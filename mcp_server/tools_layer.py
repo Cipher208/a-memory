@@ -24,6 +24,7 @@ from mcp_server.models import (
     StatsResult,
 )
 from mcp_server.registry import _get_ctx, register_tool
+from mcp_server.utils.privacy import strip_secrets
 from shared.metrics import metrics
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,7 @@ async def memory_remember(
         session_id: Session ID for dedup (optional)
     """
     # SHA-256 dedup: skip identical calls within 5min window
+    value = strip_secrets(value)
     if session_id and _dedup_cache.is_duplicate(session_id, key, value):
         logger.info("Dedup: skipping identical remember key=%s user=%s", key, user_id)
         return RememberResult(status="skipped", reason="duplicate_within_ttl").dict()
