@@ -166,3 +166,44 @@
 
 **Completed:** 38/65 items
 **Last updated:** 2026-07-05
+
+## 17. Migration from agentmemory
+
+Features to port from agentmemory (rohitg00/agentmemory) for full replacement.
+
+| Пункт | Фича | Описание | Приоритет |
+|-------|------|----------|-----------|
+| R1 | Obsidian export | Экспорт памяти в Obsidian markdown с wikilinks | nice-to-have |
+| R2 | Mesh sync | P2P синхронизация между инстансами | nice-to-have |
+| R3 | Cross-agent sync | Память доступна из Claude Code, Cursor, OpenCode | nice-to-have |
+| R4 | Git snapshots | Версионирование памяти через git commit/diff/rollback | nice-to-have |
+
+### Migration phases
+
+**Phase 1 (simple, 3-4 days):**
+- SHA-256 dedup (5min TTL)
+- Circuit breaker (3 errors → open → 30s)
+- Token budget (2000 tokens on context_inject)
+- Privacy filter (strip secrets before save)
+
+**Phase 2 (medium, 5-7 days):**
+- Slot system (8 pinned memory units)
+- Lesson confidence (strengthen/decay)
+- Faceted tagging (dimension:value with AND/OR)
+
+**Phase 3 (complex, 10-14 days):**
+- Hybrid search RRF with graph traversal
+- Knowledge graph extraction from sessions
+- Action graphs with dependencies
+- Lease system for multi-agent
+
+**Phase 4 (hooks, 5-7 days):**
+- sync_turn hook (background capture)
+- on_memory_write hook (mirror MEMORY.md)
+- Diagnostics tool
+- Export tool
+
+---
+
+**Completed:** 38/65 items (+4 roadmap)
+**Last updated:** 2026-07-07
