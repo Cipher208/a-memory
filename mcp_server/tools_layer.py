@@ -64,6 +64,39 @@ class _DedupCache:
 _dedup_cache = _DedupCache(ttl=300, max_size=10000)
 
 
+# Token budget configuration
+DEFAULT_TOKEN_BUDGET = 2000
+CHARS_PER_TOKEN = 4
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    cjk_count = len(re.findall(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', text))
+    remaining_chars = len(text) - cjk_count
+    non_cjk_tokens = remaining_chars // CHARS_PER_TOKEN
+    return cjk_count + non_cjk_tokens
+
+
+def _truncate_to_budget(text: str, max_tokens: int) -> tuple:
+    estimated = _estimate_tokens(text)
+    if estimated <= max_tokens:
+        return text, False
+    char_limit = max_tokens * CHARS_PER_TOKEN
+    lines = text.split('\\n')
+    result_lines = []
+    current_len = 0
+    for line in lines:
+        line_len = len(line) + 1
+        if current_len + line_len > char_limit:
+            break
+        result_lines.append(line)
+        current_len += line_len
+    truncated = '\\n'.join(result_lines)
+    truncated += '\\n[...truncated to token budget]'
+    return truncated, True
+
+
 def _get_memory(app, layer: str, user_id: str):
     if layer == "agent":
         return app.mm.agent_memory(user_id)
@@ -844,17 +877,24 @@ async def memory_context_inject(
     if facts_text:
         context_parts.append("REMEMBER: " + facts_text)
 
+    # Apply token budget
+    context_text = "\n".join(context_parts)
+    context_text, was_truncated = _truncate_to_budget(context_text, DEFAULT_TOKEN_BUDGET)
+
     result = {
-        "context": "\n".join(context_parts),
+        "context": context_text,
         "l4_facts_count": len(l4_facts),
         "l3_episodes_count": len(l3_episodes),
         "l1_recent_count": len(l1_recent),
         "wiki_count": len(wiki_entries),
+        "estimated_tokens": _estimate_tokens(context_text),
+        "was_truncated": was_truncated,
+        "token_budget": DEFAULT_TOKEN_BUDGET,
     }
     _set_cached(cache_key, result)
 
     # Trigger dream_buffer hook for context staging
-    await _fire_hook("dream_buffer", layer, {"text": "\n".join(context_parts), "user_id": user_id})
+    await _fire_hook("dream_buffer", layer, {"text": context_text, "user_id": user_id})
 
     return result
 
