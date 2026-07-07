@@ -29,6 +29,41 @@ from shared.metrics import metrics
 logger = logging.getLogger(__name__)
 
 
+class _DedupCache:
+    _doc_ = "SHA-256 dedup with TTL and periodic cleanup."
+    
+    def __init__(self, ttl=300, max_size=10000):
+        self._cache = {}
+        self._ttl = ttl
+        self._max_size = max_size
+        self._last_cleanup = time.time()
+    
+    def _cleanup(self):
+        now = time.time()
+        if now - self._last_cleanup < 60:
+            return
+        self._last_cleanup = now
+        expired = [k for k, v in self._cache.items() if now - v > self._ttl]
+        for k in expired:
+            del self._cache[k]
+        if len(self._cache) > self._max_size:
+            oldest = sorted(self._cache.keys(), key=lambda k: self._cache[k])[:len(self._cache) // 4]
+            for k in oldest:
+                del self._cache[k]
+    
+    def is_duplicate(self, session_id, tool, input_text):
+        self._cleanup()
+        key = hashlib.sha256(f"{session_id}:{tool}:{input_text[:500]}".encode()).hexdigest()
+        now = time.time()
+        if key in self._cache and now - self._cache[key] < self._ttl:
+            return True
+        self._cache[key] = now
+        return False
+
+
+_dedup_cache = _DedupCache(ttl=300, max_size=10000)
+
+
 def _get_memory(app, layer: str, user_id: str):
     if layer == "agent":
         return app.mm.agent_memory(user_id)
@@ -135,6 +170,7 @@ async def memory_remember(
     key: str = "",
     value: str = "",
     importance: float = 0.5,
+    session_id: str = "",
     ctx: Optional[Context] = None,
 ) -> dict:
     """Save a fact to long-term memory (L4 CoreMemory).
@@ -145,7 +181,13 @@ async def memory_remember(
         key: Fact key (e.g. "name", "language", "principle")
         value: Fact value
         importance: Importance score 0.0-1.0 (default 0.5)
+        session_id: Session ID for dedup (optional)
     """
+    # SHA-256 dedup: skip identical calls within 5min window
+    if session_id and _dedup_cache.is_duplicate(session_id, key, value):
+        logger.info("Dedup: skipping identical remember key=%s user=%s", key, user_id)
+        return RememberResult(status="skipped", reason="duplicate_within_ttl").dict()
+    
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
