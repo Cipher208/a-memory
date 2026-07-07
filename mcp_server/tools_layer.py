@@ -8,6 +8,7 @@ Caching is applied to context_inject and recall.
 from shared.constants import DB_NAME
 import hashlib
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -32,13 +33,13 @@ logger = logging.getLogger(__name__)
 
 class _DedupCache:
     _doc_ = "SHA-256 dedup with TTL and periodic cleanup."
-    
+
     def __init__(self, ttl=300, max_size=10000):
         self._cache = {}
         self._ttl = ttl
         self._max_size = max_size
         self._last_cleanup = time.time()
-    
+
     def _cleanup(self):
         now = time.time()
         if now - self._last_cleanup < 60:
@@ -51,7 +52,7 @@ class _DedupCache:
             oldest = sorted(self._cache.keys(), key=lambda k: self._cache[k])[:len(self._cache) // 4]
             for k in oldest:
                 del self._cache[k]
-    
+
     def is_duplicate(self, session_id, tool, input_text):
         self._cleanup()
         key = hashlib.sha256(f"{session_id}:{tool}:{input_text[:500]}".encode()).hexdigest()
@@ -222,7 +223,7 @@ async def memory_remember(
     if session_id and _dedup_cache.is_duplicate(session_id, key, value):
         logger.info("Dedup: skipping identical remember key=%s user=%s", key, user_id)
         return RememberResult(status="skipped", reason="duplicate_within_ttl").dict()
-    
+
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
