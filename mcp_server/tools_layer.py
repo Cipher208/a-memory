@@ -8,6 +8,7 @@ Caching is applied to context_inject and recall.
 from shared.constants import DB_NAME
 import hashlib
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -32,13 +33,13 @@ logger = logging.getLogger(__name__)
 
 class _DedupCache:
     _doc_ = "SHA-256 dedup with TTL and periodic cleanup."
-    
+
     def __init__(self, ttl=300, max_size=10000):
         self._cache = {}
         self._ttl = ttl
         self._max_size = max_size
         self._last_cleanup = time.time()
-    
+
     def _cleanup(self):
         now = time.time()
         if now - self._last_cleanup < 60:
@@ -48,10 +49,10 @@ class _DedupCache:
         for k in expired:
             del self._cache[k]
         if len(self._cache) > self._max_size:
-            oldest = sorted(self._cache.keys(), key=lambda k: self._cache[k])[:len(self._cache) // 4]
+            oldest = sorted(self._cache.keys(), key=lambda k: self._cache[k])[: len(self._cache) // 4]
             for k in oldest:
                 del self._cache[k]
-    
+
     def is_duplicate(self, session_id, tool, input_text):
         self._cleanup()
         key = hashlib.sha256(f"{session_id}:{tool}:{input_text[:500]}".encode()).hexdigest()
@@ -73,7 +74,7 @@ CHARS_PER_TOKEN = 4
 def _estimate_tokens(text: str) -> int:
     if not text:
         return 0
-    cjk_count = len(re.findall(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', text))
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]", text))
     remaining_chars = len(text) - cjk_count
     non_cjk_tokens = remaining_chars // CHARS_PER_TOKEN
     return cjk_count + non_cjk_tokens
@@ -84,7 +85,7 @@ def _truncate_to_budget(text: str, max_tokens: int) -> tuple:
     if estimated <= max_tokens:
         return text, False
     char_limit = max_tokens * CHARS_PER_TOKEN
-    lines = text.split('\\n')
+    lines = text.split("\\n")
     result_lines = []
     current_len = 0
     for line in lines:
@@ -93,8 +94,8 @@ def _truncate_to_budget(text: str, max_tokens: int) -> tuple:
             break
         result_lines.append(line)
         current_len += line_len
-    truncated = '\\n'.join(result_lines)
-    truncated += '\\n[...truncated to token budget]'
+    truncated = "\\n".join(result_lines)
+    truncated += "\\n[...truncated to token budget]"
     return truncated, True
 
 
@@ -222,7 +223,7 @@ async def memory_remember(
     if session_id and _dedup_cache.is_duplicate(session_id, key, value):
         logger.info("Dedup: skipping identical remember key=%s user=%s", key, user_id)
         return RememberResult(status="skipped", reason="duplicate_within_ttl").dict()
-    
+
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")

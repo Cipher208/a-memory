@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.5.0 (2026-07-07)
+
+### Features
+- **SHA-256 dedup**: Prevents duplicate observations within 5-minute window
+- **Circuit breaker**: Prevents cascading LLM/embedding failures (3 errors → open → 30s recovery)
+- **Token budget**: Limits context injection to 2000 tokens with CJK-aware estimation
+- **Privacy filter**: Strips API keys, secrets, and private tags before storage
+
+### Testing
+- Dedup: 5 test cases (first call, duplicate, different value, different session, TTL expiry)
+- Circuit breaker: 8 test cases (threshold, recovery, half-open, context manager, registry, metrics, callbacks)
+- Token budget: 3 test cases (short text, long text, CJK estimation)
+- Privacy filter: 7 test cases (OpenAI, GitHub, Slack, Bearer, private tags, empty text, multiple secrets)
+
+### Documentation
+- Migration roadmap from agentmemory added to ROADMAP.md
+
 ## v1.4.0 (2026-07-06)
 
 ### Testing

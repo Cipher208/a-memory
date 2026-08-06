@@ -19,7 +19,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 | Feature | Description |
 |---------|-------------|
-| **19 MCP tools** | Unified layer-based API (`user`/`agent` parameter) |
+| **25 MCP tools** | Unified layer-based API (`user`/`agent` parameter) |
 | **4-layer memory** | L1 ReflexBuffer → L2 Episodic → L3 Session → L4 Core |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
 | **RAG search** | FTS5 + binary embeddings + hybrid scoring |
@@ -28,6 +28,10 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 | **Saga pattern** | Multi-step ops with retry, idempotency, compensation |
 | **Envelope encryption** | libsodium secretbox, keychain-first key resolution |
 | **Platform-aware async** | aiosqlite on Linux/macOS, asyncio.to_thread on Windows |
+| **SHA-256 dedup** | Prevents duplicate observations within 5-minute window |
+| **Circuit breaker** | Prevents cascading LLM/embedding failures |
+| **Token budget** | Limits context injection to 2000 tokens |
+| **Privacy filter** | Strips API keys, secrets, and private tags |
 
 ## Quick Start
 
@@ -77,8 +81,8 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 ## Status
 
-- **Version:** 1.0.0
-- **Tests:** 372 passed (including 25 property-based Hypothesis tests)
+- **Version:** 1.5.0
+- **Tests:** 400+ passed (including 25 property-based Hypothesis tests)
 - **DB tables:** 23
 - **Python:** 3.10–3.13
 - **Platform:** Windows, Linux, macOS, Docker

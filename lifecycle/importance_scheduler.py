@@ -96,7 +96,7 @@ class ImportanceScheduler:
     async def _rescore_user(self, user_id: str, conn, stats: dict) -> None:
         rows = await (
             await conn.execute(
-                """SELECT id, "key", value, importance, memory_kind
+                """SELECT entry_id, "key", value, importance, memory_kind
                    FROM core_memory
                    WHERE user_id=? AND updated_at > ?""",
                 (user_id, time.time() - self.cfg.only_recent_days * 86400),
@@ -104,7 +104,7 @@ class ImportanceScheduler:
         ).fetchall()
 
         for r in rows:
-            rc = await self._lookup_retrieval_count(conn, "core_memory", int(r["id"]))
+            rc = await self._lookup_retrieval_count(conn, "core_memory", int(r["entry_id"]))
             signals = self.scorer.score(
                 text=r["value"] or "",
                 kind=r["memory_kind"] or "fact",
@@ -117,8 +117,8 @@ class ImportanceScheduler:
                 continue
             now = time.time()
             await conn.execute(
-                "UPDATE core_memory SET importance=?, updated_at=? WHERE id=?",
-                (new_score, now, int(r["id"])),
+                "UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?",
+                (new_score, now, int(r["entry_id"])),
             )
             await conn.execute(
                 """INSERT INTO importance_audit
@@ -127,7 +127,7 @@ class ImportanceScheduler:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     user_id,
-                    int(r["id"]),
+                    int(r["entry_id"]),
                     "core_memory",
                     old_score,
                     new_score,
@@ -150,7 +150,7 @@ class ImportanceScheduler:
     async def _lookup_retrieval_count(conn, source: str, source_id: int) -> int:
         row = await (
             await conn.execute(
-                """SELECT COUNT(*) c FROM audit_trail
+                """SELECT COUNT(*) c FROM audit_log
                    WHERE action='recall_useful' AND layer=? AND target_id=?""",
                 (source, str(source_id)),
             )
