@@ -65,7 +65,6 @@ class AppContext:
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     from shared.migrations import migration_manager
-    from lifecycle.importance_scheduler import importance_scheduler
 
     result = await migration_manager.migrate()
     import logging
