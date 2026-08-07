@@ -2,13 +2,13 @@
 Rate Limiter — async SQLite-based per-user rate limiting + WebSocket connection limiting
 """
 
-from shared.constants import DB_NAME
 import threading
 import time
 from typing import Any, Optional
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class RateLimiter:

@@ -2,7 +2,6 @@
 L2 SessionStore — async session history with indexes
 """
 
-from shared.constants import DB_NAME
 import json
 import time
 import uuid
@@ -10,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 @dataclass

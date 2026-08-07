@@ -1,7 +1,6 @@
 import re
 from typing import List, Pattern
 
-
 _CREDENTIAL_PATTERNS: List[Pattern] = [
     re.compile(r"\b(sk-[A-Za-z0-9]{20,})\b"),
     re.compile(r"\b(sk-ant-[A-Za-z0-9-]{20,})\b"),

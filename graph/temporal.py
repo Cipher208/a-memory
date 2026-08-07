@@ -2,12 +2,12 @@
 Temporal Graph - time-based memory relations
 """
 
-from shared.constants import DB_NAME
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from shared.connection import connection_manager
+from shared.constants import DB_NAME
 
 
 @dataclass

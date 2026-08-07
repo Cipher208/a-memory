@@ -2,10 +2,10 @@
 ArchivedMemories — async archived memory storage
 """
 
-from shared.constants import DB_NAME
 from typing import Any, Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class ArchivedMemories:

@@ -2,11 +2,11 @@
 MemoryCompressor — async dedup and compression
 """
 
-from shared.constants import DB_NAME
 import time
 from typing import Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class MemoryCompressor:

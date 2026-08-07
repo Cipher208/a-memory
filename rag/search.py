@@ -3,8 +3,8 @@
 import logging
 from typing import Any
 
-from shared.constants import DB_NAME
 from shared.connection import AsyncConnectionManager
+from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
 

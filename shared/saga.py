@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 SAGA_DIR = Path.home() / ".mcp-ariel-memory" / "sagas"
 
 try:
-    from features.secrets import encrypt_json, decrypt_json, is_encrypted_blob
+    from features.secrets import decrypt_json, encrypt_json, is_encrypted_blob
 
     _HAS_ENCRYPTION = True
 except ImportError:

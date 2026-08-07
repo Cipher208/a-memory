@@ -2,7 +2,6 @@
 L4 CoreMemory — async key-value facts with importance and typed memory (B7)
 """
 
-from shared.constants import DB_NAME
 import json
 import logging
 import time
@@ -10,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +64,8 @@ class CoreMemory:
         from shared.memory_types import (
             MemoryKind,
             default_importance,
-            kind_for_text,
             get_policy,
+            kind_for_text,
             validate_kind,
         )
 

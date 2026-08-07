@@ -2,13 +2,13 @@
 Embeddings — async SQLite cache with multilingual model
 """
 
-from shared.constants import DB_NAME
 import hashlib
 import re
 import struct
 from typing import Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 DEFAULT_MODEL = "intfloat/multilingual-e5-small"
 _model = None

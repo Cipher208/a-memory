@@ -39,7 +39,7 @@ async def run_demo():
     print("[1/6] Initializing components...")
     from core import MemoryManager
     from features.backup import BackupManager
-    from features.secrets import encrypt_json, decrypt_json
+    from features.secrets import decrypt_json, encrypt_json
     from graph.epistemic import EpistemicGraph
     from rag.engine import RAGEngine
     from shared.connection import connection_manager

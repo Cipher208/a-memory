@@ -3,13 +3,10 @@
 Merged into action-based tools to reduce tool count.
 """
 
-from shared.constants import DB_NAME
 import asyncio
 import time
 from pathlib import Path
-from typing import Optional
-
-from typing import Any
+from typing import Any, Optional
 
 from mcp.server.fastmcp import Context
 
@@ -23,6 +20,7 @@ from mcp_server.models import (
     SearchResult,
 )
 from mcp_server.registry import _get_ctx, register_tool
+from shared.constants import DB_NAME
 from shared.metrics import metrics
 
 
@@ -169,9 +167,9 @@ async def memory_cleanup(
     metrics.inc("tool_calls")
     metrics.inc("tool_cleanup")
 
-    from features.compression import MemoryCompressor
     from features.audit_trail import AuditTrail
     from features.backup_cron import backup_cron
+    from features.compression import MemoryCompressor
     from shared.dream_buffer import DreamBuffer
     from shared.saga import saga_watchdog
 

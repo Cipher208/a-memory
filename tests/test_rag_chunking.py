@@ -1,6 +1,7 @@
 """Tests for chunk_text with overlap."""
 
 import pytest
+
 from rag.chunking import chunk_text
 
 

@@ -2,7 +2,6 @@
 Epistemic Graph — async, layer-aware tags and relations
 """
 
-from shared.constants import DB_NAME
 import json
 import logging
 import time
@@ -10,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from shared.connection import connection_manager
+from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
 

@@ -2,14 +2,13 @@
 ReadOnlyReplica — async read-only DB copy for dashboard/metrics
 """
 
-from typing import Optional
-
 import logging
 import shutil
 import sqlite3
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

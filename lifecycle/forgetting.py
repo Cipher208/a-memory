@@ -2,7 +2,6 @@
 Forgetting System — type-aware decay, archiving, compression
 """
 
-from shared.constants import DB_NAME
 import logging
 import time
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Optional
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 from shared.memory_types import (
     MemoryKind,
     apply_decay,

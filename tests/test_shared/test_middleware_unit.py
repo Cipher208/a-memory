@@ -1,11 +1,12 @@
 """Tests for shared/middleware.py — essential behavior."""
 
 import asyncio
+
 from shared.middleware import (
-    MiddlewareContext,
-    ImportanceGateMiddleware,
-    DedupMiddleware,
     AuditMiddleware,
+    DedupMiddleware,
+    ImportanceGateMiddleware,
+    MiddlewareContext,
     MiddlewarePipeline,
 )
 

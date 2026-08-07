@@ -2,12 +2,12 @@
 DreamBuffer — async staging memories with TTL
 """
 
-from shared.constants import DB_NAME
 import json
 import time
 from typing import Any, Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class DreamBuffer:

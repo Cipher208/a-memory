@@ -3,10 +3,10 @@ Consolidation Engine — L1→L2→L3→L4 memory promotion (async)
 Type-aware promotion with memory_kind support.
 """
 
-from shared.constants import DB_NAME
 from typing import Any, Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 from shared.memory_types import MemoryKind, get_policy, validate_kind
 
 

@@ -1,19 +1,20 @@
 """Tests for mcp_server/tools_layer.py — tools with correct mock ctx."""
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+
 from mcp_server.tools_layer import (
     _fire_hook,
-    memory_remember,
-    memory_recall,
-    memory_forget,
-    memory_session_start,
-    memory_session_end,
     memory_episode_save,
+    memory_forget,
     memory_graph_add,
+    memory_recall,
+    memory_remember,
+    memory_session_end,
+    memory_session_start,
     memory_stats,
 )
-
 
 # ── Helpers ──
 

@@ -93,8 +93,9 @@ class BackupCron:
     def _fire_nightly_hooks(self):
         """Trigger nightly maintenance hooks for both layers."""
         try:
-            from hooks.registry import hook_registry
             import asyncio
+
+            from hooks.registry import hook_registry
 
             for layer in ["user", "agent"]:
                 asyncio.run(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))

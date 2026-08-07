@@ -2,13 +2,13 @@
 L3 EpisodicMemory — async important moments with emotional weight
 """
 
-from shared.constants import DB_NAME
 import json
 import time
 from dataclasses import dataclass
 from typing import Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 @dataclass

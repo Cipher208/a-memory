@@ -1,6 +1,7 @@
 """Tests for Importance v2 — multi-signal scorer."""
 
 import pytest
+
 from shared.importance import ImportanceScorer
 
 

@@ -3,13 +3,12 @@ Conflict Resolver — async, detects conflicting memory entries.
 Uses BM25 + char-trigram Jaccard hybrid for similarity (B3).
 """
 
-from shared.constants import DB_NAME
 import math
 import uuid
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
-
+from shared.constants import DB_NAME
 
 # ─── B3: BM25 + char-trigram similarity ───
 

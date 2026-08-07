@@ -1,10 +1,11 @@
 """Tests for saga behavior — compensation, retry, idempotency."""
 
 import asyncio
-import pytest
-from shared.saga import Saga
-import shared.connection as _conn_mod
 
+import pytest
+
+import shared.connection as _conn_mod
+from shared.saga import Saga
 
 # ── Compensation ──
 

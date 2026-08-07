@@ -3,12 +3,13 @@
 import asyncio
 import json
 import time
+
 from shared.saga import (
     Saga,
     SagaStep,
     SagaWatchdog,
-    create_consolidation_saga,
     create_backup_saga,
+    create_consolidation_saga,
 )
 
 

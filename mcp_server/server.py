@@ -120,11 +120,10 @@ mcp = FastMCP(
 
 
 def _register_all_tools():
-    from mcp_server.registry import get_all_tools
-
     # Importing these modules triggers self-registration into the registry
     import mcp_server.tools_layer  # noqa: F401
     import mcp_server.tools_ops  # noqa: F401
+    from mcp_server.registry import get_all_tools
 
     for name, func in get_all_tools().items():
         mcp.tool(name=name)(func)

@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from rag.engine import RAGEngine
 from rag.quantize import (
     binary_from_threshold_array,
     load_thresholds,
@@ -10,7 +11,6 @@ from rag.quantize import (
     supervised_threshold,
     train_supervised_thresholds,
 )
-from rag.engine import RAGEngine
 from shared.connection import AsyncConnectionManager
 
 

@@ -3,13 +3,13 @@ RAG Engine — FTS5 + binary embeddings hybrid search.
 All DB operations via AsyncConnectionManager (aiosqlite).
 """
 
-from shared.constants import DB_NAME
 import hashlib
 import logging
 from pathlib import Path
 from typing import Any, Literal, Optional, cast
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ class RAGEngine:
         return page_id
 
     async def search(self, query: str, user_id: str = "default", strategy: Optional[StrategyT] = None, limit: int = 10) -> list[dict[str, Any]]:
-        from rag.search import search_fts5, search_binary, search_rrf, auto_strategy, apply_type_boost, materialize_candidates, format_result
+        from rag.search import apply_type_boost, auto_strategy, format_result, materialize_candidates, search_binary, search_fts5, search_rrf
 
         strategy = strategy or self.search_strategy
         if strategy == "auto":

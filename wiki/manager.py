@@ -4,7 +4,6 @@ Architecture: .md files on disk = primary, SQLite FTS5 = search index.
 Layers: user, agent, shared.
 """
 
-from shared.constants import DB_NAME
 import json
 import time
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 from shared.path_safety import safe_resolve
 from wiki.shared import (
     get_enabled_types,

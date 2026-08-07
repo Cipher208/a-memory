@@ -5,7 +5,6 @@ Rate limiting is applied to all write operations.
 Caching is applied to context_inject and recall.
 """
 
-from shared.constants import DB_NAME
 import hashlib
 import logging
 import re
@@ -26,6 +25,7 @@ from mcp_server.models import (
 )
 from mcp_server.registry import _get_ctx, register_tool
 from mcp_server.utils.privacy import strip_secrets
+from shared.constants import DB_NAME
 from shared.metrics import metrics
 
 logger = logging.getLogger(__name__)

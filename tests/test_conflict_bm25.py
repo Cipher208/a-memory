@@ -1,6 +1,7 @@
 """Tests for B3: BM25 + char-trigram conflict similarity."""
 
 import pytest
+
 from rag.conflict import (
     ConflictResolver,
     bm25_pair_similarity,
