@@ -8,13 +8,12 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 class ReadOnlyReplica:
-    def __init__(self, source_dir: Optional[str] = None, replica_dir: Optional[str] = None):
+    def __init__(self, source_dir: str | None = None, replica_dir: str | None = None):
         self.source_dir = Path(source_dir or str(Path.home() / ".mcp-ariel-memory"))
         self.replica_dir = Path(replica_dir or str(Path.home() / ".mcp-ariel-memory" / "replica"))
         self.replica_dir.mkdir(parents=True, exist_ok=True)
@@ -38,7 +37,7 @@ class ReadOnlyReplica:
                     src_conn.close()
                     synced[db_file] = 1
                 except Exception as e:
-                    logger.error("Replica sync failed for %s: %s" % (db_file, e))
+                    logger.error(f"Replica sync failed for {db_file}: {e}")
                     try:
                         shutil.copy2(src, dst)
                         synced[db_file] = 1
@@ -67,7 +66,7 @@ class ReadOnlyReplica:
                     self.sync()
                 time.sleep(60)
             except Exception as e:
-                logger.error("Replica sync error: %s" % e)
+                logger.error(f"Replica sync error: {e}")
                 time.sleep(300)
 
     def get_conn(self, db_name: str = "memory.db") -> sqlite3.Connection:

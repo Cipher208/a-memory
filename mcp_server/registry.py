@@ -4,14 +4,14 @@ Tools register themselves here. server.py pulls from here and applies @mcp.tool(
 """
 
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 
 from mcp.server.fastmcp import Context
 
 _tools: dict[str, Callable] = {}
 
 
-def _get_ctx(ctx: Optional[Context]) -> Any:
+def _get_ctx(ctx: Context | None) -> Any:
     """Extract AppContext from FastMCP lifespan context."""
     if ctx is None:
         raise ValueError("Context is required but was None")

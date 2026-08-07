@@ -7,7 +7,7 @@ deduplicates by (title, content_prefix), and reranks by score.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class MultiSourceRAG:
         include_rag: bool = True,
         include_wiki: bool = True,
         strategy: str = "hybrid",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Search across RAG and Wiki sources, merge and deduplicate.
 
         Args:
@@ -37,7 +37,7 @@ class MultiSourceRAG:
             include_wiki: Include Wiki results (default True)
             strategy: RAG search strategy (fts, mib, hybrid, auto)
         """
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
 
         if include_rag:
             try:
@@ -67,7 +67,7 @@ class MultiSourceRAG:
                 logger.warning("Wiki search failed: %s", e)
 
         # Dedup by (title, content_prefix) — RAG + Wiki may store same record twice
-        dedup: List[Dict[str, Any]] = []
+        dedup: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         for r in results:
             key = (r.get("title", ""), (r.get("content") or "")[:200])

@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -271,52 +272,34 @@ def _get_migrations() -> list[Migration]:
         except sqlite3.OperationalError:
             pass
         # Add memory_kind to core_memory
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE core_memory ADD COLUMN memory_kind TEXT")
-        except sqlite3.OperationalError:
-            pass
         # Add expires_at, source, metadata to core_memory
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE core_memory ADD COLUMN expires_at REAL")
-        except sqlite3.OperationalError:
-            pass
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE core_memory ADD COLUMN source TEXT DEFAULT 'manual'")
-        except sqlite3.OperationalError:
-            pass
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE core_memory ADD COLUMN metadata TEXT")
-        except sqlite3.OperationalError:
-            pass
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_core_memory_kind ON core_memory(user_id, memory_kind)")
         # Add memory_kind to episodes
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE episodes ADD COLUMN memory_kind TEXT")
-        except sqlite3.OperationalError:
-            pass
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_kind ON episodes(user_id, memory_kind)")
         # Add memory_kind to rag_chunks (for type boost in search)
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE rag_chunks ADD COLUMN memory_kind TEXT")
-        except sqlite3.OperationalError:
-            pass
 
     migrations.append(Migration(5, "typed_memory", v5_typed_memory))
 
     async def v6_core_memory_columns(conn):
         """Add expires_at, source, metadata columns to core_memory."""
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE core_memory ADD COLUMN expires_at REAL")
-        except sqlite3.OperationalError:
-            pass
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE core_memory ADD COLUMN source TEXT DEFAULT 'manual'")
-        except sqlite3.OperationalError:
-            pass
-        try:
+        with contextlib.suppress(sqlite3.OperationalError):
             await conn.execute("ALTER TABLE core_memory ADD COLUMN metadata TEXT")
-        except sqlite3.OperationalError:
-            pass
 
     migrations.append(Migration(6, "core_memory_columns", v6_core_memory_columns))
 

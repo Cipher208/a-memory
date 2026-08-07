@@ -1,0 +1,6 @@
+{
+  "tests/test_hypothesis.py::test_chaos_db_locked_graceful": true,
+  "tests/test_importance_scheduler.py::test_scheduler_rescores_big_delta": true,
+  "tests/test_importance_scheduler.py::test_scheduler_skips_small_delta": true,
+  "tests/test_importance_scheduler.py::test_scheduler_retrieval_signal_boosts": true
+}

@@ -75,7 +75,7 @@ from shared.connection import AsyncConnectionManager, connection_manager
 
 # 2. Конструктор — принимает cm вместо db_path
 
-def __init__(self, cm: Optional[AsyncConnectionManager] = None):
+def __init__(self, cm: AsyncConnectionManager | None = None):
     self._cm = cm or connection_manager
 
 # 3. _get_conn → self._cm.get(db_name)

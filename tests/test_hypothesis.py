@@ -616,6 +616,7 @@ class TestConnectionProperties:
 # ═══════════════════════════════════════════════════════════════
 
 from shared.cache import MemoryCache
+import contextlib
 
 
 class TestCacheProperties:
@@ -742,10 +743,8 @@ class TestSagaCompensationLogic:
             saga = Saga("logic")
             saga.add_step("s1", step1, compensate)
             saga.add_step("s2", fail)
-            try:
+            with contextlib.suppress(RuntimeError):
                 await saga.execute()
-            except RuntimeError:
-                pass
 
             results = await mm.user_memory(user_id).recall("temp_key")
             assert len(results) == 0, "temp_key must be deleted after compensation"
@@ -902,10 +901,8 @@ class TestSagaStateMachine:
             saga = Saga("comp")
             for i in range(n_steps):
                 saga.add_step(f"s{i}", make_step(i), make_compensate(i))
-            try:
+            with contextlib.suppress(RuntimeError):
                 await saga.execute()
-            except RuntimeError:
-                pass
 
             # Steps before fail_at should be compensated
             for i in range(fail_at):

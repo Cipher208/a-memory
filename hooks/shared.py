@@ -49,10 +49,7 @@ def conflict_resolver(ctx: dict[str, Any], user_id: str) -> dict[str, Any]:
 
 def auto_context(ctx: dict[str, Any], user_id: str, layer: str | None = None) -> dict[str, Any]:
     query = ctx.get("query", "")
-    if layer is not None:
-        router = RetrievalRouter(layer=layer, user_id=user_id)
-    else:
-        router = RetrievalRouter(user_id=user_id)
+    router = RetrievalRouter(layer=layer, user_id=user_id) if layer is not None else RetrievalRouter(user_id=user_id)
     result = run_async(router.route(query))
     return {"context": result.context, "strategy": result.strategy.value}
 
@@ -64,10 +61,7 @@ def retrieval_router(
     include_count: bool = False,
 ) -> dict[str, Any]:
     query = ctx.get("query", "")
-    if layer is not None:
-        router = RetrievalRouter(layer=layer, user_id=user_id)
-    else:
-        router = RetrievalRouter(user_id=user_id)
+    router = RetrievalRouter(layer=layer, user_id=user_id) if layer is not None else RetrievalRouter(user_id=user_id)
     result = run_async(router.route(query))
     resp: dict[str, Any] = {
         "strategy": result.strategy.value,

@@ -5,7 +5,6 @@ Embeddings — async SQLite cache with multilingual model
 import hashlib
 import re
 import struct
-from typing import Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
@@ -15,7 +14,7 @@ _model = None
 _model_name = None
 
 
-def _get_model(model_name: Optional[str] = None):
+def _get_model(model_name: str | None = None):
     global _model, _model_name
     target = model_name or DEFAULT_MODEL
     if _model is None or _model_name != target:
@@ -30,7 +29,7 @@ def _get_model(model_name: Optional[str] = None):
 
 
 class EmbeddingCache:
-    def __init__(self, cm: Optional["AsyncConnectionManager"] = None, model_name: Optional[str] = None):
+    def __init__(self, cm: "AsyncConnectionManager" | None = None, model_name: str | None = None):
         self._cm = cm or connection_manager
         self.model_name = model_name or DEFAULT_MODEL
         self._dimension = 384
@@ -98,7 +97,7 @@ class EmbeddingCache:
         if to_compute and model:
             compute_texts = [t for _, t in to_compute]
             embeddings = model.encode(compute_texts).tolist()
-            for (idx, text), emb in zip(to_compute, embeddings):
+            for (idx, text), emb in zip(to_compute, embeddings, strict=False):
                 results[idx] = emb
                 await self._cache(text, emb)
         elif to_compute:
@@ -128,7 +127,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
 def similarity(a: list[float], b: list[float]) -> float:
     import math
 
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(x * x for x in b) ** 0.5
     if na == 0 or nb == 0 or not math.isfinite(dot):

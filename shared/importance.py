@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Optional
+from collections.abc import Iterable
 
 from shared.memory_types import (
     MemoryKind,
@@ -156,7 +156,7 @@ class ImportanceSignals:
     retrieval_signal: float = 0.0
     noise_penalty: float = 0.0
 
-    weights: Dict[str, float] = field(
+    weights: dict[str, float] = field(
         default_factory=lambda: {
             "base": 1.0,
             "length": 0.6,
@@ -198,7 +198,7 @@ class ImportanceScorer:
         self,
         technical_keywords_ru: Iterable[str] = _TECH_KEYWORDS_RU,
         technical_keywords_en: Iterable[str] = _TECH_KEYWORDS_EN,
-        weights: Optional[Dict[str, float]] = None,
+        weights: dict[str, float] | None = None,
     ):
         self.tech_ru = set(k.lower() for k in technical_keywords_ru)
         self.tech_en = set(k.lower() for k in technical_keywords_en)
@@ -207,7 +207,7 @@ class ImportanceScorer:
     def score(
         self,
         text: str,
-        kind: Optional[str | MemoryKind] = None,
+        kind: str | MemoryKind | None = None,
         retrieval_count: int = 0,
         seen_before: bool = False,
         emotion_weight: float = 0.0,

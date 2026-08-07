@@ -1,7 +1,7 @@
 import re
-from typing import List, Pattern
+from re import Pattern
 
-_CREDENTIAL_PATTERNS: List[Pattern] = [
+_CREDENTIAL_PATTERNS: list[Pattern] = [
     re.compile(r"\b(sk-[A-Za-z0-9]{20,})\b"),
     re.compile(r"\b(sk-ant-[A-Za-z0-9-]{20,})\b"),
     re.compile(r"\b(ghp_[A-Za-z0-9]{36})\b"),
@@ -34,10 +34,7 @@ def strip_secrets(text: str, replacement: str = "[REDACTED]") -> str:
 def has_secrets(text: str) -> bool:
     if not text:
         return False
-    for pattern in _CREDENTIAL_PATTERNS:
-        if pattern.search(text):
-            return True
-    return False
+    return any(pattern.search(text) for pattern in _CREDENTIAL_PATTERNS)
 
 
 def get_redacted_preview(text: str, max_length: int = 100) -> str:

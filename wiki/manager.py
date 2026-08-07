@@ -8,7 +8,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
@@ -54,7 +54,7 @@ LAYER_TYPES = {
 class WikiManager:
     """Unified wiki: .md files on disk + SQLite FTS5 index, parameterized by layer."""
 
-    def __init__(self, layer: str = "user", base_dir: Optional[str] = None, cm: Optional[AsyncConnectionManager] = None):
+    def __init__(self, layer: str = "user", base_dir: str | None = None, cm: AsyncConnectionManager | None = None):
         self.layer = layer
         self.base_dir = Path(base_dir or str(Path.home() / ".mcp-ariel-memory" / "wiki" / layer))
         self._cm = cm or connection_manager
@@ -102,7 +102,7 @@ class WikiManager:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    async def add(self, wiki_type: str, title: str, content: str, tags: Optional[list[str]] = None, importance: float = 0.5) -> str:
+    async def add(self, wiki_type: str, title: str, content: str, tags: list[str] | None = None, importance: float = 0.5) -> str:
         """Create .md file and index it. Returns file path."""
         enabled = self._get_enabled_types()
         if enabled and wiki_type not in enabled:
@@ -120,10 +120,10 @@ class WikiManager:
     async def update(
         self,
         file_path: str,
-        title: Optional[str] = None,
-        content: Optional[str] = None,
-        tags: Optional[list[str]] = None,
-        importance: Optional[float] = None,
+        title: str | None = None,
+        content: str | None = None,
+        tags: list[str] | None = None,
+        importance: float | None = None,
     ):
         """Update .md file and re-index."""
         p = safe_resolve(self.base_dir, file_path)
@@ -260,7 +260,7 @@ class WikiManager:
         await conn.commit()
         return cur.rowcount > 0
 
-    async def count(self, wiki_type: Optional[str] = None) -> int:
+    async def count(self, wiki_type: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         if wiki_type:
             cur = await conn.execute("SELECT COUNT(*) FROM wiki_index WHERE layer=? AND wiki_type=?", (self.layer, wiki_type))
@@ -291,7 +291,7 @@ class WikiManager:
                     result["errors"] += 1
         return result
 
-    async def sync_external(self, external_dirs: Optional[list[str]] = None) -> dict[str, int]:
+    async def sync_external(self, external_dirs: list[str] | None = None) -> dict[str, int]:
         """Import external .md files into wiki."""
         dirs = external_dirs or self.get_external_dirs()
         result = {"imported": 0, "skipped": 0, "errors": 0}
@@ -318,7 +318,7 @@ class WikiManager:
                     result["errors"] += 1
         return result
 
-    async def _index_file(self, file_path: Path, wiki_type: str, title: str, content: str, tags: Optional[list[str]] = None, importance: float = 0.5):
+    async def _index_file(self, file_path: Path, wiki_type: str, title: str, content: str, tags: list[str] | None = None, importance: float = 0.5):
         """Index a single .md file into DB."""
         import hashlib
 
@@ -401,7 +401,7 @@ class WikiManager:
 
         return result
 
-    def _to_md(self, title: str, content: str, tags: Optional[list[str]] = None, importance: float = 0.5) -> str:
+    def _to_md(self, title: str, content: str, tags: list[str] | None = None, importance: float = 0.5) -> str:
         """Create .md with YAML frontmatter."""
         lines = ["---"]
         lines.append(f'title: "{title}"')

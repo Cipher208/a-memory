@@ -9,7 +9,7 @@ import hashlib
 import logging
 import re
 import time
-from typing import Any, Optional
+from typing import Any
 
 from mcp.server.fastmcp import Context
 
@@ -206,7 +206,7 @@ async def memory_remember(
     value: str = "",
     importance: float = 0.5,
     session_id: str = "",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Save a fact to long-term memory (L4 CoreMemory).
 
@@ -296,7 +296,7 @@ async def memory_recall(
     user_id: str = "default",
     query: str = "",
     limit: int = 10,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Search memory across L3 (episodes) and L4 (facts).
 
@@ -329,7 +329,7 @@ async def memory_forget(
     layer: str = "user",
     user_id: str = "default",
     key: str = "",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Delete a fact from L4 memory.
 
@@ -355,7 +355,7 @@ async def memory_forget(
 async def memory_session_start(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Start a new memory session.
 
@@ -384,7 +384,7 @@ async def memory_session_end(
     user_id: str = "default",
     session_id: str = "",
     summary: str = "",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """End a session and save summary.
 
@@ -417,7 +417,7 @@ async def memory_episode_save(
     summary: str = "",
     weight: float = 0.5,
     tags: list[str] | None = None,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Save an episode to L3 episodic memory.
 
@@ -453,7 +453,7 @@ async def memory_episode_recall(
     user_id: str = "default",
     tag: str = "",
     limit: int = 10,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Recall episodes, optionally filtered by tag.
 
@@ -484,7 +484,7 @@ async def memory_graph_add(
     content: str = "",
     node_type: str = "fact",
     tags: list[str] | None = None,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Add a node to the epistemic graph.
 
@@ -527,7 +527,7 @@ async def memory_graph_query(
     tag: str = "",
     node_type: str = "",
     limit: int = 20,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Query the epistemic graph by tag or node type.
 
@@ -559,7 +559,7 @@ async def memory_session_list(
     layer: str = "user",
     user_id: str = "default",
     limit: int = 10,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """List recent memory sessions.
 
@@ -592,7 +592,7 @@ async def memory_episode_list(
     user_id: str = "default",
     limit: int = 10,
     offset: int = 0,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """List episodes from L3 episodic memory.
 
@@ -617,7 +617,7 @@ async def memory_episode_get(
     layer: str = "user",
     user_id: str = "default",
     episode_id: int = 0,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Get a single episode by ID.
 
@@ -652,7 +652,7 @@ async def memory_graph_nodes(
     user_id: str = "default",
     node_type: str = "",
     limit: int = 20,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """List nodes from the epistemic graph.
 
@@ -685,7 +685,7 @@ async def memory_graph_edges(
     user_id: str = "",
     node_id: int = 0,
     limit: int = 20,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """List edges from the epistemic graph.
 
@@ -740,7 +740,7 @@ async def memory_graph_edges(
 async def memory_stats(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Get memory statistics for a layer.
 
@@ -769,7 +769,7 @@ async def memory_stats(
 async def memory_context(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Return compressed context summary for prompt injection (L4 top-10 + L3 top-3 + recent + wiki).
 
@@ -790,16 +790,16 @@ async def memory_context(
     wiki = _get_wiki(app, layer)
 
     l4_facts = await mem.l4.get_all(user_id, 10)
-    facts_text = "; ".join(["%s=%s" % (f.key, f.value[:30]) for f in l4_facts])
+    facts_text = "; ".join([f"{f.key}={f.value[:30]}" for f in l4_facts])
 
     l3_episodes = await mem.l3.get_episodes(user_id, 3)
-    episodes_text = "; ".join(["%s" % e.summary[:50] for e in l3_episodes])
+    episodes_text = "; ".join([f"{e.summary[:50]}" for e in l3_episodes])
 
     l1_recent = mem.l1.get_recent(5)
-    recent_text = "; ".join(["%s: %s" % (r.role, r.content[:50]) for r in l1_recent])
+    recent_text = "; ".join([f"{r.role}: {r.content[:50]}" for r in l1_recent])
 
     wiki_entries = await wiki.list_all(3)
-    wiki_text = "; ".join(["[%s] %s" % (w.wiki_type, w.title) for w in wiki_entries])
+    wiki_text = "; ".join([f"[{w.wiki_type}] {w.title}" for w in wiki_entries])
 
     # Lost-in-the-Middle prevention: L4 at start+end, L2/L1 in middle
     context_parts = []
@@ -828,7 +828,7 @@ async def memory_context(
 async def memory_context_inject(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Return compressed summary for prompt injection (L4 top-10 + L3 top-3).
 
@@ -854,16 +854,16 @@ async def memory_context_inject(
     await _fire_hook("wiki_agent", layer, {"user_id": user_id, "query": "context_inject"})
 
     l4_facts = await mem.l4.get_all(user_id, 10)
-    facts_text = "; ".join(["%s=%s" % (f.key, f.value[:30]) for f in l4_facts])
+    facts_text = "; ".join([f"{f.key}={f.value[:30]}" for f in l4_facts])
 
     l3_episodes = await mem.l3.get_episodes(user_id, 3)
-    episodes_text = "; ".join(["%s" % e.summary[:50] for e in l3_episodes])
+    episodes_text = "; ".join([f"{e.summary[:50]}" for e in l3_episodes])
 
     l1_recent = mem.l1.get_recent(5)
-    recent_text = "; ".join(["%s: %s" % (r.role, r.content[:50]) for r in l1_recent])
+    recent_text = "; ".join([f"{r.role}: {r.content[:50]}" for r in l1_recent])
 
     wiki_entries = await wiki.list_all(3)
-    wiki_text = "; ".join(["[%s] %s" % (w.wiki_type, w.title) for w in wiki_entries])
+    wiki_text = "; ".join([f"[{w.wiki_type}] {w.title}" for w in wiki_entries])
 
     # Lost-in-the-Middle prevention: L4 at start+end, L2/L1 in middle
     # LLMs remember first and last items best, middle is forgotten

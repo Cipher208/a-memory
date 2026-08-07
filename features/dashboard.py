@@ -3,7 +3,7 @@ Dashboard — HTML dashboard for memory visualization
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
@@ -157,7 +157,7 @@ load();
 
 
 class Dashboard:
-    def __init__(self, mm=None, data_dir: Optional[str] = None):
+    def __init__(self, mm=None, data_dir: str | None = None):
         self.data_dir = Path(data_dir or str(Path.home() / ".mcp-ariel-memory"))
         if mm is None:
             import sys

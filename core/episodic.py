@@ -5,7 +5,6 @@ L3 EpisodicMemory — async important moments with emotional weight
 import json
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
@@ -42,7 +41,7 @@ class EpisodicMemory:
         """,
         )
 
-    async def save(self, user_id: str, summary: str, emotional_weight: float = 0.5, tags: Optional[list[str]] = None) -> int:
+    async def save(self, user_id: str, summary: str, emotional_weight: float = 0.5, tags: list[str] | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "INSERT INTO episodes (user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -101,13 +100,13 @@ class EpisodicMemory:
                 memory_type="episode",
                 importance=row["emotional_weight"],
                 original_id=row["episode_id"],
-                reason="inactive_%dd" % days,
+                reason=f"inactive_{days}d",
             )
             archived_count += 1
 
         ids = [row["episode_id"] for row in rows]
         placeholders = ",".join(["?"] * len(ids))
-        await conn.execute("DELETE FROM episodes WHERE episode_id IN (%s)" % placeholders, ids)
+        await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({placeholders})", ids)
         await conn.commit()
         return archived_count
 

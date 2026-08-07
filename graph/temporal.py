@@ -4,7 +4,7 @@ Temporal Graph - time-based memory relations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
@@ -51,7 +51,7 @@ class TemporalGraph:
         """,
         )
 
-    async def add_event(self, user_id: str, event_type: str, content: str, importance: float = 0.5, metadata: Optional[dict] = None) -> int:
+    async def add_event(self, user_id: str, event_type: str, content: str, importance: float = 0.5, metadata: dict | None = None) -> int:
         import json
 
         conn = await self._cm.get(DB_NAME)
@@ -124,7 +124,7 @@ class TemporalGraph:
         rows = await cur.fetchall()
         return [{"event_id": r[0], "type": r[1], "content": r[2], "timestamp": r[3]} for r in rows]
 
-    async def count_events(self, user_id: Optional[str] = None) -> int:
+    async def count_events(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         if user_id:
             cur = await conn.execute("SELECT COUNT(*) FROM temporal_events WHERE user_id=?", (user_id,))

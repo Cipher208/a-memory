@@ -7,7 +7,6 @@ import threading
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -19,7 +18,7 @@ class ReflexEntry:
 
 
 class ReflexBuffer:
-    def __init__(self, max_size: int = 50, persist_path: Optional[str] = None):
+    def __init__(self, max_size: int = 50, persist_path: str | None = None):
         self.max_size = max_size
         self.persist_path = persist_path
         self._buffer: deque[ReflexEntry] = deque(maxlen=max_size)

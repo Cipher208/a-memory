@@ -3,7 +3,7 @@ User Layer Hooks - 12 hooks for user memory events
 """
 
 import asyncio
-from typing import Any, Optional
+from typing import Any
 
 from lifecycle.emotion_trigger import EmotionTrigger
 
@@ -75,7 +75,7 @@ class UserHooks:
         should, reason, weight = self.emotion_trigger.should_save(text)
         if should and mem:
             try:
-                summary = "%s=%s" % (ctx.get("key", "text"), text[:50])
+                summary = "{}={}".format(ctx.get("key", "text"), text[:50])
                 asyncio.run(mem.l3.save(user_id, summary, weight, [reason]))
                 return {"saved_episode": True, "reason": reason, "weight": weight}
             except Exception:
@@ -106,17 +106,14 @@ class UserHooks:
     def _dream_buffer(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return {"action": "add_to_staging", "content": ctx.get("text", "")}
 
-    def _calculate_importance(self, text: str, memory_kind: Optional[str] = None) -> float:
+    def _calculate_importance(self, text: str, memory_kind: str | None = None) -> float:
         from shared.memory_types import default_importance
 
         if not text:
             return 0.0
 
         # Start with type-based importance if kind specified
-        if memory_kind:
-            score = default_importance(memory_kind)
-        else:
-            score = 0.3
+        score = default_importance(memory_kind) if memory_kind else 0.3
 
         # Length heuristics
         if len(text) > 15:

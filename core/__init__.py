@@ -3,7 +3,7 @@ Core Memory Module — L1-L4 async
 Two-layer: user facts + agent identity
 """
 
-from typing import Dict, List, Optional
+from typing import Optional
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -31,7 +31,7 @@ class MemoryLayer:
         return await self.l4.save(self.user_id, key, value, importance)
 
     async def recall(self, query: str, limit: int = 10) -> list[dict]:
-        cache_key = "recall:%s:%s:%d" % (self.user_id, query, limit)
+        cache_key = f"recall:{self.user_id}:{query}:{limit}"
         cached = self._cache.get(cache_key) if self._cache else None
         if cached is not None:
             return cached
@@ -72,7 +72,7 @@ class MemoryManager:
         self.layers: dict[str, MemoryLayer] = {}
 
     def get_layer(self, layer_type: str, user_id: str = "default") -> MemoryLayer:
-        key = "%s:%s" % (layer_type, user_id)
+        key = f"{layer_type}:{user_id}"
         if key not in self.layers:
             self.layers[key] = MemoryLayer(layer_type, user_id, cm=self._cm, cache=self._cache)
         return self.layers[key]

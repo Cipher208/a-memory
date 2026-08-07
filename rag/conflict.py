@@ -92,9 +92,9 @@ class ConflictResolver:
             return {"content": new_content, "is_conflict": False}
 
         like_conditions = " OR ".join(["content LIKE ?" for _ in keywords])
-        like_params = ["%%%s%%" % kw for kw in keywords]
+        like_params = [f"%{kw}%" for kw in keywords]
         cur = await conn.execute(
-            "SELECT id, content, is_conflict, conflict_group_id FROM memory_conflicts WHERE user_id=? AND (%s) LIMIT 5" % like_conditions,
+            f"SELECT id, content, is_conflict, conflict_group_id FROM memory_conflicts WHERE user_id=? AND ({like_conditions}) LIMIT 5",
             (user_id, *like_params),
         )
         rows = await cur.fetchall()
