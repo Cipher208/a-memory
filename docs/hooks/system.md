@@ -36,6 +36,7 @@ Hooks use `ImportanceGateMiddleware` to filter low-importance content:
 ```python
 from hooks.registry import register_hook
 
+
 @register_hook("before_remember", layer="user")
 async def my_hook(ctx):
     if "spam" in ctx.content.lower():

@@ -19,6 +19,7 @@ Structured logging with Python logging module:
 
 ```python
 import logging
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mcp-ariel-memory")
 ```

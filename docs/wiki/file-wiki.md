@@ -17,11 +17,7 @@ from wiki.manager import WikiManager
 fw = WikiManager(layer="user")
 
 # Add page
-fw.add_page(
-    title="Architecture Overview",
-    content="# Architecture\n\nTwo-layer memory system...",
-    wiki_type="spec"
-)
+fw.add_page(title="Architecture Overview", content="# Architecture\n\nTwo-layer memory system...", wiki_type="spec")
 
 # Search
 results = fw.search("architecture", limit=5)

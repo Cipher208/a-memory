@@ -19,19 +19,10 @@ from rag.engine import RAGEngine
 engine = RAGEngine()
 
 # Search
-results = await engine.search(
-    query="database architecture",
-    user_id="u1",
-    strategy="hybrid",
-    limit=10
-)
+results = await engine.search(query="database architecture", user_id="u1", strategy="hybrid", limit=10)
 
 # Ingest
-await engine.ingest(
-    content="PostgreSQL is used for production...",
-    user_id="u1",
-    page_id=1
-)
+await engine.ingest(content="PostgreSQL is used for production...", user_id="u1", page_id=1)
 ```
 
 ## Scoring

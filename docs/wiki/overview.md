@@ -27,7 +27,7 @@ User-specific wiki pages:
 ```python
 from wiki.manager import WikiManager
 
-uw = WikiManager(layer='user')
+uw = WikiManager(layer="user")
 await uw.add_page(user_id="u1", title="My Notes", content="...")
 ```
 
@@ -38,6 +38,6 @@ Agent identity wiki:
 ```python
 from wiki.manager import WikiManager
 
-aw = WikiManager(layer='agent')
+aw = WikiManager(layer="agent")
 await aw.add_page(title="Learning", content="...")
 ```

@@ -7,10 +7,7 @@ Unified scoring for RAG search results.
 ```python
 from rag.scoring import Scorer, ScoringWeights
 
-scorer = Scorer(
-    mode="rrf",
-    weights=ScoringWeights(relevance=1.0, novelty=0.5, type_boost=0.3)
-)
+scorer = Scorer(mode="rrf", weights=ScoringWeights(relevance=1.0, novelty=0.5, type_boost=0.3))
 
 results = scorer.rank_sync(query, candidates, user_id)
 ```

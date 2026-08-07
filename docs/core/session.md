@@ -10,12 +10,7 @@ from core.session import SessionStore
 ss = SessionStore()
 
 # Add entry
-await ss.add_entry(
-    user_id="u1",
-    role="user",
-    content="What's the weather?",
-    tokens=5
-)
+await ss.add_entry(user_id="u1", role="user", content="What's the weather?", tokens=5)
 
 # Get entries
 entries = await ss.get_entries(user_id="u1", limit=20)

@@ -473,8 +473,8 @@ LONG_TERM_PATTERNS = [
 **2. Bootstrap / Anti-Compaction Recovery**
 ```python
 SESSION_HANDOFF.md  # что было сделано, что дальше
-ACTIVE_CONTEXT.md   # текущий working set
-FRESHNESS.md        # timestamp каждого файла
+ACTIVE_CONTEXT.md  # текущий working set
+FRESHNESS.md  # timestamp каждого файла
 bootstrap_agent(reason="session_start")  # полное восстановление
 ```
 

@@ -10,12 +10,7 @@ from core.memory import CoreMemory
 cm = CoreMemory()
 
 # Store
-await cm.store(
-    user_id="u1",
-    key="preference",
-    value="dark mode",
-    kind="preference"
-)
+await cm.store(user_id="u1", key="preference", value="dark mode", kind="preference")
 
 # Retrieve
 fact = await cm.retrieve(user_id="u1", key="preference")

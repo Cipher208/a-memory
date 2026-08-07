@@ -7,13 +7,10 @@ Agent identity wiki for storing agent learning and evolution.
 ```python
 from wiki.manager import WikiManager
 
-aw = WikiManager(layer='agent')
+aw = WikiManager(layer="agent")
 
 # Add page
-await aw.add_page(
-    title="Learning Patterns",
-    content="# Learning\n\nI've learned that users prefer..."
-)
+await aw.add_page(title="Learning Patterns", content="# Learning\n\nI've learned that users prefer...")
 
 # Search
 results = await aw.search("learning patterns")

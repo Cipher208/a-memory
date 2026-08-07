@@ -22,11 +22,11 @@ buf.add(role="assistant", content="Hi there!", tokens=3)
 
 # Get recent
 recent = buf.get_recent(10)  # last 10 entries
-full = buf.get_full()        # all entries
+full = buf.get_full()  # all entries
 
 # Info
-print(buf.size())            # current size
-buf.clear()                  # reset
+print(buf.size())  # current size
+buf.clear()  # reset
 ```
 
 ## Hypothesis Tests
