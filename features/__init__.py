@@ -8,4 +8,4 @@ from .compression import MemoryCompressor
 from .import_export import ImportExport
 from .rate_limiting import RateLimiter
 
-__all__ = ["ImportExport", "BackupManager", "MemoryCompressor", "AuditTrail", "RateLimiter"]
+__all__ = ["AuditTrail", "BackupManager", "ImportExport", "MemoryCompressor", "RateLimiter"]

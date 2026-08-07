@@ -99,7 +99,7 @@ async def lifespan(server: FastMCP):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logging.getLogger(__name__).error("Periodic task error: %s", e)
+                logging.getLogger(__name__).exception("Periodic task error: %s", e)
 
     periodic_task = asyncio.create_task(_periodic_tasks())
     try:
@@ -121,7 +121,7 @@ mcp = FastMCP(
 
 def _register_all_tools():
     # Importing these modules triggers self-registration into the registry
-    import mcp_server.tools_layer  # noqa: F401
+    import mcp_server.tools_layer
     import mcp_server.tools_ops  # noqa: F401
     from mcp_server.registry import get_all_tools
 
@@ -162,7 +162,7 @@ def main():
             except Exception as e:
                 import logging
 
-                logging.getLogger(__name__).error("HTTP transport failed: %s. Try with --dashboard flag.", e)
+                logging.getLogger(__name__).exception("HTTP transport failed: %s. Try with --dashboard flag.", e)
                 raise
     else:
         mcp.run(transport="stdio")

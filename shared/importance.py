@@ -9,13 +9,16 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from shared.memory_types import (
     MemoryKind,
     get_policy,
     kind_for_text,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 # Tech keywords (RU + EN)
 _TECH_KEYWORDS_RU = (
@@ -200,8 +203,8 @@ class ImportanceScorer:
         technical_keywords_en: Iterable[str] = _TECH_KEYWORDS_EN,
         weights: dict[str, float] | None = None,
     ):
-        self.tech_ru = set(k.lower() for k in technical_keywords_ru)
-        self.tech_en = set(k.lower() for k in technical_keywords_en)
+        self.tech_ru = {k.lower() for k in technical_keywords_ru}
+        self.tech_en = {k.lower() for k in technical_keywords_en}
         self._weights = weights or {}
 
     def score(

@@ -16,7 +16,7 @@ class MetricsCollector:
         self._start_time = time.time()
         self._lock = threading.Lock()
 
-    def inc(self, name: str, value: int | float = 1):
+    def inc(self, name: str, value: float = 1):
         with self._lock:
             self._counters[name] += value
 

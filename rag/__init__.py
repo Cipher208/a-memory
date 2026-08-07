@@ -6,4 +6,4 @@ from .conflict import ConflictResolver
 from .engine import RAGEngine, StrategyT
 from .router import RetrievalRouter
 
-__all__ = ["RAGEngine", "StrategyT", "RetrievalRouter", "ConflictResolver"]
+__all__ = ["ConflictResolver", "RAGEngine", "RetrievalRouter", "StrategyT"]

@@ -6,4 +6,4 @@ from .agent_hooks import AgentHooks
 from .registry import HookRegistry
 from .user_hooks import UserHooks
 
-__all__ = ["HookRegistry", "UserHooks", "AgentHooks"]
+__all__ = ["AgentHooks", "HookRegistry", "UserHooks"]

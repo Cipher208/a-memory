@@ -92,8 +92,20 @@ line-length = 150
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
-ignore = ["E402", "E501", "F841", "F811", "UP031", "UP035"]
+select = ["ALL"]
+ignore = [
+    "INP001",   # Missing __init__.py in subdirs
+    "D",        # Missing docstrings
+    "ANN",      # Missing type annotations
+    "EM",       # Exception message literals
+    "TRY003",   # Long exception messages
+    "PLR2004",  # Magic numbers
+    "COM812",   # Missing trailing comma
+    "ISC001",   # Implicit string concatenation
+    "T201",     # print() found (we use it in demo/cli)
+    "S101",     # Use of assert (standard for tests)
+    "PLC0415",  # Import at top level (we use dynamic imports)
+]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]

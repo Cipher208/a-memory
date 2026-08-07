@@ -26,7 +26,7 @@ def test_smart_similarity_short_uses_ngrams():
     a = "Python is best"
     b = "Python best"
     s = smart_similarity(a, b)
-    ngram = char_ngram_jaccard(a, b, 3)
+    char_ngram_jaccard(a, b, 3)
     assert s > 0.5
 
 

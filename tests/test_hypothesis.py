@@ -436,7 +436,6 @@ class TestPathSafetyProperties:
 #  features/secrets.py — encrypt/decrypt roundtrip
 # ═══════════════════════════════════════════════════════════════
 
-from features.secrets import decrypt_json, encrypt_json
 
 
 class TestSecretsProperties:
@@ -615,8 +614,9 @@ class TestConnectionProperties:
 #  shared/cache.py — cache get/set invariant
 # ═══════════════════════════════════════════════════════════════
 
-from shared.cache import MemoryCache
 import contextlib
+
+from shared.cache import MemoryCache
 
 
 class TestCacheProperties:
@@ -832,7 +832,7 @@ class TestMemoryStateMachine:
 
         from core.memory import CoreMemory
 
-        rng = random.Random(seed)
+        random.Random(seed)
         mem = CoreMemory()
         expected = {}
 
@@ -850,7 +850,7 @@ class TestMemoryStateMachine:
 
         # Delete one and verify
         if expected:
-            key_to_delete = list(expected.keys())[0]
+            key_to_delete = next(iter(expected.keys()))
             asyncio.run(mem.delete("state_test", key_to_delete))
             result = asyncio.run(mem.get("state_test", key_to_delete))
             assert result is None, f"Key {key_to_delete} should be deleted"
@@ -960,7 +960,6 @@ def chaos_db_locked(monkeypatch):
         return await original_execute(self, *args, **kwargs)
 
     monkeypatch.setattr(aiosqlite.Connection, "execute", chaotic_execute)
-    yield
 
 
 @pytest.fixture
@@ -977,7 +976,6 @@ def chaos_api_timeout(monkeypatch):
         return original_encrypt(data)
 
     monkeypatch.setattr("features.secrets.encrypt_json", slow_encrypt)
-    yield
 
 
 @pytest.fixture
@@ -1042,7 +1040,7 @@ def chaos_corrupt_db(tmp_path):
     """Create a corrupted database file to test error handling."""
     db_path = tmp_path / "corrupt.db"
     db_path.write_bytes(b"not a sqlite database" * 100)
-    yield db_path
+    return db_path
 
 
 def test_chaos_keyboard_interrupt_during_saga():

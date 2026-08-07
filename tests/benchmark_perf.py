@@ -114,7 +114,7 @@ async def bench_rag_join(rag: RAGEngine, n: int = 100) -> dict:
             "SELECT COUNT(*) FROM rag_chunks c JOIN rag_pages p ON c.page_id = p.id WHERE p.user_id = ?",
             ("bench",),
         )
-        row = await cur.fetchone()
+        await cur.fetchone()
     elapsed = time.perf_counter() - start
     return {"operation": "rag_chunks_join", "n": n, "elapsed_s": elapsed, "ops_per_s": n / elapsed}
 
@@ -122,51 +122,34 @@ async def bench_rag_join(rag: RAGEngine, n: int = 100) -> dict:
 async def run_all():
     """Run all benchmarks."""
     tmp = tempfile.mkdtemp()
-    print("=== Performance Benchmark ===")
-    print("Setup: ingesting 500 chunks...")
 
     rag = await _setup_rag(tmp, n_chunks=500)
-    print("Setup complete.\n")
 
     results = []
 
     # FTS
-    print("Running FTS search benchmark...")
     r = await bench_fts_search(rag, n=100)
     results.append(r)
-    print(f"  {r['operation']}: {r['n']} ops in {r['elapsed_s']:.3f}s ({r['ops_per_s']:.0f} ops/s)")
 
     # MIB
-    print("Running MIB search benchmark...")
     r = await bench_mib_search(rag, n=50)
     results.append(r)
-    print(f"  {r['operation']}: {r['n']} ops in {r['elapsed_s']:.3f}s ({r['ops_per_s']:.0f} ops/s)")
 
     # Hybrid
-    print("Running hybrid search benchmark...")
     r = await bench_hybrid_search(rag, n=50)
     results.append(r)
-    print(f"  {r['operation']}: {r['n']} ops in {r['elapsed_s']:.3f}s ({r['ops_per_s']:.0f} ops/s)")
 
     # Tag lookup
-    print("Running tag lookup benchmark...")
     r = await bench_tag_lookup(n=200)
     results.append(r)
-    print(f"  {r['operation']}: {r['n']} ops in {r['elapsed_s']:.3f}s ({r['ops_per_s']:.0f} ops/s)")
 
     # JOIN index
-    print("Running rag_chunks JOIN benchmark...")
     r = await bench_rag_join(rag, n=100)
     results.append(r)
-    print(f"  {r['operation']}: {r['n']} ops in {r['elapsed_s']:.3f}s ({r['ops_per_s']:.0f} ops/s)")
 
-    print("\n=== Summary ===")
-    print(f"{'Operation':<25} {'Count':>6} {'Time (s)':>10} {'Ops/s':>10}")
-    print("-" * 55)
     for r in results:
-        print(f"{r['operation']:<25} {r['n']:>6} {r['elapsed_s']:>10.3f} {r['ops_per_s']:>10.0f}")
+        pass
 
-    print("\nDone!")
     return results
 
 

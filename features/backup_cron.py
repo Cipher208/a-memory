@@ -3,6 +3,7 @@ Backup Cron — automatic scheduled backups with jitter + wiki sync.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -14,7 +15,6 @@ from typing import Any
 
 from config import config
 from shared.path_safety import safe_resolve
-import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ class BackupCron:
 
                 time.sleep(60)
             except Exception as e:
-                logger.error(f"Backup cron error: {e}")
+                logger.exception(f"Backup cron error: {e}")
                 time.sleep(300)
 
     def _fire_nightly_hooks(self):
@@ -101,7 +101,7 @@ class BackupCron:
             for layer in ["user", "agent"]:
                 asyncio.run(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
         except Exception as e:
-            logger.error(f"Nightly hook error: {e}")
+            logger.exception(f"Nightly hook error: {e}")
 
     def _do_backup(self) -> str:
         import shutil
@@ -160,7 +160,7 @@ class BackupCron:
             self._last_wiki_sync = time.time()
             self._save_state()
         except Exception as e:
-            logger.error(f"Wiki sync error: {e}")
+            logger.exception(f"Wiki sync error: {e}")
 
     def backup_now(self) -> str:
         return self._do_backup()

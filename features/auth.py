@@ -3,6 +3,7 @@ Authentication — API key + persistent Bearer token with envelope encryption.
 Bearer token and API keys are encrypted at rest using libsodium secretbox.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -13,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from features.secrets import decrypt_json, encrypt_json
-import contextlib
 
 logger = logging.getLogger(__name__)
 

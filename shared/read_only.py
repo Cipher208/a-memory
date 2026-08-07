@@ -37,7 +37,7 @@ class ReadOnlyReplica:
                     src_conn.close()
                     synced[db_file] = 1
                 except Exception as e:
-                    logger.error(f"Replica sync failed for {db_file}: {e}")
+                    logger.exception(f"Replica sync failed for {db_file}: {e}")
                     try:
                         shutil.copy2(src, dst)
                         synced[db_file] = 1
@@ -66,7 +66,7 @@ class ReadOnlyReplica:
                     self.sync()
                 time.sleep(60)
             except Exception as e:
-                logger.error(f"Replica sync error: {e}")
+                logger.exception(f"Replica sync error: {e}")
                 time.sleep(300)
 
     def get_conn(self, db_name: str = "memory.db") -> sqlite3.Connection:

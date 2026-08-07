@@ -2,6 +2,7 @@
 Backup — async backup/restore of all databases
 """
 
+import contextlib
 import json
 import shutil
 import time
@@ -10,7 +11,6 @@ from typing import Any
 
 from config import config
 from shared.path_safety import safe_resolve
-import contextlib
 
 
 class BackupManager:

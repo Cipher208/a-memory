@@ -21,14 +21,14 @@ def test_embed_to_binary_basic():
 
 def test_embed_to_binary_negative_threshold():
     emb = [0.1, -0.2, 0.3, -0.4]
-    packed_a = embed_to_binary(emb, threshold=0.0, dim=4)
+    embed_to_binary(emb, threshold=0.0, dim=4)
     packed_b = embed_to_binary(emb, threshold=0.5, dim=4)
     # with threshold=0.5 all values <0.5 → all zeros
     assert packed_b == b"\x00"
 
 
 @pytest.mark.parametrize(
-    "a,b,expected",
+    ("a", "b", "expected"),
     [
         (b"\xff" * 6, b"\xff" * 6, 0),
         (b"\xff" * 6, b"\x00" * 6, 48),
@@ -64,8 +64,10 @@ def test_supervised_threshold_separates_pos_neg():
     # Threshold should exist and be finite
     assert np.isfinite(thr).all()
     # Threshold should be between min and max of the values
-    assert thr[0] >= 0.8 and thr[0] <= 0.9
-    assert thr[1] >= 0.2 and thr[1] <= 0.3
+    assert thr[0] >= 0.8
+    assert thr[0] <= 0.9
+    assert thr[1] >= 0.2
+    assert thr[1] <= 0.3
 
 
 def test_binary_pipeline_roundtrip():

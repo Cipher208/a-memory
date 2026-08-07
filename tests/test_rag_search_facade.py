@@ -97,7 +97,7 @@ class TestUnifiedSearch:
 
 class TestAutoStrategy:
     @pytest.mark.parametrize(
-        "query,expected",
+        ("query", "expected"),
         [
             ("python", "fts"),
             ("redis cluster", "fts"),

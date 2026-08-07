@@ -32,8 +32,7 @@ def run_async(coro):
     if loop and loop.is_running():
         future = _executor.submit(asyncio.run, coro)
         return future.result(timeout=30)
-    else:
-        return asyncio.run(coro)
+    return asyncio.run(coro)
 
 
 def forgetting_ritual(ctx: dict[str, Any]) -> dict[str, Any]:

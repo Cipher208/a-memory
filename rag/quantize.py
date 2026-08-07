@@ -7,7 +7,10 @@ Supervised variant (per-dimension threshold) activates via
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Sequence
 
 try:
     import numpy as np

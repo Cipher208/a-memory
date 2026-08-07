@@ -233,7 +233,7 @@ async def memory_remember(
     if rate_limit:
         return rate_limit
 
-    hooks = _get_hooks(app, layer)
+    _get_hooks(app, layer)
     gate = await _fire_hook("importance_gate", layer, {"text": value, "key": key, "importance": importance})
     if gate.get("results") and any(r.get("bypass") for r in gate["results"] if isinstance(r, dict)):
         logger.info("Importance gate bypassed: key=%s, importance=%.2f, user=%s", key, importance, user_id)

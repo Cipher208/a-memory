@@ -47,7 +47,7 @@ def test_can_archive_fact():
 
 
 @pytest.mark.parametrize(
-    "text,expected",
+    ("text", "expected"),
     [
         ("я обещаю сделать к пятнице", MemoryKind.COMMITMENT),
         ("I commit to ship by Friday", MemoryKind.COMMITMENT),

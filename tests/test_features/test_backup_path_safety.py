@@ -16,7 +16,7 @@ def bm(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "manifest_files,should_reject",
+    ("manifest_files", "should_reject"),
     [
         (["../../etc/crontab", "memory.db"], True),
         (["/etc/passwd"], True),

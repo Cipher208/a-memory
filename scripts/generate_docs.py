@@ -562,11 +562,9 @@ def main():
         if not full_path.exists():
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding="utf-8")
-            print(f"  Created: {rel_path}")
             created += 1
         else:
-            print(f"  Exists:  {rel_path}")
-    print(f"\nCreated {created} files")
+            pass
 
 
 if __name__ == "__main__":

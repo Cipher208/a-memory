@@ -1,21 +1,19 @@
 """init_v8_schema
 
 Revision ID: a38d67fcd99e
-Revises: 
+Revises:
 Create Date: 2026-08-07 23:05:00.000000
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
-revision: str = 'a38d67fcd99e'
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "a38d67fcd99e"
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -264,7 +262,20 @@ def upgrade() -> None:
         )
     """)
 
-    # 8. FTS5 (must be done statement by statement)
+    # 8. Saga Idempotency Log
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS saga_step_log (
+            saga_id TEXT NOT NULL,
+            step_name TEXT NOT NULL,
+            params_hash TEXT NOT NULL,
+            result_json BLOB,
+            completed_at REAL NOT NULL,
+            PRIMARY KEY (saga_id, step_name, params_hash)
+        )
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS idx_saga_step_log_lookup ON saga_step_log(saga_id)")
+
+    # 9. FTS5 (must be done statement by statement)
     op.execute("CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(title, content, wiki_type, content=rag_pages, content_rowid=id)")
     op.execute("CREATE VIRTUAL TABLE IF NOT EXISTS user_wiki_fts USING fts5(title, content, wiki_type, tags, content=user_wiki, content_rowid=entry_id)")
     op.execute("CREATE VIRTUAL TABLE IF NOT EXISTS agent_wiki_fts USING fts5(title, content, wiki_type, tags, content=agent_wiki, content_rowid=entry_id)")

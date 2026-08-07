@@ -243,6 +243,6 @@ def format_result(c) -> dict[str, Any]:
         "title": c.title,
         "content": content,
         "wiki_type": c.wiki_type,
-        "score": c.final_score if c.final_score else c.rrf_score,
+        "score": c.final_score or c.rrf_score,
         "source": c.source,
     }

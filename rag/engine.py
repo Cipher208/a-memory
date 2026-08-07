@@ -3,6 +3,7 @@ RAG Engine — FTS5 + binary embeddings hybrid search.
 All DB operations via AsyncConnectionManager (aiosqlite).
 """
 
+import contextlib
 import hashlib
 import logging
 from pathlib import Path
@@ -10,7 +11,6 @@ from typing import Any, Literal, cast
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
-import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ class RAGEngine:
 
         strategy = strategy or self.search_strategy
         if strategy == "auto":
-            strategy = cast(StrategyT, auto_strategy(query))
+            strategy = cast("StrategyT", auto_strategy(query))
 
         if strategy == "fts":
             results = await search_fts5(self._cm, query, user_id, limit, self._fts_available)

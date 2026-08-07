@@ -40,17 +40,17 @@ def chunk_text(text: str, max_size: int = 500, overlap: int = 100) -> list[str]:
             words = p.split()
             word_buf: list[str] = []
             for w in words:
-                if len(" ".join(word_buf + [w])) > max_size and word_buf:
+                if len(" ".join([*word_buf, w])) > max_size and word_buf:
                     chunks.append(" ".join(word_buf).strip())
                     # Word-level overlap: keep last N words
-                    word_buf = word_buf[-max(1, overlap // 8) :] + [w] if overlap else [w]
+                    word_buf = [*word_buf[-max(1, overlap // 8):], w] if overlap else [w]
                 else:
                     word_buf.append(w)
             if word_buf:
                 chunks.append(" ".join(word_buf).strip())
             continue
 
-        projected = "\n\n".join(buffer + [p])
+        projected = "\n\n".join([*buffer, p])
         if len(projected) > max_size and buffer:
             _flush(buffer)
             buffer = _take_overlap(buffer, overlap)

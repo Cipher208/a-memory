@@ -2,14 +2,14 @@
 DB Migrations — async, unified memory.db using Alembic
 """
 
-import logging
-import os
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
-from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
+
+from alembic import command as alembic_command
 from shared.connection import AsyncConnectionManager, connection_manager
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class MigrationManager:
     async def migrate(self) -> dict[str, Any]:
         """Run all pending migrations using Alembic."""
         current = await self.get_current_version()
-        
+
         # Run Alembic upgrade in a thread to avoid blocking async loop
         # (Alembic/SQLAlchemy sync nature)
         def run_upgrade():
@@ -49,9 +49,9 @@ class MigrationManager:
 
         logger.info("Starting DB migration via Alembic...")
         await asyncio.to_thread(run_upgrade)
-        
+
         new_version = await self.get_current_version()
-        
+
         return {
             "current_version": current,
             "new_version": new_version,

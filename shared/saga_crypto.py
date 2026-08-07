@@ -5,13 +5,16 @@ Wraps features.secrets for saga-specific state persistence.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import warnings
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from features.secrets import decrypt_json, encrypt_json, is_encrypted_blob
-import contextlib
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def write_state_atomic(path: Path, state: dict) -> None:

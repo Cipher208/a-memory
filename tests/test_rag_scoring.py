@@ -6,7 +6,7 @@ from rag.scoring import CorpusStats, ScoredCandidate, Scorer, ScoringWeights
 
 
 @pytest.mark.parametrize(
-    "kwargs,expected",
+    ("kwargs", "expected"),
     [
         ({}, {"relevance": 1.0, "novelty": 0.0}),
         ({"relevance": 2.0, "novelty": 0.5, "type_boost": 0.3}, {"relevance": 2.0, "novelty": 0.5}),
@@ -28,7 +28,7 @@ def test_scored_candidate():
 
 
 @pytest.mark.parametrize(
-    "total,counts,doc_id,expected",
+    ("total", "counts", "doc_id", "expected"),
     [
         (0, {}, 1, 1.0),
         (10, {1: 5}, 999, 0.0),
@@ -41,7 +41,7 @@ def test_corpus_stats(total, counts, doc_id, expected):
 
 
 @pytest.mark.parametrize(
-    "rrf,bin_score,expected",
+    ("rrf", "bin_score", "expected"),
     [
         (0.5, None, 0.5),
         (0.6, 0.8, 0.7),
@@ -54,7 +54,7 @@ def test_relevance_score(rrf, bin_score, expected):
 
 
 @pytest.mark.parametrize(
-    "counts,total,doc_id,min_novelty",
+    ("counts", "total", "doc_id", "min_novelty"),
     [
         ({}, 0, 1, 0.0),
         ({2: 50}, 100, 1, 1.0),
@@ -80,7 +80,7 @@ def test_novelty_capped():
 
 
 @pytest.mark.parametrize(
-    "wiki_type,expected",
+    ("wiki_type", "expected"),
     [
         (None, 0.0),
         ("", 0.0),

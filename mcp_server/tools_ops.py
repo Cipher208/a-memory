@@ -47,11 +47,10 @@ async def memory_api_key(
     if action == "create":
         key = api_key_auth.create_key(user_id, label)
         return ApiKeyResult(api_key=key, user_id=user_id, label=label).dict()
-    elif action == "revoke":
+    if action == "revoke":
         revoked = api_key_auth.revoke(api_key)
         return ApiKeyResult(revoked=revoked).dict()
-    else:
-        return ApiKeyResult(keys=api_key_auth.list_keys()).dict()
+    return ApiKeyResult(keys=api_key_auth.list_keys()).dict()
 
 
 async def memory_backup(
@@ -73,14 +72,13 @@ async def memory_backup(
     if action == "now":
         path = backup_cron.backup_now()
         return BackupResult(path=path).dict()
-    elif action == "list":
+    if action == "list":
         return BackupResult(backups=backup_cron.list_backups()).dict()
-    elif action == "restore":
+    if action == "restore":
         result = backup_cron.restore(backup_name)
         return BackupResult(**result).dict()
-    else:
-        status = backup_cron.status()
-        return BackupResult(**status).dict()
+    status = backup_cron.status()
+    return BackupResult(**status).dict()
 
 
 async def memory_saga(
@@ -134,11 +132,10 @@ async def memory_data(
     if action == "export":
         path = await app.import_export.export_user(user_id)
         return DataResult(path=path).dict()
-    elif action == "import":
+    if action == "import":
         result = await app.import_export.import_user(file_path, target_user_id or user_id)
         return DataResult(**result).dict()
-    else:
-        return DataResult(exports=app.import_export.list_exports()).dict()
+    return DataResult(exports=app.import_export.list_exports()).dict()
 
 
 async def memory_sync_replica(
@@ -178,7 +175,6 @@ async def memory_cleanup(
     dream_buf = DreamBuffer()
     archive_dir = str(Path.home() / ".mcp-ariel-memory" / "archives")
 
-    results: dict[str, Any] = {}
 
     dedup_task = mc.deduplicate_core(user_id)
     compress_task = mc.compress_episodes(user_id, 0.3)

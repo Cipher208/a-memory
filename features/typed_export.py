@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 
 from shared.connection import connection_manager
 from shared.memory_types import backfill_null_kinds, kind_for_text
@@ -32,8 +31,8 @@ async def do_export(user_id: str, kind: str | None) -> None:
                 (user_id,),
             )
         ).fetchall()
-    for r in rows:
-        print(json.dumps(dict(r), ensure_ascii=False, default=str))
+    for _r in rows:
+        pass
 
 
 async def do_reclassify(user_id: str, dry_run: bool) -> None:
@@ -50,21 +49,18 @@ async def do_reclassify(user_id: str, dry_run: bool) -> None:
         if r["memory_kind"] != new_kind:
             changes.append((new_kind, r["id"]))
     if dry_run:
-        print(f"[dry-run] would reclassify {len(changes)} rows")
         for kind, rid in changes[:20]:
-            print(f"  -> {kind}  (id={rid})")
+            pass
         return
     if changes:
         await conn.execute("BEGIN")
         for kind, rid in changes:
             await conn.execute("UPDATE core_memory SET memory_kind=? WHERE id=?", (kind, rid))
         await conn.commit()
-    print(f"reclassified {len(changes)} rows")
 
 
 async def do_backfill(dry_run: bool) -> None:
-    n = await backfill_null_kinds(connection_manager, dry_run=dry_run)
-    print(f"null kinds to backfill: {n}")
+    await backfill_null_kinds(connection_manager, dry_run=dry_run)
 
 
 def main() -> None:

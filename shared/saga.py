@@ -262,7 +262,7 @@ class Saga:
                 attempt += 1
                 if attempt <= step.retry_attempts:
                     delay = step.retry_backoff * (2 ** (attempt - 1))
-                    logger.warning("Saga '%s' step '%s' retry %d/%d in %.1fs: %s" % (self.name, step.name, attempt, step.retry_attempts, delay, exc))
+                    logger.warning(f"Saga '{self.name}' step '{step.name}' retry {attempt}/{step.retry_attempts} in {delay:.1f}s: {exc}")
                     await asyncio.sleep(delay)
             except Exception as exc:
                 step_exc = exc
@@ -270,7 +270,7 @@ class Saga:
 
         step.status = SagaStatus.FAILED
         if attempt > step.retry_attempts:
-            logger.error("Saga '%s' step '%s' failed after %d retries: %s" % (self.name, step.name, step.retry_attempts, step_exc))
+            logger.error(f"Saga '{self.name}' step '{step.name}' failed after {step.retry_attempts} retries: {step_exc}")
         else:
             logger.error(f"Saga '{self.name}' step '{step.name}' failed: {step_exc}")
         await self._compensate(self._current_step)
@@ -329,7 +329,7 @@ class Saga:
     async def _compensate(self, failed_step: int) -> None:
         self._status = SagaStatus.COMPENSATING
         self._save_state()
-        logger.info("Saga '%s' compensating from step %d" % (self.name, failed_step))
+        logger.info(f"Saga '{self.name}' compensating from step {failed_step}")
 
         for i in range(failed_step - 1, -1, -1):
             step = self._steps[i]

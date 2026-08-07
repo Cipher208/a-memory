@@ -62,7 +62,7 @@ class ForgettingSystem:
             logger.info("Decayed %d entries" % len(updates))
             return len(updates)
         except Exception as e:
-            logger.error(f"Decay failed: {e}")
+            logger.exception(f"Decay failed: {e}")
             return 0
 
     async def archive_old_entries(self) -> int:
@@ -122,7 +122,7 @@ class ForgettingSystem:
             logger.info("Archived %d entries" % archived_count)
             return archived_count
         except Exception as e:
-            logger.error(f"Archive failed: {e}")
+            logger.exception(f"Archive failed: {e}")
             return 0
 
     async def compress_duplicates(self) -> int:
@@ -143,7 +143,7 @@ class ForgettingSystem:
             await conn.commit()
             return removed
         except Exception as e:
-            logger.error(f"Compression failed: {e}")
+            logger.exception(f"Compression failed: {e}")
             return 0
 
     async def cleanup(self) -> dict[str, int]:

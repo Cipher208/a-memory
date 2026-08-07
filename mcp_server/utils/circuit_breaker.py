@@ -23,8 +23,8 @@ Usage:
 
 import logging
 import time
-from enum import Enum
 from collections.abc import Callable
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 

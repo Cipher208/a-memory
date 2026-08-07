@@ -62,7 +62,7 @@ class HookRegistry:
         results = []
         for handler, handler_layer in handlers:
             # Only fire handlers registered for this layer (or "both")
-            if handler_layer != "both" and handler_layer != layer:
+            if handler_layer not in ("both", layer):
                 continue
 
             try:
@@ -76,7 +76,7 @@ class HookRegistry:
                     result = await result
                 results.append(result)
             except Exception as e:
-                logger.error(f"Hook {hook_name} failed: {e}")
+                logger.exception(f"Hook {hook_name} failed: {e}")
                 results.append({"error": str(e)})
 
         return {"results": results, "handler_count": len(results)}

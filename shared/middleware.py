@@ -168,7 +168,7 @@ class DedupMiddleware(Middleware):
 
     async def process(self, ctx: MiddlewareContext, next: MiddlewareNext) -> Any:
         now = time.time()
-        key = f"{ctx.user_id}:{ctx.tool_name}:{str(sorted(ctx.args.items()))}"
+        key = f"{ctx.user_id}:{ctx.tool_name}:{sorted(ctx.args.items())!s}"
 
         if key in self._recent and now - self._recent[key] < self._window:
             ctx.metadata["deduped"] = True

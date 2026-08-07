@@ -38,7 +38,7 @@ def test_is_encrypted_blob(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "env_content,expected_key",
+    ("env_content", "expected_key"),
     [
         ("MCP_MASTER_KEY=from-dotenv-test", "from-dotenv-test"),
         ("# comment\n\nMCP_MASTER_KEY=real-value\n", "real-value"),
@@ -74,7 +74,8 @@ def test_master_key_derivation(monkeypatch):
     monkeypatch.setenv("MCP_MASTER_KEY", "my-secret-seed-for-kdf")
     _master_cache.clear()
     key = _load_master_key()
-    assert isinstance(key, bytes) and len(key) == 32
+    assert isinstance(key, bytes)
+    assert len(key) == 32
 
 
 def test_master_key_caches():

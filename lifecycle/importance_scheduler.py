@@ -86,7 +86,7 @@ class ImportanceScheduler:
                 try:
                     await self._rescore_user(uid, conn, stats)
                 except Exception as exc:
-                    logger.error("rescore for user=%s failed: %s", uid, exc)
+                    logger.exception("rescore for user=%s failed: %s", uid, exc)
                     stats["errors"] += 1
 
         await conn.commit()

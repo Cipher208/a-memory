@@ -1,6 +1,5 @@
 """Generate JSON schema for MCP tools."""
 
-import json
 from typing import Any
 
 
@@ -67,4 +66,3 @@ def generate_openapi_spec() -> dict[str, Any]:
 
 if __name__ == "__main__":
     spec = generate_openapi_spec()
-    print(json.dumps(spec, indent=2))

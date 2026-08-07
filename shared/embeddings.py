@@ -50,8 +50,7 @@ class EmbeddingCache:
     def _normalize_text(self, text: str) -> str:
         text = text.lower().strip()
         text = re.sub(r"[^\w\s]", "", text)
-        text = re.sub(r"\s+", " ", text)
-        return text
+        return re.sub(r"\s+", " ", text)
 
     def _hash_text(self, text: str) -> str:
         return hashlib.sha256(self._normalize_text(text).encode("utf-8")).hexdigest()
