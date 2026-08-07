@@ -9,4 +9,4 @@ FileWiki = WikiManager
 UserWiki = WikiManager
 AgentWiki = WikiManager
 
-__all__ = ["WikiManager", "FileWiki", "UserWiki", "AgentWiki", "ALL_USER_TYPES", "ALL_AGENT_TYPES"]
+__all__ = ["ALL_AGENT_TYPES", "ALL_USER_TYPES", "AgentWiki", "FileWiki", "UserWiki", "WikiManager"]

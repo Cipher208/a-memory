@@ -38,8 +38,12 @@ def get_external_dirs(layer: str) -> list[str]:
     return cfg.get("wiki", {}).get(layer, {}).get("external_dirs", [])
 
 
+ALLOWED_TABLES = {"user_wiki", "agent_wiki", "wiki_index"}
+
 async def find_by_source(cm: AsyncConnectionManager, table: str, user_id: str, source: str) -> int | None:
     """Find entry_id by user_id and source path in the given table."""
+    if table not in ALLOWED_TABLES:
+        raise ValueError(f"Invalid table: {table}")
     conn = await cm.get("memory.db")
     cur = await conn.execute(f"SELECT entry_id FROM {table} WHERE user_id=? AND source=?", (user_id, source))
     row = await cur.fetchone()
@@ -73,6 +77,8 @@ def build_update_clause(fields: dict[str, Any]) -> tuple[list[str], list]:
 
 def build_count_query(table: str, user_id: str | None = None, wiki_type: str | None = None) -> tuple[str, list]:
     """Build COUNT query with optional WHERE clauses."""
+    if table not in ALLOWED_TABLES:
+        raise ValueError(f"Invalid table: {table}")
     conditions, params = [], []
     if user_id:
         conditions.append("user_id=?")
