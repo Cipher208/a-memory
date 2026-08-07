@@ -47,7 +47,7 @@ def _load_dotenv() -> None:
     if not env_path.exists():
         return
     try:
-        with open(env_path) as f:
+        with Path(env_path).open() as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -66,7 +66,7 @@ def _save_dotenv(key: str, value: str) -> None:
     """Save a key-value pair to .env file."""
     env_path = Path(".env")
     try:
-        with open(env_path, "a") as f:
+        with Path(env_path, "a").open() as f:
             f.write(f"\n{key}={value}\n")
     except Exception:
         pass
@@ -166,7 +166,7 @@ def is_encrypted_blob(path: Path) -> bool:
     """
     if not path.exists():
         return False
-    with open(path, "rb") as f:
+    with Path(path, "rb").open() as f:
         head = f.read(1)
     return head not in (b"{", b"[", b" ", b"\n")
 

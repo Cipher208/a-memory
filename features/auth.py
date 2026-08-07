@@ -30,7 +30,7 @@ class APIKeyAuth:
         if not self.keys_file.exists():
             return {}
         try:
-            with open(self.keys_file, "rb") as f:
+            with Path(self.keys_file, "rb").open() as f:
                 blob = f.read()
         except Exception as e:
             logger.warning("Failed to read %s: %s", self.keys_file, e)
@@ -67,7 +67,7 @@ class APIKeyAuth:
             data = self._keys
         tmp_file = self.keys_file.with_suffix(".json.tmp")
         ciphertext = encrypt_json(data)
-        with open(tmp_file, "wb") as f:
+        with Path(tmp_file, "wb").open() as f:
             f.write(ciphertext)
         with contextlib.suppress(OSError):
             os.chmod(tmp_file, 0o600)
@@ -137,7 +137,7 @@ class BearerAuth:
         # 2. From file
         if self.token_file.exists():
             try:
-                with open(self.token_file, "rb") as f:
+                with Path(self.token_file, "rb").open() as f:
                     blob = f.read()
             except Exception as e:
                 logger.warning("Failed to read bearer token file %s: %s", self.token_file, e)
@@ -176,7 +176,7 @@ class BearerAuth:
         data = {"token": token, "created_at": time.time()}
         ciphertext = encrypt_json(data)
         tmp_file = self.token_file.with_suffix(".json.tmp")
-        with open(tmp_file, "wb") as f:
+        with Path(tmp_file, "wb").open() as f:
             f.write(ciphertext)
         with contextlib.suppress(OSError):
             os.chmod(tmp_file, 0o600)

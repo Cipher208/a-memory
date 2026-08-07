@@ -45,7 +45,7 @@ async def find_by_source(cm: AsyncConnectionManager, table: str, user_id: str, s
     if table not in ALLOWED_TABLES:
         raise ValueError(f"Invalid table: {table}")
     conn = await cm.get("memory.db")
-    sql = f"SELECT entry_id FROM {table} WHERE user_id=? AND source=?"  # noqa: S608
+    sql = f"SELECT entry_id FROM {table} WHERE user_id=? AND source=?"
     cur = await conn.execute(sql, (user_id, source))
     row = await cur.fetchone()
     return row[0] if row else None
@@ -88,7 +88,7 @@ def build_count_query(table: str, user_id: str | None = None, wiki_type: str | N
         conditions.append("wiki_type=?")
         params.append(wiki_type)
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    sql = f"SELECT COUNT(*) FROM {table}{where}"  # noqa: S608
+    sql = f"SELECT COUNT(*) FROM {table}{where}"
     return sql, params
 
 

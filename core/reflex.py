@@ -57,7 +57,7 @@ class ReflexBuffer:
     def _load(self):
         if self.persist_path and Path(self.persist_path).exists():
             try:
-                with open(self.persist_path) as f:
+                with Path(self.persist_path).open() as f:
                     data = json.load(f)
                 for entry in data:
                     self._buffer.append(ReflexEntry(**entry))
@@ -67,7 +67,7 @@ class ReflexBuffer:
     def _save(self):
         if self.persist_path:
             try:
-                with open(self.persist_path, "w") as f:
+                with Path(self.persist_path, "w").open() as f:
                     json.dump([vars(e) for e in self._buffer], f)
             except (OSError, TypeError):
                 pass

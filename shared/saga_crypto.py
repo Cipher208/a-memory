@@ -26,7 +26,7 @@ def write_state_atomic(path: Path, state: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     blob = encrypt_json(state)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "wb") as f:
+    with Path(tmp, "wb").open() as f:
         f.write(blob)
     with contextlib.suppress(OSError, PermissionError):
         os.chmod(tmp, 0o600)
@@ -39,7 +39,7 @@ def read_state(path: Path) -> dict:
     """Read encrypted state file."""
     if not path.exists():
         raise FileNotFoundError(path)
-    with open(path, "rb") as f:
+    with Path(path, "rb").open() as f:
         blob = f.read()
     return decrypt_json(blob)
 
@@ -48,7 +48,7 @@ def read_state_legacy_or_encrypted(path: Path) -> dict:
     """Backward-compat: reads legacy plain JSON or encrypted, rotates legacy to encrypted."""
     if not path.exists():
         raise FileNotFoundError(path)
-    with open(path, "rb") as f:
+    with Path(path, "rb").open() as f:
         blob = f.read()
     if is_encrypted_blob(path):
         return decrypt_json(blob)

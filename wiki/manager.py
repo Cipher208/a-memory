@@ -4,6 +4,7 @@ Architecture: .md files on disk = primary, SQLite FTS5 = search index.
 Layers: user, agent, shared.
 """
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -112,7 +113,7 @@ class WikiManager:
         file_path = self._type_dir(wiki_type) / f"{safe_title}.md"
 
         md_content = self._to_md(title, content, tags, importance)
-        file_path.write_text(md_content, encoding="utf-8")
+        await asyncio.to_thread(file_path.write_text, md_content, encoding="utf-8")
 
         await self._index_file(file_path, wiki_type, title, content, tags, importance)
         return str(file_path)
@@ -127,17 +128,18 @@ class WikiManager:
     ):
         """Update .md file and re-index."""
         p = safe_resolve(self.base_dir, file_path)
-        if not p.exists():
+        if not await asyncio.to_thread(p.exists):
             return
 
-        existing = self._parse_md(p.read_text(encoding="utf-8"))
+        text = await asyncio.to_thread(p.read_text, encoding="utf-8")
+        existing = self._parse_md(text)
         new_title = title or existing.get("title", p.stem)
         new_content = content or existing.get("content", "")
         new_tags = tags if tags is not None else existing.get("tags", [])
         new_importance = importance if importance is not None else existing.get("importance", 0.5)
 
         md_content = self._to_md(new_title, new_content, new_tags, new_importance)
-        p.write_text(md_content, encoding="utf-8")
+        await asyncio.to_thread(p.write_text, md_content, encoding="utf-8")
 
         wiki_type = p.parent.name
         await self._index_file(p, wiki_type, new_title, new_content, new_tags, new_importance)
@@ -147,9 +149,13 @@ class WikiManager:
             p = safe_resolve(self.base_dir, file_path)
         except ValueError:
             return None
-        if not p.exists():
+
+        exists = await asyncio.to_thread(p.exists)
+        if not exists:
             return None
-        parsed = self._parse_md(p.read_text(encoding="utf-8"))
+
+        text = await asyncio.to_thread(p.read_text, encoding="utf-8")
+        parsed = self._parse_md(text)
         conn = await self._cm.get(DB_NAME)
         cur = await conn.execute("SELECT * FROM wiki_index WHERE file_path=?", (str(p),))
         row = await cur.fetchone()
@@ -182,8 +188,10 @@ class WikiManager:
             results = []
             for r in rows:
                 p = Path(r["file_path"])
-                if p.exists():
-                    parsed = self._parse_md(p.read_text(encoding="utf-8"))
+                exists = await asyncio.to_thread(p.exists)
+                if exists:
+                    text = await asyncio.to_thread(p.read_text, encoding="utf-8")
+                    parsed = self._parse_md(text)
                     results.append(
                         {
                             "id": r["entry_id"],
@@ -197,7 +205,7 @@ class WikiManager:
                         }
                     )
             return results
-        except Exception:
+        except (RuntimeError, KeyError):
             return []
 
     async def list_by_type(self, wiki_type: str, limit: int = 20) -> list[WikiEntry]:
@@ -210,8 +218,10 @@ class WikiManager:
         entries = []
         for r in rows:
             p = Path(r["file_path"])
-            if p.exists():
-                parsed = self._parse_md(p.read_text(encoding="utf-8"))
+            exists = await asyncio.to_thread(p.exists)
+            if exists:
+                text = await asyncio.to_thread(p.read_text, encoding="utf-8")
+                parsed = self._parse_md(text)
                 entries.append(
                     WikiEntry(
                         entry_id=r["entry_id"],
@@ -234,8 +244,10 @@ class WikiManager:
         entries = []
         for r in rows:
             p = Path(r["file_path"])
-            if p.exists():
-                parsed = self._parse_md(p.read_text(encoding="utf-8"))
+            exists = await asyncio.to_thread(p.exists)
+            if exists:
+                text = await asyncio.to_thread(p.read_text, encoding="utf-8")
+                parsed = self._parse_md(text)
                 entries.append(
                     WikiEntry(
                         entry_id=r["entry_id"],
@@ -253,8 +265,8 @@ class WikiManager:
 
     async def delete(self, file_path: str) -> bool:
         p = safe_resolve(self.base_dir, file_path)
-        if p.exists():
-            p.unlink()
+        if await asyncio.to_thread(p.exists):
+            await asyncio.to_thread(p.unlink)
         conn = await self._cm.get(DB_NAME)
         cur = await conn.execute("DELETE FROM wiki_index WHERE file_path=?", (str(p),))
         await conn.commit()
@@ -278,16 +290,32 @@ class WikiManager:
     async def reindex_all(self) -> dict[str, int]:
         """Re-index all .md files from disk to DB."""
         result = {"indexed": 0, "skipped": 0, "errors": 0}
-        for wiki_type_dir in self.base_dir.iterdir():
-            if not wiki_type_dir.is_dir():
+        
+        # Use thread for iterdir
+        def _sync_iter():
+            return list(self.base_dir.iterdir())
+        
+        dirs = await asyncio.to_thread(_sync_iter)
+        for wiki_type_dir in dirs:
+            # Use thread for is_dir
+            is_dir = await asyncio.to_thread(wiki_type_dir.is_dir)
+            if not is_dir:
                 continue
+            
             wiki_type = wiki_type_dir.name
-            for md_file in wiki_type_dir.glob("*.md"):
+            
+            # Use thread for globbing, passing dir explicitly
+            def _sync_glob(d):
+                return list(d.glob("*.md"))
+                
+            md_files = await asyncio.to_thread(_sync_glob, wiki_type_dir)
+            for md_file in md_files:
                 try:
-                    parsed = self._parse_md(md_file.read_text(encoding="utf-8"))
+                    text = await asyncio.to_thread(md_file.read_text, encoding="utf-8")
+                    parsed = self._parse_md(text)
                     await self._index_file(md_file, wiki_type, parsed["title"], parsed["content"], parsed["tags"], parsed["importance"])
                     result["indexed"] += 1
-                except Exception:
+                except (RuntimeError, KeyError):
                     result["errors"] += 1
         return result
 
@@ -297,11 +325,19 @@ class WikiManager:
         result = {"imported": 0, "skipped": 0, "errors": 0}
         for dir_path in dirs:
             p = Path(dir_path)
-            if not p.exists():
+            # Use thread for exists
+            exists = await asyncio.to_thread(p.exists)
+            if not exists:
                 continue
-            for md_file in p.glob("**/*.md"):
+            
+            # Use thread for globbing, passing dir explicitly
+            def _sync_glob(d):
+                return list(d.glob("**/*.md"))
+            
+            md_files = await asyncio.to_thread(_sync_glob, p)
+            for md_file in md_files:
                 try:
-                    content = md_file.read_text(encoding="utf-8")
+                    content = await asyncio.to_thread(md_file.read_text, encoding="utf-8")
                     parsed = self._parse_md(content)
                     title = parsed["title"] or md_file.stem
                     wiki_type = self._guess_type(md_file, parsed["content"])
@@ -311,10 +347,10 @@ class WikiManager:
 
                     safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in title).strip().replace(" ", "_")
                     dest = self._type_dir(wiki_type) / f"{safe_title}.md"
-                    dest.write_text(content, encoding="utf-8")
+                    await asyncio.to_thread(dest.write_text, content, encoding="utf-8")
                     await self._index_file(dest, wiki_type, title, parsed["content"], parsed["tags"], parsed["importance"])
                     result["imported"] += 1
-                except Exception:
+                except (RuntimeError, KeyError):
                     result["errors"] += 1
         return result
 

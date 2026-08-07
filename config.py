@@ -20,7 +20,7 @@ class Config:
     def _load(self):
         config_path = Path(__file__).parent / "config.yaml"
         try:
-            with open(config_path) as f:
+            with Path(config_path).open() as f:
                 self._data = yaml.safe_load(f)
         except FileNotFoundError:
             self._data = {}
