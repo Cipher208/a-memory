@@ -31,6 +31,7 @@ from hooks.user_hooks import UserHooks
 from lifecycle.consolidation import ConsolidationEngine
 from lifecycle.emotion_trigger import EmotionTrigger
 from lifecycle.forgetting import ForgettingSystem
+from lifecycle.importance_scheduler import importance_scheduler
 from rag.engine import RAGEngine
 from rag.multi_source import MultiSourceRAG
 from shared.cache import MemoryCache
