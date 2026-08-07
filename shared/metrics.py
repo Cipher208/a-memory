@@ -1,69 +1,73 @@
 """
-Metrics — Prometheus-compatible metrics collection
+Metrics — Professional Prometheus-compatible metrics collection.
+Uses prometheus_client for standard compliance and advanced histograms.
 """
 
-import threading
+import os
 import time
-from collections import defaultdict
+import logging
+import threading
 from typing import Any
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Summary, generate_latest, CONTENT_TYPE_LATEST
 
+logger = logging.getLogger(__name__)
 
 class MetricsCollector:
+    """Centralized metrics management using prometheus_client."""
+
     def __init__(self):
-        self._counters: dict[str, int | float] = defaultdict(int)
-        self._gauges: dict[str, float] = {}
-        self._histograms: dict[str, list] = defaultdict(list)
         self._start_time = time.time()
-        self._lock = threading.Lock()
+        
+        # --- Standard Metrics ---
+        self.uptime = Gauge(
+            "ariel_memory_uptime_seconds", "Server uptime in seconds"
+        )
+        self.uptime.set_function(lambda: time.time() - self._start_time)
+
+        # --- Domain Metrics ---
+        self.memory_ops_total = Counter(
+            "ariel_memory_ops_total", "Total memory operations", ["action", "layer"]
+        )
+        self.importance_filtered_total = Counter(
+            "ariel_memory_filtered_total", "Total messages filtered by importance", ["reason"]
+        )
+        self.current_importance_threshold = Gauge(
+            "ariel_memory_importance_threshold", "Current EMA importance threshold"
+        )
+        
+        # --- Performance Metrics ---
+        self.search_latency = Histogram(
+            "ariel_memory_search_latency_seconds", 
+            "Latency of memory search operations",
+            buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0)
+        )
 
     def inc(self, name: str, value: float = 1):
-        with self._lock:
-            self._counters[name] += value
+        """Legacy compatibility wrapper."""
+        # Map simple counter name to the labeled counter if possible
+        if name == "importance_bypassed_total":
+            self.importance_filtered_total.labels(reason="below_threshold").inc(value)
+        else:
+            # Create a generic counter if not matched
+            Counter(f"ariel_memory_{name}", f"Legacy counter: {name}").inc(value)
 
     def gauge(self, name: str, value: float):
-        with self._lock:
-            self._gauges[name] = value
-
-    def histogram(self, name: str, value: float):
-        with self._lock:
-            self._histograms[name].append(value)
-            if len(self._histograms[name]) > 1000:
-                self._histograms[name] = self._histograms[name][-500:]
+        """Legacy compatibility wrapper."""
+        if name == "importance_threshold":
+            self.current_importance_threshold.set(value)
+        else:
+            Gauge(f"ariel_memory_{name}", f"Legacy gauge: {name}").set(value)
 
     def render_prometheus(self) -> str:
-        lines = []
-        lines.append("# HELP ariel_memory_uptime_seconds Server uptime")
-        lines.append("# TYPE ariel_memory_uptime_seconds gauge")
-        lines.append(f"ariel_memory_uptime_seconds {time.time() - self._start_time:.1f}")
-
-        with self._lock:
-            for name, val in sorted(self._counters.items()):
-                lines.append(f"# TYPE ariel_memory_{name} counter")
-                lines.append(f"ariel_memory_{name} {val}")
-
-            for name, val in sorted(self._gauges.items()):
-                lines.append(f"# TYPE ariel_memory_{name} gauge")
-                lines.append(f"ariel_memory_{name} {val}")
-
-            for name, vals in sorted(self._histograms.items()):
-                if vals:
-                    lines.append(f"# TYPE ariel_memory_{name}_summary summary")
-                    s = sorted(vals)
-                    lines.append(f'ariel_memory_{name}_summary{{quantile="0.5"}} {s[len(s) // 2]}')
-                    lines.append(f'ariel_memory_{name}_summary{{quantile="0.9"}} {s[int(len(s) * 0.9)]}')
-                    lines.append(f'ariel_memory_{name}_summary{{quantile="0.99"}} {s[int(len(s) * 0.99)]}')
-                    lines.append(f"ariel_memory_{name}_count {len(vals)}")
-
-        return "\n".join(lines) + "\n"
+        """Render all metrics in Prometheus format."""
+        return generate_latest(REGISTRY).decode("utf-8")
 
     def render_json(self) -> dict[str, Any]:
-        with self._lock:
-            return {
-                "uptime_seconds": time.time() - self._start_time,
-                "counters": dict(self._counters),
-                "gauges": dict(self._gauges),
-                "histograms": {k: {"count": len(v), "sum": sum(v), "avg": sum(v) / len(v) if v else 0} for k, v in self._histograms.items()},
-            }
+        """Legacy compatibility: render minimal JSON for dashboard."""
+        return {
+            "uptime_seconds": time.time() - self._start_time,
+            "status": "ok (prometheus_client active)"
+        }
 
-
+# Global instance — used by server.py and middleware
 metrics = MetricsCollector()

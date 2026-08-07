@@ -41,9 +41,10 @@ class AgentHooks:
         hook_registry.register("conflict_resolver", self._conflict_resolver, layer="both")
         hook_registry.register("emotion", self._emotion, layer="agent")
 
-    def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
         """Filter agent messages by importance. Type-aware with agent keywords."""
         from shared.memory_types import default_importance
+        from shared.adaptive import adaptive_threshold
 
         text = ctx.get("text", "")
         if not text:
@@ -63,7 +64,13 @@ class AgentHooks:
         if "?" in text:
             score += 0.1
 
-        return {"importance": min(1.0, score), "bypass": score < 0.3}
+        score = min(1.0, score)
+        
+        # Update EMA
+        threshold = await adaptive_threshold.get_threshold()
+        await adaptive_threshold.update(score)
+
+        return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
     def _error_occurred(self, ctx: dict[str, Any]) -> dict[str, Any]:
         error = ctx.get("error", "")

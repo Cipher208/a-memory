@@ -121,12 +121,18 @@ class ImportanceGateMiddleware(Middleware):
 
         ctx.metadata["importance_signals"] = signals
 
-        if score < self._threshold:
-            ctx.blocked = True
-            ctx.block_reason = f"below_importance_threshold({score:.2f})"
-            from shared.metrics import metrics
+        # Dynamic threshold integration
+        from shared.adaptive import adaptive_threshold
+        threshold = await adaptive_threshold.get_threshold()
+        await adaptive_threshold.update(score)
 
-            metrics.inc("importance_bypassed_total")
+        from shared.metrics import metrics
+        metrics.memory_ops_total.labels(action=ctx.tool_name, layer=ctx.user_id).inc()
+
+        if score < threshold:
+            ctx.blocked = True
+            ctx.block_reason = f"below_importance_threshold({score:.2f}, threshold={threshold:.2f})"
+            metrics.importance_filtered_total.labels(reason="below_threshold").inc()
             return ctx
 
         ctx.args["importance"] = score

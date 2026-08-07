@@ -156,6 +156,8 @@
   "tests/test_importance_v2.py::test_technical_keywords[the redis postgres jwt oauth api is critical for production]",
   "tests/test_importance_v2.py::test_total_in_unit_interval",
   "tests/test_importance_v2.py::test_weights_override",
+  "tests/test_infra_overhaul.py::test_compactor_logic",
+  "tests/test_infra_overhaul.py::test_metrics_registry",
   "tests/test_integration.py::test_conflict_resolver",
   "tests/test_integration.py::test_connection_manager",
   "tests/test_integration.py::test_dashboard",

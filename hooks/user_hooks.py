@@ -85,11 +85,17 @@ class UserHooks:
     def _nightly(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
 
-    def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        from shared.adaptive import adaptive_threshold
         text = ctx.get("text", "")
         kind = ctx.get("memory_kind")
         score = self._calculate_importance(text, kind)
-        return {"importance": score, "bypass": score < 0.3}
+        
+        # Update EMA with new score
+        threshold = await adaptive_threshold.get_threshold()
+        await adaptive_threshold.update(score)
+        
+        return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
     def _auto_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return auto_context(ctx, self.user_id)
