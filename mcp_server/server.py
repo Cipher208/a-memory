@@ -75,14 +75,16 @@ async def lifespan(server: FastMCP):
     await asyncio.to_thread(read_only_replica.sync)
 
     ctx = AppContext()
+
     async def _delayed_start():
         await asyncio.sleep(5)
         backup_cron.start()
         importance_scheduler.start()
         logging.getLogger(__name__).info("Background tasks started after delay")
+
     asyncio.create_task(_delayed_start())
 
-  # Disabled for startup speed debug
+    # Disabled for startup speed debug
 
     # Periodic maintenance tasks
     async def _periodic_tasks():
@@ -180,11 +182,13 @@ def _run_with_dashboard(host: str, port: int):
     from shared.metrics import metrics as m
 
     ctx = AppContext()
+
     async def _delayed_start():
         await asyncio.sleep(5)
         backup_cron.start()
         importance_scheduler.start()
         logging.getLogger(__name__).info("Background tasks started after delay")
+
     asyncio.create_task(_delayed_start())
     dashboard = Dashboard(mm=ctx.mm)
     api_rate_limiter = RateLimiter()
