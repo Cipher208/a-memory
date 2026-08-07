@@ -1,10 +1,12 @@
 """Tests for saga behavior — compensation, retry, idempotency."""
 
 import asyncio
-import pytest
-from shared.saga import Saga
-import shared.connection as _conn_mod
 
+import pytest
+
+import shared.connection as _conn_mod
+from shared.saga import Saga
+import contextlib
 
 # ── Compensation ──
 
@@ -29,10 +31,8 @@ def test_compensation_rolls_back():
         saga = Saga("comp")
         saga.add_step("s1", step1, compensate)
         saga.add_step("s2", fail)
-        try:
+        with contextlib.suppress(RuntimeError):
             await saga.execute()
-        except RuntimeError:
-            pass
 
         assert len(await mm.user_memory("saga_c").recall("k2")) == 0
         assert len(await mm.user_memory("saga_c").recall("k1")) > 0

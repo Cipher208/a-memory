@@ -2,15 +2,14 @@
 MemoryCompressor — async dedup and compression
 """
 
-from shared.constants import DB_NAME
 import time
-from typing import Optional
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class MemoryCompressor:
-    def __init__(self, cm: Optional["AsyncConnectionManager"] = None):
+    def __init__(self, cm: "AsyncConnectionManager" | None = None):
         self._cm = cm or connection_manager
 
     async def deduplicate_core(self, user_id: str) -> int:
@@ -43,7 +42,7 @@ class MemoryCompressor:
 
     ALLOWED_TABLES = {"core_memory", "episodes", "epistemic_edges", "temporal_edges", "saga_log", "agent_wiki", "user_wiki", "file_wiki"}
 
-    async def get_stats(self, user_id: Optional[str] = None) -> dict[str, int]:
+    async def get_stats(self, user_id: str | None = None) -> dict[str, int]:
         stats = {}
         for name, db in [("core", "memory.db"), ("episodes", "memory.db"), ("sessions", "memory.db")]:
             conn = await self._cm.get(db)
@@ -53,7 +52,7 @@ class MemoryCompressor:
                 if t not in self.ALLOWED_TABLES:
                     continue
                 try:
-                    row = await (await conn.execute("SELECT COUNT(*) FROM [%s]" % t)).fetchone()
+                    row = await (await conn.execute(f"SELECT COUNT(*) FROM [{t}]")).fetchone()
                     total += row[0] if row else 0
                 except Exception:
                     pass

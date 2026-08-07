@@ -1,7 +1,7 @@
 """
 Hook Registry - central dispatch for all hooks
 
-Handlers receive (context, mem) where mem is Optional[MemoryManager].
+Handlers receive (context, mem) where mem is MemoryManager | None.
 Each handler is registered with a layer (user/agent/both).
 Only handlers matching the current layer are fired.
 """
@@ -52,9 +52,8 @@ class HookRegistry:
         known_user = _discover_hook_names(UserHooks)
         known_agent = _discover_hook_names(AgentHooks)
 
-        if hook_name in known_user or hook_name in known_agent:
-            if not config.is_hook_enabled(layer, hook_name):
-                return {"skipped": True, "reason": "hook_disabled"}
+        if (hook_name in known_user or hook_name in known_agent) and not config.is_hook_enabled(layer, hook_name):
+            return {"skipped": True, "reason": "hook_disabled"}
 
         handlers = self._hooks.get(hook_name, [])
         if not handlers:
@@ -77,7 +76,7 @@ class HookRegistry:
                     result = await result
                 results.append(result)
             except Exception as e:
-                logger.error("Hook %s failed: %s" % (hook_name, e))
+                logger.error(f"Hook {hook_name} failed: {e}")
                 results.append({"error": str(e)})
 
         return {"results": results, "handler_count": len(results)}

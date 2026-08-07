@@ -3,13 +3,14 @@ RAG Engine — FTS5 + binary embeddings hybrid search.
 All DB operations via AsyncConnectionManager (aiosqlite).
 """
 
-from shared.constants import DB_NAME
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any, Literal, Optional, cast
+from typing import Any, Literal, cast
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class RAGEngine:
         layer: str = "user",
         binary_dim: int = 384,
         binary_threshold_mode: str = "naive",
-        binary_thresholds_path: Optional[str] = None,
+        binary_thresholds_path: str | None = None,
         thresholds=None,
         search_strategy: StrategyT = "fts",
     ):
@@ -122,13 +123,11 @@ class RAGEngine:
         """,
         )
         if self._fts_available:
-            try:
+            with contextlib.suppress(Exception):
                 await self._cm.execute_script(
                     DB_NAME,
                     "CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(title, content, wiki_type, content=rag_pages, content_rowid=id)",
                 )
-            except Exception:
-                pass
 
     async def _ingest_single_file(self, conn, page_id: int, content: str) -> int:
         from rag.chunking import chunk_text
@@ -136,7 +135,7 @@ class RAGEngine:
 
         chunks = chunk_text(content)
         embeddings = await embed_texts(chunks)
-        for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+        for i, (chunk, emb) in enumerate(zip(chunks, embeddings, strict=False)):
             bin_blob = self._binary_for(emb) if emb and len(emb) > 0 and _HAS_BINARY else None
             await conn.execute(
                 "INSERT INTO rag_chunks (page_id, chunk_index, content, bin_embedding) VALUES (?, ?, ?, ?)",
@@ -145,7 +144,7 @@ class RAGEngine:
         return len(chunks)
 
     async def _insert_page(
-        self, conn, title: str, content: str, user_id: str, page_hash: str, wiki_type: Optional[str] = None, path: str = ""
+        self, conn, title: str, content: str, user_id: str, page_hash: str, wiki_type: str | None = None, path: str = ""
     ) -> int | None:
         cur = await conn.execute("SELECT id FROM rag_pages WHERE sha256_hash = ? AND user_id = ?", (page_hash, user_id))
         existing = await cur.fetchone()
@@ -159,37 +158,35 @@ class RAGEngine:
         page_id = cursor.lastrowid
 
         if self._fts_available:
-            try:
+            with contextlib.suppress(Exception):
                 await conn.execute(
                     "INSERT INTO rag_fts(rowid, title, content, wiki_type) VALUES (?, ?, ?, ?)",
                     (page_id, title, content, wiki_type or ""),
                 )
-            except Exception:
-                pass
 
         await self._ingest_single_file(conn, page_id, content)
         return page_id
 
-    async def ingest_file(self, filepath: Path, user_id: str = "default", wiki_type: Optional[str] = None) -> str:
+    async def ingest_file(self, filepath: Path, user_id: str = "default", wiki_type: str | None = None) -> str:
         content = filepath.read_text(encoding="utf-8")
         file_hash = hashlib.sha256(content.encode()).hexdigest()
         conn = await self._cm.get(DB_NAME)
 
         page_id = await self._insert_page(conn, filepath.stem, content, user_id, file_hash, wiki_type, str(filepath))
         if page_id is None:
-            return "[SKIP] %s (already ingested)" % filepath.name
+            return f"[SKIP] {filepath.name} (already ingested)"
 
         await conn.commit()
-        return "[OK] %s" % filepath.name
+        return f"[OK] {filepath.name}"
 
     async def ingest_text(
         self,
         title: str,
         text: str,
         user_id: str = "default",
-        wiki_type: Optional[str] = None,
+        wiki_type: str | None = None,
         path: str = "",
-        relation_to: Optional[int] = None,
+        relation_to: int | None = None,
         relation_type: str = "elaborates",
     ) -> int:
         text_hash = hashlib.sha256(text.encode()).hexdigest()
@@ -210,8 +207,8 @@ class RAGEngine:
         await conn.commit()
         return page_id
 
-    async def search(self, query: str, user_id: str = "default", strategy: Optional[StrategyT] = None, limit: int = 10) -> list[dict[str, Any]]:
-        from rag.search import search_fts5, search_binary, search_rrf, auto_strategy, apply_type_boost, materialize_candidates, format_result
+    async def search(self, query: str, user_id: str = "default", strategy: StrategyT | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        from rag.search import apply_type_boost, auto_strategy, format_result, materialize_candidates, search_binary, search_fts5, search_rrf
 
         strategy = strategy or self.search_strategy
         if strategy == "auto":
@@ -260,7 +257,7 @@ class RAGEngine:
         )
         await conn.commit()
 
-    async def count_pages(self, user_id: Optional[str] = None) -> int:
+    async def count_pages(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         if user_id:
             row = await (await conn.execute("SELECT COUNT(*) FROM rag_pages WHERE user_id=?", (user_id,))).fetchone()

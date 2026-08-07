@@ -7,7 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class RateLimitMiddleware(Middleware):
         if len(user_requests) >= self._max:
             ctx.blocked = True
             ctx.block_reason = "Rate limit exceeded (%d/min)" % self._max
-            logger.warning("Rate limit hit for user %s" % ctx.user_id)
+            logger.warning(f"Rate limit hit for user {ctx.user_id}")
             return {"error": ctx.block_reason}
 
         user_requests.append(now)
@@ -69,12 +69,12 @@ class AuditMiddleware(Middleware):
 
     async def process(self, ctx: MiddlewareContext, next: MiddlewareNext) -> Any:
         ctx.start_time = time.time()
-        logger.info("Tool call: %s (user=%s)" % (ctx.tool_name, ctx.user_id))
+        logger.info(f"Tool call: {ctx.tool_name} (user={ctx.user_id})")
 
         result = await next(ctx)
 
         elapsed = time.time() - ctx.start_time
-        logger.info("Tool completed: %s in %.3fs" % (ctx.tool_name, elapsed))
+        logger.info(f"Tool completed: {ctx.tool_name} in {elapsed:.3f}s")
         ctx.metadata["elapsed"] = elapsed
         return result
 
@@ -89,7 +89,7 @@ class ImportanceGateMiddleware(Middleware):
         technical_weight: float = 0.3,
         question_weight: float = 0.2,
         scorer=None,
-        memory_kind_hint: Optional[str] = None,
+        memory_kind_hint: str | None = None,
     ):
         self._min_length = min_length
         self._threshold = threshold
@@ -149,11 +149,10 @@ class ValidationMiddleware(Middleware):
             ctx.block_reason = "user_id is required"
             return {"error": ctx.block_reason}
 
-        if ctx.tool_name in ("memory_user_remember", "memory_agent_remember"):
-            if not ctx.args.get("key"):
-                ctx.blocked = True
-                ctx.block_reason = "key is required"
-                return {"error": ctx.block_reason}
+        if ctx.tool_name in ("memory_user_remember", "memory_agent_remember") and not ctx.args.get("key"):
+            ctx.blocked = True
+            ctx.block_reason = "key is required"
+            return {"error": ctx.block_reason}
 
         return await next(ctx)
 
@@ -169,7 +168,7 @@ class DedupMiddleware(Middleware):
 
     async def process(self, ctx: MiddlewareContext, next: MiddlewareNext) -> Any:
         now = time.time()
-        key = "%s:%s:%s" % (ctx.user_id, ctx.tool_name, str(sorted(ctx.args.items())))
+        key = f"{ctx.user_id}:{ctx.tool_name}:{str(sorted(ctx.args.items()))}"
 
         if key in self._recent and now - self._recent[key] < self._window:
             ctx.metadata["deduped"] = True

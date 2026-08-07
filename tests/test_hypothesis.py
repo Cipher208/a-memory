@@ -8,7 +8,7 @@ import threading
 import time
 
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 # ── Fixed-dimension strategies (avoid assume() filtering) ──
@@ -120,7 +120,8 @@ class TestScoringProperties:
 
 try:
     import numpy as np
-    from rag.quantize import embed_to_binary, hamming_distance, hamming_to_score, _packed_bytes
+
+    from rag.quantize import _packed_bytes, embed_to_binary, hamming_distance, hamming_to_score
 
     HAS_NUMPY = True
 except ImportError:
@@ -179,7 +180,7 @@ class TestQuantizeProperties:
 #  features/secrets.py — encrypt/decrypt roundtrip
 # ═══════════════════════════════════════════════════════════════
 
-from features.secrets import encrypt_json, decrypt_json
+from features.secrets import decrypt_json, encrypt_json
 
 
 class TestSecretsProperties:
@@ -332,7 +333,8 @@ class TestReflexBufferConcurrency:
 
 import asyncio
 import tempfile
-from shared.middleware import MiddlewareContext, ImportanceGateMiddleware
+
+from shared.middleware import ImportanceGateMiddleware, MiddlewareContext
 
 
 class TestImportanceGateProperties:
@@ -370,7 +372,7 @@ class TestImportanceGateProperties:
 #  shared/memory_types.py — decay and archive invariants
 # ═══════════════════════════════════════════════════════════════
 
-from shared.memory_types import apply_decay, can_archive, kind_for_text, MemoryKind
+from shared.memory_types import MemoryKind, apply_decay, can_archive, kind_for_text
 
 
 class TestMemoryTypeProperties:
@@ -434,7 +436,7 @@ class TestPathSafetyProperties:
 #  features/secrets.py — encrypt/decrypt roundtrip
 # ═══════════════════════════════════════════════════════════════
 
-from features.secrets import encrypt_json, decrypt_json
+from features.secrets import decrypt_json, encrypt_json
 
 
 class TestSecretsProperties:
@@ -557,6 +559,7 @@ class TestEmbeddingProperties:
 # ═══════════════════════════════════════════════════════════════
 
 import uuid
+
 from shared.connection import AsyncConnectionManager
 
 
@@ -613,6 +616,7 @@ class TestConnectionProperties:
 # ═══════════════════════════════════════════════════════════════
 
 from shared.cache import MemoryCache
+import contextlib
 
 
 class TestCacheProperties:
@@ -739,10 +743,8 @@ class TestSagaCompensationLogic:
             saga = Saga("logic")
             saga.add_step("s1", step1, compensate)
             saga.add_step("s2", fail)
-            try:
+            with contextlib.suppress(RuntimeError):
                 await saga.execute()
-            except RuntimeError:
-                pass
 
             results = await mm.user_memory(user_id).recall("temp_key")
             assert len(results) == 0, "temp_key must be deleted after compensation"
@@ -827,6 +829,7 @@ class TestMemoryStateMachine:
     @settings(max_examples=30, deadline=None)
     def test_remember_forget_invariant(self, n_operations, seed):
         import random
+
         from core.memory import CoreMemory
 
         rng = random.Random(seed)
@@ -898,10 +901,8 @@ class TestSagaStateMachine:
             saga = Saga("comp")
             for i in range(n_steps):
                 saga.add_step(f"s{i}", make_step(i), make_compensate(i))
-            try:
+            with contextlib.suppress(RuntimeError):
                 await saga.execute()
-            except RuntimeError:
-                pass
 
             # Steps before fail_at should be compensated
             for i in range(fail_at):
@@ -966,6 +967,7 @@ def chaos_db_locked(monkeypatch):
 def chaos_api_timeout(monkeypatch):
     """Simulate slow API responses (2s delay)."""
     import time
+
     from features.secrets import encrypt_json
 
     original_encrypt = encrypt_json
@@ -995,9 +997,10 @@ def chaos_keyboard_interrupt():
 
 def test_chaos_db_locked_graceful(chaos_db_locked):
     """Code should handle database locked errors gracefully."""
+    import tempfile
+
     from features.audit_trail import AuditTrail
     from shared.connection import AsyncConnectionManager
-    import tempfile
 
     cm = AsyncConnectionManager(base_dir=tempfile.mkdtemp())
     at = AuditTrail(cm=cm)
@@ -1012,9 +1015,9 @@ def test_chaos_db_locked_graceful(chaos_db_locked):
 
 def test_chaos_api_timeout_does_not_hang(chaos_api_timeout):
     """Slow API should not block indefinitely."""
-    from features.secrets import encrypt_json
-
     import time
+
+    from features.secrets import encrypt_json
 
     start = time.time()
     result = encrypt_json({"test": "data"})
@@ -1142,8 +1145,8 @@ class TestWikiCRUDLogic:
     """Verify wiki add/update/search/delete maintains consistency."""
 
     def test_wiki_lifecycle(self):
-        from wiki.manager import WikiManager
         from shared.connection import AsyncConnectionManager
+        from wiki.manager import WikiManager
 
         async def t():
             import tempfile
@@ -1165,8 +1168,8 @@ class TestWikiCRUDLogic:
         asyncio.run(t())
 
     def test_wiki_type_isolation(self):
-        from wiki.manager import WikiManager
         from shared.connection import AsyncConnectionManager
+        from wiki.manager import WikiManager
 
         async def t():
             import tempfile
@@ -1237,7 +1240,7 @@ class TestImportanceGateLogic:
     """Verify importance gate blocks/allows based on threshold."""
 
     def test_low_importance_blocked(self):
-        from shared.middleware import MiddlewareContext, ImportanceGateMiddleware
+        from shared.middleware import ImportanceGateMiddleware, MiddlewareContext
 
         async def t():
             async def handler(c):
@@ -1251,7 +1254,7 @@ class TestImportanceGateLogic:
         asyncio.run(t())
 
     def test_high_importance_allowed(self):
-        from shared.middleware import MiddlewareContext, ImportanceGateMiddleware
+        from shared.middleware import ImportanceGateMiddleware, MiddlewareContext
 
         async def t():
             async def handler(c):
@@ -1268,7 +1271,7 @@ class TestImportanceGateLogic:
         asyncio.run(t())
 
     def test_non_matching_tool_passes(self):
-        from shared.middleware import MiddlewareContext, ImportanceGateMiddleware
+        from shared.middleware import ImportanceGateMiddleware, MiddlewareContext
 
         async def t():
             async def handler(c):

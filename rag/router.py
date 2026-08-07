@@ -5,7 +5,7 @@ Multi-signal: FTS5 + Vector + Entity/NER extraction
 
 import re
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from .engine import RAGEngine
 
@@ -141,7 +141,7 @@ class RetrievalRouter:
             out.extend(v)
         return [kw.lower() for kw in out]
 
-    async def route(self, query: str, recent_context: Optional[list[dict]] = None) -> RouterResult:
+    async def route(self, query: str, recent_context: list[dict] | None = None) -> RouterResult:
         q = query.lower()
 
         for route in _ROUTE_TABLE:
@@ -159,10 +159,10 @@ class RetrievalRouter:
         self,
         q_lower: str,
         query: str,
-        keyword_kind: Optional[str],
+        keyword_kind: str | None,
         strategy: Strategy,
         confidence: float,
-        recent_context: Optional[list[dict]],
+        recent_context: list[dict] | None,
     ) -> RouterResult | None:
         """Try to match a single route. Returns RouterResult or None."""
         if keyword_kind == "recent":

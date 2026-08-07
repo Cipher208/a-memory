@@ -3,12 +3,9 @@
 Merged into action-based tools to reduce tool count.
 """
 
-from shared.constants import DB_NAME
 import asyncio
 import time
 from pathlib import Path
-from typing import Optional
-
 from typing import Any
 
 from mcp.server.fastmcp import Context
@@ -23,6 +20,7 @@ from mcp_server.models import (
     SearchResult,
 )
 from mcp_server.registry import _get_ctx, register_tool
+from shared.constants import DB_NAME
 from shared.metrics import metrics
 
 
@@ -31,7 +29,7 @@ async def memory_api_key(
     user_id: str = "default",
     label: str = "",
     api_key: str = "",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Manage API keys.
 
@@ -59,7 +57,7 @@ async def memory_api_key(
 async def memory_backup(
     action: str = "status",
     backup_name: str = "",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Manage backups.
 
@@ -88,7 +86,7 @@ async def memory_backup(
 async def memory_saga(
     action: str = "consolidate",
     user_id: str = "default",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Run sagas with auto-rollback on failure.
 
@@ -119,7 +117,7 @@ async def memory_data(
     user_id: str = "default",
     file_path: str = "",
     target_user_id: str = "",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Import/export memory data.
 
@@ -144,7 +142,7 @@ async def memory_data(
 
 
 async def memory_sync_replica(
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Sync read-only replica for dashboard/metrics."""
     metrics.inc("tool_calls")
@@ -158,7 +156,7 @@ async def memory_sync_replica(
 async def memory_cleanup(
     user_id: str = "default",
     retention_days: int = 30,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Full memory cleanup: deduplicate, archive, clean staging.
 
@@ -169,9 +167,9 @@ async def memory_cleanup(
     metrics.inc("tool_calls")
     metrics.inc("tool_cleanup")
 
-    from features.compression import MemoryCompressor
     from features.audit_trail import AuditTrail
     from features.backup_cron import backup_cron
+    from features.compression import MemoryCompressor
     from shared.dream_buffer import DreamBuffer
     from shared.saga import saga_watchdog
 
@@ -203,7 +201,7 @@ async def memory_cleanup(
 async def memory_lucidity_purge(
     user_id: str = "default",
     hours: int = 24,
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Emergency purge: delete all data from the last N hours.
 
@@ -287,7 +285,7 @@ async def memory_search(
     limit: int = 10,
     strategy: str = "hybrid",
     sources: str = "all",
-    ctx: Optional[Context] = None,
+    ctx: Context | None = None,
 ) -> dict:
     """Hybrid search across RAG + Wiki with strategy selection.
 

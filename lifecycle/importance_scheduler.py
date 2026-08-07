@@ -18,7 +18,6 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
 
 from shared.connection import connection_manager
 from shared.importance import ImportanceScorer
@@ -38,13 +37,13 @@ class SchedulerConfig:
 class ImportanceScheduler:
     def __init__(
         self,
-        scorer: Optional[ImportanceScorer] = None,
-        scheduler_config: Optional[SchedulerConfig] = None,
+        scorer: ImportanceScorer | None = None,
+        scheduler_config: SchedulerConfig | None = None,
     ):
         self.scorer = scorer or ImportanceScorer()
         self.cfg = scheduler_config or SchedulerConfig()
         self._stop_event = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         if not self.cfg.enabled or self._thread is not None:

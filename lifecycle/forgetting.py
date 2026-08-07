@@ -2,14 +2,13 @@
 Forgetting System — type-aware decay, archiving, compression
 """
 
-from shared.constants import DB_NAME
 import logging
 import time
 from pathlib import Path
-from typing import Optional
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 from shared.memory_types import (
     MemoryKind,
     apply_decay,
@@ -22,7 +21,7 @@ ARCHIVE_DIR = Path.home() / ".mcp-ariel-memory" / "archives"
 
 
 class ForgettingSystem:
-    def __init__(self, cm: Optional[AsyncConnectionManager] = None, layer: str = "user"):
+    def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
         self.layer = layer
         self.decay_rate = config.get_forgetting("decay_rate") or 0.01
@@ -63,7 +62,7 @@ class ForgettingSystem:
             logger.info("Decayed %d entries" % len(updates))
             return len(updates)
         except Exception as e:
-            logger.error("Decay failed: %s" % e)
+            logger.error(f"Decay failed: {e}")
             return 0
 
     async def archive_old_entries(self) -> int:
@@ -108,7 +107,7 @@ class ForgettingSystem:
             for r in all_rows:
                 await am.archive(
                     user_id=r["user_id"],
-                    content="%s=%s" % (r["key"], r["value"]),
+                    content="{}={}".format(r["key"], r["value"]),
                     memory_type=r["memory_kind"] or "fact",
                     importance=r["importance"],
                     original_id=r["entry_id"],
@@ -118,12 +117,12 @@ class ForgettingSystem:
 
             ids = [r["entry_id"] for r in all_rows]
             placeholders = ",".join(["?"] * len(ids))
-            await conn.execute("DELETE FROM core_memory WHERE entry_id IN (%s)" % placeholders, ids)
+            await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({placeholders})", ids)
             await conn.commit()
             logger.info("Archived %d entries" % archived_count)
             return archived_count
         except Exception as e:
-            logger.error("Archive failed: %s" % e)
+            logger.error(f"Archive failed: {e}")
             return 0
 
     async def compress_duplicates(self) -> int:
@@ -144,7 +143,7 @@ class ForgettingSystem:
             await conn.commit()
             return removed
         except Exception as e:
-            logger.error("Compression failed: %s" % e)
+            logger.error(f"Compression failed: {e}")
             return 0
 
     async def cleanup(self) -> dict[str, int]:

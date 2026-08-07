@@ -11,6 +11,7 @@ import warnings
 from pathlib import Path
 
 from features.secrets import decrypt_json, encrypt_json, is_encrypted_blob
+import contextlib
 
 
 def write_state_atomic(path: Path, state: dict) -> None:
@@ -24,15 +25,11 @@ def write_state_atomic(path: Path, state: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     with open(tmp, "wb") as f:
         f.write(blob)
-    try:
+    with contextlib.suppress(OSError, PermissionError):
         os.chmod(tmp, 0o600)
-    except (OSError, PermissionError):
-        pass
     tmp.replace(path)
-    try:
+    with contextlib.suppress(OSError, PermissionError):
         os.chmod(path, 0o600)
-    except (OSError, PermissionError):
-        pass
 
 
 def read_state(path: Path) -> dict:
@@ -52,7 +49,7 @@ def read_state_legacy_or_encrypted(path: Path) -> dict:
         blob = f.read()
     if is_encrypted_blob(path):
         return decrypt_json(blob)
-    warnings.warn(f"{path} is plain JSON; rotating to encrypted", DeprecationWarning)
+    warnings.warn(f"{path} is plain JSON; rotating to encrypted", DeprecationWarning, stacklevel=2)
     legacy = json.loads(blob.decode("utf-8"))
     write_state_atomic(path, legacy)
     return legacy

@@ -7,7 +7,7 @@ Supervised variant (per-dimension threshold) activates via
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, Optional, Sequence, Tuple
+from collections.abc import Callable, Iterable, Sequence
 
 try:
     import numpy as np
@@ -95,8 +95,8 @@ def supervised_threshold(
 
 
 def train_supervised_thresholds(
-    pos_pairs: list[Tuple[Sequence[float], Sequence[float]]],
-    neg_pairs: list[Tuple[Sequence[float], Sequence[float]]] | None = None,
+    pos_pairs: list[tuple[Sequence[float], Sequence[float]]],
+    neg_pairs: list[tuple[Sequence[float], Sequence[float]]] | None = None,
     emb_fn: Callable | None = None,
     n_candidates: int = 50,
     dim: int = DEFAULT_DIM,
@@ -150,10 +150,7 @@ def train_supervised_thresholds(
         best_t, best_score = candidates[0], -1.0
         for t in candidates:
             agree_pos = ((pos_a[:, i] > t) == (pos_b[:, i] > t)).mean()
-            if len(neg_a) > 0:
-                agree_neg = 1.0 - ((neg_a[:, i] > t) == (neg_b[:, i] > t)).mean()
-            else:
-                agree_neg = 0.5
+            agree_neg = 1.0 - ((neg_a[:, i] > t) == (neg_b[:, i] > t)).mean() if len(neg_a) > 0 else 0.5
             score = 0.7 * agree_pos + 0.3 * agree_neg
             if score > best_score:
                 best_score = score
@@ -208,7 +205,7 @@ def hamming_to_score(distance: int, dim: int = DEFAULT_DIM) -> float:
 
 def binary_batch(
     embeddings: Sequence[Sequence[float]],
-    thresholds: Optional[Sequence[float] | float] = None,
+    thresholds: Sequence[float] | float | None = None,
     dim: int = DEFAULT_DIM,
 ) -> list[bytes]:
     """Vectorized binarization of multiple embeddings."""

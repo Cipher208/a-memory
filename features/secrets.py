@@ -19,8 +19,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 try:
-    from nacl.secret import SecretBox
     from nacl.pwhash import argon2id
+    from nacl.secret import SecretBox
     from nacl.utils import random as nacl_random
 
     _HAS_NACL = True

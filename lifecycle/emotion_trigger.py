@@ -4,7 +4,6 @@ Supports Russian + English. Rule-based + pattern detection.
 """
 
 import re
-from typing import Optional
 
 EMOTION_MARKERS = {
     "love": [
@@ -155,7 +154,7 @@ STATE_SHIFT_THRESHOLD = 0.15
 
 
 class EmotionTrigger:
-    def should_save(self, message: str, emotional_state: Optional[dict] = None, state_delta: Optional[dict] = None) -> tuple[bool, str, float]:
+    def should_save(self, message: str, emotional_state: dict | None = None, state_delta: dict | None = None) -> tuple[bool, str, float]:
         msg_lower = message.lower()
 
         result = self._check_phrase_patterns(msg_lower)
@@ -213,13 +212,12 @@ class EmotionTrigger:
                     return True, f"emotion_{emotion}", weight
         return None
 
-    def _check_emotional_state(self, emotional_state: Optional[dict]) -> tuple[bool, str, float] | None:
-        if emotional_state:
-            if emotional_state.get("joy", 0) > 0.8 or emotional_state.get("interest", 0) > 0.8:
-                return True, "high_emotion", 0.6
+    def _check_emotional_state(self, emotional_state: dict | None) -> tuple[bool, str, float] | None:
+        if emotional_state and (emotional_state.get("joy", 0) > 0.8 or emotional_state.get("interest", 0) > 0.8):
+            return True, "high_emotion", 0.6
         return None
 
-    def _check_state_shift(self, state_delta: Optional[dict]) -> tuple[bool, str, float] | None:
+    def _check_state_shift(self, state_delta: dict | None) -> tuple[bool, str, float] | None:
         if state_delta:
             for key, delta in state_delta.items():
                 if abs(delta) > STATE_SHIFT_THRESHOLD:

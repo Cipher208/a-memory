@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass
@@ -28,17 +28,17 @@ class ScoredCandidate:
     page_id: int
     title: str
     content: str
-    wiki_type: Optional[str]
+    wiki_type: str | None
     rrf_score: float
-    bin_score: Optional[float] = None
-    hamming: Optional[int] = None
+    bin_score: float | None = None
+    hamming: int | None = None
     source: str = ""
-    memory_kind: Optional[str] = None
+    memory_kind: str | None = None
     degraded: bool = False
     novelty: float = 0.0
     type_boost: float = 0.0
     final_score: float = 0.0
-    debug: Dict[str, Any] = field(default_factory=dict)
+    debug: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -46,7 +46,7 @@ class CorpusStats:
     """Statistics for novelty calculation based on retrieval history."""
 
     total_retrievals: int = 0
-    doc_retrieval_counts: Dict[int, int] = field(default_factory=dict)
+    doc_retrieval_counts: dict[int, int] = field(default_factory=dict)
 
     def prior(self, doc_id: int) -> float:
         """Prior probability that a document has been retrieved before.
@@ -69,8 +69,8 @@ class Scorer:
     def __init__(
         self,
         mode: str = "rrf",
-        weights: Optional[ScoringWeights] = None,
-        corpus_stats: Optional[CorpusStats] = None,
+        weights: ScoringWeights | None = None,
+        corpus_stats: CorpusStats | None = None,
     ):
         self.mode = mode
         self.weights = weights or ScoringWeights()
@@ -94,7 +94,7 @@ class Scorer:
         surprise = -math.log2(max(prior, 1e-6)) / math.log2(max(self.corpus_stats.total_retrievals, 2))
         return min(surprise, 1.0)
 
-    def _type_boost(self, wiki_type: Optional[str]) -> float:
+    def _type_boost(self, wiki_type: str | None) -> float:
         """Simple type boost based on wiki_type."""
         if not wiki_type:
             return 0.0

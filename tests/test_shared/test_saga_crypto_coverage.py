@@ -2,8 +2,10 @@
 
 import json
 import warnings
-import pytest
 from pathlib import Path
+
+import pytest
+
 from shared.saga_crypto import read_state, read_state_legacy_or_encrypted, write_state_atomic
 
 

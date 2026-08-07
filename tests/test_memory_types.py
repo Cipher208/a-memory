@@ -1,16 +1,18 @@
 """Tests for shared/memory_types.py — 13 typed memory categories."""
 
 import math
+
 import pytest
+
 from shared.memory_types import (
-    MemoryKind,
     _REGISTRY,
+    MemoryKind,
     apply_decay,
+    boost_for_query,
     can_archive,
+    get_policy,
     kind_for_text,
     validate_kind,
-    boost_for_query,
-    get_policy,
 )
 
 

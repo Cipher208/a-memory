@@ -1,14 +1,14 @@
 """Tests to boost coverage for features/ modules."""
 
 import asyncio
-import pytest
 
+import pytest
 
 # ── typed_export ──
 
 
 def test_typed_export_import():
-    from features.typed_export import do_export, do_reclassify, do_backfill
+    from features.typed_export import do_backfill, do_export, do_reclassify
 
     assert callable(do_export)
     assert callable(do_reclassify)
@@ -209,8 +209,8 @@ def test_agent_hooks_decision_made():
 
 
 def test_wiki_add_and_list(tmp_path):
-    from wiki.manager import WikiManager
     from shared.connection import AsyncConnectionManager
+    from wiki.manager import WikiManager
 
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir()
@@ -224,8 +224,8 @@ def test_wiki_add_and_list(tmp_path):
 
 
 def test_wiki_agent_layer(tmp_path):
-    from wiki.manager import WikiManager
     from shared.connection import AsyncConnectionManager
+    from wiki.manager import WikiManager
 
     wiki_dir = tmp_path / "wiki_agent"
     wiki_dir.mkdir()
@@ -241,8 +241,8 @@ def test_wiki_agent_layer(tmp_path):
 
 
 def test_wiki_disabled_type_raises(tmp_path):
-    from wiki.manager import WikiManager
     from shared.connection import AsyncConnectionManager
+    from wiki.manager import WikiManager
 
     wiki_dir = tmp_path / "wiki_disabled"
     wiki_dir.mkdir()
@@ -255,8 +255,8 @@ def test_wiki_disabled_type_raises(tmp_path):
 
 
 def test_wiki_enabled_types(tmp_path):
-    from wiki.manager import WikiManager
     from shared.connection import AsyncConnectionManager
+    from wiki.manager import WikiManager
 
     wiki_dir = tmp_path / "wiki_types"
     wiki_dir.mkdir()
@@ -268,8 +268,8 @@ def test_wiki_enabled_types(tmp_path):
 
 
 def test_wiki_list_and_count(tmp_path):
-    from wiki.manager import WikiManager
     from shared.connection import AsyncConnectionManager
+    from wiki.manager import WikiManager
 
     cm = AsyncConnectionManager(base_dir=str(tmp_path))
     wm = WikiManager(layer="user", base_dir=str(tmp_path / "wiki"), cm=cm)
@@ -301,8 +301,9 @@ def test_backup_cron_backup_now(tmp_path):
 
 
 def test_backup_cron_start_stop(tmp_path):
-    from features.backup_cron import BackupCron
     import os
+
+    from features.backup_cron import BackupCron
 
     os.environ.pop("BACKUP_CRON_DISABLED", None)
     bc = BackupCron(base_dir=str(tmp_path))

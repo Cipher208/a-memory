@@ -1,6 +1,7 @@
 """Verify deprecated RAG methods are removed and don't appear via shadow paths."""
 
 import pytest
+
 from rag.engine import RAGEngine
 
 

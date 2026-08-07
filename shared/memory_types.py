@@ -226,9 +226,7 @@ def can_archive(
         return False
     if days_since_update < archive_threshold_days:
         return False
-    if importance >= archive_min_importance:
-        return False
-    return True
+    return not importance >= archive_min_importance
 
 
 def kind_for_text(text: str) -> MemoryKind:

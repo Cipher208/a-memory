@@ -1,6 +1,7 @@
 """Tests for B3: BM25 + char-trigram conflict similarity."""
 
 import pytest
+
 from rag.conflict import (
     ConflictResolver,
     bm25_pair_similarity,
@@ -26,7 +27,7 @@ def test_smart_similarity_short_uses_ngrams():
     b = "Python best"
     s = smart_similarity(a, b)
     ngram = char_ngram_jaccard(a, b, 3)
-    assert 0.5 < s
+    assert s > 0.5
 
 
 def test_smart_similarity_long_uses_both_signals():

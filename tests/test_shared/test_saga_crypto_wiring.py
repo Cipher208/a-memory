@@ -1,8 +1,9 @@
 """Verify that saga._load_state and backup_cron._load_state use saga_crypto functions."""
 
 import inspect
-from shared import saga
+
 from features import backup_cron
+from shared import saga
 
 
 def test_saga_load_state_uses_read_state():

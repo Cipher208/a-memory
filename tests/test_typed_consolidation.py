@@ -1,8 +1,9 @@
 """Tests for typed consolidation — type-aware promotion."""
 
 import pytest
-from shared.connection import AsyncConnectionManager
+
 from lifecycle.consolidation import ConsolidationEngine
+from shared.connection import AsyncConnectionManager
 from shared.memory_types import MemoryKind
 
 

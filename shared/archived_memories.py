@@ -2,14 +2,14 @@
 ArchivedMemories — async archived memory storage
 """
 
-from shared.constants import DB_NAME
-from typing import Any, Optional
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class ArchivedMemories:
-    def __init__(self, cm: Optional["AsyncConnectionManager"] = None):
+    def __init__(self, cm: "AsyncConnectionManager" | None = None):
         self._cm = cm or connection_manager
 
     async def _init_db(self):
@@ -31,9 +31,9 @@ class ArchivedMemories:
         self,
         user_id: str,
         content: str,
-        memory_type: Optional[str] = None,
-        importance: Optional[float] = None,
-        original_id: Optional[int] = None,
+        memory_type: str | None = None,
+        importance: float | None = None,
+        original_id: int | None = None,
         reason: str = "manual",
     ) -> int:
         conn = await self._cm.get(DB_NAME)

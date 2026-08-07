@@ -2,16 +2,16 @@
 DreamBuffer — async staging memories with TTL
 """
 
-from shared.constants import DB_NAME
 import json
 import time
-from typing import Any, Optional
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class DreamBuffer:
-    def __init__(self, cm: Optional["AsyncConnectionManager"] = None):
+    def __init__(self, cm: "AsyncConnectionManager" | None = None):
         self._cm = cm or connection_manager
 
     async def _init_db(self):
@@ -35,8 +35,8 @@ class DreamBuffer:
         session_id: str,
         content: str,
         importance: float = 0.5,
-        event_id: Optional[str] = None,
-        metadata: Optional[dict] = None,
+        event_id: str | None = None,
+        metadata: dict | None = None,
     ) -> int:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
@@ -46,7 +46,7 @@ class DreamBuffer:
         await conn.commit()
         return cursor.lastrowid
 
-    async def get_staging(self, user_id: str = "default", session_id: Optional[str] = None) -> list[dict[str, Any]]:
+    async def get_staging(self, user_id: str = "default", session_id: str | None = None) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)
         if session_id:
             cursor = await conn.execute(
@@ -69,7 +69,7 @@ class DreamBuffer:
             for r in rows
         ]
 
-    async def clear_staging(self, user_id: str = "default", session_id: Optional[str] = None) -> int:
+    async def clear_staging(self, user_id: str = "default", session_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         if session_id:
             cursor = await conn.execute("DELETE FROM staging_memories WHERE user_id=? AND session_id=?", (user_id, session_id))

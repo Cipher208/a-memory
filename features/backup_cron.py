@@ -10,16 +10,17 @@ import random
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import config
 from shared.path_safety import safe_resolve
+import contextlib
 
 logger = logging.getLogger(__name__)
 
 
 class BackupCron:
-    def __init__(self, base_dir: Optional[str] = None):
+    def __init__(self, base_dir: str | None = None):
         self.base_dir = Path(base_dir or str(Path.home() / ".mcp-ariel-memory"))
         self.backup_dir = self.base_dir / "backups"
         self.backup_dir.mkdir(parents=True, exist_ok=True)
@@ -56,8 +57,8 @@ class BackupCron:
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        jitter_info = " (+%ds jitter)" % self.jitter_seconds if self.jitter_seconds else ""
-        logger.info("Backup cron started (interval=%dh%s)" % (self.interval_hours, jitter_info))
+        jitter_info = f" (+{self.jitter_seconds}s jitter)" if self.jitter_seconds else ""
+        logger.info(f"Backup cron started (interval={self.interval_hours}h{jitter_info})")
 
     def stop(self):
         self._running = False
@@ -74,7 +75,7 @@ class BackupCron:
                 if now >= next_backup:
                     jitter = random.randint(0, self.jitter_seconds) if self.jitter_seconds else 0
                     if jitter:
-                        logger.info("Backup jitter: waiting %ds" % jitter)
+                        logger.info(f"Backup jitter: waiting {jitter}s")
                         time.sleep(jitter)
                     self._do_backup()
                     self._cleanup_old()
@@ -87,26 +88,27 @@ class BackupCron:
 
                 time.sleep(60)
             except Exception as e:
-                logger.error("Backup cron error: %s" % e)
+                logger.error(f"Backup cron error: {e}")
                 time.sleep(300)
 
     def _fire_nightly_hooks(self):
         """Trigger nightly maintenance hooks for both layers."""
         try:
-            from hooks.registry import hook_registry
             import asyncio
+
+            from hooks.registry import hook_registry
 
             for layer in ["user", "agent"]:
                 asyncio.run(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
         except Exception as e:
-            logger.error("Nightly hook error: %s" % e)
+            logger.error(f"Nightly hook error: {e}")
 
     def _do_backup(self) -> str:
         import shutil
         import uuid
 
         timestamp = int(time.time())
-        name = "auto_%d_%s" % (timestamp, uuid.uuid4().hex[:6])
+        name = f"auto_{timestamp}_{uuid.uuid4().hex[:6]}"
         dest = self.backup_dir / name
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -158,7 +160,7 @@ class BackupCron:
             self._last_wiki_sync = time.time()
             self._save_state()
         except Exception as e:
-            logger.error("Wiki sync error: %s" % e)
+            logger.error(f"Wiki sync error: {e}")
 
     def backup_now(self) -> str:
         return self._do_backup()
@@ -168,13 +170,10 @@ class BackupCron:
 
         src = self.backup_dir / backup_name
         if not src.exists():
-            return {"error": "Backup not found: %s" % backup_name}
+            return {"error": f"Backup not found: {backup_name}"}
 
         manifest_path = src / "manifest.json"
-        if manifest_path.exists():
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        else:
-            manifest = {"files": [f.name for f in src.glob("*.db")]}
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"files": [f.name for f in src.glob("*.db")]}
 
         restored = []
         for db_file in manifest.get("files", []):
@@ -201,10 +200,8 @@ class BackupCron:
                 info = {"name": d.name}
                 manifest_path = d / "manifest.json"
                 if manifest_path.exists():
-                    try:
+                    with contextlib.suppress(Exception):
                         info.update(json.loads(manifest_path.read_text(encoding="utf-8")))
-                    except Exception:
-                        pass
                 backups.append(info)
         return backups
 

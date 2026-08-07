@@ -57,7 +57,7 @@ async def _setup_rag(tmp_path: str, n_chunks: int = 500) -> RAGEngine:
 async def bench_fts_search(rag: RAGEngine, n: int = 100) -> dict:
     """FTS5 search baseline."""
     start = time.perf_counter()
-    for i in range(n):
+    for _i in range(n):
         query = "Redis configuration"
         await rag.search(query, user_id="bench", strategy="fts", limit=10)
     elapsed = time.perf_counter() - start
@@ -67,7 +67,7 @@ async def bench_fts_search(rag: RAGEngine, n: int = 100) -> dict:
 async def bench_mib_search(rag: RAGEngine, n: int = 50) -> dict:
     """MIB binary search with batched reads."""
     start = time.perf_counter()
-    for i in range(n):
+    for _i in range(n):
         query = "Redis configuration and performance"
         await rag.search(query, user_id="bench", strategy="mib", limit=10)
     elapsed = time.perf_counter() - start
@@ -77,7 +77,7 @@ async def bench_mib_search(rag: RAGEngine, n: int = 50) -> dict:
 async def bench_hybrid_search(rag: RAGEngine, n: int = 50) -> dict:
     """Hybrid search (FTS + MIB)."""
     start = time.perf_counter()
-    for i in range(n):
+    for _i in range(n):
         query = "Redis configuration and performance"
         await rag.search(query, user_id="bench", strategy="hybrid", limit=10)
     elapsed = time.perf_counter() - start
@@ -109,7 +109,7 @@ async def bench_rag_join(rag: RAGEngine, n: int = 100) -> dict:
     # Test a simple count with JOIN
     conn = await rag._cm.get("memory.db")
     start = time.perf_counter()
-    for i in range(n):
+    for _i in range(n):
         cur = await conn.execute(
             "SELECT COUNT(*) FROM rag_chunks c JOIN rag_pages p ON c.page_id = p.id WHERE p.user_id = ?",
             ("bench",),

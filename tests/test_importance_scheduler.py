@@ -1,10 +1,11 @@
 """Tests for importance scheduler."""
 
 import time
+
 import pytest
 
-from shared.connection import AsyncConnectionManager
 from lifecycle.importance_scheduler import ImportanceScheduler, SchedulerConfig
+from shared.connection import AsyncConnectionManager
 
 
 @pytest.fixture

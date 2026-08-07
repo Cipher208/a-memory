@@ -17,13 +17,14 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+import contextlib
 
 logger = logging.getLogger(__name__)
 
 SAGA_DIR = Path.home() / ".mcp-ariel-memory" / "sagas"
 
 try:
-    from features.secrets import encrypt_json, decrypt_json, is_encrypted_blob
+    from features.secrets import decrypt_json, encrypt_json, is_encrypted_blob
 
     _HAS_ENCRYPTION = True
 except ImportError:
@@ -126,7 +127,7 @@ class Saga:
             else:
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
         except Exception as e:
-            logger.error("Failed to save saga state: %s" % e)
+            logger.error(f"Failed to save saga state: {e}")
 
     def _load_state(self, saga_id: str) -> dict | None:
         """Load state from disk (supports encrypted and legacy plain JSON)."""
@@ -144,10 +145,8 @@ class Saga:
         """Delete state file after completion."""
         state_file = SAGA_DIR / (self._saga_id + ".json")
         if state_file.exists():
-            try:
+            with contextlib.suppress(Exception):
                 state_file.unlink()
-            except Exception:
-                pass
 
     # ─── Idempotency helpers ───
 
@@ -214,7 +213,7 @@ class Saga:
             )
             await conn.commit()
         except Exception as e:
-            logger.warning("Failed to record idempotency log: %s" % e)
+            logger.warning(f"Failed to record idempotency log: {e}")
 
     # ─── Execute with retry + idempotency ───
 
@@ -234,7 +233,7 @@ class Saga:
                 self._data.update(step.result)
                 self._completed_steps.append(self._current_step)
                 self._save_state()
-                logger.info("Saga '%s' step '%s' replayed from cache" % (self.name, step.name))
+                logger.info(f"Saga '{self.name}' step '{step.name}' replayed from cache")
                 return True, idemp_key
         return False, idemp_key
 
@@ -273,7 +272,7 @@ class Saga:
         if attempt > step.retry_attempts:
             logger.error("Saga '%s' step '%s' failed after %d retries: %s" % (self.name, step.name, step.retry_attempts, step_exc))
         else:
-            logger.error("Saga '%s' step '%s' failed: %s" % (self.name, step.name, step_exc))
+            logger.error(f"Saga '{self.name}' step '{step.name}' failed: {step_exc}")
         await self._compensate(self._current_step)
         self._save_state()
         if step_exc is not None:
@@ -288,7 +287,7 @@ class Saga:
         step.status = SagaStatus.COMPLETED
         self._completed_steps.append(self._current_step)
         self._save_state()
-        logger.info("Saga '%s' step '%s' completed" % (self.name, step.name))
+        logger.info(f"Saga '{self.name}' step '{step.name}' completed")
 
     async def execute(self, initial_data: dict | None = None) -> dict:
         if not self._saga_id:
@@ -300,7 +299,7 @@ class Saga:
         self._completed_steps = []
         self._save_state()
 
-        logger.info("Saga '%s' started (id=%s)" % (self.name, self._saga_id))
+        logger.info(f"Saga '{self.name}' started (id={self._saga_id})")
 
         try:
             for i, step in enumerate(self._steps):
@@ -317,14 +316,14 @@ class Saga:
 
             self._status = SagaStatus.COMPLETED
             self._cleanup_state()
-            logger.info("Saga '%s' completed" % self.name)
+            logger.info(f"Saga '{self.name}' completed")
             return self._data
 
         except Exception as e:
             if self._status != SagaStatus.COMPENSATED:
                 self._status = SagaStatus.FAILED
             self._save_state()
-            logger.error("Saga '%s' failed: %s" % (self.name, e))
+            logger.error(f"Saga '{self.name}' failed: {e}")
             raise
 
     async def _compensate(self, failed_step: int) -> None:
@@ -351,9 +350,9 @@ class Saga:
             if inner_step.status == SagaStatus.COMPLETED and inner_step.compensation:
                 try:
                     await inner_step.compensation(inner_step.data)
-                    logger.info("Saga '%s' compensated inner step '%s'" % (self.name, inner_step.name))
+                    logger.info(f"Saga '{self.name}' compensated inner step '{inner_step.name}'")
                 except Exception as e:
-                    logger.error("Saga '%s' inner compensation failed for '%s': %s" % (self.name, inner_step.name, e))
+                    logger.error(f"Saga '{self.name}' inner compensation failed for '{inner_step.name}': {e}")
 
     async def _compensate_step(self, step: SagaStep) -> None:
         """Run compensation for a single step, logging success or failure."""
@@ -361,9 +360,9 @@ class Saga:
             return
         try:
             await step.compensation(step.data)
-            logger.info("Saga '%s' compensated step '%s'" % (self.name, step.name))
+            logger.info(f"Saga '{self.name}' compensated step '{step.name}'")
         except Exception as e:
-            logger.error("Saga '%s' compensation failed for '%s': %s" % (self.name, step.name, e))
+            logger.error(f"Saga '{self.name}' compensation failed for '{step.name}': {e}")
 
     def get_state(self) -> dict:
         return {
@@ -405,7 +404,7 @@ class SagaWatchdog:
                 self._check_stuck_sagas()
                 time.sleep(self.check_interval)
             except Exception as e:
-                logger.error("Saga watchdog error: %s" % e)
+                logger.error(f"Saga watchdog error: {e}")
                 time.sleep(30)
 
     def _check_stuck_sagas(self):
@@ -416,10 +415,7 @@ class SagaWatchdog:
         for state_file in SAGA_DIR.glob("*.json"):
             try:
                 blob = state_file.read_bytes()
-                if _HAS_ENCRYPTION and is_encrypted_blob(state_file):
-                    state = decrypt_json(blob)
-                else:
-                    state = json.loads(blob.decode("utf-8"))
+                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
 
                 status = state.get("status", "")
                 started_at = state.get("started_at", 0)
@@ -437,7 +433,7 @@ class SagaWatchdog:
                         logger.warning("Saga '%s' marked as STUCK (age=%ds)" % (saga_name, int(age)))
 
             except Exception as e:
-                logger.error("Error checking saga %s: %s" % (state_file.name, e))
+                logger.error(f"Error checking saga {state_file.name}: {e}")
 
     def get_stuck_sagas(self) -> list[dict[str, Any]]:
         """Get list of stuck sagas."""
@@ -447,10 +443,7 @@ class SagaWatchdog:
         for state_file in SAGA_DIR.glob("*.json"):
             try:
                 blob = state_file.read_bytes()
-                if _HAS_ENCRYPTION and is_encrypted_blob(state_file):
-                    state = decrypt_json(blob)
-                else:
-                    state = json.loads(blob.decode("utf-8"))
+                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
 
                 if state.get("status") in ("stuck", "failed", "running"):
                     age = time.time() - state.get("started_at", 0)
@@ -476,13 +469,10 @@ class SagaWatchdog:
 
         try:
             blob = state_file.read_bytes()
-            if _HAS_ENCRYPTION and is_encrypted_blob(state_file):
-                state = decrypt_json(blob)
-            else:
-                state = json.loads(blob.decode("utf-8"))
+            state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
 
             if state.get("status") != "stuck":
-                return {"error": "Saga is not stuck, status: %s" % state.get("status")}
+                return {"error": "Saga is not stuck, status: {}".format(state.get("status"))}
 
             state["status"] = "manual_review_required"
             state["recovered_at"] = time.time()
@@ -504,10 +494,7 @@ class SagaWatchdog:
         for state_file in SAGA_DIR.glob("*.json"):
             try:
                 blob = state_file.read_bytes()
-                if _HAS_ENCRYPTION and is_encrypted_blob(state_file):
-                    state = decrypt_json(blob)
-                else:
-                    state = json.loads(blob.decode("utf-8"))
+                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
 
                 if state.get("status") in ("completed", "compensated", "stuck", "failed", "manual_review_required"):
                     if state.get("started_at", 0) < cutoff:
@@ -553,7 +540,7 @@ async def _consolidation_promote(data: dict) -> dict:
     promoted = 0
     for item in items:
         content = item.get("content", "")
-        key = "auto_%s" % content[:20].replace(" ", "_").lower()
+        key = "auto_{}".format(content[:20].replace(" ", "_").lower())
         await mm.user_memory(user_id).remember(key, content, item.get("importance", 0.5))
         promoted += 1
     return {"promoted": promoted}
@@ -567,15 +554,13 @@ async def _consolidation_compensate(data: dict) -> None:
     items = data.get("important_items", []) + data.get("staging_items", [])
     for item in items:
         content = item.get("content", "")
-        key = "auto_%s" % content[:20].replace(" ", "_").lower()
-        try:
+        key = "auto_{}".format(content[:20].replace(" ", "_").lower())
+        with contextlib.suppress(Exception):
             await mm.user_memory(user_id).forget(key)
-        except Exception:
-            pass
 
 
 def create_consolidation_saga(user_id: str, mm=None) -> Saga:
-    saga = Saga("consolidation_%s" % user_id)
+    saga = Saga(f"consolidation_{user_id}")
     saga.add_step("gather", _consolidation_gather, _consolidation_compensate)
     saga.add_step("distill", _consolidation_distill, _consolidation_compensate)
     saga.add_step("promote", _consolidation_promote, _consolidation_compensate)

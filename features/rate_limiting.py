@@ -2,17 +2,17 @@
 Rate Limiter — async SQLite-based per-user rate limiting + WebSocket connection limiting
 """
 
-from shared.constants import DB_NAME
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 
 
 class RateLimiter:
-    def __init__(self, cm: Optional["AsyncConnectionManager"] = None):
+    def __init__(self, cm: "AsyncConnectionManager" | None = None):
         self._cm = cm or connection_manager
         self._max_per_user = config.get("security", "rate_limit_per_user") or 100
         self._window_seconds = 60
@@ -76,7 +76,7 @@ class RateLimiter:
 class ConnectionLimiter:
     """Async WebSocket/SSE connection limiter (in-memory)."""
 
-    def __init__(self, max_connections_per_user: Optional[int] = None, max_total: Optional[int] = None):
+    def __init__(self, max_connections_per_user: int | None = None, max_total: int | None = None):
         self._max_per_user = max_connections_per_user or config.get("security", "max_ws_per_user") or 5
         self._max_total = max_total or config.get("security", "max_ws_total") or 100
         self._connections: dict[str, set[str]] = {}

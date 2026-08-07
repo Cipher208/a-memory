@@ -2,14 +2,15 @@
 Epistemic Graph — async, layer-aware tags and relations
 """
 
-from shared.constants import DB_NAME
 import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from shared.connection import connection_manager
+from shared.constants import DB_NAME
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +100,10 @@ class EpistemicGraph:
         """,
         )
         # Migration: add layer column if missing
-        try:
+        with contextlib.suppress(Exception):
             await self._cm.execute_script(DB_NAME, "ALTER TABLE epi_nodes ADD COLUMN layer TEXT NOT NULL DEFAULT 'user'")
-        except Exception:
-            pass
 
-    async def add_node(self, user_id: str, content: str, node_type: str, tags: Optional[list[str]] = None, confidence: float = 0.5) -> int:
+    async def add_node(self, user_id: str, content: str, node_type: str, tags: list[str] | None = None, confidence: float = 0.5) -> int:
         if tags:
             known = {**USER_TAGS, **AGENT_TAGS}
             for tag in tags:
@@ -183,7 +182,7 @@ class EpistemicGraph:
             for r in rows
         ]
 
-    async def find_path(self, source_id: int, target_id: int, max_depth: Optional[int] = None) -> list[dict[str, Any]]:
+    async def find_path(self, source_id: int, target_id: int, max_depth: int | None = None) -> list[dict[str, Any]]:
         if max_depth is None:
             try:
                 from config import config
@@ -207,7 +206,7 @@ class EpistemicGraph:
         rows = await cur.fetchall()
         return [{"target": r[0], "relation": r[1], "weight": r[2], "depth": r[3]} for r in rows]
 
-    async def count_nodes(self, user_id: Optional[str] = None) -> int:
+    async def count_nodes(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         if user_id:
             cur = await conn.execute("SELECT COUNT(*) FROM epi_nodes WHERE layer=? AND user_id=?", (self.layer, user_id))

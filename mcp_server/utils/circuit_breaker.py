@@ -24,7 +24,7 @@ Usage:
 import logging
 import time
 from enum import Enum
-from typing import Callable, Optional
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ class CircuitBreaker:
         threshold: int = 3,
         recovery_timeout: float = 30.0,
         name: str = "default",
-        on_state_change: Optional[Callable] = None,
+        on_state_change: Callable | None = None,
     ):
         self.threshold = threshold
         self.recovery_timeout = recovery_timeout
@@ -64,9 +64,8 @@ class CircuitBreaker:
 
     @property
     def state(self) -> CircuitState:
-        if self._state == CircuitState.OPEN:
-            if time.time() - self._opened_at > self.recovery_timeout:
-                self._transition_to(CircuitState.HALF_OPEN)
+        if self._state == CircuitState.OPEN and time.time() - self._opened_at > self.recovery_timeout:
+            self._transition_to(CircuitState.HALF_OPEN)
         return self._state
 
     @property
@@ -93,10 +92,7 @@ class CircuitBreaker:
         self._failures += 1
         self._last_failure_at = time.time()
 
-        if self._state == CircuitState.HALF_OPEN:
-            self._transition_to(CircuitState.OPEN)
-            self._opened_at = time.time()
-        elif self._failures >= self.threshold:
+        if self._state == CircuitState.HALF_OPEN or self._failures >= self.threshold:
             self._transition_to(CircuitState.OPEN)
             self._opened_at = time.time()
 
@@ -146,7 +142,7 @@ class CircuitBreakerRegistry:
     def __init__(self):
         self._breakers: dict[str, CircuitBreaker] = {}
 
-    def get(self, name: str, threshold: int = 3, recovery_timeout: float = 30.0, on_state_change: Optional[Callable] = None) -> CircuitBreaker:
+    def get(self, name: str, threshold: int = 3, recovery_timeout: float = 30.0, on_state_change: Callable | None = None) -> CircuitBreaker:
         if name not in self._breakers:
             self._breakers[name] = CircuitBreaker(
                 threshold=threshold,

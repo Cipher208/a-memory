@@ -6,23 +6,24 @@ import json
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from config import config
 from shared.path_safety import safe_resolve
+import contextlib
 
 
 class BackupManager:
-    def __init__(self, base_dir: Optional[str] = None):
+    def __init__(self, base_dir: str | None = None):
         self.base_dir = Path(base_dir or str(Path.home() / ".mcp-ariel-memory"))
         self.backup_dir = self.base_dir / "backups"
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
-    async def backup(self, label: Optional[str] = None) -> str:
+    async def backup(self, label: str | None = None) -> str:
         import uuid
 
         timestamp = int(time.time())
-        name = label or "backup_%d_%s" % (timestamp, uuid.uuid4().hex[:6])
+        name = label or f"backup_{timestamp}_{uuid.uuid4().hex[:6]}"
         dest = self.backup_dir / name
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -41,13 +42,10 @@ class BackupManager:
     async def restore(self, backup_name: str) -> dict[str, Any]:
         src = self.backup_dir / backup_name
         if not src.exists():
-            return {"error": "Backup not found: %s" % backup_name}
+            return {"error": f"Backup not found: {backup_name}"}
 
         manifest_path = src / "manifest.json"
-        if manifest_path.exists():
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        else:
-            manifest = {"files": [f.name for f in src.glob("*.db")]}
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"files": [f.name for f in src.glob("*.db")]}
 
         restored = []
         for db_file in manifest.get("files", []):
@@ -66,10 +64,8 @@ class BackupManager:
                 info = {"name": d.name}
                 manifest_path = d / "manifest.json"
                 if manifest_path.exists():
-                    try:
+                    with contextlib.suppress(Exception):
                         info.update(json.loads(manifest_path.read_text(encoding="utf-8")))
-                    except Exception:
-                        pass
                 backups.append(info)
         return backups
 

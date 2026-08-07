@@ -1,6 +1,7 @@
 """Tests for WikiManager — unified wiki with layer separation."""
 
 import pytest
+
 from wiki.manager import WikiManager
 
 

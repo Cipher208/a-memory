@@ -4,29 +4,31 @@ Each test creates a temporary database via AsyncConnectionManager(base_dir=tmp_p
 No global connection_manager is used, so no aiosqlite hang on exit.
 """
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
+from mcp_server.tools_layer import (
+    memory_context,
+    memory_context_inject,
+    memory_episode_get,
+    memory_episode_list,
+    memory_episode_recall,
+    memory_episode_save,
+    memory_forget,
+    memory_graph_add,
+    memory_graph_edges,
+    memory_graph_nodes,
+    memory_graph_query,
+    memory_recall,
+    memory_remember,
+    memory_session_end,
+    memory_session_list,
+    memory_session_start,
+    memory_stats,
+)
 from shared.connection import AsyncConnectionManager
 from shared.migrations import MigrationManager
-from mcp_server.tools_layer import (
-    memory_remember,
-    memory_recall,
-    memory_forget,
-    memory_session_start,
-    memory_session_end,
-    memory_episode_save,
-    memory_episode_recall,
-    memory_graph_add,
-    memory_graph_query,
-    memory_stats,
-    memory_context_inject,
-    memory_session_list,
-    memory_episode_list,
-    memory_episode_get,
-    memory_graph_nodes,
-    memory_graph_edges,
-    memory_context,
-)
 
 
 @pytest.fixture
@@ -36,14 +38,14 @@ async def app(tmp_path):
     mm = MigrationManager(cm=cm)
     await mm.migrate()
 
-    from shared.cache import MemoryCache
-    from graph.epistemic import EpistemicGraph
-    from wiki.manager import WikiManager
-    from lifecycle.emotion_trigger import EmotionTrigger
-    from features.rate_limiting import RateLimiter
-    from hooks.user_hooks import UserHooks
-    from hooks.agent_hooks import AgentHooks
     from core import MemoryManager as MM
+    from features.rate_limiting import RateLimiter
+    from graph.epistemic import EpistemicGraph
+    from hooks.agent_hooks import AgentHooks
+    from hooks.user_hooks import UserHooks
+    from lifecycle.emotion_trigger import EmotionTrigger
+    from shared.cache import MemoryCache
+    from wiki.manager import WikiManager
 
     class App:
         pass

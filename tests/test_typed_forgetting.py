@@ -1,10 +1,12 @@
 """Tests for typed forgetting — type-aware decay and archive."""
 
 import time
+
 import pytest
-from shared.connection import AsyncConnectionManager
+
 from lifecycle.forgetting import ForgettingSystem
 from shared.archived_memories import ArchivedMemories
+from shared.connection import AsyncConnectionManager
 
 
 @pytest.fixture

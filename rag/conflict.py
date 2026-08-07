@@ -3,13 +3,12 @@ Conflict Resolver — async, detects conflicting memory entries.
 Uses BM25 + char-trigram Jaccard hybrid for similarity (B3).
 """
 
-from shared.constants import DB_NAME
 import math
 import uuid
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
-
+from shared.constants import DB_NAME
 
 # ─── B3: BM25 + char-trigram similarity ───
 
@@ -93,9 +92,9 @@ class ConflictResolver:
             return {"content": new_content, "is_conflict": False}
 
         like_conditions = " OR ".join(["content LIKE ?" for _ in keywords])
-        like_params = ["%%%s%%" % kw for kw in keywords]
+        like_params = [f"%{kw}%" for kw in keywords]
         cur = await conn.execute(
-            "SELECT id, content, is_conflict, conflict_group_id FROM memory_conflicts WHERE user_id=? AND (%s) LIMIT 5" % like_conditions,
+            f"SELECT id, content, is_conflict, conflict_group_id FROM memory_conflicts WHERE user_id=? AND ({like_conditions}) LIMIT 5",
             (user_id, *like_params),
         )
         rows = await cur.fetchall()

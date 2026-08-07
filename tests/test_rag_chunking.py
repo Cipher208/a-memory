@@ -1,6 +1,7 @@
 """Tests for chunk_text with overlap."""
 
 import pytest
+
 from rag.chunking import chunk_text
 
 
@@ -8,7 +9,7 @@ def test_overlap_param_now_used():
     text = "Paragraph one is here.\n\n" * 30
     chunks = chunk_text(text, max_size=200, overlap=50)
     assert all(len(c) <= 230 for c in chunks)
-    overlaps = sum(1 for a, b in zip(chunks, chunks[1:]) if any(line in b for line in a.split("\n\n") if line))
+    overlaps = sum(1 for a, b in zip(chunks, chunks[1:], strict=False) if any(line in b for line in a.split("\n\n") if line))
     assert overlaps >= len(chunks) - 1
 
 

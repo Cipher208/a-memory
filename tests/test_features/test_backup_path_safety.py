@@ -1,8 +1,10 @@
 """Tests for backup path traversal prevention."""
 
-import json
 import asyncio
+import json
+
 import pytest
+
 from features.backup import BackupManager
 
 

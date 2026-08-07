@@ -1,6 +1,7 @@
 """Tests for FileWiki path traversal prevention."""
 
 import pytest
+
 from wiki.manager import WikiManager
 
 

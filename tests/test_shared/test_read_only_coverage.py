@@ -1,6 +1,7 @@
 """Tests for shared/read_only.py — essential behavior."""
 
 import sqlite3
+
 from shared.read_only import ReadOnlyReplica
 
 

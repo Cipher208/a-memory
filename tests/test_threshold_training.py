@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 
+from rag.engine import RAGEngine
 from rag.quantize import (
     binary_from_threshold_array,
     load_thresholds,
@@ -10,7 +11,6 @@ from rag.quantize import (
     supervised_threshold,
     train_supervised_thresholds,
 )
-from rag.engine import RAGEngine
 from shared.connection import AsyncConnectionManager
 
 
@@ -27,7 +27,7 @@ def _make_pairs(n=10, dim=8, seed=42):
     rng = np.random.RandomState(seed)
     base = rng.randn(n, dim).astype(np.float32)
     noise = rng.randn(n, dim).astype(np.float32) * 0.1
-    return list(zip(base.tolist(), (base + noise).tolist()))
+    return list(zip(base.tolist(), (base + noise).tolist(), strict=False))
 
 
 def _make_neg_pairs(n=5, dim=8, seed=99):
@@ -35,7 +35,7 @@ def _make_neg_pairs(n=5, dim=8, seed=99):
     rng = np.random.RandomState(seed)
     a = rng.randn(n, dim).astype(np.float32)
     b = rng.randn(n, dim).astype(np.float32) * 5.0
-    return list(zip(a.tolist(), b.tolist()))
+    return list(zip(a.tolist(), b.tolist(), strict=False))
 
 
 class TestSupervisedThresholdExisting:

@@ -2,18 +2,18 @@
 Import/Export — async import/export memory between instances
 """
 
-from shared.constants import DB_NAME
 import json
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.constants import DB_NAME
 from shared.path_safety import safe_resolve
 
 
 class ImportExport:
-    def __init__(self, cm: Optional["AsyncConnectionManager"] = None):
+    def __init__(self, cm: "AsyncConnectionManager" | None = None):
         self._cm = cm or connection_manager
         self.export_dir = self.base_dir / "exports"
         self.export_dir.mkdir(parents=True, exist_ok=True)
@@ -59,7 +59,7 @@ class ImportExport:
         filepath.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(filepath)
 
-    async def import_user(self, filepath: str, target_user_id: Optional[str] = None) -> dict[str, int]:
+    async def import_user(self, filepath: str, target_user_id: str | None = None) -> dict[str, int]:
         safe_resolve(self.export_dir, filepath)  # raises ValueError if traversal
         data = json.loads(Path(filepath).read_text(encoding="utf-8"))
         user_id = target_user_id or data.get("user_id", "default")

@@ -1,6 +1,7 @@
 """Tests for shared/embeddings.py — remaining unit tests."""
 
 import pytest
+
 from shared.embeddings import similarity
 
 

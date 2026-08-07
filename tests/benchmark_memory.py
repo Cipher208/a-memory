@@ -53,7 +53,7 @@ def benchmark_recall(n: int = 100):
 
 
 def benchmark_encrypt(n: int = 100):
-    from features.secrets import encrypt_json, decrypt_json
+    from features.secrets import decrypt_json, encrypt_json
 
     data = {"key": "value", "number": 42, "list": [1, 2, 3]}
 

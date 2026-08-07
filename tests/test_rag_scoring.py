@@ -1,6 +1,7 @@
 """Tests for rag/scoring.py — parametrized."""
 
 import pytest
+
 from rag.scoring import CorpusStats, ScoredCandidate, Scorer, ScoringWeights
 
 

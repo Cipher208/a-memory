@@ -4,7 +4,7 @@ import asyncio
 import os
 import sys
 import time as _time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -70,7 +70,7 @@ async def lifespan(server: FastMCP):
     result = await migration_manager.migrate()
     import logging
 
-    logging.getLogger(__name__).info("Migrations: %s" % result)
+    logging.getLogger(__name__).info(f"Migrations: {result}")
 
     await asyncio.to_thread(read_only_replica.sync)
 
@@ -104,10 +104,8 @@ async def lifespan(server: FastMCP):
         yield ctx
     finally:
         periodic_task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await periodic_task
-        except asyncio.CancelledError:
-            pass
         importance_scheduler.stop()
         backup_cron.stop()
 
@@ -120,11 +118,10 @@ mcp = FastMCP(
 
 
 def _register_all_tools():
-    from mcp_server.registry import get_all_tools
-
     # Importing these modules triggers self-registration into the registry
     import mcp_server.tools_layer  # noqa: F401
     import mcp_server.tools_ops  # noqa: F401
+    from mcp_server.registry import get_all_tools
 
     for name, func in get_all_tools().items():
         mcp.tool(name=name)(func)
@@ -409,7 +406,7 @@ def _run_with_dashboard(host: str, port: int):
         async def dispatch(self, request, call_next):
             if request.url.path == "/mcp" and request.headers.get("upgrade", "").lower() == "websocket":
                 user = request.headers.get("X-User-ID", request.client.host if request.client else "unknown")
-                conn_id = "%s_%s" % (user, int(time.time() * 1000))
+                conn_id = f"{user}_{int(time.time() * 1000)}"
                 acquired = ws_limiter.acquire(user, conn_id)
                 if not acquired["allowed"]:
                     from starlette.responses import JSONResponse
