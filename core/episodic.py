@@ -105,9 +105,12 @@ class EpisodicMemory:
             archived_count += 1
 
         ids = [row["episode_id"] for row in rows]
+        if not ids:
+            return archived_count
+
         placeholders = ",".join(["?"] * len(ids))
-        query = f"DELETE FROM episodes WHERE episode_id IN ({placeholders})"
-        await conn.execute(query, ids)
+        sql = f"DELETE FROM episodes WHERE episode_id IN ({placeholders})"  # noqa: S608
+        await conn.execute(sql, ids)
         await conn.commit()
         return archived_count
 

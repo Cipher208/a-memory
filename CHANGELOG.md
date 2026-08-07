@@ -3,6 +3,26 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.0] - 2026-08-08
+
+### Added
+- **Prometheus Metrics** — Integrated `prometheus_client` exporter on port `9120`. Real-time tracking of memory operations, filter performance, and search latency.
+- **Adaptive Importance Threshold** — Implemented Exponential Moving Average (EMA) for dynamic noise filtering. The threshold now adapts to conversation signal within [0.1, 0.6] range.
+- **Memory Auto-Compaction** — Background maintenance task that automatically archives old, low-importance memories to keep search results relevant and reduce context bloat.
+- **Alembic Migrations** — Transitioned database schema management to Alembic for reliable, versioned updates.
+- **Infrastructure Dashboard** — Enhanced metrics visibility via Prometheus-compatible endpoints.
+
+### Fixed
+- **SQL Injection Vectors** — Hardened dynamic query construction in `episodic.py` and `wiki/shared.py` using table whitelisting and proper parameterization.
+- **Insecure Hashing** — Updated content hashing in `wiki/manager.py` from `md5` to `sha256`.
+- **Async I/O Safety** — Fixed blocking `pathlib` calls in async contexts by wrapping them in `asyncio.to_thread`.
+- **CI Stability** — Massive linting (Ruff) and typecheck (Mypy) cleanup across the codebase.
+- **Database Consistency** — Implemented orphans cleanup and SQLite statistics optimization (`ANALYZE`).
+
+### Security
+- Resolved multiple S608 (SQLi) and S324 (Insecure Hashing) findings flagged by strict security audit.
+- Migrated all `open()` calls to safe `Path.open()` wrappers.
+
 ## [1.4.0] - 2026-07-06
 
 ### Added

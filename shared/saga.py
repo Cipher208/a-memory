@@ -6,6 +6,7 @@ Supports retry with exponential backoff and idempotent step execution (B7).
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -17,7 +18,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
-import contextlib
 
 logger = logging.getLogger(__name__)
 

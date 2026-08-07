@@ -3,9 +3,8 @@ File Storage for Wiki — handles disk I/O and path safety.
 """
 
 import asyncio
-import os
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 from shared.path_safety import safe_resolve
 
@@ -21,7 +20,7 @@ class WikiStore:
         """Write content to file securely."""
         full_path = safe_resolve(self.base_dir, relative_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         def _sync_write():
             full_path.write_text(content, encoding="utf-8")
             return full_path
@@ -31,7 +30,7 @@ class WikiStore:
     async def read(self, relative_path: str) -> str:
         """Read file content."""
         full_path = safe_resolve(self.base_dir, relative_path)
-        
+
         def _sync_read():
             return full_path.read_text(encoding="utf-8")
 
@@ -40,7 +39,7 @@ class WikiStore:
     async def delete(self, relative_path: str) -> bool:
         """Delete file from disk."""
         full_path = safe_resolve(self.base_dir, relative_path)
-        
+
         def _sync_delete():
             if full_path.exists():
                 full_path.unlink()
@@ -59,5 +58,6 @@ class WikiStore:
             yield f
 
     async def exists(self, relative_path: str) -> bool:
+        """Check if file exists on disk."""
         full_path = safe_resolve(self.base_dir, relative_path)
         return await asyncio.to_thread(full_path.exists)

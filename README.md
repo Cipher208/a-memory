@@ -56,15 +56,16 @@ graph TD
 | Feature | mcp-ariel-memory | Typical Memory |
 |---------|------------------|----------------|
 | **Memory hierarchy** | L1→L2→L3→L4 (4 layers) | Flat key-value store |
+| **Adaptive Threshold** | Dynamic EMA-based noise filtering | Static threshold |
 | **Hybrid search** | FTS5 + binary embeddings + RRF | FTS or vector only |
 | **ITS scoring** | Novelty + relevance via document frequency | None |
 | **Knowledge graphs** | Epistemic + Temporal | None |
 | **Typed memory** | 13 categories with per-type retention | None |
 | **Two layers** | User (about people) + Agent (self-knowledge) | User only |
 | **Wiki** | 14 types, .md files as source of truth, FTS5 | None |
-| **24 hooks** | Intercept operations at every stage | 0 |
-| **Lost-in-the-Middle prevention** | L4 CoreMemory at start/end of prompt | None |
+| **Auto-Compaction** | Periodic archiving of low-importance items | None |
 | **Encryption** | libsodium secretbox (keychain-first) | Usually none |
+| **Metrics** | Real-time Prometheus exporter (port 9120) | None |
 | **Tests** | 250 (79 property-based/logic/chaos) | — |
 | **Dashboard** | Real-time HTML dashboard | — |
 
@@ -107,6 +108,15 @@ cd mcp-ariel-memory
 pip install -e ".[all]"
 python -m mcp_server.server --transport stdio
 ```
+
+### Monitoring & Maintenance
+
+mcp-ariel-memory includes built-in tools for keeping the system healthy:
+
+- **Prometheus Metrics** — The server exports real-time metrics on port `9120`. Monitor search latency, operation counts, and memory growth.
+- **Memory Auto-Compaction** — Automatically archives old memories with low importance scores to keep the context window efficient.
+- **Adaptive Threshold (EMA)** — The importance filter dynamically adjusts to your conversation style, ensuring only high-signal data reaches long-term storage.
+- **Alembic Migrations** — Versioned database schema management for reliable updates.
 
 ---
 

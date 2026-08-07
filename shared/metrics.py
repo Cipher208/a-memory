@@ -3,12 +3,11 @@ Metrics — Professional Prometheus-compatible metrics collection.
 Uses prometheus_client for standard compliance and advanced histograms.
 """
 
-import os
-import time
 import logging
-import threading
+import time
 from typing import Any
-from prometheus_client import REGISTRY, Counter, Gauge, Histogram, Summary, generate_latest, CONTENT_TYPE_LATEST
+
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,7 @@ class MetricsCollector:
 
     def __init__(self):
         self._start_time = time.time()
-        
+
         # --- Standard Metrics ---
         self.uptime = Gauge(
             "ariel_memory_uptime_seconds", "Server uptime in seconds"
@@ -34,10 +33,10 @@ class MetricsCollector:
         self.current_importance_threshold = Gauge(
             "ariel_memory_importance_threshold", "Current EMA importance threshold"
         )
-        
+
         # --- Performance Metrics ---
         self.search_latency = Histogram(
-            "ariel_memory_search_latency_seconds", 
+            "ariel_memory_search_latency_seconds",
             "Latency of memory search operations",
             buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0)
         )
@@ -66,7 +65,7 @@ class MetricsCollector:
         """Legacy compatibility: render minimal JSON for dashboard."""
         return {
             "uptime_seconds": time.time() - self._start_time,
-            "status": "ok (prometheus_client active)"
+            "status": "ok (prometheus_client active)",
         }
 
 # Global instance — used by server.py and middleware

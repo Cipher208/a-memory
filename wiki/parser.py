@@ -3,8 +3,9 @@ Markdown Parser for Wiki — handles YAML frontmatter and content separation.
 """
 
 import re
-import yaml
 from typing import Any
+
+import yaml
 
 
 class WikiParser:
@@ -13,11 +14,11 @@ class WikiParser:
     @staticmethod
     def parse(text: str) -> dict[str, Any]:
         """Parse .md with YAML frontmatter.
-        
+
         Returns dict with: title, content, tags, importance.
         """
         result: dict[str, Any] = {"title": "", "content": text, "tags": [], "importance": 0.5}
-        
+
         if not text.startswith("---"):
             return result
 
@@ -30,10 +31,10 @@ class WikiParser:
                     result["tags"] = frontmatter.get("tags", [])
                     result["importance"] = float(frontmatter.get("importance", 0.5))
                     result["content"] = parts[2].strip()
-        except Exception:
-            # Fallback to plain text if YAML is malformed
+        except (yaml.YAMLError, ValueError, TypeError):
+            # Fallback to plain text if YAML is malformed or types are wrong
             pass
-            
+
         return result
 
     @staticmethod

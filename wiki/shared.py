@@ -17,9 +17,9 @@ def load_config() -> dict:
         import yaml
 
         config_path = Path(__file__).parent.parent / "config.yaml"
-        with open(config_path) as f:
+        with config_path.open() as f:
             return yaml.safe_load(f) or {}
-    except Exception:
+    except (OSError, yaml.YAMLError):
         return {}
 
 
@@ -45,7 +45,8 @@ async def find_by_source(cm: AsyncConnectionManager, table: str, user_id: str, s
     if table not in ALLOWED_TABLES:
         raise ValueError(f"Invalid table: {table}")
     conn = await cm.get("memory.db")
-    cur = await conn.execute(f"SELECT entry_id FROM {table} WHERE user_id=? AND source=?", (user_id, source))
+    sql = f"SELECT entry_id FROM {table} WHERE user_id=? AND source=?"  # noqa: S608
+    cur = await conn.execute(sql, (user_id, source))
     row = await cur.fetchone()
     return row[0] if row else None
 
@@ -87,7 +88,8 @@ def build_count_query(table: str, user_id: str | None = None, wiki_type: str | N
         conditions.append("wiki_type=?")
         params.append(wiki_type)
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    return f"SELECT COUNT(*) FROM {table}{where}", params
+    sql = f"SELECT COUNT(*) FROM {table}{where}"  # noqa: S608
+    return sql, params
 
 
 def format_search_result(row: tuple, content_limit: int = 300) -> dict[str, Any]:

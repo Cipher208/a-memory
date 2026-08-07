@@ -43,8 +43,8 @@ class AgentHooks:
 
     async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
         """Filter agent messages by importance. Type-aware with agent keywords."""
-        from shared.memory_types import default_importance
         from shared.adaptive import adaptive_threshold
+        from shared.memory_types import default_importance
 
         text = ctx.get("text", "")
         if not text:
@@ -65,7 +65,7 @@ class AgentHooks:
             score += 0.1
 
         score = min(1.0, score)
-        
+
         # Update EMA
         threshold = await adaptive_threshold.get_threshold()
         await adaptive_threshold.update(score)

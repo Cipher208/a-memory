@@ -90,11 +90,11 @@ class UserHooks:
         text = ctx.get("text", "")
         kind = ctx.get("memory_kind")
         score = self._calculate_importance(text, kind)
-        
+
         # Update EMA with new score
         threshold = await adaptive_threshold.get_threshold()
         await adaptive_threshold.update(score)
-        
+
         return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
     def _auto_context(self, ctx: dict[str, Any]) -> dict[str, Any]:

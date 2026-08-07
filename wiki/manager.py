@@ -432,9 +432,8 @@ class WikiManager:
             if any(w in content.lower() for w in ["проект", "задача"]):
                 return "work_notes"
             return "diary"
-        else:
-            if any(w in content.lower() for w in ["решение", "decided"]):
-                return "decision_log"
-            if any(w in content.lower() for w in ["ошибка", "error"]):
-                return "error_analysis"
-            return "wiki_agent"
+        if any(w in content.lower() for w in ["решение", "decided"]):
+            return "decision_log"
+        if any(w in content.lower() for w in ["ошибка", "error"]):
+            return "error_analysis"
+        return "wiki_agent"
