@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 L2 SessionStore — async session history with indexes
 """
@@ -65,7 +66,7 @@ class SessionStore:
         )
         await conn.commit()
 
-    async def get_recent_sessions(self, user_id: str, limit: int = 10) -> list["SessionRecord"]:
+    async def get_recent_sessions(self, user_id: str, limit: int = 10) -> list[SessionRecord]:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "SELECT * FROM sessions WHERE user_id=? ORDER BY started_at DESC LIMIT ?",

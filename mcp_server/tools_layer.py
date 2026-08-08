@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Layer tools — unified user/agent memory operations.
 
 All tools accept a `layer` parameter: "user" or "agent".
@@ -10,9 +11,8 @@ import hashlib
 import logging
 import re
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from mcp.server.fastmcp import Context
 
 from mcp_server.models import (
     ContextResult,
@@ -28,6 +28,9 @@ from mcp_server.registry import _get_ctx, register_tool
 from mcp_server.utils.privacy import strip_secrets
 from shared.constants import DB_NAME
 from shared.metrics import metrics
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
 
 logger = logging.getLogger(__name__)
 

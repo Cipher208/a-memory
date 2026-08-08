@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 User Layer Hooks - 12 hooks for user memory events
 """

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 DreamBuffer — async staging memories with TTL
 """
@@ -12,7 +13,7 @@ from shared.constants import DB_NAME
 
 
 class DreamBuffer:
-    def __init__(self, cm: "AsyncConnectionManager" | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
     async def _init_db(self):

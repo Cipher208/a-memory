@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Middleware Pipeline — chain of handlers for intercepting and modifying requests.
 Analogous to middleware_pipeline.py from ariel.
@@ -193,7 +194,7 @@ class MiddlewarePipeline:
     def __init__(self):
         self._middlewares: list[Middleware] = []
 
-    def add(self, middleware: Middleware) -> "MiddlewarePipeline":
+    def add(self, middleware: Middleware) -> MiddlewarePipeline:
         self._middlewares.append(middleware)
         return self
 

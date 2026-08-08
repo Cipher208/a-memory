@@ -1,13 +1,15 @@
 from __future__ import annotations
 import hashlib
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from rag.chunking import chunk_text
 from rag.models import RAGPage
 from rag.quantize import binary_batch
-from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
 from shared.embeddings import embed_texts
+
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
 
 
 class RAGIngestor:

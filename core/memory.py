@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 L4 CoreMemory — async key-value facts with importance and typed memory (B7)
 """

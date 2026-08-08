@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 RAG Engine — Unified facade for Ingestor and Searcher.
 Maintains backward compatibility for legacy consumers.

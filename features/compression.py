@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 MemoryCompressor — async dedup and compression
 """
@@ -11,7 +12,7 @@ from shared.constants import DB_NAME
 
 
 class MemoryCompressor:
-    def __init__(self, cm: "AsyncConnectionManager" | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
     async def deduplicate_core(self, user_id: str) -> int:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Retrieval Router — async routes queries to the right memory strategy
 Multi-signal: FTS5 + Vector + Entity/NER extraction

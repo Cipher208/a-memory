@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 WikiIndex Layer — handles all SQLite and FTS5 operations for Wiki.
 Isolates DB logic from filesystem and business logic.
@@ -8,9 +9,12 @@ import json
 import logging
 import time
 
-from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
-from wiki.models import WikiEntry
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from wiki.models import WikiEntry
+    from shared.connection import AsyncConnectionManager
 
 logger = logging.getLogger(__name__)
 

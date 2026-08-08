@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """Operations tools — auth, backup, saga, data transfer, search.
 
 Merged into action-based tools to reduce tool count.
@@ -7,9 +8,8 @@ Merged into action-based tools to reduce tool count.
 import asyncio
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from mcp.server.fastmcp import Context
 
 from mcp_server.models import (
     ApiKeyResult,
@@ -22,6 +22,9 @@ from mcp_server.models import (
 from mcp_server.registry import _get_ctx, register_tool
 from shared.constants import DB_NAME
 from shared.metrics import metrics
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
 
 
 async def memory_api_key(

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Saga — pattern for multi-step operations with compensation (rollback).
 Includes watchdog for detecting stuck sagas and persistence for recovery.
@@ -92,7 +93,7 @@ class Saga:
         retry_backoff: float = 0.5,
         retry_on: tuple = (ConnectionError, TimeoutError),
         idempotency_key_fn: Callable[[dict], str] | None = None,
-    ) -> "Saga":
+    ) -> Saga:
         self._steps.append(
             SagaStep(
                 name=name,
@@ -344,7 +345,7 @@ class Saga:
 
         self._status = SagaStatus.COMPENSATED
 
-    async def _compensate_inner_saga(self, inner: "Saga") -> None:
+    async def _compensate_inner_saga(self, inner: Saga) -> None:
         """Compensate all completed steps of a nested saga in reverse order."""
         for j in range(len(inner._steps) - 1, -1, -1):
             inner_step = inner._steps[j]

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 ReadOnlyReplica — async read-only DB copy for dashboard/metrics
 """

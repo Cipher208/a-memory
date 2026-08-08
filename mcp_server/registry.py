@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 """Tool registry — breaks circular imports between server.py, tools_layer.py, tools_ops.py.
 
 Tools register themselves here. server.py pulls from here and applies @mcp.tool().
 """
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from mcp.server.fastmcp import Context
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
 
 _tools: dict[str, Callable] = {}
 

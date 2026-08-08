@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Circuit Breaker pattern for LLM/embedding calls.
 

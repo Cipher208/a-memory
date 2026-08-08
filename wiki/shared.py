@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Shared wiki utilities — config loading, type helpers, query builders.
 Eliminates duplication across agent_wiki, file_wiki, user_wiki.
@@ -7,9 +8,11 @@ Eliminates duplication across agent_wiki, file_wiki, user_wiki.
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from shared.connection import AsyncConnectionManager
+
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
 
 
 def load_config() -> dict:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Consolidation Engine — L1→L2→L3→L4 memory promotion (async)
 Type-aware promotion with memory_kind support.

@@ -1,5 +1,8 @@
 from __future__ import annotations
-from .engine import EmotionEngine
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .engine import EmotionEngine
 
 
 class EmotionTrigger:

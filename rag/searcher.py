@@ -1,12 +1,14 @@
 from __future__ import annotations
 import logging
-from typing import Literal, cast
+from typing import Literal, cast, TYPE_CHECKING
 
-from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
 from rag.models import SearchResult
 from rag.search import search_fts5, search_binary, search_rrf, auto_strategy
-from shared.importance import ImportanceScorer
+
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
+    from shared.importance import ImportanceScorer
 
 logger = logging.getLogger(__name__)
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 AsyncConnectionManager — unified SQLite connection manager.
 
@@ -54,7 +55,7 @@ class _SyncConnectionWrapper:
         self.row_factory = conn.row_factory
         self._lock = threading.Lock()
 
-    async def execute(self, sql: str, params: tuple = ()) -> "_SyncCursorWrapper":
+    async def execute(self, sql: str, params: tuple = ()) -> _SyncCursorWrapper:
         def _do():
             with self._lock:
                 return self._conn.execute(sql, params)
@@ -97,7 +98,7 @@ class _SyncConnectionWrapper:
 
         await asyncio.to_thread(_do)
 
-    def cursor(self) -> "_SyncCursorWrapper":
+    def cursor(self) -> _SyncCursorWrapper:
         return _SyncCursorWrapper(self._conn.cursor())
 
 

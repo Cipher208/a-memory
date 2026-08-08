@@ -10,7 +10,7 @@ from shared.constants import DB_NAME
 
 
 class ArchivedMemories:
-    def __init__(self, cm: "AsyncConnectionManager" | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
     async def _init_db(self):

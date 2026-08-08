@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Import/Export — async import/export memory between instances
 """
@@ -14,7 +15,7 @@ from shared.path_safety import safe_resolve
 
 
 class ImportExport:
-    def __init__(self, cm: "AsyncConnectionManager" | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
         self.export_dir = self.base_dir / "exports"
         self.export_dir.mkdir(parents=True, exist_ok=True)

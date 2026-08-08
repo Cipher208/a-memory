@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Shared hook utilities — eliminates duplication between agent and user hooks.
 """

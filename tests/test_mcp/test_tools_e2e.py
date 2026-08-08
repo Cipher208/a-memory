@@ -57,7 +57,7 @@ async def app(tmp_path):
     app.agent_wiki = WikiManager(layer="agent", base_dir=str(tmp_path / "wiki_a"), cm=cm)
     app.user_graph = EpistemicGraph(layer="user", cm=cm)
     app.agent_graph = EpistemicGraph(layer="agent", cm=cm)
-    
+
     emo_cfg = load_emotion_config()
     app.emotion_engine = EmotionEngine(config=emo_cfg)
     app.emotion_trigger = EmotionTrigger(app.emotion_engine)

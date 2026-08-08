@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Embeddings — async SQLite cache with multilingual model
 """
@@ -30,7 +31,7 @@ def _get_model(model_name: str | None = None):
 
 
 class EmbeddingCache:
-    def __init__(self, cm: "AsyncConnectionManager" | None = None, model_name: str | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None, model_name: str | None = None):
         self._cm = cm or connection_manager
         self.model_name = model_name or DEFAULT_MODEL
         self._dimension = 384

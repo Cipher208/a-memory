@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Core Memory Module — L1-L4 async
 Two-layer: user facts + agent identity
