@@ -430,7 +430,7 @@ Markdown-based wiki with layer separation (user/agent/shared).
 ## Usage
 
 ```python
-from wiki.manager import WikiManager
+from wiki import WikiManager
 
 wm = WikiManager(layer="user")
 path = await wm.add("diary", "Day 1", "Started project")

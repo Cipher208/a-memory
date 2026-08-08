@@ -1,0 +1,59 @@
+from typing import Dict, Optional, Tuple, List
+from .engine import EmotionEngine
+from .models import EmotionResult
+
+class EmotionTrigger:
+    """
+    Facade for emotional and non-emotional message triggers.
+    Re-implements logic from old lifecycle/emotion_trigger.py using EmotionEngine.
+    """
+    
+    STATE_SHIFT_THRESHOLD = 0.15
+
+    def __init__(self, engine: EmotionEngine):
+        self.engine = engine
+
+    def should_save(
+        self, 
+        message: str, 
+        emotional_state: Optional[Dict[str, float]] = None, 
+        state_delta: Optional[Dict[str, float]] = None
+    ) -> Tuple[bool, str, float]:
+        """
+        Evaluates if a message should be saved based on emotional content and structural markers.
+        Returns (should_save, trigger_name, score).
+        """
+        candidates: List[Tuple[str, float]] = []
+
+        # 1. Base emotions from engine
+        engine_results = self.engine.detect(message)
+        for res in engine_results:
+            candidates.append((f"emotion_{res.trigger_type}", res.score))
+
+        # 2. Non-emotional structural triggers
+        if len(message) > 300:
+            candidates.append(("long_message", 0.3))
+        
+        if message.count("?") >= 3:
+            candidates.append(("complex_question", 0.4))
+            
+        if message.count("!") >= 2:
+            candidates.append(("exclamation", 0.3))
+
+        # 3. Contextual emotional state
+        if emotional_state:
+            if emotional_state.get("joy", 0) > 0.8 or emotional_state.get("interest", 0) > 0.8:
+                candidates.append(("high_emotion", 0.6))
+
+        # 4. State shifts
+        if state_delta:
+            for key, delta in state_delta.items():
+                if abs(delta) > self.STATE_SHIFT_THRESHOLD:
+                    candidates.append((f"state_shift_{key}", 0.4))
+
+        if not candidates:
+            return False, "", 0.0
+
+        # Return the highest scoring trigger
+        best_trigger, best_score = max(candidates, key=lambda x: x[1])
+        return True, best_trigger, best_score

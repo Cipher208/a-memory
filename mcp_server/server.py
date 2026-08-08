@@ -29,14 +29,14 @@ from graph.temporal import TemporalGraph
 from hooks.agent_hooks import AgentHooks
 from hooks.user_hooks import UserHooks
 from lifecycle.consolidation import ConsolidationEngine
-from lifecycle.emotion_trigger import EmotionTrigger
+from lifecycle.emotion import EmotionTrigger, EmotionEngine
 from lifecycle.forgetting import ForgettingSystem
 from lifecycle.importance_scheduler import importance_scheduler
 from rag.engine import RAGEngine
 from rag.multi_source import MultiSourceRAG
 from shared.cache import MemoryCache
 from shared.read_only import read_only_replica
-from wiki.manager import WikiManager
+from wiki import WikiManager
 
 
 class AppContext:
@@ -53,7 +53,8 @@ class AppContext:
         self.agent_graph = EpistemicGraph(layer="agent")
         self.temporal = TemporalGraph()
         self.forgetting = ForgettingSystem()
-        self.emotion_trigger = EmotionTrigger()
+        self.emotion_engine = EmotionEngine()
+        self.emotion_trigger = EmotionTrigger(self.emotion_engine)
         self.consolidation = ConsolidationEngine()
         self.audit = AuditTrail()
         self.rate_limiter = RateLimiter()

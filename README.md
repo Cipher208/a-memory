@@ -211,7 +211,7 @@ Single `memory.db` file — no external database required.
 | `staging_memories` | shared/dream_buffer.py | Temporary staging |
 | `archived_memories` | shared/archived_memories.py | Archived memories |
 | `audit_log` | features/audit_trail.py | Audit trail |
-| `rate_limits` | features/rate_limiting.py | Rate limiting |
+| `rate_limits" | features/rate_limiting.py | Rate limiting |
 | `embedding_cache` | shared/embeddings.py | Cached embeddings |
 | `rag_pages` | rag/engine.py | RAG document pages |
 | `rag_chunks` | rag/engine.py | RAG document chunks |
@@ -220,9 +220,9 @@ Single `memory.db` file — no external database required.
 | `epi_edges` | graph/epistemic.py | Epistemic graph edges |
 | `temporal_events` | graph/temporal.py | Temporal events |
 | `temporal_links` | graph/temporal.py | Temporal links |
-| `user_wiki` | wiki/user_wiki.py | User wiki entries |
-| `agent_wiki` | wiki/agent_wiki.py | Agent wiki entries |
-| `wiki_index` | wiki/file_wiki.py | Wiki FTS5 index |
+| `user_wiki` | wiki/models.py | User wiki entries |
+| `agent_wiki` | wiki/models.py | Agent wiki entries |
+| `wiki_index` | wiki/index.py | Wiki FTS5 index |
 | `memory_conflicts` | rag/conflict.py | Memory conflicts |
 | `migration_log` | shared/migrations.py | Migration history |
 

@@ -43,9 +43,9 @@ async def app(tmp_path):
     from graph.epistemic import EpistemicGraph
     from hooks.agent_hooks import AgentHooks
     from hooks.user_hooks import UserHooks
-    from lifecycle.emotion_trigger import EmotionTrigger
+    from lifecycle.emotion import EmotionTrigger, EmotionEngine
     from shared.cache import MemoryCache
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     class App:
         pass
@@ -57,7 +57,8 @@ async def app(tmp_path):
     app.agent_wiki = WikiManager(layer="agent", base_dir=str(tmp_path / "wiki_a"), cm=cm)
     app.user_graph = EpistemicGraph(layer="user", cm=cm)
     app.agent_graph = EpistemicGraph(layer="agent", cm=cm)
-    app.emotion_trigger = EmotionTrigger()
+    app.emotion_engine = EmotionEngine()
+    app.emotion_trigger = EmotionTrigger(app.emotion_engine)
     app.rate_limiter = RateLimiter()
     app.user_hooks = UserHooks()
     app.agent_hooks = AgentHooks()

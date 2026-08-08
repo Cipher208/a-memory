@@ -5,7 +5,7 @@ User Layer Hooks - 12 hooks for user memory events
 import asyncio
 from typing import Any
 
-from lifecycle.emotion_trigger import EmotionTrigger
+from lifecycle.emotion import EmotionTrigger, EmotionEngine
 
 from .registry import hook_registry
 from .shared import (
@@ -20,7 +20,8 @@ from .shared import (
 class UserHooks:
     def __init__(self, user_id: str = "default"):
         self.user_id = user_id
-        self.emotion_trigger = EmotionTrigger()
+        self.emotion_engine = EmotionEngine()
+        self.emotion_trigger = EmotionTrigger(self.emotion_engine)
         self._register_all()
 
     def _register_all(self):

@@ -3,6 +3,17 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.0] - 2026-08-08
+
+### Changed
+- **Saga System** — Refactored and moved to `shared/saga/`. Now features a modular async engine with Pydantic v2 validation and encrypted state persistence via libsodium.
+- **Emotion Trigger** — Refactored and moved to `lifecycle/emotion/`. Improved modularity, regex-optimized detection, and support for external trigger assets.
+- **Wiki System** — Migrated to a dedicated `wiki/` package. Enhanced frontmatter parsing, optimized FTS5 reindexing, and improved modular structure for agent/user wikis.
+- **Importance Scorer** — Refactored and moved to `shared/importance/`. Implemented a modular plugin architecture for importance signals with dynamic weight support.
+
+### Performance
+- **System Health** — Repowise average score improved from ~7.1 to 7.67 through significant architectural decoupling and modularization.
+
 ## [1.5.0] - 2026-08-08
 
 ### Added

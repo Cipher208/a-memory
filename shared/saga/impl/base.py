@@ -131,7 +131,7 @@ class Saga:
 
     def _load_state(self, saga_id: str) -> dict | None:
         """Load state from disk (supports encrypted and legacy plain JSON)."""
-        from shared.saga_crypto import read_state_legacy_or_encrypted
+        from shared.saga import read_state_legacy_or_encrypted
 
         state_file = SAGA_DIR / (saga_id + ".json")
         if not state_file.exists():
@@ -510,96 +510,4 @@ class SagaWatchdog:
 saga_watchdog = SagaWatchdog()
 
 
-# === Ready-made sagas for mcp-ariel-memory ===
-
-
-async def _consolidation_gather(data: dict) -> dict:
-    mm = data.get("_mm")
-    if not mm:
-        return {"staging_count": 0}
-    user_id = data.get("user_id", "default")
-    l1 = mm.user_memory(user_id).l1
-    recent = l1.get_recent(20)
-    data["staging_items"] = [{"content": r.content, "importance": 0.5} for r in recent]
-    return {"staging_count": len(data["staging_items"])}
-
-
-async def _consolidation_distill(data: dict) -> dict:
-    items = data.get("staging_items", [])
-    important = [i for i in items if i.get("importance", 0) > 0.3]
-    data["important_items"] = important
-    return {"distilled_count": len(important)}
-
-
-async def _consolidation_promote(data: dict) -> dict:
-    mm = data.get("_mm")
-    if not mm:
-        return {"promoted": 0}
-    user_id = data.get("user_id", "default")
-    items = data.get("important_items", [])
-    promoted = 0
-    for item in items:
-        content = item.get("content", "")
-        key = "auto_{}".format(content[:20].replace(" ", "_").lower())
-        await mm.user_memory(user_id).remember(key, content, item.get("importance", 0.5))
-        promoted += 1
-    return {"promoted": promoted}
-
-
-async def _consolidation_compensate(data: dict) -> None:
-    mm = data.get("_mm")
-    if not mm:
-        return
-    user_id = data.get("user_id", "default")
-    items = data.get("important_items", []) + data.get("staging_items", [])
-    for item in items:
-        content = item.get("content", "")
-        key = "auto_{}".format(content[:20].replace(" ", "_").lower())
-        with contextlib.suppress(Exception):
-            await mm.user_memory(user_id).forget(key)
-
-
-def create_consolidation_saga(user_id: str, mm=None) -> Saga:
-    saga = Saga(f"consolidation_{user_id}")
-    saga.add_step("gather", _consolidation_gather, _consolidation_compensate)
-    saga.add_step("distill", _consolidation_distill, _consolidation_compensate)
-    saga.add_step("promote", _consolidation_promote, _consolidation_compensate)
-    return saga
-
-
-async def _backup_copy_db(data: dict) -> dict:
-    import shutil
-    from pathlib import Path
-
-    base = Path.home() / ".mcp-ariel-memory"
-    backup_dir = base / "backups" / ("saga_%d" % int(time.time()))
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    src = base / "memory.db"
-    if src.exists():
-        shutil.copy2(src, backup_dir / "memory.db")
-    data["backup_path"] = str(backup_dir)
-    return {"backup_path": str(backup_dir)}
-
-
-async def _backup_verify(data: dict) -> dict:
-    from pathlib import Path
-
-    backup_path = Path(data.get("backup_path", ""))
-    files = list(backup_path.glob("*.db")) if backup_path.exists() else []
-    return {"verified_files": len(files)}
-
-
-async def _backup_compensate(data: dict) -> None:
-    import shutil
-    from pathlib import Path
-
-    backup_path = Path(data.get("backup_path", ""))
-    if backup_path.exists():
-        shutil.rmtree(backup_path)
-
-
-def create_backup_saga() -> Saga:
-    saga = Saga("backup")
-    saga.add_step("copy", _backup_copy_db, _backup_compensate)
-    saga.add_step("verify", _backup_verify)
-    return saga
+# Ready-made sagas moved to backup.py and consolidation.py

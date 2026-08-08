@@ -38,7 +38,7 @@ class BackupCron:
     def _load_state(self):
         if self._state_file.exists():
             try:
-                from shared.saga_crypto import read_state_legacy_or_encrypted
+                from shared.saga import read_state_legacy_or_encrypted
 
                 state = read_state_legacy_or_encrypted(self._state_file)
                 self._last_backup = state.get("last_backup", 0.0)
@@ -149,7 +149,7 @@ class BackupCron:
     def _sync_wiki(self):
         """Synchronize wiki files with disk."""
         try:
-            from wiki.manager import WikiManager
+            from wiki import WikiManager
 
             for layer in ["user", "agent"]:
                 fw = WikiManager(layer=layer)

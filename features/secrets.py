@@ -166,7 +166,7 @@ def is_encrypted_blob(path: Path) -> bool:
     """
     if not path.exists():
         return False
-    with Path(path, "rb").open() as f:
+    with path.open("rb") as f:
         head = f.read(1)
     return head not in (b"{", b"[", b" ", b"\n")
 

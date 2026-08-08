@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from shared.saga_crypto import read_state, read_state_legacy_or_encrypted, write_state_atomic
+from shared.saga import read_state, read_state_legacy_or_encrypted, write_state_atomic
 
 
 def test_write_state_atomic_creates_encrypted_file(tmp_path):

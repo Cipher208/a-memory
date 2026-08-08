@@ -2,7 +2,7 @@
 
 import pytest
 
-from wiki.manager import WikiManager
+from wiki import WikiManager
 
 
 @pytest.fixture

@@ -1144,7 +1144,7 @@ class TestWikiCRUDLogic:
 
     def test_wiki_lifecycle(self):
         from shared.connection import AsyncConnectionManager
-        from wiki.manager import WikiManager
+        from wiki import WikiManager
 
         async def t():
             import tempfile
@@ -1167,7 +1167,7 @@ class TestWikiCRUDLogic:
 
     def test_wiki_type_isolation(self):
         from shared.connection import AsyncConnectionManager
-        from wiki.manager import WikiManager
+        from wiki import WikiManager
 
         async def t():
             import tempfile

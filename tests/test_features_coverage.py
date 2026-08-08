@@ -210,7 +210,7 @@ def test_agent_hooks_decision_made():
 
 def test_wiki_add_and_list(tmp_path):
     from shared.connection import AsyncConnectionManager
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     wiki_dir = tmp_path / "wiki"
     wiki_dir.mkdir()
@@ -225,7 +225,7 @@ def test_wiki_add_and_list(tmp_path):
 
 def test_wiki_agent_layer(tmp_path):
     from shared.connection import AsyncConnectionManager
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     wiki_dir = tmp_path / "wiki_agent"
     wiki_dir.mkdir()
@@ -242,7 +242,7 @@ def test_wiki_agent_layer(tmp_path):
 
 def test_wiki_disabled_type_raises(tmp_path):
     from shared.connection import AsyncConnectionManager
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     wiki_dir = tmp_path / "wiki_disabled"
     wiki_dir.mkdir()
@@ -256,7 +256,7 @@ def test_wiki_disabled_type_raises(tmp_path):
 
 def test_wiki_enabled_types(tmp_path):
     from shared.connection import AsyncConnectionManager
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     wiki_dir = tmp_path / "wiki_types"
     wiki_dir.mkdir()
@@ -269,7 +269,7 @@ def test_wiki_enabled_types(tmp_path):
 
 def test_wiki_list_and_count(tmp_path):
     from shared.connection import AsyncConnectionManager
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     cm = AsyncConnectionManager(base_dir=str(tmp_path))
     wm = WikiManager(layer="user", base_dir=str(tmp_path / "wiki"), cm=cm)

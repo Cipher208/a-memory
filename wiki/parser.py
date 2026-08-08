@@ -1,51 +1,79 @@
-"""
-Markdown Parser for Wiki — handles YAML frontmatter and content separation.
-"""
+import time
+from pathlib import Path
+from typing import Optional
 
-import re
-from typing import Any
-
-import yaml
+import frontmatter
+from .models import WikiEntry
 
 
 class WikiParser:
     """Parses and generates Markdown files with YAML frontmatter."""
 
     @staticmethod
-    def parse(text: str) -> dict[str, Any]:
+    def parse(text: str, file_path: Optional[Path] = None) -> WikiEntry:
         """Parse .md with YAML frontmatter.
 
-        Returns dict with: title, content, tags, importance.
+        Returns WikiEntry.
         """
-        result: dict[str, Any] = {"title": "", "content": text, "tags": [], "importance": 0.5}
-
-        if not text.startswith("---"):
-            return result
-
         try:
-            parts = re.split(r"^---\s*$", text, maxsplit=2, flags=re.MULTILINE)
-            if len(parts) >= 3:
-                frontmatter = yaml.safe_load(parts[1])
-                if isinstance(frontmatter, dict):
-                    result["title"] = frontmatter.get("title", "")
-                    result["tags"] = frontmatter.get("tags", [])
-                    result["importance"] = float(frontmatter.get("importance", 0.5))
-                    result["content"] = parts[2].strip()
-        except (yaml.YAMLError, ValueError, TypeError):
-            # Fallback to plain text if YAML is malformed or types are wrong
-            pass
+            post = frontmatter.loads(text)
+            metadata = post.metadata
+            content = post.content.strip()
+        except Exception:
+            # Fallback for malformed YAML or other errors
+            metadata = {}
+            content = text.strip()
+        
+        # Extract fields from frontmatter or use defaults
+        title = metadata.get("title") or (file_path.stem if file_path else "Untitled")
+        try:
+            importance = float(metadata.get("importance", 0.5))
+        except (ValueError, TypeError):
+            importance = 0.5
+            
+        wiki_type = metadata.get("wiki_type", "note")
+        tags = metadata.get("tags")
+        if isinstance(tags, str):
+            tags = [t.strip() for t in tags.split(",")]
+        elif not isinstance(tags, list):
+            tags = []
 
-        return result
+        now = time.time()
+        try:
+            created_at = float(metadata.get("created_at", now))
+        except (ValueError, TypeError):
+            created_at = now
+            
+        try:
+            updated_at = float(metadata.get("updated_at", now))
+        except (ValueError, TypeError):
+            updated_at = now
+
+        return WikiEntry(
+            entry_id=metadata.get("entry_id"),
+            wiki_type=wiki_type,
+            title=str(title),
+            content=content,
+            file_path=str(file_path) if file_path else "",
+            tags=tags,
+            importance=importance,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
 
     @staticmethod
-    def to_md(title: str, content: str, tags: list[str] | None = None, importance: float = 0.5) -> str:
+    def to_markdown(entry: WikiEntry) -> str:
         """Generate .md string with YAML frontmatter."""
-        lines = ["---"]
-        lines.append(f"title: {title}")
-        if tags:
-            lines.append(f"tags: {tags}")
-        lines.append(f"importance: {importance}")
-        lines.append("---")
-        lines.append("")
-        lines.append(content)
-        return "\n".join(lines)
+        metadata = {
+            "wiki_type": entry.wiki_type,
+            "title": entry.title,
+            "tags": entry.tags,
+            "importance": entry.importance,
+            "created_at": entry.created_at,
+            "updated_at": entry.updated_at,
+        }
+        if entry.entry_id is not None:
+            metadata["entry_id"] = entry.entry_id
+            
+        post = frontmatter.Post(entry.content, **metadata)
+        return frontmatter.dumps(post)

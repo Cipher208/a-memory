@@ -11,7 +11,7 @@
 > (documentation, ownership, history, decisions). **Always verify against
 > actual source files before making changes** — the index may be stale.
 
-Last indexed: 2026-07-15 (commit 9a92a0f)
+Last indexed: 2026-08-08 (commit e428650)
 ### Entry Points
 - `__main__.py`
 - `mcp_server/server.py`
@@ -22,12 +22,12 @@ Last indexed: 2026-07-15 (commit 9a92a0f)
 **Infra:** Docker, Docker Compose### Architectural Layers
 | Layer | Files | Purpose |
 |-------|-------|---------|
-| Application | 66 |  |
+| Application | 72 |  |
 | Service | 5 |  |
 | Config | 19 |  |
-| Utility | 21 |  |
+| Utility | 22 |  |
 | Docs & Tooling | 43 |  |
-| Test | 55 |  |
+| Test | 56 |  |
 
 ### Guided Tour (12 steps)
 1. `README.md`
@@ -40,26 +40,26 @@ Last indexed: 2026-07-15 (commit 9a92a0f)
 ### Hotspots (High Churn)
 | File | Churn | 90d Commits | Owner |
 |------|-------|-------------|-------|
-| `rag/engine.py` | 99.2th %ile | 32 | Ariel Memory |
-| `tests/test_mcp/test_tools_e2e.py` | 98.5th %ile | 9 | Ariel Memory |
-| `tests/test_hypothesis.py` | 97.7th %ile | 7 | Ariel Memory |
-| `mcp_server/tools_layer.py` | 96.9th %ile | 20 | Ariel Memory |
-| `shared/saga.py` | 96.2th %ile | 19 | Ariel Memory |
+| `rag/engine.py` | 99.3th %ile | 35 | Ariel Memory |
+| `tests/test_mcp/test_tools_e2e.py` | 98.6th %ile | 10 | Ariel Memory |
+| `tests/test_hypothesis.py` | 97.8th %ile | 10 | Ariel Memory |
+| `mcp_server/tools_layer.py` | 97.1th %ile | 26 | Ariel Memory |
+| `shared/saga.py` | 96.4th %ile | 23 | Ariel Memory |
 
 ## Code health
 Three signals: **defect risk** (the overall score), **maintainability** (smells that hurt readability/change-cost without predicting bugs), and **performance** (static performance RISK: I/O-in-loop / N+1 shapes that waste work, high-precision/low-recall). Maintainability and performance are co-equal views, never blended into the defect headline. See `docs/CODE_HEALTH.md`.
 
-Defect risk, Hotspot health: 4.74/10 (stable) ·
-Average: 7.11/10 ·
+Defect risk, Hotspot health: 4.09/10 (stable) ·
+Average: 6.82/10 ·
 Worst: 1.0/10 (`shared/saga.py`)
-Maintainability, Average: 8.71/10
-Performance risk, Average: 9.82/10
+Maintainability, Average: 8.89/10
+Performance risk, Average: 9.85/10
 
 ### Critical biomarkers
+- `tests/test_rag_scoring.py` — churn risk — impact −2.4
 - `tests/test_integration.py` — churn risk — impact −2.4
-- `features/rate_limiting.py` — untested hotspot — impact −2.0
 - `features/audit_trail.py` — untested hotspot — impact −2.0
-- `graph/epistemic.py` — untested hotspot — impact −2.0
+- `features/rate_limiting.py` — untested hotspot — impact −2.0
 - `graph/temporal.py` — untested hotspot — impact −2.0
 
 ### Repowise MCP Tools

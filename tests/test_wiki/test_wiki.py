@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
 def test_file_wiki_add_search():
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     async def t():
         w = WikiManager(layer="user")
@@ -22,7 +22,7 @@ def test_file_wiki_add_search():
 
 
 def test_file_wiki_enabled_types():
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     w = WikiManager(layer="user")
     types = w.get_enabled_types()
@@ -31,7 +31,7 @@ def test_file_wiki_enabled_types():
 
 
 def test_file_wiki_count():
-    from wiki.manager import WikiManager
+    from wiki import WikiManager
 
     async def t():
         w = WikiManager(layer="user")

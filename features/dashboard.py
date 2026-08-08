@@ -171,7 +171,7 @@ class Dashboard:
 
     async def get_stats(self, user_id: str = "default") -> dict[str, Any]:
         from graph.epistemic import EpistemicGraph
-        from wiki.manager import WikiManager
+        from wiki import WikiManager
 
         uw = WikiManager(layer="user")
         aw = WikiManager(layer="agent")
