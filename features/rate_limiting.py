@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Rate Limiter — async SQLite-based per-user rate limiting + WebSocket connection limiting
 """

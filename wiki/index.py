@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 WikiIndex Layer — handles all SQLite and FTS5 operations for Wiki.
 Isolates DB logic from filesystem and business logic.

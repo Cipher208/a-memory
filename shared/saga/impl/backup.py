@@ -9,6 +9,7 @@ from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
 
+
 async def _backup_copy_db(ctx: dict[str, Any]) -> dict[str, Any]:
     """Copy the main database file to a new backup directory."""
     base = Path.home() / ".mcp-ariel-memory"
@@ -30,6 +31,7 @@ async def _backup_copy_db(ctx: dict[str, Any]) -> dict[str, Any]:
     logger.warning(f"Source database {src} not found for backup")
     return {"status": "skipped_no_source"}
 
+
 async def _backup_verify(ctx: dict[str, Any]) -> dict[str, Any]:
     """Verify that the backup file exists and is not empty."""
     backup_path_str = ctx.get("backup_path")
@@ -44,6 +46,7 @@ async def _backup_verify(ctx: dict[str, Any]) -> dict[str, Any]:
 
     return {"verified": False, "reason": "file_missing_or_empty"}
 
+
 async def _backup_compensate(ctx: dict[str, Any]) -> None:
     """Delete the backup directory if the saga fails."""
     backup_path_str = ctx.get("backup_path")
@@ -53,6 +56,7 @@ async def _backup_compensate(ctx: dict[str, Any]) -> None:
             shutil.rmtree(backup_path)
             logger.info(f"Backup directory {backup_path} removed during compensation")
 
+
 def create_backup_saga() -> list[SagaStep]:
     """
     Returns steps for the database backup saga.
@@ -60,14 +64,6 @@ def create_backup_saga() -> list[SagaStep]:
     Compensation: Delete backup dir on failure.
     """
     return [
-        SagaStep(
-            name="copy_db",
-            action=_backup_copy_db,
-            compensation=_backup_compensate,
-            retry_attempts=2
-        ),
-        SagaStep(
-            name="verify_backup",
-            action=_backup_verify
-        )
+        SagaStep(name="copy_db", action=_backup_copy_db, compensation=_backup_compensate, retry_attempts=2),
+        SagaStep(name="verify_backup", action=_backup_verify),
     ]

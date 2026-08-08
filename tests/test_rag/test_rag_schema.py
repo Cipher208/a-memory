@@ -1,7 +1,7 @@
 import pytest
 from rag.models import RAGPage, RAGChunk, SearchResult
 from rag.schema import init_rag_db
-from shared.connection import AsyncConnectionManager
+
 
 @pytest.mark.asyncio
 async def test_rag_models_validation():
@@ -22,19 +22,21 @@ async def test_rag_models_validation():
     assert res.score == 0.9
     assert res.metadata == {}
 
+
 @pytest.mark.asyncio
 async def test_init_rag_db(tmp_path):
     # Use a temporary database for testing
     db_path = tmp_path / "test_rag.db"
 
     # We need to mock AsyncConnectionManager or use a real one with a test db
-    cm = AsyncConnectionManager()
+    # cm = AsyncConnectionManager()
     # Override DB_NAME for testing if possible, or just rely on cm's behavior
     # In this project, connection_manager is often used as a singleton.
     # For testing, we might need a more isolated approach.
 
     # Let's try to use a real connection and check schema
     import aiosqlite
+
     async with aiosqlite.connect(db_path) as conn:
         # Mocking the cm behavior for init_rag_db
         class MockCM:

@@ -5,6 +5,7 @@ from shared.saga.engine import SagaStep
 
 logger = logging.getLogger(__name__)
 
+
 async def _consolidation_gather(ctx: dict[str, Any]) -> dict[str, Any]:
     """Gather recent memories from L1 (staging)."""
     mm = ctx.get("_mm")
@@ -24,6 +25,7 @@ async def _consolidation_gather(ctx: dict[str, Any]) -> dict[str, Any]:
         logger.error(f"Failed to gather memories: {e}")
         return {"gathered_count": 0, "error": str(e)}
 
+
 async def _consolidation_distill(ctx: dict[str, Any]) -> dict[str, Any]:
     """Filter gathered memories by importance (distillation)."""
     items = ctx.get("staging_items", [])
@@ -31,6 +33,7 @@ async def _consolidation_distill(ctx: dict[str, Any]) -> dict[str, Any]:
     important_items = [i for i in items if i.get("importance", 0) >= 0.7]
     ctx["important_items"] = important_items
     return {"distilled_count": len(important_items)}
+
 
 async def _consolidation_promote(ctx: dict[str, Any]) -> dict[str, Any]:
     """Promote important items to L2 (Core Memory)."""
@@ -48,18 +51,12 @@ async def _consolidation_promote(ctx: dict[str, Any]) -> dict[str, Any]:
         importance = item.get("importance", 0.8)
 
         # Save to Core Memory (L2)
-        await mm.save(
-            user_id=user_id,
-            key=key,
-            value=value,
-            importance=importance,
-            memory_kind="fact",
-            source="consolidation"
-        )
+        await mm.save(user_id=user_id, key=key, value=value, importance=importance, memory_kind="fact", source="consolidation")
         promoted_keys.append(key)
 
     ctx["promoted_keys"] = promoted_keys
     return {"promoted_count": len(promoted_keys)}
+
 
 async def _consolidation_rollback(ctx: dict[str, Any]) -> None:
     """Rollback promoted items (forget them from L2)."""
@@ -77,6 +74,7 @@ async def _consolidation_rollback(ctx: dict[str, Any]) -> None:
         except Exception as e:
             logger.error(f"Failed to rollback memory {key}: {e}")
 
+
 def create_consolidation_saga(user_id: str, mm: Any) -> list[SagaStep]:
     """
     Returns steps for the memory consolidation saga.
@@ -84,17 +82,7 @@ def create_consolidation_saga(user_id: str, mm: Any) -> list[SagaStep]:
     Compensation: Rollback promoted items (forget).
     """
     return [
-        SagaStep(
-            name="gather_memories",
-            action=_consolidation_gather
-        ),
-        SagaStep(
-            name="distill_memories",
-            action=_consolidation_distill
-        ),
-        SagaStep(
-            name="promote_to_core",
-            action=_consolidation_promote,
-            compensation=_consolidation_rollback
-        )
+        SagaStep(name="gather_memories", action=_consolidation_gather),
+        SagaStep(name="distill_memories", action=_consolidation_distill),
+        SagaStep(name="promote_to_core", action=_consolidation_promote, compensation=_consolidation_rollback),
     ]

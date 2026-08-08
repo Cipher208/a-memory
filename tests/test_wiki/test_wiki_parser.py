@@ -1,6 +1,7 @@
 from pathlib import Path
 from wiki import WikiParser, WikiEntry
 
+
 def test_parse_full_md_with_frontmatter():
     md_content = """---
 title: "Test Entry"
@@ -21,6 +22,7 @@ This is the content."""
     assert entry.content == "This is the content."
     assert entry.created_at == 1234567890.0
 
+
 def test_parse_plain_md_no_frontmatter():
     md_content = "Just plain content."
     file_path = Path("my_note.md")
@@ -33,6 +35,7 @@ def test_parse_plain_md_no_frontmatter():
     assert entry.importance == 0.5
     assert entry.tags == []
 
+
 def test_parse_malformed_yaml():
     md_content = """---
 title: "Test
@@ -44,7 +47,8 @@ Content"""
     entry = WikiParser.parse(md_content)
     # If YAML is malformed, frontmatter.loads fails and we fallback to full text
     assert "Content" in entry.content
-    assert entry.importance == 0.5 # default
+    assert entry.importance == 0.5  # default
+
 
 def test_to_markdown():
     entry = WikiEntry(
@@ -55,7 +59,7 @@ def test_to_markdown():
         tags=["urgent"],
         importance=1.0,
         created_at=100.0,
-        updated_at=200.0
+        updated_at=200.0,
     )
 
     md = WikiParser.to_markdown(entry)

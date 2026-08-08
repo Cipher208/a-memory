@@ -5,6 +5,7 @@ Revises:
 Create Date: 2026-08-07 23:05:00.000000
 
 """
+
 from collections.abc import Sequence
 
 from alembic import op
@@ -277,8 +278,12 @@ def upgrade() -> None:
 
     # 9. FTS5 (must be done statement by statement)
     op.execute("CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(title, content, wiki_type, content=rag_pages, content_rowid=id)")
-    op.execute("CREATE VIRTUAL TABLE IF NOT EXISTS user_wiki_fts USING fts5(title, content, wiki_type, tags, content=user_wiki, content_rowid=entry_id)")
-    op.execute("CREATE VIRTUAL TABLE IF NOT EXISTS agent_wiki_fts USING fts5(title, content, wiki_type, tags, content=agent_wiki, content_rowid=entry_id)")
+    op.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS user_wiki_fts USING fts5(title, content, wiki_type, tags, content=user_wiki, content_rowid=entry_id)"
+    )
+    op.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS agent_wiki_fts USING fts5(title, content, wiki_type, tags, content=agent_wiki, content_rowid=entry_id)"
+    )
     op.execute("CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(title, content, wiki_type, tags, content=wiki_index, content_rowid=entry_id)")
 
 

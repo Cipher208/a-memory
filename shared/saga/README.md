@@ -18,17 +18,8 @@ from shared.saga.schema import SagaState
 
 # Define steps
 steps = [
-    SagaStep(
-        name="reserve_resource",
-        action=reserve_fn,
-        compensation=release_fn,
-        retry_attempts=3
-    ),
-    SagaStep(
-        name="charge_user",
-        action=charge_fn,
-        compensation=refund_fn
-    )
+    SagaStep(name="reserve_resource", action=reserve_fn, compensation=release_fn, retry_attempts=3),
+    SagaStep(name="charge_user", action=charge_fn, compensation=refund_fn),
 ]
 
 # Execute saga

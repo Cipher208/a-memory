@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Dashboard — HTML dashboard for memory visualization
 """

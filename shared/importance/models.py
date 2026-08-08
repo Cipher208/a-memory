@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from typing import Dict, Any
+
 
 class ImportanceSignals(BaseModel):
     base: float = 0.0
@@ -12,9 +12,11 @@ class ImportanceSignals(BaseModel):
     retrieval_signal: float = 0.0
     noise_penalty: float = 0.0
 
+
 class ImportanceConfig(BaseModel):
-    weights: Dict[str, float] = Field(default_factory=dict)
-    thresholds: Dict[str, float] = Field(default_factory=dict)
+    weights: dict[str, float] = Field(default_factory=dict)
+    thresholds: dict[str, float] = Field(default_factory=dict)
+
 
 class ScorerResult(BaseModel):
     score: float
@@ -24,14 +26,25 @@ class ScorerResult(BaseModel):
         return self.score
 
     @property
-    def base(self) -> float: return self.signals.base
+    def base(self) -> float:
+        return self.signals.base
+
     @property
-    def length(self) -> float: return self.signals.length
+    def length(self) -> float:
+        return self.signals.length
+
     @property
-    def tech_keyword(self) -> float: return self.signals.tech_keyword
+    def tech_keyword(self) -> float:
+        return self.signals.tech_keyword
+
     @property
-    def novelty(self) -> float: return self.signals.novelty
+    def novelty(self) -> float:
+        return self.signals.novelty
+
     @property
-    def retrieval_signal(self) -> float: return self.signals.retrieval_signal
+    def retrieval_signal(self) -> float:
+        return self.signals.retrieval_signal
+
     @property
-    def emotional(self) -> float: return self.signals.emotional
+    def emotional(self) -> float:
+        return self.signals.emotional

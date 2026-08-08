@@ -1,9 +1,11 @@
 import pytest
 from features.auth.bearer import BearerAuth
 
+
 @pytest.fixture
 def token_file(tmp_path):
     return tmp_path / "tokens.enc"
+
 
 def test_bearer_auth_init_and_generate(token_file):
     auth = BearerAuth(token_file)
@@ -11,6 +13,7 @@ def test_bearer_auth_init_and_generate(token_file):
     assert token.startswith("mt_")
     assert len(token) > 10
     assert auth.verify(f"Bearer {token}") is True
+
 
 def test_bearer_auth_persistence(token_file):
     auth1 = BearerAuth(token_file)
@@ -22,11 +25,13 @@ def test_bearer_auth_persistence(token_file):
     assert token1 == token2
     assert auth2.verify(f"Bearer {token1}") is True
 
+
 def test_bearer_auth_env_priority(token_file, monkeypatch):
     monkeypatch.setenv("MCP_AUTH_TOKEN", "mt_env_token")
     auth = BearerAuth(token_file)
     assert auth.get_token() == "mt_env_token"
     assert auth.verify("Bearer mt_env_token") is True
+
 
 def test_bearer_auth_rotation(token_file):
     auth = BearerAuth(token_file)
@@ -39,6 +44,7 @@ def test_bearer_auth_rotation(token_file):
 
     assert auth.verify(f"Bearer {token1}") is False
     assert auth.verify(f"Bearer {token2}") is True
+
 
 def test_bearer_auth_verify_invalid(token_file):
     auth = BearerAuth(token_file)

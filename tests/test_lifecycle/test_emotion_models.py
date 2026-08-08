@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from lifecycle.emotion.models import EmotionMarkerConfig
 
+
 def test_emotion_marker_config_loading():
     """Verify that emotions.json can be correctly loaded into EmotionMarkerConfig."""
     asset_path = Path(__file__).parent.parent.parent / "shared" / "assets" / "emotions.json"
@@ -28,15 +29,11 @@ def test_emotion_marker_config_loading():
     assert "joy" in config.emojis
     assert "😊" in config.emojis["joy"]
 
+
 def test_phrase_pattern_validation():
     """Verify individual phrase pattern validation."""
     from lifecycle.emotion.models import PhrasePattern
 
-    pattern = PhrasePattern(
-        pattern=r"test (pattern)",
-        emotion="joy",
-        score=0.9,
-        lang="en"
-    )
+    pattern = PhrasePattern(pattern=r"test (pattern)", emotion="joy", score=0.9, lang="en")
     assert pattern.score == 0.9
     assert pattern.lang == "en"

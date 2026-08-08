@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Temporal Graph - time-based memory relations
 """

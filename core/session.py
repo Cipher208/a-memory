@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 L2 SessionStore — async session history with indexes
 """

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Pydantic models for MCP tool return types."""
 
 from pydantic import BaseModel, Field

@@ -48,8 +48,8 @@ def _load_dotenv() -> None:
         return
     try:
         with Path(env_path).open() as f:
-            for line in f:
-                line = line.strip()
+            for raw_line in f:
+                line = raw_line.strip()
                 if not line or line.startswith("#"):
                     continue
                 if "=" in line:

@@ -25,12 +25,7 @@ manager = WikiManager(layer="user")
 await manager.init_db()
 
 # Add entry
-path = await manager.add(
-    wiki_type="diary",
-    title="Morning thoughts",
-    content="Hello world",
-    tags=["daily"]
-)
+path = await manager.add(wiki_type="diary", title="Morning thoughts", content="Hello world", tags=["daily"])
 
 # Search
 results = await manager.search("thoughts")

@@ -1,9 +1,11 @@
 import pytest
 from shared.importance import ImportanceScorer, ImportanceConfig
 
+
 @pytest.fixture
 def scorer():
     return ImportanceScorer()
+
 
 def test_scorer_all_weights_zero(scorer):
     """Verify that if all weights are zero, the score is 0.0."""
@@ -16,7 +18,7 @@ def test_scorer_all_weights_zero(scorer):
             "emotional": 0.0,
             "novelty": 0.0,
             "retrieval_signal": 0.0,
-            "noise_penalty": 1.0
+            "noise_penalty": 1.0,
         }
     )
     scorer._config = zero_config
@@ -24,6 +26,7 @@ def test_scorer_all_weights_zero(scorer):
     text = "Some very important tech text about redis and docker!"
     result = scorer.score(text)
     assert result.score == 0.0
+
 
 def test_scorer_empty_text(scorer):
     """Verify empty text handling."""
@@ -34,6 +37,7 @@ def test_scorer_empty_text(scorer):
     result = scorer.score("")
     # Just verify it doesn't crash and returns a valid result
     assert result.score >= 0.0
+
 
 def test_scorer_signal_clamping(scorer):
     """Verify that signals are clamped to [0, 1] range."""
@@ -47,9 +51,10 @@ def test_scorer_signal_clamping(scorer):
     result = scorer.score(text_tech)
     assert result.signals.tech_keyword == 1.0
 
+
 def test_scorer_negative_weights_safety(scorer):
     """
-    Verify that negative weights (if allowed by config) 
+    Verify that negative weights (if allowed by config)
     don't result in negative final score due to clamping.
     """
     neg_config = ImportanceConfig(
@@ -61,7 +66,7 @@ def test_scorer_negative_weights_safety(scorer):
             "emotional": 0.0,
             "novelty": 0.0,
             "retrieval_signal": 0.0,
-            "noise_penalty": 1.0
+            "noise_penalty": 1.0,
         }
     )
     scorer._config = neg_config

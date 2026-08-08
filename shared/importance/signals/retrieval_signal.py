@@ -1,10 +1,12 @@
 import math
 from .base_signal import IImportanceSignal
 
+
 class RetrievalSignal(IImportanceSignal):
     """
     Signal based on retrieval frequency.
     """
+
     def calculate(self, text: str, context: dict) -> float:
         retrieval_count = context.get("retrieval_count", 0)
         if retrieval_count > 0:

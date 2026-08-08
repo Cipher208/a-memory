@@ -52,7 +52,7 @@ async def init_rag_db(cm: AsyncConnectionManager, fts_available: bool):
                 DB_NAME,
                 """
                 CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(title, content, wiki_type, content=rag_pages, content_rowid=id);
-                
+
                 -- Triggers to keep FTS in sync
                 CREATE TRIGGER IF NOT EXISTS rag_pages_ai AFTER INSERT ON rag_pages BEGIN
                   INSERT INTO rag_fts(rowid, title, content, wiki_type) VALUES (new.id, new.title, new.content, new.wiki_type);

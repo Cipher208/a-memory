@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Middleware Pipeline — chain of handlers for intercepting and modifying requests.
 Analogous to middleware_pipeline.py from ariel.
@@ -123,10 +124,12 @@ class ImportanceGateMiddleware(Middleware):
 
         # Dynamic threshold integration
         from shared.adaptive import adaptive_threshold
+
         threshold = await adaptive_threshold.get_threshold()
         await adaptive_threshold.update(score)
 
         from shared.metrics import metrics
+
         metrics.memory_ops_total.labels(action=ctx.tool_name, layer=ctx.user_id).inc()
 
         if score < threshold:

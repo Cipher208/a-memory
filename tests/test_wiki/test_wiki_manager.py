@@ -5,6 +5,7 @@ from pathlib import Path
 from wiki import WikiManager
 from shared.connection import connection_manager
 
+
 @pytest.fixture
 async def wiki(tmp_path):
     # Use a temporary directory for FS operations
@@ -19,6 +20,7 @@ async def wiki(tmp_path):
 
     return wm
     # Cleanup connection if needed (AsyncConnectionManager handles it usually)
+
 
 @pytest.mark.asyncio
 async def test_wiki_manager_full_cycle(wiki):
@@ -75,6 +77,7 @@ async def test_wiki_manager_full_cycle(wiki):
     search_after = await wiki.search("integration")
     assert len(search_after) == 0
 
+
 @pytest.mark.asyncio
 async def test_wiki_manager_reindex(wiki):
     """Test optimized reindex_all."""
@@ -99,6 +102,7 @@ async def test_wiki_manager_reindex(wiki):
     stats2 = await wiki.reindex_all()
     assert stats2["skipped"] == 1
     assert stats2["indexed"] == 0
+
 
 @pytest.mark.asyncio
 async def test_wiki_manager_sync_external(wiki, tmp_path):

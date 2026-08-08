@@ -4,11 +4,13 @@ import hashlib
 from wiki import WikiIndex, WikiEntry
 from shared.connection import AsyncConnectionManager
 
+
 @pytest.fixture
 async def connection_manager(tmp_path):
     cm = AsyncConnectionManager(base_dir=str(tmp_path))
     yield cm
     await cm.close_all()
+
 
 @pytest.fixture
 async def wiki_index(connection_manager):
@@ -16,10 +18,12 @@ async def wiki_index(connection_manager):
     await idx.init_db()
     return idx
 
+
 @pytest.mark.asyncio
 async def test_init_db(wiki_index, connection_manager):
     assert await connection_manager.table_exists("memory.db", "wiki_index")
     assert await connection_manager.table_exists("memory.db", "wiki_fts")
+
 
 @pytest.mark.asyncio
 async def test_crud_operations(wiki_index):
@@ -31,7 +35,7 @@ async def test_crud_operations(wiki_index):
         tags=["tag1", "tag2"],
         importance=0.8,
         created_at=time.time(),
-        updated_at=time.time()
+        updated_at=time.time(),
     )
     content_hash = hashlib.sha256(entry.content.encode()).hexdigest()
 
@@ -63,6 +67,7 @@ async def test_crud_operations(wiki_index):
     assert await wiki_index.count() == 0
     assert await wiki_index.get_by_path(entry.file_path) is None
 
+
 @pytest.mark.asyncio
 async def test_fts_search(wiki_index):
     entries = [
@@ -72,7 +77,7 @@ async def test_fts_search(wiki_index):
             content="Recipe for a delicious apple pie.",
             file_path="/tmp/apple.md",
             created_at=time.time(),
-            updated_at=time.time()
+            updated_at=time.time(),
         ),
         WikiEntry(
             wiki_type="notes",
@@ -80,8 +85,8 @@ async def test_fts_search(wiki_index):
             content="How to make sweet banana bread.",
             file_path="/tmp/banana.md",
             created_at=time.time(),
-            updated_at=time.time()
-        )
+            updated_at=time.time(),
+        ),
     ]
 
     for entry in entries:
@@ -107,6 +112,7 @@ async def test_fts_search(wiki_index):
     results = await wiki_index.search("bread OR pie")
     assert len(results) == 2
 
+
 @pytest.mark.asyncio
 async def test_fts_update_cleanup(wiki_index):
     entry = WikiEntry(
@@ -115,7 +121,7 @@ async def test_fts_update_cleanup(wiki_index):
         content="I like eating an apple.",
         file_path="/tmp/test_update.md",
         created_at=time.time(),
-        updated_at=time.time()
+        updated_at=time.time(),
     )
     h1 = hashlib.sha256(entry.content.encode()).hexdigest()
     await wiki_index.save(entry, h1)

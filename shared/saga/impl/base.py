@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Saga — pattern for multi-step operations with compensation (rollback).
 Includes watchdog for detecting stuck sagas and persistence for recovery.

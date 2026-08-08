@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Backup — async backup/restore of all databases
 """

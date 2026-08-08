@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Tool registry — breaks circular imports between server.py, tools_layer.py, tools_ops.py.
 
 Tools register themselves here. server.py pulls from here and applies @mcp.tool().

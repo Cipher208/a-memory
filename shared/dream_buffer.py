@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 DreamBuffer — async staging memories with TTL
 """

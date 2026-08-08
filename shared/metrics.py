@@ -11,6 +11,7 @@ from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_late
 
 logger = logging.getLogger(__name__)
 
+
 class MetricsCollector:
     """Centralized metrics management using prometheus_client."""
 
@@ -18,27 +19,17 @@ class MetricsCollector:
         self._start_time = time.time()
 
         # --- Standard Metrics ---
-        self.uptime = Gauge(
-            "ariel_memory_uptime_seconds", "Server uptime in seconds"
-        )
+        self.uptime = Gauge("ariel_memory_uptime_seconds", "Server uptime in seconds")
         self.uptime.set_function(lambda: time.time() - self._start_time)
 
         # --- Domain Metrics ---
-        self.memory_ops_total = Counter(
-            "ariel_memory_ops_total", "Total memory operations", ["action", "layer"]
-        )
-        self.importance_filtered_total = Counter(
-            "ariel_memory_filtered_total", "Total messages filtered by importance", ["reason"]
-        )
-        self.current_importance_threshold = Gauge(
-            "ariel_memory_importance_threshold", "Current EMA importance threshold"
-        )
+        self.memory_ops_total = Counter("ariel_memory_ops_total", "Total memory operations", ["action", "layer"])
+        self.importance_filtered_total = Counter("ariel_memory_filtered_total", "Total messages filtered by importance", ["reason"])
+        self.current_importance_threshold = Gauge("ariel_memory_importance_threshold", "Current EMA importance threshold")
 
         # --- Performance Metrics ---
         self.search_latency = Histogram(
-            "ariel_memory_search_latency_seconds",
-            "Latency of memory search operations",
-            buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0)
+            "ariel_memory_search_latency_seconds", "Latency of memory search operations", buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0)
         )
 
     def inc(self, name: str, value: float = 1):
@@ -67,6 +58,7 @@ class MetricsCollector:
             "uptime_seconds": time.time() - self._start_time,
             "status": "ok (prometheus_client active)",
         }
+
 
 # Global instance — used by server.py and middleware
 metrics = MetricsCollector()

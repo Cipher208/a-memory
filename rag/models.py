@@ -1,4 +1,5 @@
-from datetime import datetime
+from __future__ import annotations
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -13,8 +14,8 @@ class RAGPage(BaseModel):
     content: str
     sha256_hash: str | None = None
     wiki_type: str | None = None
-    created_at: float | None = Field(default_factory=lambda: datetime.now().timestamp())
-    updated_at: float | None = Field(default_factory=lambda: datetime.now().timestamp())
+    created_at: float | None = Field(default_factory=lambda: datetime.now(tz=timezone.utc).timestamp())
+    updated_at: float | None = Field(default_factory=lambda: datetime.now(tz=timezone.utc).timestamp())
 
 
 class RAGChunk(BaseModel):

@@ -1,4 +1,6 @@
+from __future__ import annotations
 from .engine import EmotionEngine
+
 
 class EmotionTrigger:
     """
@@ -12,10 +14,7 @@ class EmotionTrigger:
         self.engine = engine
 
     def should_save(
-        self,
-        message: str,
-        emotional_state: dict[str, float] | None = None,
-        state_delta: dict[str, float] | None = None
+        self, message: str, emotional_state: dict[str, float] | None = None, state_delta: dict[str, float] | None = None
     ) -> tuple[bool, str, float]:
         """
         Evaluates if a message should be saved based on emotional content and structural markers.

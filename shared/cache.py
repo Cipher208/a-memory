@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Memory Cache - LRU cache for hot data
 """

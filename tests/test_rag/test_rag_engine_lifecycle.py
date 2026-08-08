@@ -3,6 +3,7 @@ from rag.engine import RAGEngine
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
+
 @pytest.mark.asyncio
 async def test_rag_engine_lifecycle():
     # Use a temporary database for testing if possible, or just ensure cleanup

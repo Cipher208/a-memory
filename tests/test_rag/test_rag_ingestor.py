@@ -8,6 +8,7 @@ import tempfile
 import os
 import shutil
 
+
 @pytest.fixture
 async def cm():
     temp_dir = tempfile.mkdtemp()
@@ -18,11 +19,12 @@ async def cm():
     await cm.close_all()
     shutil.rmtree(temp_dir)
 
+
 @pytest.mark.asyncio
 async def test_ingest_basic(cm):
     ingestor = RAGIngestor(cm)
     title = "Test Page"
-    content = "This is a test content that should be chunked properly. " * 20 # Long enough for chunks
+    content = "This is a test content that should be chunked properly. " * 20  # Long enough for chunks
     user_id = "user1"
 
     page_id = await ingestor.ingest(title, content, user_id)
@@ -48,6 +50,7 @@ async def test_ingest_basic(cm):
     count_row = await cursor.fetchone()
     assert count_row[0] == 1
 
+
 @pytest.mark.asyncio
 async def test_ingest_parallel_embeddings(cm):
     with patch("rag.ingestor.embed_texts", new_callable=AsyncMock) as mock_embed:
@@ -55,7 +58,7 @@ async def test_ingest_parallel_embeddings(cm):
         mock_embed.side_effect = lambda texts: [[0.1] * 384 for _ in texts]
 
         ingestor = RAGIngestor(cm)
-        content = "Chunk 1\n\nChunk 2\n\nChunk 3" # 3 paragraphs -> 3 chunks likely
+        content = "Chunk 1\n\nChunk 2\n\nChunk 3"  # 3 paragraphs -> 3 chunks likely
         await ingestor.ingest("Parallel Test", content, "user1")
 
         # Verify it was called once for all chunks
@@ -65,6 +68,7 @@ async def test_ingest_parallel_embeddings(cm):
         # But should be called with a list.
         assert isinstance(args[0], list)
         assert len(args[0]) > 0
+
 
 @pytest.mark.asyncio
 async def test_ingest_binarization(cm):
@@ -77,4 +81,4 @@ async def test_ingest_binarization(cm):
     row = await cursor.fetchone()
     assert row is not None
     assert isinstance(row["bin_embedding"], bytes)
-    assert len(row["bin_embedding"]) == 48 # 384 / 8
+    assert len(row["bin_embedding"]) == 48  # 384 / 8

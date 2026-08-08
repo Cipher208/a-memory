@@ -29,7 +29,7 @@ def test_create_key(auth):
     assert "key" in keys[0]
     # Mask is prefix...suffix (6 chars + ... + 4 chars)
     assert "..." in keys[0]["key"]
-    assert len(keys[0]["key"]) == 13 # 6 + 3 + 4
+    assert len(keys[0]["key"]) == 13  # 6 + 3 + 4
 
 
 def test_verify_success(auth):

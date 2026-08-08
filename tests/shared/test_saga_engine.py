@@ -9,19 +9,23 @@ from shared.saga.engine import SagaEngine, SagaStep
 from shared.saga.schema import SagaState, SagaStatus
 from shared.saga.persistence import FileSagaStore
 
+
 @pytest.fixture
 def temp_dir():
     d = tempfile.mkdtemp()
     yield Path(d)
     shutil.rmtree(d)
 
+
 @pytest.fixture
 def store(temp_dir):
     return FileSagaStore(temp_dir)
 
+
 @pytest.fixture
 def engine(store):
     return SagaEngine(store)
+
 
 @pytest.mark.asyncio
 async def test_saga_success(engine, store):
@@ -34,10 +38,7 @@ async def test_saga_success(engine, store):
     async def step2(ctx):
         return {"b": ctx["a"] + 1}
 
-    steps = [
-        SagaStep(name="s1", action=step1),
-        SagaStep(name="s2", action=step2)
-    ]
+    steps = [SagaStep(name="s1", action=step1), SagaStep(name="s2", action=step2)]
 
     # Execute
     result = await engine.execute(state, steps)
@@ -54,6 +55,7 @@ async def test_saga_success(engine, store):
     assert loaded.status == SagaStatus.COMPLETED
     assert loaded.context == {"a": 1, "b": 2}
 
+
 @pytest.mark.asyncio
 async def test_saga_idempotency(engine, store):
     # Setup state with first step already completed
@@ -61,21 +63,16 @@ async def test_saga_idempotency(engine, store):
         saga_id="test2",
         name="idemp_saga",
         context={"a": 10},
-        steps=[
-            {"name": "s1", "status": SagaStatus.COMPLETED, "result": {"a": 10}},
-            {"name": "s2", "status": SagaStatus.PENDING}
-        ]
+        steps=[{"name": "s1", "status": SagaStatus.COMPLETED, "result": {"a": 10}}, {"name": "s2", "status": SagaStatus.PENDING}],
     )
     store.save(state)
 
     s1_mock = MagicMock()
+
     async def s2_action(ctx):
         return {"b": ctx["a"] + 5}
 
-    steps = [
-        SagaStep(name="s1", action=s1_mock),
-        SagaStep(name="s2", action=s2_action)
-    ]
+    steps = [SagaStep(name="s1", action=s1_mock), SagaStep(name="s2", action=s2_action)]
 
     # Execute
     result = await engine.execute(state, steps)
@@ -85,11 +82,13 @@ async def test_saga_idempotency(engine, store):
     assert result == {"a": 10, "b": 15}
     assert state.steps[1].status == SagaStatus.COMPLETED
 
+
 @pytest.mark.asyncio
 async def test_saga_retry(engine):
     state = SagaState(saga_id="test3", name="retry_saga")
 
     calls = 0
+
     async def failing_step(ctx):
         nonlocal calls
         calls += 1
@@ -97,19 +96,19 @@ async def test_saga_retry(engine):
             raise ValueError("try again")
         return {"ok": True}
 
-    steps = [
-        SagaStep(name="s1", action=failing_step, retry_attempts=3, retry_backoff=0.01)
-    ]
+    steps = [SagaStep(name="s1", action=failing_step, retry_attempts=3, retry_backoff=0.01)]
 
     result = await engine.execute(state, steps)
     assert result == {"ok": True}
     assert calls == 3
+
 
 @pytest.mark.asyncio
 async def test_saga_compensation(engine):
     state = SagaState(saga_id="test4", name="comp_saga")
 
     comp_called = False
+
     async def s1_action(ctx):
         return {"data": "step1"}
 
@@ -120,10 +119,7 @@ async def test_saga_compensation(engine):
     async def s2_action(ctx):
         raise ValueError("boom")
 
-    steps = [
-        SagaStep(name="s1", action=s1_action, compensation=s1_comp),
-        SagaStep(name="s2", action=s2_action)
-    ]
+    steps = [SagaStep(name="s1", action=s1_action, compensation=s1_comp), SagaStep(name="s2", action=s2_action)]
 
     with pytest.raises(ValueError, match="boom"):
         await engine.execute(state, steps)
@@ -133,6 +129,7 @@ async def test_saga_compensation(engine):
     assert state.steps[0].status == SagaStatus.COMPLETED
     assert state.steps[1].status == SagaStatus.FAILED
 
+
 @pytest.mark.asyncio
 async def test_saga_timeout(engine):
     state = SagaState(saga_id="test_timeout", name="timeout_saga")
@@ -141,9 +138,7 @@ async def test_saga_timeout(engine):
         await asyncio.sleep(0.5)
         return {"ok": True}
 
-    steps = [
-        SagaStep(name="s1", action=slow_step, timeout_seconds=0.1)
-    ]
+    steps = [SagaStep(name="s1", action=slow_step, timeout_seconds=0.1)]
 
     with pytest.raises((asyncio.TimeoutError, TimeoutError)):
         await engine.execute(state, steps)

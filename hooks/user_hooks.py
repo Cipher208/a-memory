@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 User Layer Hooks - 12 hooks for user memory events
 """
@@ -83,6 +84,7 @@ class UserHooks:
     @hook_registry.mark("importance_gate", layer="user")
     async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
         from shared.adaptive import adaptive_threshold
+
         text = ctx.get("text", "")
         kind = ctx.get("memory_kind")
         score = self._calculate_importance(text, kind)

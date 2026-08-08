@@ -1,3 +1,4 @@
+from __future__ import annotations
 import asyncio
 import inspect
 import logging
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
 
+
 class HookHandler(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     func: Callable
@@ -19,10 +21,11 @@ class HookHandler(BaseModel):
     takes_mem: bool
     instance: Any | None = None
 
+
 class HookRegistry:
     def __init__(self):
         self._hooks = {}
-        self._enabled_hooks = set() # Optional explicit enablement
+        self._enabled_hooks = set()  # Optional explicit enablement
 
     def register(self, handler):
         if handler.name not in self._hooks:
@@ -34,16 +37,11 @@ class HookRegistry:
             meta = getattr(method, "_hook_metadata", None)
             if meta:
                 handler = HookHandler(
-                    func=method,
-                    name=meta["name"],
-                    layer=meta["layer"],
-                    is_async=meta["is_async"],
-                    takes_mem=meta["takes_mem"],
-                    instance=obj
+                    func=method, name=meta["name"], layer=meta["layer"], is_async=meta["is_async"], takes_mem=meta["takes_mem"], instance=obj
                 )
                 self.register(handler)
 
-    def mark(self, hook_name, layer = "both"):
+    def mark(self, hook_name, layer="both"):
         def decorator(func):
             sig = inspect.signature(func)
             func._hook_metadata = {
@@ -53,6 +51,7 @@ class HookRegistry:
                 "takes_mem": "mem" in sig.parameters,
             }
             return func
+
         return decorator
 
     async def fire(self, hook_name, layer, context, mem=None):
@@ -60,6 +59,7 @@ class HookRegistry:
         # Note: In production we use config.is_hook_enabled
         try:
             from config import config
+
             if not config.is_hook_enabled(layer, hook_name):
                 # Only skip if specifically NOT enabled in real config
                 # For tests, we might need a bypass
@@ -90,5 +90,6 @@ class HookRegistry:
 
     def list_hooks(self):
         return {n: len(h) for n, h in self._hooks.items()}
+
 
 hook_registry = HookRegistry()

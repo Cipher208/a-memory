@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Forgetting System — type-aware decay, archiving, compression
 """

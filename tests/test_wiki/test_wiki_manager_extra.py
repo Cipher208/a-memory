@@ -2,6 +2,7 @@ import pytest
 import asyncio
 from wiki import WikiManager
 
+
 @pytest.fixture
 async def wiki(tmp_path):
     # Ensure base_dir exists
@@ -17,6 +18,7 @@ async def wiki(tmp_path):
 
     return wm
 
+
 @pytest.mark.asyncio
 async def test_wiki_concurrent_adds(wiki):
     """Verify that multiple concurrent additions work (SQLite WAL mode)."""
@@ -29,6 +31,7 @@ async def test_wiki_concurrent_adds(wiki):
 
     count = await wiki.count()
     assert count == 10
+
 
 @pytest.mark.asyncio
 async def test_wiki_reindex_idempotency(wiki):
@@ -44,6 +47,7 @@ async def test_wiki_reindex_idempotency(wiki):
     assert result["skipped"] == 2
     assert await wiki.count() == 2
 
+
 @pytest.mark.asyncio
 async def test_wiki_search_fts_special_chars(wiki):
     """Verify search handles special FTS5 characters or ignores them gracefully."""
@@ -54,6 +58,7 @@ async def test_wiki_search_fts_special_chars(wiki):
 
     assert isinstance(results, list)
     assert isinstance(results2, list)
+
 
 @pytest.mark.asyncio
 async def test_wiki_update_nonexistent(wiki):

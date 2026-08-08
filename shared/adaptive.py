@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Adaptive Threshold Management — EMA-based dynamic importance filtering.
 """
@@ -8,6 +9,7 @@ import time
 from shared.connection import connection_manager
 
 logger = logging.getLogger(__name__)
+
 
 class AdaptiveThresholdManager:
     """Manages dynamic importance threshold using EMA."""
@@ -27,9 +29,7 @@ class AdaptiveThresholdManager:
             return self._current_value
 
         conn = await connection_manager.get("memory.db")
-        row = await (await conn.execute(
-            "SELECT value FROM preferences WHERE key=?", (self.key,)
-        )).fetchone()
+        row = await (await conn.execute("SELECT value FROM preferences WHERE key=?", (self.key,))).fetchone()
 
         if row:
             self._current_value = float(row[0])
@@ -39,6 +39,7 @@ class AdaptiveThresholdManager:
 
         # Update prometheus metric
         from shared.metrics import metrics
+
         metrics.current_importance_threshold.set(self._current_value)
 
         return self._current_value
@@ -61,6 +62,7 @@ class AdaptiveThresholdManager:
 
         # Update prometheus metric
         from shared.metrics import metrics
+
         metrics.current_importance_threshold.set(updated)
 
         return updated
@@ -75,6 +77,7 @@ class AdaptiveThresholdManager:
             (self.key, str(value), time.time()),
         )
         await conn.commit()
+
 
 # Singleton instance
 adaptive_threshold = AdaptiveThresholdManager()

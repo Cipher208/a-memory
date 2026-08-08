@@ -8,19 +8,23 @@ import tempfile
 import shutil
 from pathlib import Path
 
+
 @pytest.fixture
 def temp_dir():
     d = tempfile.mkdtemp()
     yield Path(d)
     shutil.rmtree(d)
 
+
 @pytest.fixture
 def store(temp_dir):
     return FileSagaStore(temp_dir)
 
+
 @pytest.fixture
 def engine(store):
     return SagaEngine(store)
+
 
 @pytest.mark.asyncio
 async def test_saga_step_timeout_during_retry(engine):
@@ -28,21 +32,14 @@ async def test_saga_step_timeout_during_retry(engine):
     state = SagaState(saga_id="test_timeout_retry", name="timeout_retry")
 
     calls = 0
+
     async def slow_step(ctx):
         nonlocal calls
         calls += 1
         await asyncio.sleep(0.5)
         return {"ok": True}
 
-    steps = [
-        SagaStep(
-            name="s1",
-            action=slow_step,
-            timeout_seconds=0.1,
-            retry_attempts=2,
-            retry_backoff=0.01
-        )
-    ]
+    steps = [SagaStep(name="s1", action=slow_step, timeout_seconds=0.1, retry_attempts=2, retry_backoff=0.01)]
 
     with pytest.raises((asyncio.TimeoutError, TimeoutError)):
         await engine.execute(state, steps)
@@ -50,6 +47,7 @@ async def test_saga_step_timeout_during_retry(engine):
     # Initial + 2 retries = 3 calls
     assert calls == 3
     assert state.status == SagaStatus.COMPENSATED
+
 
 @pytest.mark.asyncio
 async def test_saga_compensation_failure_isolation(engine):
@@ -74,15 +72,16 @@ async def test_saga_compensation_failure_isolation(engine):
     steps = [
         SagaStep(name="s1", action=AsyncMock(return_value={}), compensation=s1_comp),
         SagaStep(name="s2", action=AsyncMock(return_value={}), compensation=s2_comp),
-        SagaStep(name="s3", action=s3_action)
+        SagaStep(name="s3", action=s3_action),
     ]
 
     with pytest.raises(RuntimeError, match="trigger compensation"):
         await engine.execute(state, steps)
 
     assert comp2_called is True
-    assert comp1_called is True # Should still be called despite s2_comp failure
+    assert comp1_called is True  # Should still be called despite s2_comp failure
     assert state.status == SagaStatus.COMPENSATED
+
 
 @pytest.mark.asyncio
 async def test_saga_context_persistence_between_steps(engine, store):
@@ -98,10 +97,7 @@ async def test_saga_context_persistence_between_steps(engine, store):
         assert loaded.context.get("key1") == "val1"
         return {"key2": "val2"}
 
-    steps = [
-        SagaStep(name="s1", action=step1),
-        SagaStep(name="s2", action=step2)
-    ]
+    steps = [SagaStep(name="s1", action=step1), SagaStep(name="s2", action=step2)]
 
     await engine.execute(state, steps)
 

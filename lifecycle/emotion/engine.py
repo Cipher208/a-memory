@@ -1,10 +1,13 @@
+from __future__ import annotations
 import re
 from .models import EmotionMarkerConfig, EmotionResult
+
 
 class EmotionEngine:
     """
     Engine for detecting emotions in text using optimized regex matching.
     """
+
     def __init__(self, config: EmotionMarkerConfig):
         self.config = config
         self.phrase_regex: re.Pattern | None = None
@@ -64,11 +67,7 @@ class EmotionEngine:
             # Clean category name (reverse replace)
             emotion = emotion.replace("_", " ")
             if emotion not in results or results[emotion].score < score:
-                results[emotion] = EmotionResult(
-                    trigger_type=emotion,
-                    score=score,
-                    metadata={"source": source, "match": match_text}
-                )
+                results[emotion] = EmotionResult(trigger_type=emotion, score=score, metadata={"source": source, "match": match_text})
 
         # 1. Phrases (Highest priority/explicit scores)
         if self.phrase_regex:

@@ -1,4 +1,6 @@
+from __future__ import annotations
 from pydantic import BaseModel, Field
+
 
 class WikiEntry(BaseModel):
     entry_id: int | None = None

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Operations tools — auth, backup, saga, data transfer, search.
 
 Merged into action-based tools to reduce tool count.
@@ -16,7 +17,6 @@ from mcp_server.models import (
     CleanupResult,
     DataResult,
     PurgeResult,
-    SagaResult,
     SearchResult,
 )
 from mcp_server.registry import _get_ctx, register_tool
@@ -176,7 +176,6 @@ async def memory_cleanup(
     at = AuditTrail()
     dream_buf = DreamBuffer()
     archive_dir = str(Path.home() / ".mcp-ariel-memory" / "archives")
-
 
     dedup_task = mc.deduplicate_core(user_id)
     compress_task = mc.compress_episodes(user_id, 0.3)

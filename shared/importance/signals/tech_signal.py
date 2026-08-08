@@ -1,10 +1,12 @@
 from .base_signal import IImportanceSignal
 
+
 class TechKeywordSignal(IImportanceSignal):
     """
     Signal based on technical keywords.
     Uses regex compiled from importance.json (provided via context).
     """
+
     def calculate(self, text: str, context: dict) -> float:
         tech_re = context.get("tech_re")
         if not tech_re:

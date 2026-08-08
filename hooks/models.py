@@ -1,3 +1,4 @@
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 from collections.abc import Callable
@@ -6,6 +7,7 @@ from collections.abc import Callable
 @dataclass
 class HookHandler:
     """Metadata for a registered hook handler."""
+
     func: Callable
     name: str
     layer: str

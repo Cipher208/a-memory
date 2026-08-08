@@ -21,6 +21,7 @@ async def test_metrics_registry():
     assert 'action="test_op"' in output
     assert "ariel_memory_importance_threshold 0.42" in output
 
+
 @pytest.mark.asyncio
 async def test_compactor_logic(tmp_path, monkeypatch):
     """Verify memory compaction (archiving old low-importance items)."""
@@ -36,14 +37,14 @@ async def test_compactor_logic(tmp_path, monkeypatch):
     # Insert a fresh important memory (should stay)
     await conn.execute(
         "INSERT INTO core_memory (user_id, key, value, importance, memory_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (user_id, "stay", "important fresh", 0.9, "fact", now, now)
+        (user_id, "stay", "important fresh", 0.9, "fact", now, now),
     )
 
     # Insert an old unimportant memory (should be archived)
-    old_time = now - (10 * 86400) # 10 days ago
+    old_time = now - (10 * 86400)  # 10 days ago
     await conn.execute(
         "INSERT INTO core_memory (user_id, key, value, importance, memory_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (user_id, "go", "old boring", 0.2, "chitchat", old_time, old_time)
+        (user_id, "go", "old boring", 0.2, "chitchat", old_time, old_time),
     )
     await conn.commit()
 

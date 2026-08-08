@@ -1,22 +1,26 @@
+from __future__ import annotations
 from enum import Enum
 import uuid
 import time
 from pydantic import BaseModel, Field
 
+
 class SagaStatus(str, Enum):
-    PENDING = 'pending'
-    RUNNING = 'running'
-    COMPLETED = 'completed'
-    FAILED = 'failed'
-    COMPENSATING = 'compensating'
-    COMPENSATED = 'compensated'
-    STUCK = 'stuck'
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    COMPENSATING = "compensating"
+    COMPENSATED = "compensated"
+    STUCK = "stuck"
+
 
 class SagaStepState(BaseModel):
     name: str
     status: SagaStatus = SagaStatus.PENDING
     result: dict = Field(default_factory=dict)
     error: str | None = None
+
 
 class SagaState(BaseModel):
     saga_id: str = Field(default_factory=lambda: uuid.uuid4().hex)

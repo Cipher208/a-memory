@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 DB Migrations — async, unified memory.db using Alembic
 """
@@ -9,7 +10,7 @@ from typing import Any
 
 from alembic.config import Config as AlembicConfig
 
-from alembic import command as alembic_command
+import alembic.command as alembic_command
 from shared.connection import AsyncConnectionManager, connection_manager
 
 logger = logging.getLogger(__name__)
@@ -52,11 +53,7 @@ class MigrationManager:
 
         new_version = await self.get_current_version()
 
-        return {
-            "current_version": current,
-            "new_version": new_version,
-            "status": "up_to_date" if new_version else "initialized"
-        }
+        return {"current_version": current, "new_version": new_version, "status": "up_to_date" if new_version else "initialized"}
 
     async def get_pending(self) -> list[str]:
         # Simple check: if current != head

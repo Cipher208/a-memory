@@ -50,6 +50,7 @@ class WikiStore:
 
     async def list_files(self, pattern: str = "**/*.md") -> AsyncIterator[Path]:
         """Glob files in directory."""
+
         def _sync_glob():
             return list(self.base_dir.glob(pattern))
 

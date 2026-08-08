@@ -21,12 +21,7 @@ class APIKeyAuth:
         """Generate ak_... key, save state."""
         key = f"ak_{secrets.token_hex(24)}"
 
-        model = APIKeyModel(
-            user_id=user_id,
-            label=label,
-            created_at=time.time(),
-            enabled=True
-        )
+        model = APIKeyModel(user_id=user_id, label=label, created_at=time.time(), enabled=True)
 
         self._keys[key] = model.model_dump()
         self.store.save(self._keys)
@@ -51,10 +46,7 @@ class APIKeyAuth:
         self._keys[key] = model.model_dump()
         self.store.save(self._keys)
 
-        return {
-            "user_id": model.user_id,
-            "label": model.label
-        }
+        return {"user_id": model.user_id, "label": model.label}
 
     def revoke(self, key: str) -> bool:
         """Set enabled=False, save."""

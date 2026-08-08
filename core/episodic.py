@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 L3 EpisodicMemory — async important moments with emotional weight
 """

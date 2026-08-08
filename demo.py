@@ -38,7 +38,6 @@ async def run_demo():
     from graph.epistemic import EpistemicGraph
     from rag.engine import RAGEngine
     from shared.connection import connection_manager
-    from shared.saga import Saga
 
     mm = MemoryManager()
     rag = RAGEngine(cm=connection_manager, layer="user", binary_dim=384)
@@ -110,19 +109,19 @@ async def run_demo():
 
     # 5. Test saga
     from shared.saga import SagaEngine, FileSagaStore, SAGA_DIR, SagaState, SagaStep
-    
-    async def step1(d): return {"step1_done": True}
-    async def step2(d): return {"step2_done": True}
-    
-    steps = [
-        SagaStep(name="step1", action=step1),
-        SagaStep(name="step2", action=step2)
-    ]
-    
+
+    async def step1(d):
+        return {"step1_done": True}
+
+    async def step2(d):
+        return {"step2_done": True}
+
+    steps = [SagaStep(name="step1", action=step1), SagaStep(name="step2", action=step2)]
+
     store = FileSagaStore(SAGA_DIR)
     engine = SagaEngine(store)
     state = SagaState(name="demo_saga", context={"user_id": "demo_user"})
-    
+
     start = time.perf_counter()
     await engine.execute(state, steps)
     time.perf_counter() - start
@@ -165,7 +164,7 @@ def main():
             str(args.port),
             "--no-auth",
         ]
-        subprocess.run(cmd)
+        subprocess.run(cmd, check=False)
 
 
 if __name__ == "__main__":

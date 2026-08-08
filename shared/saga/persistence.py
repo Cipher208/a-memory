@@ -5,6 +5,7 @@ import json
 
 from shared.saga.schema import SagaState
 
+
 @runtime_checkable
 class ISagaStore(Protocol):
     """Abstract base class for Saga persistence."""
@@ -25,6 +26,7 @@ class ISagaStore(Protocol):
         """List all persisted sagas."""
         ...
 
+
 class FileSagaStore:
     """File-based Saga storage with optional encryption."""
 
@@ -41,6 +43,7 @@ class FileSagaStore:
 
         try:
             from shared.saga.impl.crypto import write_state_atomic
+
             write_state_atomic(path, data)
         except (ImportError, Exception):
             # Fallback to plain JSON if crypto fails or unavailable
@@ -56,6 +59,7 @@ class FileSagaStore:
 
         try:
             from shared.saga.impl.crypto import read_state_legacy_or_encrypted
+
             data = read_state_legacy_or_encrypted(path)
         except (ImportError, Exception):
             with open(path, encoding="utf-8") as f:

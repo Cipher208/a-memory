@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 RAG Engine — Unified facade for Ingestor and Searcher.
 Maintains backward compatibility for legacy consumers.
@@ -15,6 +16,7 @@ from rag.searcher import RAGSearcher, StrategyT
 from shared.importance import ImportanceScorer
 
 logger = logging.getLogger(__name__)
+
 
 class RAGEngine:
     def __init__(
@@ -43,23 +45,16 @@ class RAGEngine:
 
         # Initialize Ingestor and Searcher
         self.ingestor = RAGIngestor(
-            cm=self._cm,
-            layer=self.layer,
-            binary_dim=self.binary_dim,
-            thresholds_cache=self._thresholds_cache or self.thresholds
+            cm=self._cm, layer=self.layer, binary_dim=self.binary_dim, thresholds_cache=self._thresholds_cache or self.thresholds
         )
-        self.searcher = RAGSearcher(
-            cm=self._cm,
-            layer=self.layer,
-            scorer=self.scorer,
-            binary_dim=self.binary_dim
-        )
+        self.searcher = RAGSearcher(cm=self._cm, layer=self.layer, scorer=self.scorer, binary_dim=self.binary_dim)
 
     def _load_thresholds(self):
         if self.binary_threshold_mode != "supervised_path" or not self.binary_thresholds_path:
             return None
         try:
             import numpy as np
+
             return np.load(self.binary_thresholds_path)
         except (FileNotFoundError, Exception) as e:
             logger.warning(f"[rag] Failed to load thresholds from {self.binary_thresholds_path}: {e}")
@@ -80,13 +75,7 @@ class RAGEngine:
     async def ingest_file(self, filepath: Path, user_id: str = "default", wiki_type: str | None = None) -> str:
         """Delegate to ingestor."""
         content = filepath.read_text(encoding="utf-8")
-        page_id = await self.ingestor.ingest(
-            title=filepath.stem,
-            content=content,
-            user_id=user_id,
-            wiki_type=wiki_type,
-            path=str(filepath)
-        )
+        page_id = await self.ingestor.ingest(title=filepath.stem, content=content, user_id=user_id, wiki_type=wiki_type, path=str(filepath))
         if page_id is None:
             return f"[SKIP] {filepath.name} (already ingested or empty)"
         return f"[OK] {filepath.name}"
@@ -102,36 +91,19 @@ class RAGEngine:
         relation_type: str = "elaborates",
     ) -> int:
         """Delegate to ingestor."""
-        page_id = await self.ingestor.ingest(
-            title=title,
-            content=text,
-            user_id=user_id,
-            wiki_type=wiki_type,
-            path=path
-        )
+        page_id = await self.ingestor.ingest(title=title, content=text, user_id=user_id, wiki_type=wiki_type, path=path)
 
         if page_id and relation_to is not None:
             await self.add_relation(page_id, relation_to, relation_type)
 
         return page_id or 0
 
-    async def search(
-        self,
-        query: str,
-        user_id: str = "default",
-        strategy: StrategyT | None = None,
-        limit: int = 10
-    ) -> list[dict[str, Any]]:
+    async def search(self, query: str, user_id: str = "default", strategy: StrategyT | None = None, limit: int = 10) -> list[dict[str, Any]]:
         """
         Delegate to searcher.search().
         Converts SearchResult models back to dict for backward compatibility.
         """
-        results = await self.searcher.search(
-            query=query,
-            user_id=user_id,
-            strategy=strategy or self.search_strategy,
-            limit=limit
-        )
+        results = await self.searcher.search(query=query, user_id=user_id, strategy=strategy or self.search_strategy, limit=limit)
 
         # Compatibility layer: convert models to dicts
         return [
@@ -141,7 +113,7 @@ class RAGEngine:
                 "content": r.content,
                 "score": r.score,
                 "source": r.metadata.get("source", ""),
-                "wiki_type": r.metadata.get("wiki_type")
+                "wiki_type": r.metadata.get("wiki_type"),
             }
             for r in results
         ]

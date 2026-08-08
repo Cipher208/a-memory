@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Import/Export — async import/export memory between instances
 """

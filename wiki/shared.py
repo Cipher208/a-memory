@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Shared wiki utilities — config loading, type helpers, query builders.
 Eliminates duplication across agent_wiki, file_wiki, user_wiki.
@@ -39,6 +40,7 @@ def get_external_dirs(layer: str) -> list[str]:
 
 
 ALLOWED_TABLES = {"user_wiki", "agent_wiki", "wiki_index"}
+
 
 async def find_by_source(cm: AsyncConnectionManager, table: str, user_id: str, source: str) -> int | None:
     """Find entry_id by user_id and source path in the given table."""

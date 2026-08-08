@@ -1,9 +1,11 @@
+from __future__ import annotations
 """
 MemoryCompressor — async dedup and compression
 """
 
 import time
 
+from typing import ClassVar
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 
@@ -40,7 +42,16 @@ class MemoryCompressor:
         await conn.commit()
         return cursor.rowcount
 
-    ALLOWED_TABLES = {"core_memory", "episodes", "epistemic_edges", "temporal_edges", "saga_log", "agent_wiki", "user_wiki", "file_wiki"}
+    ALLOWED_TABLES: ClassVar[set[str]] = {
+        "core_memory",
+        "episodes",
+        "epistemic_edges",
+        "temporal_edges",
+        "saga_log",
+        "agent_wiki",
+        "user_wiki",
+        "file_wiki",
+    }
 
     async def get_stats(self, user_id: str | None = None) -> dict[str, int]:
         stats = {}

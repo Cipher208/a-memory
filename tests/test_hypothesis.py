@@ -437,7 +437,6 @@ class TestPathSafetyProperties:
 # ═══════════════════════════════════════════════════════════════
 
 
-
 class TestSecretsProperties:
     @given(data=st.dictionaries(st.text(min_size=1, max_size=20), st.text(max_size=100), min_size=1, max_size=5))
     @settings(deadline=None, max_examples=30)

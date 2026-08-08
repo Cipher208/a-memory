@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Conflict Resolver — async, detects conflicting memory entries.
 Uses BM25 + char-trigram Jaccard hybrid for similarity (B3).

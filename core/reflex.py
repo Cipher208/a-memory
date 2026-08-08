@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 L1 ReflexBuffer - ring buffer for recent messages
 """

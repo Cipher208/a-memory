@@ -10,18 +10,22 @@ from shared.saga.impl.backup import create_backup_saga
 from shared.saga.impl.consolidation import create_consolidation_saga
 from shared.constants import DB_NAME
 
+
 @pytest.fixture
 def temp_dir():
     with tempfile.TemporaryDirectory() as d:
         yield Path(d)
 
+
 @pytest.fixture
 def store(temp_dir):
     return FileSagaStore(temp_dir)
 
+
 @pytest.fixture
 def engine(store):
     return SagaEngine(store)
+
 
 @pytest.mark.asyncio
 async def test_backup_saga_success(engine, temp_dir):
@@ -44,6 +48,7 @@ async def test_backup_saga_success(engine, temp_dir):
         assert backup_path.exists()
         assert (backup_path / DB_NAME).exists()
         assert state.status == SagaStatus.COMPLETED
+
 
 @pytest.mark.asyncio
 async def test_backup_saga_compensation(engine, temp_dir):
@@ -71,6 +76,7 @@ async def test_backup_saga_compensation(engine, temp_dir):
         if backup_path_str:
             assert not Path(backup_path_str).exists()
 
+
 @pytest.mark.asyncio
 async def test_consolidation_saga_success(engine):
     # Mock Memory Manager
@@ -83,11 +89,7 @@ async def test_consolidation_saga_success(engine):
 
     user_id = "user123"
     steps = create_consolidation_saga(user_id, mm)
-    state = SagaState(
-        saga_id="cons_test",
-        name="consolidation",
-        context={"user_id": user_id, "_mm": mm}
-    )
+    state = SagaState(saga_id="cons_test", name="consolidation", context={"user_id": user_id, "_mm": mm})
 
     # Execute
     result = await engine.execute(state, steps)
@@ -100,10 +102,8 @@ async def test_consolidation_saga_success(engine):
 
     # Check MM calls
     assert mm.save.call_count == 2
-    mm.save.assert_any_call(
-        user_id=user_id, key="k1", value="v1",
-        importance=0.9, memory_kind="fact", source="consolidation"
-    )
+    mm.save.assert_any_call(user_id=user_id, key="k1", value="v1", importance=0.9, memory_kind="fact", source="consolidation")
+
 
 @pytest.mark.asyncio
 async def test_consolidation_saga_rollback(engine):
@@ -119,11 +119,7 @@ async def test_consolidation_saga_rollback(engine):
     # Add a dummy failing step at the end to trigger compensation
     steps.append(SagaStep(name="fail", action=AsyncMock(side_effect=RuntimeError("trigger rollback"))))
 
-    state = SagaState(
-        saga_id="cons_fail",
-        name="consolidation",
-        context={"user_id": user_id, "_mm": mm}
-    )
+    state = SagaState(saga_id="cons_fail", name="consolidation", context={"user_id": user_id, "_mm": mm})
 
     # Execute
     with pytest.raises(RuntimeError, match="trigger rollback"):

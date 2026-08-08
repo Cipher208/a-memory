@@ -1,3 +1,4 @@
+from __future__ import annotations
 """Layer tools — unified user/agent memory operations.
 
 All tools accept a `layer` parameter: "user" or "agent".
