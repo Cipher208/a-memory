@@ -22,3 +22,4 @@ docs/compose/
 .repowise/
 site/
 .github/tmp-protection.json
+.venv_test/
