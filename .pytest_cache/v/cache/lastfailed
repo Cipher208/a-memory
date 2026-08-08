@@ -45,5 +45,6 @@
   "tests/test_hypothesis.py::TestImportanceScoringLogic::test_commitment_has_emotional_weight": true,
   "tests/test_hypothesis.py::TestImportanceScoringLogic::test_score_bounded": true,
   "tests/test_hypothesis.py::TestImportanceGateLogic::test_low_importance_blocked": true,
-  "tests/test_hypothesis.py::TestImportanceGateLogic::test_high_importance_allowed": true
+  "tests/test_hypothesis.py::TestImportanceGateLogic::test_high_importance_allowed": true,
+  "tests/test_hooks/test_registry_fire.py::test_fire_instance_methods": true
 }

@@ -60,8 +60,15 @@ class AppContext:
         self.rate_limiter = RateLimiter()
         self.backup = BackupManager()
         self.import_export = ImportExport()
+
+        # Load hooks once to trigger decorators
+        from hooks import hook_registry
+        self.hook_registry = hook_registry
+
         self.user_hooks = UserHooks()
         self.agent_hooks = AgentHooks()
+        self.hook_registry.register_instance(self.user_hooks)
+        self.hook_registry.register_instance(self.agent_hooks)
 
 
 @asynccontextmanager

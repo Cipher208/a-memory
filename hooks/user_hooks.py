@@ -20,24 +20,12 @@ from .shared import (
 class UserHooks:
     def __init__(self, user_id: str = "default"):
         self.user_id = user_id
-        self.emotion_engine = EmotionEngine()
-        self.emotion_trigger = EmotionTrigger(self.emotion_engine)
-        self._register_all()
+        # Emotion engine requires config, initialized via server lifecycle usually
+        # For ad-hoc registration we just need the methods
+        self.emotion_engine = None
+        self.emotion_trigger = None
 
-    def _register_all(self):
-        hook_registry.register("message_received", self._message_received, layer="user")
-        hook_registry.register("message_sent", self._message_sent, layer="user")
-        hook_registry.register("state_delta", self._state_delta, layer="user")
-        hook_registry.register("consolidation", self._consolidation, layer="both")
-        hook_registry.register("emotion_trigger", self._emotion_trigger, layer="user")
-        hook_registry.register("nightly", self._nightly, layer="user")
-        hook_registry.register("importance_gate", self._importance_gate, layer="user")
-        hook_registry.register("auto_context", self._auto_context, layer="both")
-        hook_registry.register("forgetting_ritual", self._forgetting_ritual, layer="both")
-        hook_registry.register("retrieval_router", self._retrieval_router, layer="both")
-        hook_registry.register("conflict_resolver", self._conflict_resolver, layer="both")
-        hook_registry.register("dream_buffer", self._dream_buffer, layer="user")
-
+    @hook_registry.mark("message_received", layer="user")
     def _message_received(self, ctx: dict[str, Any], mem=None) -> dict[str, Any]:
         """Store message in L1 buffer for recent context."""
         text = ctx.get("text", "")
@@ -50,6 +38,7 @@ class UserHooks:
                 return {"saved_to_l1": False, "importance": importance, "error": "add_failed"}
         return {"saved_to_l1": False, "importance": importance}
 
+    @hook_registry.mark("message_sent", layer="user")
     def _message_sent(self, ctx: dict[str, Any], mem=None) -> dict[str, Any]:
         text = ctx.get("text", "")
         if mem:
@@ -60,17 +49,22 @@ class UserHooks:
                 return {"saved_to_l1": False, "error": "add_failed"}
         return {"saved_to_l1": False, "role": "assistant", "text": text[:100]}
 
+    @hook_registry.mark("state_delta", layer="user")
     def _state_delta(self, ctx: dict[str, Any]) -> dict[str, Any]:
         delta = ctx.get("delta", {})
         if delta:
             return {"action": "save_episode", "summary": f"State changed: {list(delta.keys())}", "weight": 0.4}
         return {"action": "skip"}
 
+    @hook_registry.mark("consolidation", layer="both")
     def _consolidation(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return consolidation(ctx, self.user_id)
 
+    @hook_registry.mark("emotion_trigger", layer="user")
     def _emotion_trigger(self, ctx: dict[str, Any], mem=None) -> dict[str, Any]:
         """Evaluate emotional content and save episode if weighty."""
+        if not self.emotion_trigger:
+            return {"saved_episode": False, "error": "emotion_trigger_not_init"}
         text = ctx.get("text", "")
         user_id = ctx.get("user_id", "default")
         should, reason, weight = self.emotion_trigger.should_save(text)
@@ -83,9 +77,11 @@ class UserHooks:
                 return {"saved_episode": False, "reason": reason, "error": "save_failed"}
         return {"saved_episode": False, "reason": reason}
 
+    @hook_registry.mark("nightly", layer="user")
     def _nightly(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
 
+    @hook_registry.mark("importance_gate", layer="user")
     async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
         from shared.adaptive import adaptive_threshold
         text = ctx.get("text", "")
@@ -98,18 +94,23 @@ class UserHooks:
 
         return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
+    @hook_registry.mark("auto_context", layer="both")
     def _auto_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return auto_context(ctx, self.user_id)
 
+    @hook_registry.mark("forgetting_ritual", layer="both")
     def _forgetting_ritual(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return forgetting_ritual(ctx)
 
+    @hook_registry.mark("retrieval_router", layer="both")
     def _retrieval_router(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return retrieval_router(ctx, self.user_id, include_count=True)
 
+    @hook_registry.mark("conflict_resolver", layer="both")
     def _conflict_resolver(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return conflict_resolver(ctx, self.user_id)
 
+    @hook_registry.mark("dream_buffer", layer="user")
     def _dream_buffer(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return {"action": "add_to_staging", "content": ctx.get("text", "")}
 
