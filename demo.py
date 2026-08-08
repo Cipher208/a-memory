@@ -109,11 +109,22 @@ async def run_demo():
     time.perf_counter() - start
 
     # 5. Test saga
-    saga = Saga("demo_saga")
-    saga.add_step("step1", lambda d: {"step1_done": True})
-    saga.add_step("step2", lambda d: {"step2_done": True})
+    from shared.saga import SagaEngine, FileSagaStore, SAGA_DIR, SagaState, SagaStep
+    
+    async def step1(d): return {"step1_done": True}
+    async def step2(d): return {"step2_done": True}
+    
+    steps = [
+        SagaStep(name="step1", action=step1),
+        SagaStep(name="step2", action=step2)
+    ]
+    
+    store = FileSagaStore(SAGA_DIR)
+    engine = SagaEngine(store)
+    state = SagaState(name="demo_saga", context={"user_id": "demo_user"})
+    
     start = time.perf_counter()
-    await saga.execute({"user_id": "demo_user"})
+    await engine.execute(state, steps)
     time.perf_counter() - start
 
     # 6. Test backup

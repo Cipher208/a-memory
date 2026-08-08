@@ -96,18 +96,20 @@ async def memory_saga(
     metrics.inc("tool_saga")
     app = _get_ctx(ctx)
 
+    from shared.saga import SagaEngine, FileSagaStore, SAGA_DIR, create_consolidation_saga, create_backup_saga, SagaState
+
+    store = FileSagaStore(SAGA_DIR)
+    engine = SagaEngine(store)
+
     if action == "consolidate":
-        from shared.saga import create_consolidation_saga
-
-        saga = create_consolidation_saga(user_id, mm=app.mm)
-        result = await saga.execute({"user_id": user_id, "_mm": app.mm})
+        steps = create_consolidation_saga(user_id, mm=app.mm)
+        state = SagaState(name=f"consolidation_{user_id}", context={"user_id": user_id, "_mm": app.mm})
     else:
-        from shared.saga import create_backup_saga
+        steps = create_backup_saga()
+        state = SagaState(name="backup")
 
-        saga = create_backup_saga()
-        result = await saga.execute()
-
-    return SagaResult(status=saga.status.value, result=result, steps=saga.get_state()["steps"]).dict()
+    result = await engine.execute(state, steps)
+    return {"status": state.status.value, "result": result, "saga_id": state.saga_id}
 
 
 async def memory_data(
