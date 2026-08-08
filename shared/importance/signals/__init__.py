@@ -9,13 +9,13 @@ from .retrieval_signal import RetrievalSignal
 from .noise_signal import NoiseSignal
 
 __all__ = [
-    "IImportanceSignal",
     "BaseSignal",
-    "LengthSignal",
-    "QuestionSignal",
-    "TechKeywordSignal",
     "EmotionSignal",
-    "NoveltySignal",
-    "RetrievalSignal",
+    "IImportanceSignal",
+    "LengthSignal",
     "NoiseSignal",
+    "NoveltySignal",
+    "QuestionSignal",
+    "RetrievalSignal",
+    "TechKeywordSignal",
 ]

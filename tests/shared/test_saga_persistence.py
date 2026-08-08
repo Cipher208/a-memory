@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 from shared.saga.schema import SagaState, SagaStatus
 from shared.saga.persistence import FileSagaStore
 
@@ -15,7 +14,7 @@ def test_save_and_load(temp_saga_store):
         started_at=12345.67
     )
     temp_saga_store.save(state)
-    
+
     loaded = temp_saga_store.load("test_1")
     assert loaded is not None
     assert loaded.saga_id == "test_1"
@@ -26,7 +25,7 @@ def test_delete(temp_saga_store):
     state = SagaState(saga_id="to_delete", name="delete_me")
     temp_saga_store.save(state)
     assert temp_saga_store.load("to_delete") is not None
-    
+
     temp_saga_store.delete("to_delete")
     assert temp_saga_store.load("to_delete") is None
 
@@ -37,7 +36,7 @@ def test_list_all(temp_saga_store):
     ]
     for s in sagas:
         temp_saga_store.save(s)
-    
+
     all_sagas = temp_saga_store.list_all()
     assert len(all_sagas) == 3
     ids = {s.saga_id for s in all_sagas}

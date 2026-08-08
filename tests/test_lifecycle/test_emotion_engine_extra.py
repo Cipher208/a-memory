@@ -40,7 +40,7 @@ def test_engine_marker_overlapping_phrase(engine):
     )
     # Re-compile regexes
     engine._compile() # It is _compile in the actual file, not _compile_regexes
-    
+
     results = engine.detect("ура победа")
     # Should only return one joy result with score 1.0 (phrase) not 0.4 (marker)
     joy_results = [r for r in results if r.trigger_type == "joy"]

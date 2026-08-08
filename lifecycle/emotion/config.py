@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from .models import EmotionMarkerConfig
 
@@ -12,7 +11,7 @@ def load_emotion_config(asset_path: Path = None) -> EmotionMarkerConfig:
     3. shared/assets/emotions.json (fallback)
     """
     home_config = Path.home() / ".mcp-ariel-memory" / "emotions.json"
-    
+
     if home_config.exists():
         config_path = home_config
     elif asset_path and asset_path.exists():
@@ -24,7 +23,7 @@ def load_emotion_config(asset_path: Path = None) -> EmotionMarkerConfig:
     if not config_path.exists():
         raise FileNotFoundError(f"Emotion config not found at {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         data = json.load(f)
-        
+
     return EmotionMarkerConfig.model_validate(data)

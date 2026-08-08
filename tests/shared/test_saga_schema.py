@@ -1,5 +1,3 @@
-import pytest
-from pydantic import ValidationError
 from shared.saga.schema import SagaStatus, SagaStepState, SagaState
 import time
 
@@ -47,7 +45,7 @@ def test_saga_state_serialization():
     )
     json_data = state.model_dump_json()
     assert "deadbeef" in json_data
-    
+
     restored = SagaState.model_validate_json(json_data)
     assert restored.saga_id == "deadbeef"
 

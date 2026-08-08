@@ -18,8 +18,8 @@ __all__ = [
     "AgentWiki",
     "FileWiki",
     "UserWiki",
-    "WikiManager",
-    "WikiIndex",
     "WikiEntry",
+    "WikiIndex",
+    "WikiManager",
     "WikiParser",
 ]

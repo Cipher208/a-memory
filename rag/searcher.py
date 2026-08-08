@@ -1,5 +1,5 @@
 import logging
-from typing import Any, List, Optional, Literal, cast
+from typing import Literal, cast
 
 from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
@@ -21,7 +21,7 @@ class RAGSearcher:
         self,
         cm: AsyncConnectionManager,
         layer: str = "user",
-        scorer: Optional[ImportanceScorer] = None,
+        scorer: ImportanceScorer | None = None,
         binary_dim: int = 384,
     ):
         self._cm = cm
@@ -33,7 +33,7 @@ class RAGSearcher:
     async def _check_fts(self):
         if self._fts_available is not None:
             return self._fts_available
-        
+
         conn = await self._cm.get(DB_NAME)
         try:
             cur = await conn.execute("PRAGMA compile_options")
@@ -43,7 +43,7 @@ class RAGSearcher:
             self._fts_available = False
         return self._fts_available
 
-    async def _search_fts5(self, query: str, user_id: str, limit: int) -> List[SearchResult]:
+    async def _search_fts5(self, query: str, user_id: str, limit: int) -> list[SearchResult]:
         fts_ready = await self._check_fts()
         raw_results = await search_fts5(self._cm, query, user_id, limit, fts_ready)
         return [
@@ -57,11 +57,11 @@ class RAGSearcher:
             for r in raw_results
         ]
 
-    async def _search_mib(self, query: str, user_id: str, limit: int) -> List[SearchResult]:
+    async def _search_mib(self, query: str, user_id: str, limit: int) -> list[SearchResult]:
         # We need the binary_for function. In RAGEngine it uses thresholds.
         # For now, let's use the default embed_to_binary from rag.quantize.
         from rag.quantize import embed_to_binary
-        
+
         def default_bin_for(emb):
             return embed_to_binary(emb, threshold=0.0, dim=len(emb))
 
@@ -79,7 +79,7 @@ class RAGSearcher:
             for r in raw_results
         ]
 
-    async def _search_hybrid(self, query: str, user_id: str, limit: int) -> List[SearchResult]:
+    async def _search_hybrid(self, query: str, user_id: str, limit: int) -> list[SearchResult]:
         if self.scorer is None:
             # Fallback to RRF
             fts_ready = await self._check_fts()
@@ -97,11 +97,11 @@ class RAGSearcher:
                 )
                 for r in raw_results
             ]
-        
+
         # Smart Ranking with ImportanceScorer
         fts_results = await self._search_fts5(query, user_id, limit * 3)
         mib_results = await self._search_mib(query, user_id, limit * 3)
-        
+
         seen = {}
         for r in fts_results + mib_results:
             pid = r.page_id
@@ -110,9 +110,9 @@ class RAGSearcher:
             else:
                 # Merge scores (max for now, or could use RRF-like)
                 seen[pid].score = max(seen[pid].score, r.score)
-        
+
         candidates = list(seen.values())
-        
+
         # Re-rank using ImportanceScorer
         for c in candidates:
             # We pass query in context to ImportanceScorer if needed
@@ -127,15 +127,14 @@ class RAGSearcher:
 
     async def search(
         self, query: str, user_id: str = "default", strategy: StrategyT = "auto", limit: int = 10
-    ) -> List[SearchResult]:
+    ) -> list[SearchResult]:
         if strategy == "auto":
-            strategy = cast(StrategyT, auto_strategy(query))
-        
+            strategy = cast("StrategyT", auto_strategy(query))
+
         if strategy == "fts":
             return await self._search_fts5(query, user_id, limit)
-        elif strategy == "mib":
+        if strategy == "mib":
             return await self._search_mib(query, user_id, limit)
-        elif strategy == "hybrid":
+        if strategy == "hybrid":
             return await self._search_hybrid(query, user_id, limit)
-        else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+        raise ValueError(f"Unknown strategy: {strategy}")

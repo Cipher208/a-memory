@@ -10,4 +10,4 @@ DEFAULT_TOKEN_FILE = Path.home() / ".mcp-ariel-memory" / "bearer_token.json"
 api_key_auth = APIKeyAuth(keys_file=DEFAULT_KEYS_FILE)
 bearer_auth = BearerAuth(token_file=DEFAULT_TOKEN_FILE)
 
-__all__ = ["api_key_auth", "bearer_auth", "APIKeyAuth", "BearerAuth"]
+__all__ = ["APIKeyAuth", "BearerAuth", "api_key_auth", "bearer_auth"]

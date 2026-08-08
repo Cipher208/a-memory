@@ -14,6 +14,6 @@ class BaseSignal(IImportanceSignal):
                 kind = MemoryKind(kind)
             except ValueError:
                 kind = MemoryKind.FACT
-        
+
         policy = get_policy(kind)
         return policy.default_importance

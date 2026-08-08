@@ -49,7 +49,7 @@ class MemoryCompactor:
                 # 3. Delete from active memory
                 await conn.execute("DELETE FROM core_memory WHERE entry_id=?", (row["id"],))
                 archived_count += 1
-            except (KeyError, RuntimeError):  # noqa: PERF203
+            except (KeyError, RuntimeError):
                 logger.exception("Failed to archive memory %s", row.get("id", "unknown"))
 
         await conn.commit()

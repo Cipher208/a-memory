@@ -1,6 +1,0 @@
-============================= test session starts ==============================
-platform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.6.0 -- /home/murat/Projects/repos/mcp-ariel-memory/.venv_test/bin/python3.11
-cachedir: .pytest_cache
-rootdir: /home/murat/Projects/repos/mcp-ariel-memory
-configfile: pyproject.toml
-collecting ... 

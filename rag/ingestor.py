@@ -1,9 +1,8 @@
-import asyncio
 import hashlib
-from typing import Any, Optional
+from typing import Any
 
 from rag.chunking import chunk_text
-from rag.models import RAGChunk, RAGPage
+from rag.models import RAGPage
 from rag.quantize import binary_batch
 from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
@@ -17,7 +16,7 @@ class RAGIngestor:
         self.binary_dim = binary_dim
         self.thresholds_cache = thresholds_cache
 
-    async def ingest(self, title: str, content: str, user_id: str, wiki_type: Optional[str] = None, path: str = "") -> Optional[int]:
+    async def ingest(self, title: str, content: str, user_id: str, wiki_type: str | None = None, path: str = "") -> int | None:
         # Calculate content hash
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
@@ -45,10 +44,10 @@ class RAGIngestor:
             wiki_type=wiki_type,
         )
 
-        # Insert page and chunks in a transaction manually if needed, 
+        # Insert page and chunks in a transaction manually if needed,
         # but aiosqlite connection itself isn't a context manager for transactions.
         # It's a context manager for the connection itself.
-        
+
         # Parallelism: Embed all chunks at once
         embeddings = await embed_texts(chunks_text)
 
@@ -76,7 +75,7 @@ class RAGIngestor:
                     page.updated_at,
                 ),
             )
-            
+
             cursor = await conn.execute("SELECT last_insert_rowid()")
             row = await cursor.fetchone()
             page_id = row[0]

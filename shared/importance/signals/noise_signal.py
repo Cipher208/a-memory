@@ -1,4 +1,3 @@
-import re
 from .base_signal import IImportanceSignal
 
 class NoiseSignal(IImportanceSignal):
@@ -10,8 +9,8 @@ class NoiseSignal(IImportanceSignal):
         noise_re = context.get("noise_re")
         if not noise_re:
             return 0.0
-            
+
         if noise_re.match(text.strip().lower()):
             return 0.95
-            
+
         return 0.0

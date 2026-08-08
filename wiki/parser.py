@@ -1,6 +1,5 @@
 import time
 from pathlib import Path
-from typing import Optional
 
 import frontmatter
 from .models import WikiEntry
@@ -10,7 +9,7 @@ class WikiParser:
     """Parses and generates Markdown files with YAML frontmatter."""
 
     @staticmethod
-    def parse(text: str, file_path: Optional[Path] = None) -> WikiEntry:
+    def parse(text: str, file_path: Path | None = None) -> WikiEntry:
         """Parse .md with YAML frontmatter.
 
         Returns WikiEntry.
@@ -23,14 +22,14 @@ class WikiParser:
             # Fallback for malformed YAML or other errors
             metadata = {}
             content = text.strip()
-        
+
         # Extract fields from frontmatter or use defaults
         title = metadata.get("title") or (file_path.stem if file_path else "Untitled")
         try:
             importance = float(metadata.get("importance", 0.5))
         except (ValueError, TypeError):
             importance = 0.5
-            
+
         wiki_type = metadata.get("wiki_type", "note")
         tags = metadata.get("tags")
         if isinstance(tags, str):
@@ -43,7 +42,7 @@ class WikiParser:
             created_at = float(metadata.get("created_at", now))
         except (ValueError, TypeError):
             created_at = now
-            
+
         try:
             updated_at = float(metadata.get("updated_at", now))
         except (ValueError, TypeError):
@@ -74,6 +73,6 @@ class WikiParser:
         }
         if entry.entry_id is not None:
             metadata["entry_id"] = entry.entry_id
-            
+
         post = frontmatter.Post(entry.content, **metadata)
         return frontmatter.dumps(post)

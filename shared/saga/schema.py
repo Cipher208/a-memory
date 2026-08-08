@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Optional
 from pydantic import BaseModel, Field
 
 class SagaStatus(str, Enum):
@@ -15,7 +14,7 @@ class SagaStepState(BaseModel):
     name: str
     status: SagaStatus
     result: dict = Field(default_factory=dict)
-    error: Optional[str] = None
+    error: str | None = None
 
 class SagaState(BaseModel):
     saga_id: str

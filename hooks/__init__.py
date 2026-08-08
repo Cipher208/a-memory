@@ -10,4 +10,4 @@ from .user_hooks import UserHooks
 # Trigger registration
 load_all_hooks()
 
-__all__ = ["AgentHooks", "hook_registry", "UserHooks", "load_all_hooks"]
+__all__ = ["AgentHooks", "UserHooks", "hook_registry", "load_all_hooks"]

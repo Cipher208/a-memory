@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import List, Callable, Optional, Any, Coroutine, Dict
+from typing import Any
+from collections.abc import Callable, Coroutine
 import asyncio
 import logging
 import time
@@ -12,8 +13,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SagaStep:
     name: str
-    action: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]] | Dict[str, Any]]
-    compensation: Optional[Callable[[Dict[str, Any]], Coroutine[Any, Any, None] | None]] = None
+    action: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]] | dict[str, Any]]
+    compensation: Callable[[dict[str, Any]], Coroutine[Any, Any, None] | None] | None = None
     retry_attempts: int = 0
     retry_backoff: float = 1.0
     timeout_seconds: float = 300.0
@@ -22,7 +23,7 @@ class SagaEngine:
     def __init__(self, store: ISagaStore):
         self.store = store
 
-    async def execute(self, state: SagaState, steps: List[SagaStep]) -> Dict[str, Any]:
+    async def execute(self, state: SagaState, steps: list[SagaStep]) -> dict[str, Any]:
         """
         Execute a list of steps for a given saga state.
         Implements idempotency, retries, and state persistence.
@@ -55,11 +56,11 @@ class SagaEngine:
 
                 attempt = 0
                 last_error = None
-                
+
                 while attempt <= step_def.retry_attempts:
                     try:
                         logger.info(f"Saga {state.saga_id}: executing step {step_def.name} (attempt {attempt})")
-                        
+
                         async def _run_action():
                             action_res = step_def.action(state.context)
                             if asyncio.iscoroutine(action_res):
@@ -67,7 +68,7 @@ class SagaEngine:
                             return action_res
 
                         result = await asyncio.wait_for(_run_action(), timeout=step_def.timeout_seconds)
-                        
+
                         step_state.result = result or {}
                         step_state.status = SagaStatus.COMPLETED
                         step_state.error = None
@@ -99,7 +100,7 @@ class SagaEngine:
             await self.compensate(state, steps)
             raise e
 
-    async def compensate(self, state: SagaState, steps: List[SagaStep]):
+    async def compensate(self, state: SagaState, steps: list[SagaStep]):
         """
         Perform compensation (rollback) for all completed steps in reverse order.
         """
@@ -110,19 +111,19 @@ class SagaEngine:
         for i in range(state.current_step_index, -1, -1):
             if i >= len(state.steps):
                 continue
-                
+
             step_state = state.steps[i]
             step_def = steps[i]
 
             if step_state.status == SagaStatus.COMPLETED and step_def.compensation:
                 try:
                     logger.info(f"Saga {state.saga_id}: compensating step {step_def.name}")
-                    
+
                     async def _run_compensation():
                         comp_res = step_def.compensation(state.context)
                         if asyncio.iscoroutine(comp_res):
                             await comp_res
-                    
+
                     await asyncio.wait_for(_run_compensation(), timeout=step_def.timeout_seconds)
                 except Exception as e:
                     logger.error(f"Saga {state.saga_id}: compensation for step {step_def.name} failed: {e}")

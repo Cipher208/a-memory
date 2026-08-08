@@ -70,7 +70,7 @@ class WikiIndex:
                 return
 
             entry_id = existing["entry_id"]
-            
+
             # FTS update requires OLD values for the 'delete' command in external content tables
             await conn.execute(
                 "INSERT INTO wiki_fts(wiki_fts, rowid, title, content, wiki_type, tags) VALUES ('delete', ?, ?, ?, ?, ?)",
@@ -83,7 +83,7 @@ class WikiIndex:
                    WHERE entry_id=?""",
                 (entry.title, tags_json, entry.importance, entry.content, content_hash, now, entry_id),
             )
-            
+
             # Then insert NEW values
             await conn.execute(
                 "INSERT INTO wiki_fts(rowid, title, content, wiki_type, tags) VALUES (?, ?, ?, ?, ?)",

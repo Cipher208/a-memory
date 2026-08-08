@@ -1,7 +1,6 @@
 import pytest
 import time
 import hashlib
-from pathlib import Path
 from wiki import WikiIndex, WikiEntry
 from shared.connection import AsyncConnectionManager
 
@@ -50,7 +49,7 @@ async def test_crud_operations(wiki_index):
     entry.content = "Updated Content"
     new_hash = hashlib.sha256(entry.content.encode()).hexdigest()
     await wiki_index.save(entry, new_hash)
-    
+
     row = await wiki_index.get_by_path(entry.file_path)
     assert row["content"] == "Updated Content"
     assert row["content_hash"] == new_hash

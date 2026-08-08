@@ -12,7 +12,7 @@ class BearerAuth:
     def __init__(self, token_file: Path | None = None):
         if token_file is None:
             token_file = Path("data/auth/token.enc")
-        
+
         self.store = EncryptedStore(token_file, AuthTokenModel)
         self._load_or_create()
 
@@ -33,14 +33,14 @@ class BearerAuth:
         env_token = os.environ.get("MCP_AUTH_TOKEN")
         if env_token:
             return env_token
-        
+
         return self._current_token
 
     def verify(self, auth_header: str) -> bool:
         """Check if header matches the current token."""
         if not auth_header or not auth_header.startswith("Bearer "):
             return False
-        
+
         provided_token = auth_header[7:]
         return provided_token == self.get_token()
 

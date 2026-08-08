@@ -1,10 +1,9 @@
 import hashlib
-import json
 import logging
 import time
 import asyncio
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.path_safety import safe_resolve
@@ -103,7 +102,7 @@ class WikiManager:
 
         text = await asyncio.to_thread(p.read_text, encoding="utf-8")
         entry = self.parser.parse(text, p)
-        
+
         if title is not None:
             entry.title = title
         if content is not None:
@@ -112,7 +111,7 @@ class WikiManager:
             entry.tags = tags
         if importance is not None:
             entry.importance = importance
-        
+
         entry.updated_at = time.time()
 
         md_content = self.parser.to_markdown(entry)
@@ -166,7 +165,7 @@ class WikiManager:
         p = safe_resolve(self.base_dir, file_path)
         if await asyncio.to_thread(p.exists):
             await asyncio.to_thread(p.unlink)
-        
+
         # index.delete handles both wiki_index and wiki_fts
         await self.index.delete(str(p))
         return True
@@ -183,10 +182,10 @@ class WikiManager:
     async def reindex_all(self) -> dict[str, int]:
         """Re-index all .md files from disk to DB using batching and hash checks."""
         result = {"indexed": 0, "skipped": 0, "errors": 0}
-        
+
         md_files = []
         enabled_types = self._get_enabled_types()
-        
+
         def _collect_files():
             files = []
             for wiki_type in enabled_types:
@@ -196,18 +195,18 @@ class WikiManager:
             return files
 
         md_files = await asyncio.to_thread(_collect_files)
-        
+
         async def _process_file(f: Path):
             try:
                 text = await asyncio.to_thread(f.read_text, encoding="utf-8")
                 entry = self.parser.parse(text, f)
                 content_hash = hashlib.sha256(entry.content.encode()).hexdigest()
-                
+
                 # Check hash in DB before saving
                 existing = await self.index.get_by_path(str(f))
                 if existing and existing.get("content_hash") == content_hash:
                     return "skipped"
-                
+
                 await self.index.save(entry, content_hash)
                 return "indexed"
             except Exception as e:
@@ -220,38 +219,38 @@ class WikiManager:
             outcomes = await asyncio.gather(*tasks)
             for o in outcomes:
                 result[o] += 1
-                
+
         return result
 
     async def sync_external(self, external_dirs: list[str] | None = None) -> dict[str, int]:
         """Import external .md files with optimization."""
         dirs = external_dirs or self.get_external_dirs()
         result = {"imported": 0, "skipped": 0, "errors": 0}
-        
+
         enabled_types = self._get_enabled_types()
-        
+
         for dir_path in dirs:
             p = Path(dir_path)
             if not await asyncio.to_thread(p.exists):
                 continue
-            
+
             def _find_md():
                 return list(p.glob("**/*.md"))
-            
+
             md_files = await asyncio.to_thread(_find_md)
-            
+
             async def _sync_file(f: Path):
                 try:
                     content = await asyncio.to_thread(f.read_text, encoding="utf-8")
                     parsed_entry = self.parser.parse(content, f)
                     wiki_type = self._guess_type(f, parsed_entry.content)
-                    
+
                     if wiki_type not in enabled_types:
                         return "skipped"
 
                     safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in parsed_entry.title).strip().replace(" ", "_")
                     dest = self._type_dir(wiki_type) / f"{safe_title}.md"
-                    
+
                     # Optimization: check if already exists and same content
                     if await asyncio.to_thread(dest.exists):
                         dest_content = await asyncio.to_thread(dest.read_text, encoding="utf-8")
@@ -273,7 +272,7 @@ class WikiManager:
                 outcomes = await asyncio.gather(*tasks)
                 for o in outcomes:
                     result[o] += 1
-                    
+
         return result
 
     def _guess_type(self, path: Path, content: str) -> str:

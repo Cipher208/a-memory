@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 from wiki import WikiParser, WikiEntry
 
@@ -12,9 +11,9 @@ created_at: 1234567890.0
 updated_at: 1234567890.0
 ---
 This is the content."""
-    
+
     entry = WikiParser.parse(md_content)
-    
+
     assert entry.title == "Test Entry"
     assert entry.wiki_type == "concept"
     assert entry.tags == ["test", "wiki"]
@@ -25,9 +24,9 @@ This is the content."""
 def test_parse_plain_md_no_frontmatter():
     md_content = "Just plain content."
     file_path = Path("my_note.md")
-    
+
     entry = WikiParser.parse(md_content, file_path=file_path)
-    
+
     assert entry.title == "my_note"
     assert entry.wiki_type == "note"
     assert entry.content == "Just plain content."
@@ -58,12 +57,12 @@ def test_to_markdown():
         created_at=100.0,
         updated_at=200.0
     )
-    
+
     md = WikiParser.to_markdown(entry)
     assert "title: My Task" in md
     assert "wiki_type: task" in md
     assert "Do things." in md
-    
+
     # Round trip
     parsed = WikiParser.parse(md)
     assert parsed.title == entry.title

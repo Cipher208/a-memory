@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Type, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel
 
@@ -17,7 +17,7 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class EncryptedStore:
-    def __init__(self, file_path: Path, model_class: Type[BaseModel]):
+    def __init__(self, file_path: Path, model_class: type[BaseModel]):
         self.file_path = Path(file_path)
         self.model_class = model_class
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -27,18 +27,18 @@ class EncryptedStore:
         # Validation if needed, though prompt says save(data: dict)
         # We can validate via model_class if it's a single object or a dict of objects.
         # But for now, just encrypt what we got as per instructions.
-        
+
         ciphertext = encrypt_json(data)
         tmp_file = self.file_path.with_suffix(".tmp")
-        
+
         with tmp_file.open("wb") as f:
             f.write(ciphertext)
-        
+
         with contextlib.suppress(OSError):
             os.chmod(tmp_file, 0o600)
-            
+
         tmp_file.replace(self.file_path)
-        
+
         with contextlib.suppress(OSError):
             os.chmod(self.file_path, 0o600)
 

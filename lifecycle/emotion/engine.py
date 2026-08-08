@@ -1,6 +1,5 @@
 import re
-from typing import List, Dict, Any, Optional
-from .models import EmotionMarkerConfig, EmotionResult, PhrasePattern
+from .models import EmotionMarkerConfig, EmotionResult
 
 class EmotionEngine:
     """
@@ -8,9 +7,9 @@ class EmotionEngine:
     """
     def __init__(self, config: EmotionMarkerConfig):
         self.config = config
-        self.phrase_regex: Optional[re.Pattern] = None
-        self.marker_regex: Optional[re.Pattern] = None
-        self.emoji_regex: Optional[re.Pattern] = None
+        self.phrase_regex: re.Pattern | None = None
+        self.marker_regex: re.Pattern | None = None
+        self.emoji_regex: re.Pattern | None = None
         self._compile()
 
     def _compile(self):
@@ -22,7 +21,7 @@ class EmotionEngine:
             # "я тебя люблю" -> "я\s+(?:\w+\s+)?тебя\s+(?:\w+\s+)?люблю"
             pattern = p.pattern.replace(" ", r"\s+(?:\w+\s+)?")
             phrase_parts.append(f"(?P<p{i}>{pattern})")
-        
+
         if phrase_parts:
             self.phrase_regex = re.compile("|".join(phrase_parts), re.IGNORECASE)
 
@@ -35,7 +34,7 @@ class EmotionEngine:
             # but we follow the optimization goal of one large regex.
             escaped_words = "|".join(re.escape(w) for w in words)
             marker_parts.append(f"(?P<m_{category.replace(' ', '_')}>{escaped_words})")
-        
+
         if marker_parts:
             self.marker_regex = re.compile("|".join(marker_parts), re.IGNORECASE)
 
@@ -46,11 +45,11 @@ class EmotionEngine:
                 continue
             escaped_icons = "|".join(re.escape(i) for i in icons)
             emoji_parts.append(f"(?P<e_{category.replace(' ', '_')}>{escaped_icons})")
-        
+
         if emoji_parts:
             self.emoji_regex = re.compile("|".join(emoji_parts))
 
-    def detect(self, text: str) -> List[EmotionResult]:
+    def detect(self, text: str) -> list[EmotionResult]:
         """
         Detects emotions in the given text.
         Priority: Phrases > Markers > Emojis.
@@ -59,11 +58,11 @@ class EmotionEngine:
         if not text:
             return []
 
-        results: Dict[str, EmotionResult] = {}
+        results: dict[str, EmotionResult] = {}
 
         def add_result(emotion: str, score: float, source: str, match_text: str):
             # Clean category name (reverse replace)
-            emotion = emotion.replace('_', ' ')
+            emotion = emotion.replace("_", " ")
             if emotion not in results or results[emotion].score < score:
                 results[emotion] = EmotionResult(
                     trigger_type=emotion,
@@ -75,7 +74,7 @@ class EmotionEngine:
         if self.phrase_regex:
             for match in self.phrase_regex.finditer(text):
                 group_name = match.lastgroup
-                if group_name and group_name.startswith('p'):
+                if group_name and group_name.startswith("p"):
                     idx = int(group_name[1:])
                     phrase_def = self.config.phrases[idx]
                     add_result(phrase_def.emotion, phrase_def.score, "phrase", match.group())
@@ -84,7 +83,7 @@ class EmotionEngine:
         if self.marker_regex:
             for match in self.marker_regex.finditer(text):
                 group_name = match.lastgroup
-                if group_name and group_name.startswith('m_'):
+                if group_name and group_name.startswith("m_"):
                     category = group_name[2:]
                     add_result(category, 0.4, "marker", match.group())
 
@@ -92,7 +91,7 @@ class EmotionEngine:
         if self.emoji_regex:
             for match in self.emoji_regex.finditer(text):
                 group_name = match.lastgroup
-                if group_name and group_name.startswith('e_'):
+                if group_name and group_name.startswith("e_"):
                     category = group_name[2:]
                     add_result(category, 0.3, "emoji", match.group())
 

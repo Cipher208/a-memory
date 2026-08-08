@@ -5,7 +5,6 @@ User Layer Hooks - 12 hooks for user memory events
 import asyncio
 from typing import Any
 
-from lifecycle.emotion import EmotionTrigger, EmotionEngine
 
 from .registry import hook_registry
 from .shared import (

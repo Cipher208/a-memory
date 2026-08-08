@@ -12,7 +12,7 @@ def test_scorer_all_weights_zero(scorer):
             "base": 0.0,
             "tech_keyword": 0.0,
             "length": 0.0,
-            "question": 0.0, 
+            "question": 0.0,
             "emotional": 0.0,
             "novelty": 0.0,
             "retrieval_signal": 0.0,
@@ -20,7 +20,7 @@ def test_scorer_all_weights_zero(scorer):
         }
     )
     scorer._config = zero_config
-    
+
     text = "Some very important tech text about redis and docker!"
     result = scorer.score(text)
     assert result.score == 0.0
@@ -41,7 +41,7 @@ def test_scorer_signal_clamping(scorer):
     text = "a" * 2000
     result = scorer.score(text)
     assert result.signals.length == 1.0
-    
+
     # Tech signal maxes at 4 keywords = 1.0
     text_tech = "redis docker postgres redis redis"
     result = scorer.score(text_tech)
@@ -65,6 +65,6 @@ def test_scorer_negative_weights_safety(scorer):
         }
     )
     scorer._config = neg_config
-    
+
     result = scorer.score("redis")
     assert result.score >= 0.0

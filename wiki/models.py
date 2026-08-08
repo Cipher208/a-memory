@@ -1,8 +1,7 @@
-from typing import Optional
 from pydantic import BaseModel, Field
 
 class WikiEntry(BaseModel):
-    entry_id: Optional[int] = None
+    entry_id: int | None = None
     wiki_type: str
     title: str
     content: str

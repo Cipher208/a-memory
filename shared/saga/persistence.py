@@ -1,6 +1,5 @@
 from __future__ import annotations
-from abc import ABC, abstractmethod
-from typing import List, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 from pathlib import Path
 import json
 
@@ -14,7 +13,7 @@ class ISagaStore(Protocol):
         """Save saga state to persistence."""
         ...
 
-    def load(self, saga_id: str) -> Optional[SagaState]:
+    def load(self, saga_id: str) -> SagaState | None:
         """Load saga state by ID."""
         ...
 
@@ -22,7 +21,7 @@ class ISagaStore(Protocol):
         """Delete saga state."""
         ...
 
-    def list_all(self) -> List[SagaState]:
+    def list_all(self) -> list[SagaState]:
         """List all persisted sagas."""
         ...
 
@@ -39,7 +38,7 @@ class FileSagaStore:
     def save(self, state: SagaState) -> None:
         path = self._get_path(state.saga_id)
         data = state.model_dump()
-        
+
         try:
             from shared.saga.impl.crypto import write_state_atomic
             write_state_atomic(path, data)
@@ -50,18 +49,18 @@ class FileSagaStore:
                 json.dump(data, f, indent=2, default=str)
             tmp_path.replace(path)
 
-    def load(self, saga_id: str) -> Optional[SagaState]:
+    def load(self, saga_id: str) -> SagaState | None:
         path = self._get_path(saga_id)
         if not path.exists():
             return None
-        
+
         try:
             from shared.saga.impl.crypto import read_state_legacy_or_encrypted
             data = read_state_legacy_or_encrypted(path)
         except (ImportError, Exception):
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-        
+
         return SagaState(**data)
 
     def delete(self, saga_id: str) -> None:
@@ -69,7 +68,7 @@ class FileSagaStore:
         if path.exists():
             path.unlink()
 
-    def list_all(self) -> List[SagaState]:
+    def list_all(self) -> list[SagaState]:
         states = []
         for path in self.storage_dir.glob("*.json"):
             saga_id = path.stem

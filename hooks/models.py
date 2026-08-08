@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
+from collections.abc import Callable
 
 
 @dataclass
@@ -10,4 +11,4 @@ class HookHandler:
     layer: str
     is_async: bool
     takes_mem: bool
-    instance: Optional[Any] = None
+    instance: Any | None = None

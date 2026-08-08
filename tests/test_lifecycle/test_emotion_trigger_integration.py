@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 from lifecycle.emotion.trigger import EmotionTrigger
 from lifecycle.emotion.config import load_emotion_config
 from lifecycle.emotion.engine import EmotionEngine
@@ -29,7 +28,7 @@ def test_exclamation_trigger(emotion_trigger):
     # "great" might trigger joy (0.4 or phrase score)
     # If joy > 0.3, it might return joy.
     # Let's use a text that doesn't trigger emotions but has exclamations.
-    message = "!! !!" 
+    message = "!! !!"
     should_save, trigger, score = emotion_trigger.should_save(message)
     assert should_save is True
     assert trigger == "exclamation"

@@ -5,14 +5,13 @@ Maintains backward compatibility for legacy consumers.
 
 import logging
 from pathlib import Path
-from typing import Any, Literal, List, Optional, cast
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from rag.schema import init_rag_db
 from rag.ingestor import RAGIngestor
 from rag.searcher import RAGSearcher, StrategyT
-from rag.models import SearchResult
 from shared.importance import ImportanceScorer
 
 logger = logging.getLogger(__name__)
@@ -35,13 +34,13 @@ class RAGEngine:
         self.binary_thresholds_path = binary_thresholds_path
         self.thresholds = thresholds
         self.search_strategy: StrategyT = search_strategy
-        
+
         # Load thresholds if needed
         self._thresholds_cache = self._load_thresholds()
-        
+
         # Initialize Scorer
         self.scorer = self._init_scorer()
-        
+
         # Initialize Ingestor and Searcher
         self.ingestor = RAGIngestor(
             cm=self._cm,
@@ -66,7 +65,7 @@ class RAGEngine:
             logger.warning(f"[rag] Failed to load thresholds from {self.binary_thresholds_path}: {e}")
             return None
 
-    def _init_scorer(self) -> Optional[ImportanceScorer]:
+    def _init_scorer(self) -> ImportanceScorer | None:
         try:
             return ImportanceScorer()
         except Exception as e:
@@ -110,19 +109,19 @@ class RAGEngine:
             wiki_type=wiki_type,
             path=path
         )
-        
+
         if page_id and relation_to is not None:
             await self.add_relation(page_id, relation_to, relation_type)
-            
+
         return page_id or 0
 
     async def search(
-        self, 
-        query: str, 
-        user_id: str = "default", 
-        strategy: StrategyT | None = None, 
+        self,
+        query: str,
+        user_id: str = "default",
+        strategy: StrategyT | None = None,
         limit: int = 10
-    ) -> List[dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Delegate to searcher.search().
         Converts SearchResult models back to dict for backward compatibility.
@@ -133,7 +132,7 @@ class RAGEngine:
             strategy=strategy or self.search_strategy,
             limit=limit
         )
-        
+
         # Compatibility layer: convert models to dicts
         return [
             {
@@ -147,7 +146,7 @@ class RAGEngine:
             for r in results
         ]
 
-    async def get_relations(self, page_id: int, depth: int = 1) -> List[dict[str, Any]]:
+    async def get_relations(self, page_id: int, depth: int = 1) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)
         sql = """
         WITH RECURSIVE graph AS (
