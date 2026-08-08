@@ -46,5 +46,13 @@ class ScorerResult(BaseModel):
         return self.signals.retrieval_signal
 
     @property
+    def question(self) -> float:
+        return self.signals.question
+
+    @property
+    def noise_penalty(self) -> float:
+        return self.signals.noise_penalty
+
+    @property
     def emotional(self) -> float:
         return self.signals.emotional

@@ -17,6 +17,7 @@ class MetricsCollector:
 
     def __init__(self):
         self._start_time = time.time()
+        self._dynamic_metrics = {}
 
         # --- Standard Metrics ---
         self.uptime = Gauge("ariel_memory_uptime_seconds", "Server uptime in seconds")
@@ -38,15 +39,21 @@ class MetricsCollector:
         if name == "importance_bypassed_total":
             self.importance_filtered_total.labels(reason="below_threshold").inc(value)
         else:
-            # Create a generic counter if not matched
-            Counter(f"ariel_memory_{name}", f"Legacy counter: {name}").inc(value)
+            # Create a generic counter if not matched, using cache to avoid DuplicateTimeseries
+            m_name = f"ariel_memory_{name}"
+            if m_name not in self._dynamic_metrics:
+                self._dynamic_metrics[m_name] = Counter(m_name, f"Legacy counter: {name}")
+            self._dynamic_metrics[m_name].inc(value)
 
     def gauge(self, name: str, value: float):
         """Legacy compatibility wrapper."""
         if name == "importance_threshold":
             self.current_importance_threshold.set(value)
         else:
-            Gauge(f"ariel_memory_{name}", f"Legacy gauge: {name}").set(value)
+            m_name = f"ariel_memory_{name}"
+            if m_name not in self._dynamic_metrics:
+                self._dynamic_metrics[m_name] = Gauge(m_name, f"Legacy gauge: {name}")
+            self._dynamic_metrics[m_name].set(value)
 
     def render_prometheus(self) -> str:
         """Render all metrics in Prometheus format."""

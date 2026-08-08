@@ -28,6 +28,12 @@ class MigrationManager:
         cfg = AlembicConfig(str(self._alembic_ini))
         # Ensure alembic uses the correct directory for versions
         cfg.set_main_option("script_location", str(self._repo_root / "alembic"))
+
+        # Dynamically set the database URL to point to our current DB
+        db_path = self._cm.base_dir / DB_NAME
+        # Alembic expects a standard sqlite:/// path
+        cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+
         return cfg
 
     async def get_current_version(self) -> str | None:

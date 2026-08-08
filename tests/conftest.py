@@ -24,4 +24,5 @@ def master_key_env():
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """Force exit after all tests complete — aiosqlite worker thread bug."""
-    os._exit(0)
+    # os._exit(0)
+    pass

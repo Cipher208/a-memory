@@ -12,6 +12,14 @@ config = context.config
 
 
 def get_url():
+    # Priority:
+    # 1. URL from alembic config (passed via MigrationManager)
+    # 2. environment variable
+    # 3. default path
+    config_url = config.get_main_option("sqlalchemy.url")
+    if config_url and "memory.db" in config_url:
+        return config_url
+
     data_dir = os.environ.get("MCP_MEMORY_DATA_DIR", str(Path.home() / ".mcp-ariel-memory"))
     db_path = Path(data_dir) / "memory.db"
     return f"sqlite:///{db_path}"
