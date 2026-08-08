@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0 -- /home/murat/.local/venv/bin/python3.14
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /home/murat/Projects/repos/mcp-ariel-memory
+configfile: pyproject.toml
+plugins: asyncio-1.4.0, anyio-4.14.1, timeout-2.4.0, hypothesis-6.165.2
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+timeout: 60.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+tests/test_rag_no_legacy_api.py::test_search_uniformly_handles_three_strategies FAILED [100%]
