@@ -18,9 +18,9 @@ graph TB
     end
 
     Memory --> RAG[RAG Engine<br/>FTS5 + MIB]
-    Memory --> Wiki[Wiki System<br/>.md files]
+    Memory --> Wiki[Wiki System<br/>FTS5 Index]
     Memory --> Graph[Knowledge Graphs<br/>epistemic + temporal]
-    Memory --> Saga[Saga Pattern<br/>retry + compensation]
+    Memory --> Saga[Saga Engine<br/>persistence + compensation]
 ```
 
 ## Memory Consolidation Flow
@@ -44,7 +44,7 @@ sequenceDiagram
 
     L3->>L3: Important entry?
     alt High importance
-        L3->>L4: Promote to core
+        L3->>L4: Promote to core (Typed Memory)
     end
 ```
 
@@ -52,16 +52,16 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    Query[User Query] --> Router{Auto Strategy}
-    Router -->|short| FTS[FTS5 Search]
-    Router -->|long| Hybrid[Hybrid Search]
+    Query[User Query] --> Router{RetrievalRouter}
+    Router -->|short/exact| FTS[FTS5 Search]
+    Router -->|long/semantic| Hybrid[Hybrid Search]
 
     FTS --> RRF[RRF Scoring]
     Hybrid --> FTS
     Hybrid --> MIB[MIB Binary Search]
     Hybrid --> RRF
 
-    RRF --> Scorer[Scorer<br/>relevance + novelty + type_boost]
+    RRF --> Scorer[ImportanceScorer<br/>relevance + novelty + type_boost]
     MIB --> Scorer
 
     Scorer --> Results[Ranked Results]

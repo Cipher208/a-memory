@@ -54,7 +54,10 @@ Single `memory.db` file with ~23 tables:
 - `core_facts` — L4 key-value store
 - `episodic_sessions` — L2 session summaries
 - `rag_chunks` — RAG search index
-- `wiki_pages` — Wiki content (FTS5 indexed)
+- `wiki_index` — Wiki metadata index
+- `wiki_fts` — Wiki full-text search (FTS5)
+- `saga_state` — Saga persistence
+- `importance_audit` — Importance scoring logs
 - `epistemic_nodes/edges` — Knowledge graph
 - `temporal_events/links` — Timeline graph
 - And more...
