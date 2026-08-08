@@ -15,12 +15,12 @@ async def cm(tmp_path):
         "memory.db",
         """
         CREATE TABLE core_memory (
-            id INTEGER PRIMARY KEY,
+            entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT, "key" TEXT, value TEXT,
             importance REAL, memory_kind TEXT,
             updated_at REAL, created_at REAL
         );
-        CREATE TABLE audit_trail (
+        CREATE TABLE audit_log (
             id INTEGER PRIMARY KEY,
             user_id TEXT, layer TEXT, action TEXT,
             target_id TEXT, details TEXT, timestamp REAL
@@ -90,7 +90,7 @@ async def test_scheduler_retrieval_signal_boosts(cm, monkeypatch):
     )
     for _ in range(20):
         await conn.execute(
-            """INSERT INTO audit_trail
+            """INSERT INTO audit_log
                (user_id, layer, action, target_id, timestamp)
                VALUES (?, ?, ?, ?, ?)""",
             ("alice", "core_memory", "recall_useful", "1", time.time()),

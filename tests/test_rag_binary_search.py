@@ -9,7 +9,7 @@ from shared.connection import AsyncConnectionManager
 @pytest.fixture
 async def rag(tmp_path):
     cm = AsyncConnectionManager(base_dir=str(tmp_path))
-    r = RAGEngine(cm=cm, layer="user", binary_dim=8)
+    r = RAGEngine(cm=cm, layer="user", binary_dim=384)
     await r.init_db()
     return r
 
@@ -39,7 +39,7 @@ async def test_search_mib_returns_results_with_scores(rag):
 async def test_search_mib_works_without_numpy(rag):
     """Guarantee: MIB strategy doesn't crash if numpy is unavailable."""
     await rag.ingest_text("topic", "any content here for testing", user_id="bob")
-    # This should work even without numpy (returns empty list)
+    # This should work even without numpy (returns empty list if not _HAS_BINARY)
     out = await rag.search("any", user_id="bob", strategy="mib", limit=5)
     assert isinstance(out, list)
 
@@ -75,8 +75,8 @@ async def test_search_mib_empty_database(rag):
 @pytest.mark.asyncio
 async def test_search_mib_filters_by_user(rag):
     """MIB search respects user_id filter."""
-    await rag.ingest_text("doc1", "Content for alice", user_id="alice")
-    await rag.ingest_text("doc2", "Content for bob", user_id="bob")
+    await rag.ingest_text("alice doc", "Content for alice", user_id="alice")
+    await rag.ingest_text("bob doc", "Content for bob", user_id="bob")
 
     alice_results = await rag.search("content", user_id="alice", strategy="mib", limit=10)
     bob_results = await rag.search("content", user_id="bob", strategy="mib", limit=10)
@@ -91,7 +91,7 @@ async def test_search_mib_filters_by_user(rag):
 async def test_search_works_without_float_embeddings(tmp_path):
     """Search should work even when float embeddings are not stored."""
     cm = AsyncConnectionManager(base_dir=str(tmp_path))
-    r = RAGEngine(cm=cm, layer="user", binary_dim=8)
+    r = RAGEngine(cm=cm, layer="user", binary_dim=384)
     await r.init_db()
     await r.ingest_text("test", "content for testing", user_id="u")
     # Verify binary embedding is stored by default

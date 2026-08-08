@@ -97,6 +97,6 @@ class SagaEngine:
 
                     await asyncio.wait_for(_run_c(), timeout=step_def.timeout_seconds)
                 except Exception as e:
-                    logger.error(f"Saga {state.saga_id}: compensation for {step_def.name} failed: {e}")
+                    logger.exception(f"Saga {state.saga_id}: compensation for {step_def.name} failed: {e}")
         state.status = SagaStatus.COMPENSATED
         self.store.save(state)

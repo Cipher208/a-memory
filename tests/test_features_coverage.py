@@ -4,6 +4,10 @@ import asyncio
 
 import pytest
 
+
+async def _noop(data):
+    return {"ok": True}
+
 # ── typed_export ──
 
 
@@ -175,15 +179,16 @@ def test_connection_limiter_total_limit():
 # ── agent_hooks ──
 
 
-def test_agent_hooks_importance_gate():
+@pytest.mark.asyncio
+async def test_agent_hooks_importance_gate():
     from hooks.agent_hooks import AgentHooks
 
     ah = AgentHooks("test_hooks")
-    r = ah._importance_gate({"text": "error in database connection"})
+    r = await ah._importance_gate({"text": "error in database connection"})
     assert r["importance"] > 0.3
     assert r["bypass"] is False
 
-    r2 = ah._importance_gate({"text": ""})
+    r2 = await ah._importance_gate({"text": ""})
     assert r2["bypass"] is True
 
 
@@ -379,14 +384,14 @@ def test_backup_cron_state_persistence(tmp_path):
 
 
 def test_saga_save_load_state(tmp_path):
-    from shared import saga as saga_mod
+    from shared.saga.impl import base as saga_base
     from shared.saga import Saga
 
-    orig_dir = saga_mod.SAGA_DIR
-    saga_mod.SAGA_DIR = tmp_path
+    orig_dir = saga_base.SAGA_DIR
+    saga_base.SAGA_DIR = tmp_path
     try:
         s = Saga("state_test")
-        s.add_step("s1", lambda d: {"ok": True})
+        s.add_step("s1", _noop)
         s._saga_id = "st_1"
         s._save_state()
         assert (tmp_path / "st_1.json").exists()
@@ -395,15 +400,15 @@ def test_saga_save_load_state(tmp_path):
         assert state is not None
         assert state["name"] == "state_test"
     finally:
-        saga_mod.SAGA_DIR = orig_dir
+        saga_base.SAGA_DIR = orig_dir
 
 
 def test_saga_cleanup_state(tmp_path):
-    from shared import saga as saga_mod
+    from shared.saga.impl import base as saga_base
     from shared.saga import Saga
 
-    orig_dir = saga_mod.SAGA_DIR
-    saga_mod.SAGA_DIR = tmp_path
+    orig_dir = saga_base.SAGA_DIR
+    saga_base.SAGA_DIR = tmp_path
     try:
         s = Saga("cleanup_test")
         s._saga_id = "ct_1"
@@ -413,21 +418,20 @@ def test_saga_cleanup_state(tmp_path):
         s._cleanup_state()
         assert not (tmp_path / "ct_1.json").exists()
     finally:
-        saga_mod.SAGA_DIR = orig_dir
+        saga_base.SAGA_DIR = orig_dir
 
 
 def test_saga_compute_idempotency_key():
-    from shared.saga import Saga, SagaStep
-
+    from shared.saga.impl.base import Saga, SagaStep
     s = Saga("idem_key")
     step = SagaStep(
         name="test_step",
-        action=lambda d: {"ok": True},
+        action=_noop,
         idempotency_key_fn=lambda d: f"user:{d.get('user_id', 'x')}",
     )
     key = s._compute_idempotency_key(step)
     assert key is not None
     assert len(key) == 64  # SHA-256 hex
 
-    step_no_key = SagaStep(name="no_key", action=lambda d: {"ok": True})
+    step_no_key = SagaStep(name="no_key", action=_noop)
     assert s._compute_idempotency_key(step_no_key) is None

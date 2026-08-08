@@ -41,9 +41,8 @@ class EmotionTrigger:
             candidates.append(("exclamation", 0.3))
 
         # 3. Contextual emotional state
-        if emotional_state:
-            if emotional_state.get("joy", 0) > 0.8 or emotional_state.get("interest", 0) > 0.8:
-                candidates.append(("high_emotion", 0.6))
+        if emotional_state and (emotional_state.get("joy", 0) > 0.8 or emotional_state.get("interest", 0) > 0.8):
+            candidates.append(("high_emotion", 0.6))
 
         # 4. State shifts
         if state_delta:

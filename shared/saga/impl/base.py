@@ -129,7 +129,7 @@ class Saga:
             else:
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
         except Exception as e:
-            logger.error(f"Failed to save saga state: {e}")
+            logger.exception(f"Failed to save saga state: {e}")
 
     def _load_state(self, saga_id: str) -> dict | None:
         """Load state from disk (supports encrypted and legacy plain JSON)."""
@@ -325,7 +325,7 @@ class Saga:
             if self._status != SagaStatus.COMPENSATED:
                 self._status = SagaStatus.FAILED
             self._save_state()
-            logger.error(f"Saga '{self.name}' failed: {e}")
+            logger.exception(f"Saga '{self.name}' failed: {e}")
             raise
 
     async def _compensate(self, failed_step: int) -> None:
@@ -354,7 +354,7 @@ class Saga:
                     await inner_step.compensation(inner_step.data)
                     logger.info(f"Saga '{self.name}' compensated inner step '{inner_step.name}'")
                 except Exception as e:
-                    logger.error(f"Saga '{self.name}' inner compensation failed for '{inner_step.name}': {e}")
+                    logger.exception(f"Saga '{self.name}' inner compensation failed for '{inner_step.name}': {e}")
 
     async def _compensate_step(self, step: SagaStep) -> None:
         """Run compensation for a single step, logging success or failure."""
@@ -364,7 +364,7 @@ class Saga:
             await step.compensation(step.data)
             logger.info(f"Saga '{self.name}' compensated step '{step.name}'")
         except Exception as e:
-            logger.error(f"Saga '{self.name}' compensation failed for '{step.name}': {e}")
+            logger.exception(f"Saga '{self.name}' compensation failed for '{step.name}': {e}")
 
     def get_state(self) -> dict:
         return {
@@ -406,7 +406,7 @@ class SagaWatchdog:
                 self._check_stuck_sagas()
                 time.sleep(self.check_interval)
             except Exception as e:
-                logger.error(f"Saga watchdog error: {e}")
+                logger.exception(f"Saga watchdog error: {e}")
                 time.sleep(30)
 
     def _check_stuck_sagas(self):
@@ -435,7 +435,7 @@ class SagaWatchdog:
                         logger.warning("Saga '%s' marked as STUCK (age=%ds)" % (saga_name, int(age)))
 
             except Exception as e:
-                logger.error(f"Error checking saga {state_file.name}: {e}")
+                logger.exception(f"Error checking saga {state_file.name}: {e}")
 
     def get_stuck_sagas(self) -> list[dict[str, Any]]:
         """Get list of stuck sagas."""

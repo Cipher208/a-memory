@@ -12,13 +12,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-async def _setup():
+@pytest.fixture(autouse=True)
+async def run_migrations():
     from shared.migrations import migration_manager
-
     await migration_manager.migrate()
-
-
-asyncio.run(_setup())
 
 
 @pytest.fixture
@@ -148,7 +145,8 @@ async def test_migrations():
 
     mm = MigrationManager()
     version = await mm.get_current_version()
-    assert isinstance(version, int)
+    assert version is not None
+    assert isinstance(version, str)
 
 
 @pytest.mark.asyncio

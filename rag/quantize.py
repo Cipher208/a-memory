@@ -215,7 +215,9 @@ def binary_batch(
     _check_numpy()
     arr = np.asarray(embeddings, dtype=np.float32)
     if arr.ndim != 2 or arr.shape[1] != dim:
-        raise ValueError(f"expected [N, {dim}]")
+        import logging
+        logging.getLogger(__name__).error(f"binary_batch shape mismatch: got {arr.shape}, expected [N, {dim}]")
+        raise ValueError(f"expected [N, {dim}], got {arr.shape}")
     if thresholds is None:
         bits = (arr > 0.0).astype(np.uint8)
     elif isinstance(thresholds, (int, float)):

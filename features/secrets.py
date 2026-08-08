@@ -66,7 +66,7 @@ def _save_dotenv(key: str, value: str) -> None:
     """Save a key-value pair to .env file."""
     env_path = Path(".env")
     try:
-        with Path(env_path, "a").open() as f:
+        with env_path.open("a") as f:
             f.write(f"\n{key}={value}\n")
     except Exception:
         pass

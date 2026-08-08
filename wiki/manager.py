@@ -211,7 +211,7 @@ class WikiManager:
                 await self.index.save(entry, content_hash)
                 return "indexed"
             except Exception as e:
-                logger.error(f"Error reindexing {f}: {e}")
+                logger.exception(f"Error reindexing {f}: {e}")
                 return "error"
 
         # Batch processing
@@ -265,7 +265,7 @@ class WikiManager:
                     await self.index.save(parsed_entry, content_hash)
                     return "imported"
                 except Exception as e:
-                    logger.error(f"Error syncing {f}: {e}")
+                    logger.exception(f"Error syncing {f}: {e}")
                     return "error"
 
             tasks = [_sync_file(f) for f in md_files]

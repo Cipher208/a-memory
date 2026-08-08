@@ -29,8 +29,8 @@ from mcp_server.utils.privacy import strip_secrets
 from shared.constants import DB_NAME
 from shared.metrics import metrics
 
-if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
+# if TYPE_CHECKING:
+from mcp.server.fastmcp import Context
 
 logger = logging.getLogger(__name__)
 

@@ -53,7 +53,7 @@ def test_wrong_master_key_fails(tmp_path):
     from features.auth import APIKeyAuth
 
     auth = APIKeyAuth(keys_file=str(keys_file))
-    auth.create_key("bob")
+    auth.create_key("bob", "test-label")
 
     # Change master key
     os.environ["MCP_MASTER_KEY"] = "different-secret"

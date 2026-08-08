@@ -50,6 +50,15 @@ class RAGEngine:
         )
         self.searcher = RAGSearcher(cm=self._cm, layer=self.layer, scorer=self.scorer, binary_dim=self.binary_dim)
 
+    def _binary_for(self, emb: Sequence[float]) -> bytes:
+        """Binarize using current thresholds. Mostly for internal use and tests."""
+        from rag.quantize import embed_to_binary, binary_from_threshold_array
+
+        thr = self._thresholds_cache or self.thresholds
+        if thr is not None:
+            return binary_from_threshold_array(emb, thr)
+        return embed_to_binary(emb, threshold=0.0, dim=self.binary_dim)
+
     def _load_thresholds(self):
         if self.binary_threshold_mode != "supervised_path" or not self.binary_thresholds_path:
             return None

@@ -23,8 +23,8 @@ from mcp_server.registry import _get_ctx, register_tool
 from shared.constants import DB_NAME
 from shared.metrics import metrics
 
-if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
+# if TYPE_CHECKING:
+from mcp.server.fastmcp import Context
 
 
 async def memory_api_key(

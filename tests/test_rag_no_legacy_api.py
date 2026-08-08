@@ -28,7 +28,7 @@ async def test_search_uniformly_handles_three_strategies(tmp_path):
     from shared.connection import AsyncConnectionManager
 
     cm = AsyncConnectionManager(base_dir=str(tmp_path))
-    e = RAGEngine(cm=cm, binary_dim=8)
+    e = RAGEngine(cm=cm, binary_dim=384)
     await e.init_db()
     await e.ingest_text("a", "redis cluster pipelining", user_id="u")
 

@@ -29,14 +29,18 @@ class AdaptiveThresholdManager:
         if self._current_value is not None:
             return self._current_value
 
-        conn = await connection_manager.get("memory.db")
-        row = await (await conn.execute("SELECT value FROM preferences WHERE key=?", (self.key,))).fetchone()
+        try:
+            conn = await connection_manager.get("memory.db")
+            row = await (await conn.execute("SELECT value FROM preferences WHERE key=?", (self.key,))).fetchone()
 
-        if row:
-            self._current_value = float(row[0])
-        else:
+            if row:
+                self._current_value = float(row[0])
+            else:
+                self._current_value = self.DEFAULT_THRESHOLD
+                await self._save(self._current_value)
+        except Exception as e:
+            logger.warning(f"Failed to load adaptive threshold from DB, using default: {e}")
             self._current_value = self.DEFAULT_THRESHOLD
-            await self._save(self._current_value)
 
         # Update prometheus metric
         from shared.metrics import metrics
@@ -70,14 +74,17 @@ class AdaptiveThresholdManager:
 
     async def _save(self, value: float) -> None:
         """Persist threshold to DB."""
-        conn = await connection_manager.get("memory.db")
-        await conn.execute(
-            """INSERT INTO preferences (key, value, updated_at)
-               VALUES (?, ?, ?)
-               ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
-            (self.key, str(value), time.time()),
-        )
-        await conn.commit()
+        try:
+            conn = await connection_manager.get("memory.db")
+            await conn.execute(
+                """INSERT INTO preferences (key, value, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+                (self.key, str(value), time.time()),
+            )
+            await conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to save adaptive threshold to DB: {e}")
 
 
 # Singleton instance

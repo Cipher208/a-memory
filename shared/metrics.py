@@ -61,9 +61,17 @@ class MetricsCollector:
 
     def render_json(self) -> dict[str, Any]:
         """Legacy compatibility: render minimal JSON for dashboard."""
+        counters = {}
+        for name, metric in self._dynamic_metrics.items():
+            if isinstance(metric, Counter):
+                # Strip prefix for legacy output
+                clean_name = name.replace("ariel_memory_", "")
+                counters[clean_name] = metric._value.get()
+
         return {
             "uptime_seconds": time.time() - self._start_time,
             "status": "ok (prometheus_client active)",
+            "counters": counters
         }
 
 

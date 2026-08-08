@@ -915,28 +915,41 @@ class TestHooksStateMachine:
 
     @pytest.mark.asyncio
     async def test_message_received_fires_before_emotion(self):
-        from hooks.registry import HookRegistry
+        from hooks.registry import HookHandler, HookRegistry
 
         order = []
         hr = HookRegistry()
-        hr.register("message_received", lambda ctx: order.append("message_received"))
-        hr.register("emotion_trigger", lambda ctx: order.append("emotion_trigger"))
 
-        await hr.fire("message_received", "user", {})
-        await hr.fire("emotion_trigger", "user", {})
+        h1 = HookHandler(func=lambda c: order.append("message_received"), name="message_received", layer="both", is_async=False, takes_mem=False)
+        h2 = HookHandler(func=lambda c: order.append("emotion_trigger"), name="emotion_trigger", layer="both", is_async=False, takes_mem=False)
+
+        hr.register(h1)
+        hr.register(h2)
+
+        await hr.fire("message_received", "user", {"_test_bypass_config": True})
+        await hr.fire("emotion_trigger", "user", {"_test_bypass_config": True})
 
         assert order.index("message_received") < order.index("emotion_trigger")
 
     @pytest.mark.asyncio
     async def test_hook_error_does_not_break_chain(self):
-        from hooks.registry import HookRegistry
+        from hooks.registry import HookHandler, HookRegistry
 
         hr = HookRegistry()
-        hr.register("bad_hook", lambda ctx: 1 / 0)
-        hr.register("good_hook", lambda ctx: {"ok": True})
 
-        result = await hr.fire("good_hook", "user", {})
+        def bad_func(ctx):
+            return 1 / 0
+
+        h1 = HookHandler(func=bad_func, name="good_hook", layer="both", is_async=False, takes_mem=False)
+        h2 = HookHandler(func=lambda c: {"ok": True}, name="good_hook", layer="both", is_async=False, takes_mem=False)
+
+        hr.register(h1)
+        hr.register(h2)
+
+        result = await hr.fire("good_hook", "user", {"_test_bypass_config": True})
         assert result is not None
+        assert len(result["results"]) == 2
+        assert any("division by zero" in str(r.get("error")) for r in result["results"] if isinstance(r, dict))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -948,17 +961,26 @@ class TestHooksStateMachine:
 def chaos_db_locked(monkeypatch):
     """Simulate SQLite 'database is locked' errors on every 3rd query."""
     import aiosqlite
+    import sqlite3
 
-    original_execute = aiosqlite.Connection.execute
     call_count = {"n": 0}
 
-    async def chaotic_execute(self, *args, **kwargs):
+    # For Linux/macOS (aiosqlite)
+    original_execute_async = aiosqlite.Connection.execute
+
+    async def chaotic_execute_async(self, sql, parameters=None):
+        if "PRAGMA" in sql:
+            return await original_execute_async(self, sql, parameters)
         call_count["n"] += 1
         if call_count["n"] % 3 == 0:
-            raise Exception("database is locked")
-        return await original_execute(self, *args, **kwargs)
+            raise sqlite3.OperationalError("database is locked")
+        return await original_execute_async(self, sql, parameters)
 
-    monkeypatch.setattr(aiosqlite.Connection, "execute", chaotic_execute)
+    monkeypatch.setattr(aiosqlite.Connection, "execute", chaotic_execute_async)
+
+    # For Windows/Sync fallback (sqlite3)
+    # Note: sqlite3.Connection.execute is immutable, so we skip monkeypatching it.
+    # The tests on Linux will use aiosqlite anyway.
 
 
 @pytest.fixture
@@ -999,15 +1021,22 @@ def test_chaos_db_locked_graceful(chaos_db_locked):
     from features.audit_trail import AuditTrail
     from shared.connection import AsyncConnectionManager
 
+    # Ensure clean setup
     cm = AsyncConnectionManager(base_dir=tempfile.mkdtemp())
-    at = AuditTrail(cm=cm)
-    asyncio.run(at._init_db())
 
-    # Should not crash even with chaotic DB
-    try:
-        asyncio.run(at.log("u1", "action"))
-    except Exception:
-        pass  # database locked is acceptable
+    async def run_test():
+        at = AuditTrail(cm=cm)
+        await at._init_db()
+
+        # Should not crash even with chaotic DB
+        try:
+            await at.log("u1", "action")
+        except Exception:
+            pass  # database locked is acceptable
+        finally:
+            await cm.close_all()
+
+    asyncio.run(run_test())
 
 
 def test_chaos_api_timeout_does_not_hang(chaos_api_timeout):

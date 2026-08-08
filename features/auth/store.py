@@ -68,5 +68,5 @@ class EncryptedStore:
             logger.info("Rotated legacy JSON in %s to encrypted format", self.file_path)
             return legacy_data
         except Exception as e:
-            logger.error("Failed to load %s as encrypted or legacy JSON: %s", self.file_path, e)
+            logger.exception("Failed to load %s as encrypted or legacy JSON: %s", self.file_path, e)
             return {}

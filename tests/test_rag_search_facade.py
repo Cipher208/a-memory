@@ -11,7 +11,7 @@ from shared.connection import AsyncConnectionManager
 @pytest.fixture
 async def rag(tmp_path):
     cm = AsyncConnectionManager(base_dir=str(tmp_path))
-    r = RAGEngine(cm=cm, layer="test_facade", binary_dim=8)
+    r = RAGEngine(cm=cm, layer="test_facade", binary_dim=384)
     await r.init_db()
     return r
 
@@ -70,7 +70,7 @@ class TestUnifiedSearch:
 
     @pytest.mark.asyncio
     async def test_search_unknown_strategy_raises(self, rag_with_data):
-        with pytest.raises(ValueError, match="unknown strategy"):
+        with pytest.raises(ValueError, match="Unknown strategy"):
             await rag_with_data.search("test", user_id="u1", strategy="bogus")
 
     @pytest.mark.asyncio
@@ -85,8 +85,8 @@ class TestUnifiedSearch:
 
     @pytest.mark.asyncio
     async def test_search_user_filtering(self, rag):
-        await rag.ingest_text("Alice Doc", "Content for alice", user_id="alice")
-        await rag.ingest_text("Bob Doc", "Content for bob", user_id="bob")
+        await rag.ingest_text("alice doc", "Content for alice", user_id="alice")
+        await rag.ingest_text("bob doc", "Content for bob", user_id="bob")
         alice_results = await rag.search("content", user_id="alice", strategy="fts")
         bob_results = await rag.search("content", user_id="bob", strategy="fts")
         assert len(alice_results) == 1
