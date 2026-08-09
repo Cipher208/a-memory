@@ -9,7 +9,6 @@ import shared.saga as saga_mod
 from shared.saga.impl.base import SagaStep as SagaStepImpl
 from shared.saga import (
     Saga,
-    SagaStep,
     SagaWatchdog,
     create_backup_saga,
     create_consolidation_saga,
@@ -246,6 +245,7 @@ def test_watchdog_start_stop(tmp_path):
 
 def test_create_consolidation_saga():
     from unittest.mock import MagicMock
+
     mm = MagicMock()
     steps = create_consolidation_saga("user1", mm)
     assert len(steps) > 0
@@ -263,6 +263,7 @@ def test_consolidation_saga_execute():
         from unittest.mock import AsyncMock, MagicMock
         from shared.saga.engine import SagaEngine
         from shared.saga.schema import SagaState
+
         mm = MagicMock()
         mm.search = AsyncMock(return_value=[])
         steps = create_consolidation_saga("test_u", mm)
@@ -280,6 +281,7 @@ def test_backup_saga_execute():
         from unittest.mock import MagicMock
         from shared.saga.engine import SagaEngine
         from shared.saga.schema import SagaState
+
         steps = create_backup_saga()
         store = MagicMock()
         engine = SagaEngine(store)

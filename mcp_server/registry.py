@@ -10,7 +10,9 @@ from typing import Any, TYPE_CHECKING
 
 
 # if TYPE_CHECKING:
-from mcp.server.fastmcp import Context
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
 
 _tools: dict[str, Callable] = {}
 

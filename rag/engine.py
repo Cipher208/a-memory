@@ -6,6 +6,7 @@ Maintains backward compatibility for legacy consumers.
 """
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 

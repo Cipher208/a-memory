@@ -1,7 +1,5 @@
 """Tests for shared/migrations.py — behavior tests."""
 
-import asyncio
-
 import pytest
 
 from shared.migrations import MigrationManager

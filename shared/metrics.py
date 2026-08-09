@@ -68,11 +68,7 @@ class MetricsCollector:
                 clean_name = name.replace("ariel_memory_", "")
                 counters[clean_name] = metric._value.get()
 
-        return {
-            "uptime_seconds": time.time() - self._start_time,
-            "status": "ok (prometheus_client active)",
-            "counters": counters
-        }
+        return {"uptime_seconds": time.time() - self._start_time, "status": "ok (prometheus_client active)", "counters": counters}
 
 
 # Global instance — used by server.py and middleware

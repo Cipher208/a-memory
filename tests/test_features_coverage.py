@@ -8,6 +8,7 @@ import pytest
 async def _noop(data):
     return {"ok": True}
 
+
 # ── typed_export ──
 
 
@@ -423,6 +424,7 @@ def test_saga_cleanup_state(tmp_path):
 
 def test_saga_compute_idempotency_key():
     from shared.saga.impl.base import Saga, SagaStep
+
     s = Saga("idem_key")
     step = SagaStep(
         name="test_step",

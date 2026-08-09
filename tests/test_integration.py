@@ -3,7 +3,6 @@ Critical integration tests — the 15 tests that verify real module interactions
 Non-critical tests removed (covered by test_tools_e2e.py or unit tests).
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -15,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 @pytest.fixture(autouse=True)
 async def run_migrations():
     from shared.migrations import migration_manager
+
     await migration_manager.migrate()
 
 
