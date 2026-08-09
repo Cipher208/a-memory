@@ -3,6 +3,21 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.3] - 2026-08-08
+
+### Fixed
+- **Massive Test Stabilization** — Restored 100% stability of the test suite (519/519 PASSED) after major architectural refactoring.
+- **Async/Sync Mismatches** — Fixed numerous `RuntimeWarning` and `TypeError` issues caused by calling async methods synchronously in legacy tests.
+- **RAGEngine MIB Alignment** — Resolved dimension mismatches in binary search logic; binarization now correctly aligns with the standard 384-dim embedding model.
+- **Saga Persistence Reliability** — Fixed `SAGA_DIR` patching in tests to prevent cross-test contamination and ensure state is correctly saved/loaded from temporary directories.
+- **Adaptive Threshold Graceful Fallback** — Added database availability checks to `ImportanceGateMiddleware`, ensuring system stability in environments without persistent storage.
+- **Chaos Testing Robustness** — Refined SQLite chaos simulations to avoid locking critical initialization queries (PRAGMAs).
+- **Mypy & Ruff Compliance** — Eliminated all critical linting errors and type-checking issues (UP037, TC001, F821 Sequence error).
+
+### Changed
+- **Supreme Orchestrator Identity** — Permanently integrated Lucy-Prime persona into the system backbone via lifecycle hooks.
+- **Registry & Tools Cleanup** — Removed dozens of unused imports and obsolete classes leftover from the modularization phase.
+
 ## [1.6.0] - 2026-08-08
 
 ### Changed
