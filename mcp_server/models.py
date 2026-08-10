@@ -68,12 +68,6 @@ class BackupResult(BaseModel):
     interval_hours: int | None = None
 
 
-class SagaResult(BaseModel):
-    status: str = Field(description="Saga status (completed, failed, etc.)")
-    result: dict = Field(description="Saga execution result")
-    steps: list[dict] = Field(description="Step details")
-
-
 class DataResult(BaseModel):
     path: str | None = Field(default=None, description="Export path")
     exports: list[dict] | None = Field(default=None, description="List of exports")

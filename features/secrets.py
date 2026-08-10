@@ -10,18 +10,19 @@ Master key resolution order:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
+from shared.crypto import decrypt_json as _decrypt_json
+from shared.crypto import encrypt_json as _encrypt_json
+from shared.crypto import is_encrypted_blob as _is_encrypted_blob
+
 logger = logging.getLogger(__name__)
 
 try:
     from nacl.pwhash import argon2id
-    from nacl.secret import SecretBox
-    from nacl.utils import random as nacl_random
 
     _HAS_NACL = True
 except ImportError:
@@ -33,10 +34,6 @@ _KEYRING_USERNAME = "master-key"
 _ENV_VAR = "MCP_MASTER_KEY"
 _KDF_SALT = b"ariel-memory-v1\x00"
 _MASTER_KEY_LEN = 32
-
-# File format: [nonce 24B][ciphertext...]
-_NONCE_SIZE = 24
-_MAC_SIZE = 16
 
 
 def _load_dotenv() -> None:
@@ -143,19 +140,12 @@ def _get_master_key() -> bytes:
 
 def encrypt_json(data: dict | list) -> bytes:
     """Encrypt JSON data. Returns nonce(24) || ciphertext."""
-    box = SecretBox(_get_master_key())
-    nonce = nacl_random(SecretBox.NONCE_SIZE)
-    plaintext = json.dumps(data, ensure_ascii=False, sort_keys=True).encode()
-    return nonce + box.encrypt(plaintext, nonce).ciphertext
+    return _encrypt_json(data, _get_master_key())
 
 
 def decrypt_json(blob: bytes) -> Any:
     """Decrypt blob back to JSON."""
-    if len(blob) < _NONCE_SIZE + _MAC_SIZE:
-        raise ValueError("blob too short for valid SecretBox message")
-    nonce, ct = blob[:_NONCE_SIZE], blob[_NONCE_SIZE:]
-    box = SecretBox(_get_master_key())
-    return json.loads(box.decrypt(ct, nonce).decode("utf-8"))
+    return _decrypt_json(blob, _get_master_key())
 
 
 def is_encrypted_blob(path: Path) -> bool:
@@ -168,7 +158,7 @@ def is_encrypted_blob(path: Path) -> bool:
         return False
     with path.open("rb") as f:
         head = f.read(1)
-    return head not in (b"{", b"[", b" ", b"\n")
+    return _is_encrypted_blob(head)
 
 
 def install_master_key_to_keychain(hex_key: str) -> None:

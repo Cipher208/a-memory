@@ -6,13 +6,10 @@ Eliminates duplication across agent_wiki, file_wiki, user_wiki.
 """
 
 import json
-import time
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 
-if TYPE_CHECKING:
-    from shared.connection import AsyncConnectionManager
 
 
 def load_config() -> dict:
@@ -45,56 +42,11 @@ def get_external_dirs(layer: str) -> list[str]:
 ALLOWED_TABLES = {"user_wiki", "agent_wiki", "wiki_index"}
 
 
-async def find_by_source(cm: AsyncConnectionManager, table: str, user_id: str, source: str) -> int | None:
-    """Find entry_id by user_id and source path in the given table."""
-    if table not in ALLOWED_TABLES:
-        raise ValueError(f"Invalid table: {table}")
-    conn = await cm.get("memory.db")
-    sql = f"SELECT entry_id FROM {table} WHERE user_id=? AND source=?"
-    cur = await conn.execute(sql, (user_id, source))
-    row = await cur.fetchone()
-    return row[0] if row else None
-
-
 def parse_tags(raw_tags: Any) -> list[str]:
     """Parse tags from JSON string or list."""
     if isinstance(raw_tags, str):
         return json.loads(raw_tags) if raw_tags else []
     return raw_tags or []
-
-
-def build_update_clause(fields: dict[str, Any]) -> tuple[list[str], list]:
-    """Build SET clause and params for dynamic UPDATE.
-
-    fields: dict of column_name -> value (None values skipped).
-    Always includes updated_at. Returns (set_clauses, params).
-    """
-    updates = ["updated_at=?"]
-    params: list = [time.time()]
-    for col, val in fields.items():
-        if col == "tags" and val is not None:
-            updates.append(f"{col}=?")
-            params.append(json.dumps(val))
-        elif val is not None:
-            updates.append(f"{col}=?")
-            params.append(val)
-    return updates, params
-
-
-def build_count_query(table: str, user_id: str | None = None, wiki_type: str | None = None) -> tuple[str, list]:
-    """Build COUNT query with optional WHERE clauses."""
-    if table not in ALLOWED_TABLES:
-        raise ValueError(f"Invalid table: {table}")
-    conditions, params = [], []
-    if user_id:
-        conditions.append("user_id=?")
-        params.append(user_id)
-    if wiki_type:
-        conditions.append("wiki_type=?")
-        params.append(wiki_type)
-    where = " WHERE " + " AND ".join(conditions) if conditions else ""
-    sql = f"SELECT COUNT(*) FROM {table}{where}"
-    return sql, params
 
 
 def format_search_result(row: tuple, content_limit: int = 300) -> dict[str, Any]:

@@ -192,20 +192,6 @@ def auto_strategy(query: str) -> str:
     return "hybrid"
 
 
-def apply_type_boost(query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Apply type-aware boost to search results based on query keywords."""
-    from shared.memory_types import boost_for_query
-
-    for r in results:
-        kind = r.get("memory_kind") or r.get("wiki_type") or "fact"
-        boost = boost_for_query(query, kind)
-        if boost > 0:
-            current_score = r.get("score") or 0.0
-            r["score"] = min(1.0, current_score + boost)
-            r["boost_by_memory_type"] = boost
-    return results
-
-
 def materialize_candidates(results: list[dict[str, Any]]) -> list:
     """Convert raw search dicts to ScoredCandidate objects for the Scorer."""
     from rag.scoring import ScoredCandidate

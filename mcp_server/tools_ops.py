@@ -9,6 +9,7 @@ import asyncio
 import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
+from mcp.server.fastmcp import Context
 
 
 from mcp_server.models import (
@@ -26,7 +27,7 @@ from shared.metrics import metrics
 # if TYPE_CHECKING:
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
+    pass
 
 
 async def memory_api_key(

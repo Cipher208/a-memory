@@ -26,7 +26,16 @@ logger = logging.getLogger(__name__)
 SAGA_DIR = Path.home() / ".mcp-ariel-memory" / "sagas"
 
 try:
-    from features.secrets import decrypt_json, encrypt_json, is_encrypted_blob
+    from shared.crypto import is_encrypted_blob as _is_crypto_encrypted_blob
+    from features.secrets import decrypt_json, encrypt_json
+
+    def is_encrypted_blob(path: Path) -> bool:
+        """Check if file is encrypted (not plain JSON)."""
+        if not path.exists():
+            return False
+        with path.open("rb") as f:
+            head = f.read(1)
+        return _is_crypto_encrypted_blob(head)
 
     _HAS_ENCRYPTION = True
 except ImportError:
