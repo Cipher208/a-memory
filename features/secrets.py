@@ -156,11 +156,3 @@ def is_encrypted_blob(path: Path) -> bool:
     with path.open("rb") as f:
         head = f.read(1)
     return bool(_is_encrypted_blob(head))
-
-
-def install_master_key_to_keychain(hex_key: str) -> None:
-    """Store master key in OS keychain (run once during setup)."""
-    bytes.fromhex(hex_key)  # validate
-    import keyring
-
-    keyring.set_password(_KEYRING_SERVICE, _KEYRING_USERNAME, hex_key)

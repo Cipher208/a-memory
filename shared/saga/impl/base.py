@@ -455,23 +455,31 @@ class SagaWatchdog:
         now = time.time()
 
         for state_file in SAGA_DIR.glob("*.json"):
-            if state_file.is_symlink():
+            if not state_file.is_file() or state_file.is_symlink():
                 continue
-            try:
-                blob = state_file.read_bytes()
-                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
+            self._process_stuck_candidate(state_file, now)
 
-                status = state.get("status", "")
-                started_at = state.get("started_at", 0)
-                saga_name = state.get("name", "unknown")
+    def _process_stuck_candidate(self, state_file: Path, now: float) -> None:
+        """Read and analyze a single saga state file for timeout."""
+        try:
+            blob = state_file.read_bytes()
+            state = (
+                decrypt_json(blob)
+                if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
+                else json.loads(blob.decode(UTF8))
+            )
 
-                if status in (STATUS_RUNNING, STATUS_COMPENSATING):
-                    age = now - started_at
-                    if age > self.max_age_seconds:
-                        self._mark_as_stuck(state_file, state, saga_name, age)
+            status = state.get("status", "")
+            started_at = state.get("started_at", 0)
+            saga_name = state.get("name", "unknown")
 
-            except Exception:
-                logger.exception("Error checking saga %s", state_file.name)
+            if status in (STATUS_RUNNING, STATUS_COMPENSATING):
+                age = now - started_at
+                if age > self.max_age_seconds:
+                    self._mark_as_stuck(state_file, state, saga_name, age)
+
+        except Exception:
+            logger.exception("Error checking saga %s", state_file.name)
 
     def _mark_as_stuck(self, state_file: Path, state: dict[str, Any], saga_name: str, age: float) -> None:
         state["status"] = STATUS_STUCK
@@ -484,30 +492,40 @@ class SagaWatchdog:
 
     def get_stuck_sagas(self) -> list[dict[str, Any]]:
         """Get list of stuck sagas."""
-        with contextlib.suppress(Exception):
-            stuck = []
-            SAGA_DIR.mkdir(parents=True, exist_ok=True)
+        stuck = []
+        SAGA_DIR.mkdir(parents=True, exist_ok=True)
 
-            for state_file in SAGA_DIR.glob("*.json"):
-                if state_file.is_symlink():
-                    continue
-                blob = state_file.read_bytes()
-                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
+        for state_file in SAGA_DIR.glob("*.json"):
+            if not state_file.is_file() or state_file.is_symlink():
+                continue
 
-                if state.get("status") in (STATUS_STUCK, STATUS_FAILED, STATUS_RUNNING):
-                    age = time.time() - state.get("started_at", 0)
-                    stuck.append(
-                        {
-                            "saga_id": state.get("saga_id"),
-                            "name": state.get("name"),
-                            "status": state.get("status"),
-                            "current_step": state.get("current_step"),
-                            "age_seconds": int(age),
-                        }
-                    )
+            with contextlib.suppress(Exception):
+                state = self._read_state_safe(state_file)
+                if self._is_stuck_candidate(state):
+                    stuck.append(self._format_stuck_info(state))
 
-            return stuck
-        return []
+        return stuck
+
+    def _read_state_safe(self, state_file: Path) -> dict[str, Any]:
+        blob = state_file.read_bytes()
+        return (
+            decrypt_json(blob)
+            if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
+            else json.loads(blob.decode(UTF8))
+        )
+
+    def _is_stuck_candidate(self, state: dict[str, Any]) -> bool:
+        return state.get("status") in (STATUS_STUCK, STATUS_FAILED, STATUS_RUNNING)
+
+    def _format_stuck_info(self, state: dict[str, Any]) -> dict[str, Any]:
+        age = time.time() - state.get("started_at", 0)
+        return {
+            "saga_id": state.get("saga_id"),
+            "name": state.get("name"),
+            "status": state.get("status"),
+            "current_step": state.get("current_step"),
+            "age_seconds": int(age),
+        }
 
     def recover_saga(self, saga_id: str) -> dict[str, Any] | None:
         """Attempt to recover a stuck saga."""

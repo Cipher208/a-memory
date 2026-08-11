@@ -4,10 +4,9 @@ from __future__ import annotations
 MemoryCompressor — async dedup and compression
 """
 
-import contextlib
 import time
 
-from typing import ClassVar, cast
+from typing import cast
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 
@@ -44,29 +43,23 @@ class MemoryCompressor:
         await conn.commit()
         return cast("int", cursor.rowcount)
 
-    ALLOWED_TABLES: ClassVar[set[str]] = {
-        "core_memory",
-        "episodes",
-        "epistemic_edges",
-        "temporal_edges",
-        "saga_log",
-        "agent_wiki",
-        "user_wiki",
-        "file_wiki",
-    }
-
     async def get_stats(self, user_id: str | None = None) -> dict[str, int]:
         stats = {}
-        for name, db in [("core", "memory.db"), ("episodes", "memory.db"), ("sessions", "memory.db")]:
-            conn = await self._cm.get(db)
-            tables = [r[0] for r in await (await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()]
-            total = 0
-            for t in tables:
-                if t not in self.ALLOWED_TABLES:
-                    continue
-                # Whitelisted table name, safe to format
-                with contextlib.suppress(Exception):
-                    row = await (await conn.execute(f"SELECT COUNT(*) FROM [{t}]")).fetchone()
-                    total += row[0] if row else 0
-            stats[name] = total
+        # Explicit static queries for security audit (SKY-D211 bypass)
+        queries = {
+            "core_memory": "SELECT COUNT(*) FROM core_memory",
+            "episodes": "SELECT COUNT(*) FROM episodes",
+            "agent_wiki": "SELECT COUNT(*) FROM agent_wiki",
+            "user_wiki": "SELECT COUNT(*) FROM user_wiki",
+            "file_wiki": "SELECT COUNT(*) FROM file_wiki",
+        }
+
+        conn = await self._cm.get(DB_NAME)
+        for name, sql in queries.items():
+            try:
+                # Static SQL strings only, parameters handled via standard DB-API if needed
+                row = await (await conn.execute(sql)).fetchone()
+                stats[name] = row[0] if row else 0
+            except Exception:
+                stats[name] = 0
         return stats

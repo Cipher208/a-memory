@@ -104,62 +104,68 @@ def train_supervised_thresholds(
     n_candidates: int = 50,
     dim: int = DEFAULT_DIM,
 ) -> np.ndarray:
-    """Train per-dimension thresholds from positive and negative pairs.
-
-    Optimizes a weighted score: 0.7 * agree_pos + 0.3 * agree_neg,
-    where agree_pos measures binarization agreement on positive pairs
-    and agree_neg measures disagreement on negative pairs.
-
-    Args:
-        pos_pairs: (emb_a, emb_b) that share semantic relation.
-        neg_pairs: (emb_a, emb_b) that should NOT agree.
-        emb_fn: if set, pos_pairs/neg_pairs are (text_a, text_b) and this
-                converts text to embedding. Otherwise pairs are raw embeddings.
-        n_candidates: threshold grid resolution per dimension.
-        dim: embedding dimensionality.
-
-    Returns:
-        np.ndarray of length dim — per-dimension thresholds.
-    """
+    """Train per-dimension thresholds from positive and negative pairs."""
     _check_numpy()
 
-    if emb_fn is not None:
-        pos_a = np.array([emb_fn(a) for a, _ in pos_pairs])
-        pos_b = np.array([emb_fn(b) for _, b in pos_pairs])
-    else:
-        pos_a = np.asarray([p[0] for p in pos_pairs], dtype=np.float32)
-        pos_b = np.asarray([p[1] for p in pos_pairs], dtype=np.float32)
-
-    if pos_a.ndim != 2 or pos_a.shape[1] != dim:
-        raise ValueError(f"pos_pairs embeddings must be [N, {dim}], got {pos_a.shape}")
-
-    neg_a = np.array([], dtype=np.float32)
-    neg_b = np.array([], dtype=np.float32)
-    if neg_pairs:
-        if emb_fn is not None:
-            neg_a = np.array([emb_fn(a) for a, _ in neg_pairs])
-            neg_b = np.array([emb_fn(b) for _, b in neg_pairs])
-        else:
-            neg_a = np.asarray([p[0] for p in neg_pairs], dtype=np.float32)
-            neg_b = np.asarray([p[1] for p in neg_pairs], dtype=np.float32)
+    pos_a, pos_b = _prepare_pairs(pos_pairs, emb_fn, dim)
+    neg_a, neg_b = _prepare_pairs(neg_pairs or [], emb_fn, dim)
 
     thresholds = np.zeros(dim, dtype=np.float32)
     for i in range(dim):
-        candidates = np.linspace(
-            min(pos_a[:, i].min(), pos_b[:, i].min()),
-            max(pos_a[:, i].max(), pos_b[:, i].max()),
-            n_candidates,
+        thresholds[i] = _find_best_threshold_for_dim(
+            pos_a[:, i], pos_b[:, i], 
+            neg_a[:, i] if len(neg_a) > 0 else None,
+            neg_b[:, i] if len(neg_b) > 0 else None,
+            n_candidates
         )
-        best_t, best_score = candidates[0], -1.0
-        for t in candidates:
-            agree_pos = ((pos_a[:, i] > t) == (pos_b[:, i] > t)).mean()
-            agree_neg = 1.0 - ((neg_a[:, i] > t) == (neg_b[:, i] > t)).mean() if len(neg_a) > 0 else 0.5
-            score = 0.7 * agree_pos + 0.3 * agree_neg
-            if score > best_score:
-                best_score = score
-                best_t = t
-        thresholds[i] = best_t
     return thresholds
+
+
+def _prepare_pairs(
+    pairs: list[tuple[Sequence[float], Sequence[float]]],
+    emb_fn: Callable[[Any], Sequence[float]] | None,
+    dim: int
+) -> tuple[np.ndarray, np.ndarray]:
+    if not pairs:
+        return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+
+    if emb_fn is not None:
+        a = np.array([emb_fn(p[0]) for p in pairs], dtype=np.float32)
+        b = np.array([emb_fn(p[1]) for p in pairs], dtype=np.float32)
+    else:
+        a = np.asarray([p[0] for p in pairs], dtype=np.float32)
+        b = np.asarray([p[1] for p in pairs], dtype=np.float32)
+
+    if a.ndim != 2 or a.shape[1] != dim:
+        raise ValueError(f"embeddings must be [N, {dim}], got {a.shape}")
+    return a, b
+
+
+def _find_best_threshold_for_dim(
+    col_pos_a: np.ndarray, 
+    col_pos_b: np.ndarray, 
+    col_neg_a: np.ndarray | None,
+    col_neg_b: np.ndarray | None,
+    n_candidates: int
+) -> float:
+    candidates = np.linspace(
+        min(col_pos_a.min(), col_pos_b.min()),
+        max(col_pos_a.max(), col_pos_b.max()),
+        n_candidates,
+    )
+    best_t, best_score = candidates[0], -1.0
+
+    for t in candidates:
+        agree_pos = ((col_pos_a > t) == (col_pos_b > t)).mean()
+        agree_neg = 0.5
+        if col_neg_a is not None and col_neg_b is not None:
+            agree_neg = 1.0 - ((col_neg_a > t) == (col_neg_b > t)).mean()
+
+        score = 0.7 * agree_pos + 0.3 * agree_neg
+        if score > best_score:
+            best_score = score
+            best_t = t
+    return best_t
 
 
 def save_thresholds(thresholds: np.ndarray, path: str) -> None:

@@ -171,3 +171,14 @@ class ForgettingSystem:
             "archived": await self.archive_old_entries(),
             "compressed": await self.compress_duplicates(),
         }
+
+    async def run_cleanup(self, user_id: str = "default") -> dict[str, int]:
+        """Alias for archive_old_entries to satisfy legacy compactor interface."""
+        # ForgettingSystem defaults are used, user_id can override if needed
+        # (though ForgettingSystem is currently layer-scoped)
+        count = await self.archive_old_entries()
+        return {"archived": count}
+
+
+# Global instance
+forgetting_system = ForgettingSystem()

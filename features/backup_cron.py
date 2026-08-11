@@ -175,26 +175,34 @@ class BackupCron:
         import shutil
 
         src = self.backup_dir / backup_name
-        if not src.exists():
-            return {"error": f"Backup not found: {backup_name}"}
+        if not src.exists() or src.is_symlink():
+            return {"error": f"Backup not found or invalid: {backup_name}"}
 
         manifest_path = src / "manifest.json"
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"files": [f.name for f in src.glob("*.db")]}
+        if manifest_path.exists() and not manifest_path.is_symlink():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        else:
+            manifest = {"files": [f.name for f in src.glob("*.db")]}
 
         restored = []
         for db_file in manifest.get("files", []):
+            dest_path = self.base_dir / db_file
+            if dest_path.exists() and dest_path.is_symlink():
+                logger.error("Refusing to restore over symlink: %s", dest_path)
+                continue
+
             safe_resolve(self.base_dir, db_file)  # raises ValueError if traversal
             if db_file.endswith("/"):
                 # Restore wiki directory
                 src_wiki = src / db_file
-                dest_wiki = self.base_dir / db_file
-                if src_wiki.exists():
-                    shutil.copytree(src_wiki, dest_wiki, dirs_exist_ok=True)
+                if src_wiki.exists() and not src_wiki.is_symlink():
+                    shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True)
                     restored.append(db_file)
             else:
                 backup_file = src / db_file
-                if backup_file.exists():
-                    shutil.copy2(backup_file, self.base_dir / db_file)
+                if backup_file.exists() and not backup_file.is_symlink():
+                    # skylos: ignore [SKY-D215, SKY-D325] - Safe via safe_resolve and symlink checks
+                    shutil.copy2(backup_file, dest_path)
                     restored.append(db_file)
 
         return {"restored": restored, "backup": backup_name}

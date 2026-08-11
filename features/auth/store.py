@@ -5,15 +5,14 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, TypeVar, cast
-
-from pydantic import BaseModel
+from typing import Any, cast, TYPE_CHECKING
 
 from features.secrets import decrypt_json, encrypt_json
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
-T = TypeVar("T", bound=BaseModel)
+logger = logging.getLogger(__name__)
 
 
 class EncryptedStore:

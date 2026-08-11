@@ -64,65 +64,62 @@ class WikiIndex:
     async def save(self, entry: WikiEntry, content_hash: str) -> None:
         """Atomic insert/update in both wiki_index and wiki_fts."""
         now = time.time()
-        tags_json = json.dumps(entry.tags)
         conn = await self._cm.get(DB_NAME)
 
-        # Check for existing entry
-        cur = await conn.execute(
-            "SELECT entry_id, title, content, wiki_type, tags, content_hash FROM wiki_index WHERE file_path=?",
-            (entry.file_path,),
-        )
-        existing = await cur.fetchone()
+        existing = await self._get_existing(conn, entry.file_path)
 
         if existing:
             if existing["content_hash"] == content_hash:
                 return
-
-            entry_id = existing["entry_id"]
-
-            # FTS update requires OLD values for the 'delete' command in external content tables
-            await conn.execute(
-                "INSERT INTO wiki_fts(wiki_fts, rowid, title, content, wiki_type, tags) VALUES ('delete', ?, ?, ?, ?, ?)",
-                (entry_id, existing["title"], existing["content"], existing["wiki_type"], existing["tags"]),
-            )
-
-            await conn.execute(
-                """UPDATE wiki_index
-                   SET title=?, tags=?, importance=?, content=?, content_hash=?, updated_at=?
-                   WHERE entry_id=?""",
-                (entry.title, tags_json, entry.importance, entry.content, content_hash, now, entry_id),
-            )
-
-            # Then insert NEW values
-            await conn.execute(
-                "INSERT INTO wiki_fts(rowid, title, content, wiki_type, tags) VALUES (?, ?, ?, ?, ?)",
-                (entry_id, entry.title, entry.content, entry.wiki_type, tags_json),
-            )
+            await self._update_entry_and_fts(conn, entry, existing, content_hash, now)
         else:
-            cur = await conn.execute(
-                """INSERT INTO wiki_index
-                   (layer, wiki_type, title, file_path, tags, importance, content, content_hash, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    self.layer,
-                    entry.wiki_type,
-                    entry.title,
-                    entry.file_path,
-                    tags_json,
-                    entry.importance,
-                    entry.content,
-                    content_hash,
-                    now,
-                    now,
-                ),
-            )
-            entry_id = cur.lastrowid
-            await conn.execute(
-                "INSERT INTO wiki_fts(rowid, title, content, wiki_type, tags) VALUES (?, ?, ?, ?, ?)",
-                (entry_id, entry.title, entry.content, entry.wiki_type, tags_json),
-            )
+            await self._insert_entry_and_fts(conn, entry, content_hash, now)
 
         await conn.commit()
+
+    async def _get_existing(self, conn: Any, file_path: str) -> dict[str, Any] | None:
+        cur = await conn.execute(
+            "SELECT entry_id, title, content, wiki_type, tags, content_hash FROM wiki_index WHERE file_path=?",
+            (file_path,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def _update_entry_and_fts(self, conn: Any, entry: WikiEntry, existing: dict[str, Any], content_hash: str, now: float) -> None:
+        entry_id = existing["entry_id"]
+        tags_json = json.dumps(entry.tags)
+
+        # FTS update: delete old, insert new
+        await conn.execute(
+            "INSERT INTO wiki_fts(wiki_fts, rowid, title, content, wiki_type, tags) VALUES ('delete', ?, ?, ?, ?, ?)",
+            (entry_id, existing["title"], existing["content"], existing["wiki_type"], existing["tags"]),
+        )
+
+        await conn.execute(
+            """UPDATE wiki_index
+               SET title=?, tags=?, importance=?, content=?, content_hash=?, updated_at=?
+               WHERE entry_id=?""",
+            (entry.title, tags_json, entry.importance, entry.content, content_hash, now, entry_id),
+        )
+
+        await conn.execute(
+            "INSERT INTO wiki_fts(rowid, title, content, wiki_type, tags) VALUES (?, ?, ?, ?, ?)",
+            (entry_id, entry.title, entry.content, entry.wiki_type, tags_json),
+        )
+
+    async def _insert_entry_and_fts(self, conn: Any, entry: WikiEntry, content_hash: str, now: float) -> None:
+        tags_json = json.dumps(entry.tags)
+        cur = await conn.execute(
+            """INSERT INTO wiki_index
+               (layer, wiki_type, title, file_path, tags, importance, content, content_hash, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (self.layer, entry.wiki_type, entry.title, entry.file_path, tags_json, entry.importance, entry.content, content_hash, now, now),
+        )
+        entry_id = cur.lastrowid
+        await conn.execute(
+            "INSERT INTO wiki_fts(rowid, title, content, wiki_type, tags) VALUES (?, ?, ?, ?, ?)",
+            (entry_id, entry.title, entry.content, entry.wiki_type, tags_json),
+        )
 
     async def get_by_path(self, file_path: str) -> dict[str, Any] | None:
         """Fetch metadata and hash by file path."""

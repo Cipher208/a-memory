@@ -138,6 +138,16 @@ async def search_rrf(
             bin_results = await search_binary(cm, query, user_id, limit * 3, binary_for_fn, binary_dim)
             bin_ranks = {r["id"]: rank for rank, r in enumerate(bin_results)}
 
+    merged = _calculate_rrf_scores(fts_ranks, bin_ranks, k)
+    sorted_ids = sorted(merged.keys(), key=lambda x: -merged[x])[:limit]
+    if not sorted_ids:
+        return []
+
+    return await _fetch_rrf_results(cm, sorted_ids, merged, fts_ranks, bin_ranks)
+
+
+def _calculate_rrf_scores(fts_ranks: dict[int, int], bin_ranks: dict[int, int], k: int) -> dict[int, float]:
+    """Calculate merged RRF scores."""
     def rrf(rank: int) -> float:
         return 1.0 / (k + rank + 1)
 
@@ -149,17 +159,22 @@ async def search_rrf(
         if doc_id in bin_ranks:
             score += rrf(bin_ranks[doc_id])
         merged[doc_id] = score
+    return merged
 
-    sorted_ids = sorted(merged.keys(), key=lambda x: -merged[x])[:limit]
-    if not sorted_ids:
-        return []
 
+async def _fetch_rrf_results(
+    cm: AsyncConnectionManager,
+    sorted_ids: list[int],
+    merged: dict[int, float],
+    fts_ranks: dict[int, int],
+    bin_ranks: dict[int, int],
+) -> list[dict[str, Any]]:
+    """Fetch final metadata for RRF results from DB."""
     conn = await cm.get(DB_NAME)
     placeholders = ",".join(["?"] * len(sorted_ids))
-    cur = await conn.execute(
-        f"SELECT id, title, content, wiki_type FROM rag_pages WHERE id IN ({placeholders})",
-        tuple(sorted_ids),
-    )
+    # skylos: ignore [SKY-D211] - Static ID list from internal merged ranks.
+    sql = f"SELECT id, title, content, wiki_type FROM rag_pages WHERE id IN ({placeholders})"
+    cur = await conn.execute(sql, tuple(sorted_ids))
     rows = await cur.fetchall()
     by_id = {r[0]: r for r in rows}
 
@@ -167,9 +182,7 @@ async def search_rrf(
     for doc_id in sorted_ids:
         row = by_id.get(doc_id)
         if row:
-            has_fts = doc_id in fts_ranks
-            has_bin = doc_id in bin_ranks
-            source = "rrf(fts+mib)" if (has_fts and has_bin) else ("fts5" if has_fts else "mib")
+            source = _determine_source(doc_id, fts_ranks, bin_ranks)
             content = row[2]
             results.append(
                 {
@@ -182,6 +195,12 @@ async def search_rrf(
                 }
             )
     return results
+
+
+def _determine_source(doc_id: int, fts_ranks: dict[int, int], bin_ranks: dict[int, int]) -> str:
+    has_fts = doc_id in fts_ranks
+    has_bin = doc_id in bin_ranks
+    return "rrf(fts+mib)" if (has_fts and has_bin) else ("fts5" if has_fts else "mib")
 
 
 def auto_strategy(query: str) -> str:

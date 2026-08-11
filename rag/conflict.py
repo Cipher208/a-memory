@@ -109,12 +109,13 @@ class ConflictResolver:
         return {"content": new_content, "is_conflict": False}
 
     async def _find_potential_conflicts(self, conn: Any, user_id: str, keywords: list[str]) -> Any:
+        if not keywords:
+            return []
         like_conditions = " OR ".join(["content LIKE ?" for _ in keywords])
         like_params = [f"%{kw}%" for kw in keywords]
-        cur = await conn.execute(
-            f"SELECT id, content, is_conflict, conflict_group_id FROM memory_conflicts WHERE user_id=? AND ({like_conditions}) LIMIT 5",
-            (user_id, *like_params),
-        )
+        # skylos: ignore [SKY-D211] - Parameterized via ?, like_conditions derived from local keyword count only.
+        sql = f"SELECT id, content, is_conflict, conflict_group_id FROM memory_conflicts WHERE user_id=? AND ({like_conditions}) LIMIT 5"
+        cur = await conn.execute(sql, (user_id, *like_params))
         return await cur.fetchall()
 
     async def _handle_conflict(

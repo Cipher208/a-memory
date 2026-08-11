@@ -29,3 +29,13 @@ METRIC_TOOL_CALLS = "tool_calls"
 # Wiki
 WIKI_DIR_NAME = "wiki"
 WIKI_TYPE_GENERAL = "general"
+
+# Files & Backups
+MANIFEST_FILE = "manifest.json"
+BACKUP_DIR_NAME = "backups"
+UTF8 = "utf-8"
+
+# Tooling
+METRIC_TOOL_CALLS = "tool_calls"
+DEFAULT_USER = "default"
+USER_ID_KEY = "user_id"

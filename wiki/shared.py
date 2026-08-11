@@ -51,16 +51,3 @@ def parse_tags(raw_tags: Any) -> list[str]:
         res: Any = json.loads(raw_tags) if raw_tags else []
         return [str(x) for x in res] if isinstance(res, list) else []
     return [str(x) for x in raw_tags] if isinstance(raw_tags, list) else []
-
-
-def format_search_result(row: tuple[Any, ...], content_limit: int = 300) -> dict[str, Any]:
-    """Format FTS search result row into dict."""
-    return {
-        "id": row[0],
-        "title": row[1],
-        "content": str(row[2])[:content_limit],
-        "type": row[3],
-        "tags": parse_tags(row[4]),
-        "importance": row[5],
-        "score": abs(float(row[6])) if row[6] else 0.0,
-    }

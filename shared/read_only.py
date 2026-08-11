@@ -28,25 +28,40 @@ class ReadOnlyReplica:
         db_files = ["memory.db"]
         synced = {}
         for db_file in db_files:
-            src = self.source_dir / db_file
-            dst = self.replica_dir / db_file
-            if src.exists():
-                try:
-                    src_conn = sqlite3.connect(str(src))
-                    dst_conn = sqlite3.connect(str(dst))
-                    src_conn.backup(dst_conn)
-                    dst_conn.close()
-                    src_conn.close()
-                    synced[db_file] = 1
-                except Exception:
-                    logger.exception(f"Replica sync failed for {db_file}")
-                    try:
-                        shutil.copy2(src, dst)
-                        synced[db_file] = 1
-                    except Exception:
-                        synced[db_file] = 0
+            src, dst = self.source_dir / db_file, self.replica_dir / db_file
+            if not src.exists() or src.is_symlink():
+                synced[db_file] = 0
+                continue
+
+            # Try native SQLite backup first (safer for active DB)
+            if self._backup_db(src, dst) or self._copy_file(src, dst):
+                synced[db_file] = 1
+            else:
+                synced[db_file] = 0
+
         self._last_sync = time.time()
         return synced
+
+    def _backup_db(self, src: Path, dst: Path) -> bool:
+        """Internal helper for SQLite online backup."""
+        try:
+            with sqlite3.connect(str(src)) as src_conn, sqlite3.connect(str(dst)) as dst_conn:
+                src_conn.backup(dst_conn)
+            return True
+        except Exception:
+            logger.debug("SQLite backup failed for %s, falling back to copy", src.name)
+            return False
+
+    def _copy_file(self, src: Path, dst: Path) -> bool:
+        """Fallback helper for file copy."""
+        try:
+            if dst.exists() and dst.is_symlink():
+                return False
+            shutil.copy2(src, dst)
+            return True
+        except Exception:
+            logger.exception("Replica file copy failed for %s", src.name)
+            return False
 
     def start_auto_sync(self, interval_seconds: int = 300) -> None:
         self._sync_interval = interval_seconds

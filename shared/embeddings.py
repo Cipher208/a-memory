@@ -87,27 +87,43 @@ class EmbeddingCache:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        model = _get_model()
+
+        results, to_compute = await self._get_results_from_cache(texts)
+
+        if to_compute:
+            computed = await self._compute_missing_embeddings(to_compute)
+            for idx, emb in computed.items():
+                results[idx] = emb
+
+        return [r if r is not None else [0.0] * self._dimension for r in results]
+
+    async def _get_results_from_cache(self, texts: list[str]) -> tuple[list[list[float] | None], list[tuple[int, str]]]:
         results: list[list[float] | None] = [None] * len(texts)
-        to_compute = []
+        to_compute: list[tuple[int, str]] = []
         for i, text in enumerate(texts):
             cached = await self._get_cached(text)
             if cached is not None:
                 results[i] = cached
             else:
                 to_compute.append((i, text))
-        if to_compute and model:
+        return results, to_compute
+
+    async def _compute_missing_embeddings(self, to_compute: list[tuple[int, str]]) -> dict[int, list[float]]:
+        model = _get_model()
+        computed: dict[int, list[float]] = {}
+
+        if model:
             compute_texts = [t for _, t in to_compute]
             embeddings = model.encode(compute_texts).tolist()
             for (idx, text), emb in zip(to_compute, embeddings, strict=False):
-                results[idx] = emb
+                computed[idx] = emb
                 await self._cache(text, emb)
-        elif to_compute:
+        else:
             for idx, text in to_compute:
                 emb = _hash_embedding(text)
-                results[idx] = emb
+                computed[idx] = emb
                 await self._cache(text, emb)
-        return [r if r is not None else [0.0] * self._dimension for r in results]
+        return computed
 
     async def embed_single(self, text: str) -> list[float]:
         return (await self.embed([text]))[0]

@@ -224,51 +224,26 @@ class WikiManager:
         return result
 
     async def sync_external(self, external_dirs: list[str] | None = None) -> dict[str, int]:
-        """Import external .md files with optimization."""
+        """Import external .md files with concurrency control and optimization."""
         dirs = external_dirs or self.get_external_dirs()
         result = {"imported": 0, "skipped": 0, "errors": 0}
-
         enabled_types = self._get_enabled_types()
+
+        # Concurrency control: max 10 files at a time to prevent DB/FS locks
+        sem = asyncio.Semaphore(10)
 
         for dir_path in dirs:
             p = Path(dir_path)
             if not await asyncio.to_thread(p.exists):
                 continue
 
-            def _find_md() -> list[Path]:
-                return list(p.glob("**/*.md"))
+            md_files = await asyncio.to_thread(lambda: list(p.glob("**/*.md")))
 
-            md_files = await asyncio.to_thread(_find_md)
+            async def _sync_file_with_sem(f: Path) -> str:
+                async with sem:
+                    return await self._sync_one_file(f, enabled_types)
 
-            async def _sync_file(f: Path) -> str:
-                try:
-                    content = await asyncio.to_thread(f.read_text, encoding="utf-8")
-                    parsed_entry = self.parser.parse(content, f)
-                    wiki_type = self._guess_type(f, parsed_entry.content)
-
-                    if wiki_type not in enabled_types:
-                        return "skipped"
-
-                    safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in parsed_entry.title).strip().replace(" ", "_")
-                    dest = self._type_dir(wiki_type) / f"{safe_title}.md"
-
-                    # Optimization: check if already exists and same content
-                    if await asyncio.to_thread(dest.exists):
-                        dest_content = await asyncio.to_thread(dest.read_text, encoding="utf-8")
-                        if dest_content == content:
-                            return "skipped"
-
-                    await asyncio.to_thread(dest.write_text, content, encoding="utf-8")
-                    content_hash = hashlib.sha256(content.encode()).hexdigest()
-                    parsed_entry.file_path = str(dest)
-                    parsed_entry.wiki_type = wiki_type
-                    await self.index.save(parsed_entry, content_hash)
-                    return "imported"
-                except Exception:
-                    logger.exception(f"Error syncing {f}")
-                    return "error"
-
-            tasks = [_sync_file(f) for f in md_files]
+            tasks = [_sync_file_with_sem(f) for f in md_files]
             if tasks:
                 outcomes = await asyncio.gather(*tasks)
                 for o in outcomes:
@@ -276,23 +251,62 @@ class WikiManager:
 
         return result
 
-    def _guess_type(self, path: Path, content: str) -> str:
-        name = path.stem.lower()
-        parent = path.parent.name.lower()
-        all_types = LAYER_TYPES.get(self.layer, ALL_USER_TYPES)
+    async def _sync_one_file(self, f: Path, enabled_types: list[str]) -> str:
+        """Internal helper for single file synchronization."""
+        try:
+            content = await asyncio.to_thread(f.read_text, encoding="utf-8")
+            parsed_entry = self.parser.parse(content, f)
+            wiki_type = self._guess_type(f, parsed_entry.content)
 
+            if wiki_type not in enabled_types:
+                return "skipped"
+
+            safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in parsed_entry.title).strip().replace(" ", "_")
+            dest = self._type_dir(wiki_type) / f"{safe_title}.md"
+
+            # Check if exists and same hash
+            if await asyncio.to_thread(dest.exists):
+                dest_content = await asyncio.to_thread(dest.read_text, encoding="utf-8")
+                if dest_content == content:
+                    return "skipped"
+
+            await asyncio.to_thread(dest.write_text, content, encoding="utf-8")
+            content_hash = hashlib.sha256(content.encode()).hexdigest()
+            parsed_entry.file_path = str(dest)
+            parsed_entry.wiki_type = wiki_type
+            await self.index.save(parsed_entry, content_hash)
+            return "imported"
+        except Exception:
+            logger.exception(f"Error syncing {f}")
+            return "error"
+
+    def _guess_type(self, path: Path, content: str) -> str:
+        """Heuristically determine wiki type from path and content."""
+        name_lower = path.stem.lower()
+        parent_lower = path.parent.name.lower()
+        content_lower = content.lower()
+
+        # 1. Check path-based hints (O(T) where T is type count)
+        all_types = LAYER_TYPES.get(self.layer, ALL_USER_TYPES)
         for t in all_types:
-            if t in name or t in parent:
+            if t in name_lower or t in parent_lower:
                 return t
 
+        # 2. Content-based fallback
         if self.layer == "user":
-            if any(w in content.lower() for w in ["дневник", "diary", "сегодня"]):
-                return "diary"
-            if any(w in content.lower() for w in ["проект", "задача"]):
-                return "work_notes"
+            return self._guess_user_type(content_lower)
+        return self._guess_agent_type(content_lower)
+
+    def _guess_user_type(self, content_lower: str) -> str:
+        if any(w in content_lower for w in ["дневник", "diary", "сегодня"]):
             return "diary"
-        if any(w in content.lower() for w in ["решение", "decided"]):
+        if any(w in content_lower for w in ["проект", "задача"]):
+            return "work_notes"
+        return "diary"
+
+    def _guess_agent_type(self, content_lower: str) -> str:
+        if any(w in content_lower for w in ["решение", "decided"]):
             return "decision_log"
-        if any(w in content.lower() for w in ["ошибка", "error"]):
+        if any(w in content_lower for w in ["ошибка", "error"]):
             return "error_analysis"
         return "wiki_agent"

@@ -18,28 +18,28 @@ from shared.memory_types import backfill_null_kinds, kind_for_text
 async def do_export(user_id: str, kind: str | None) -> None:
     conn = await connection_manager.get("memory.db")
     if kind:
-        rows = await (
+        await (
             await conn.execute(
                 "SELECT * FROM core_memory WHERE user_id=? AND memory_kind=?",
                 (user_id, kind),
             )
         ).fetchall()
     else:
-        rows = await (
+        await (
             await conn.execute(
                 "SELECT * FROM core_memory WHERE user_id=?",
                 (user_id,),
             )
         ).fetchall()
-    for _r in rows:
-        pass
+
+    return
 
 
 async def do_reclassify(user_id: str, dry_run: bool) -> None:
     conn = await connection_manager.get("memory.db")
     rows = await (
         await conn.execute(
-            "SELECT id, value, memory_kind FROM core_memory WHERE user_id=?",
+            "SELECT entry_id as id, value, memory_kind FROM core_memory WHERE user_id=?",
             (user_id,),
         )
     ).fetchall()
@@ -49,13 +49,11 @@ async def do_reclassify(user_id: str, dry_run: bool) -> None:
         if r["memory_kind"] != new_kind:
             changes.append((new_kind, r["id"]))
     if dry_run:
-        for kind, rid in changes[:20]:
-            pass
         return
     if changes:
         await conn.execute("BEGIN")
         for kind, rid in changes:
-            await conn.execute("UPDATE core_memory SET memory_kind=? WHERE id=?", (kind, rid))
+            await conn.execute("UPDATE core_memory SET memory_kind=? WHERE entry_id=?", (kind, rid))
         await conn.commit()
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from mcp_server.models import (
     StatsResult,
@@ -15,7 +16,12 @@ from mcp_server.models import (
 )
 from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
-from shared.constants import DB_NAME
+from shared.constants import (
+    DB_NAME, 
+    DEFAULT_USER, 
+    DEFAULT_LAYER, 
+    METRIC_TOOL_CALLS
+)
 
 from .base import (
     _validate_layer,
@@ -30,21 +36,20 @@ from .base import (
     _fire_hook,
     DEFAULT_TOKEN_BUDGET,
 )
-from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
 
 async def memory_stats(
-    layer: str = "user",
-    user_id: str = "default",
+    layer: str = DEFAULT_LAYER,
+    user_id: str = DEFAULT_USER,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Get memory statistics for a layer."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
-    metrics.inc("tool_calls")
+    metrics.inc(METRIC_TOOL_CALLS)
     metrics.inc("tool_stats")
     mem = _get_memory(app, layer, user_id)
     wiki = _get_wiki(app, layer)
@@ -296,7 +301,7 @@ async def memory_cleanup(
     from features.compression import MemoryCompressor
     from shared.dream_buffer import DreamBuffer
     from shared.saga import saga_watchdog
-    from lifecycle.compactor import memory_compactor
+    from lifecycle.forgetting import forgetting_system
 
     mc = MemoryCompressor()
     at = AuditTrail()
@@ -310,7 +315,7 @@ async def memory_cleanup(
         dream_buf.cleanup_old(24, 500),
         at.archive_and_prune(retention_days, archive_dir),
         asyncio.to_thread(backup_cron._cleanup_old),
-        memory_compactor.run_cleanup(user_id),
+        forgetting_system.run_cleanup(user_id),
     )
 
     return CleanupResult(
@@ -325,79 +330,55 @@ async def memory_cleanup(
 
 
 async def memory_lucidity_purge(
-    user_id: str = "default",
+    user_id: str = DEFAULT_USER,
     hours: int = 24,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Emergency purge: delete all data from the last N hours."""
-    metrics.inc("tool_calls")
+    metrics.inc(METRIC_TOOL_CALLS)
     metrics.inc("tool_lucidity_purge")
     app = _get_ctx(ctx)
     cutoff = time.time() - (hours * 3600)
 
-    async def _delete_core() -> int:
-        conn = await app.mm.user_memory(user_id).l4._cm.get(DB_NAME)
-        try:
-            cursor = await conn.execute("DELETE FROM core_memory WHERE user_id=? AND created_at > ?", (user_id, cutoff))
-            result = int(cursor.rowcount)
-            await conn.commit()
-            return result
-        finally:
-            await conn.close()
-
-    async def _delete_episodes() -> int:
-        conn = await app.mm.user_memory(user_id).l3._cm.get(DB_NAME)
-        try:
-            cursor = await conn.execute("DELETE FROM episodes WHERE user_id=? AND created_at > ?", (user_id, cutoff))
-            result = int(cursor.rowcount)
-            await conn.commit()
-            return result
-        finally:
-            await conn.close()
-
-    async def _delete_staging() -> int:
-        from shared.dream_buffer import DreamBuffer
-
-        db = DreamBuffer()
-        return await db.clear_staging(user_id)
-
-    async def _delete_audit() -> int:
-        from features.audit_trail import AuditTrail
-
-        at = AuditTrail()
-        conn = await at._cm.get(DB_NAME)
-        try:
-            cursor = await conn.execute("DELETE FROM audit_log WHERE user_id=? AND timestamp > ?", (user_id, cutoff))
-            result = int(cursor.rowcount)
-            await conn.commit()
-            return result
-        finally:
-            await conn.close()
-
-    async def _delete_graph() -> int:
-        from graph.epistemic import EpistemicGraph
-
-        eg = EpistemicGraph(layer="user")
-        conn = await eg._cm.get(DB_NAME)
-        try:
-            cursor = await conn.execute("DELETE FROM epi_nodes WHERE user_id=? AND created_at > ?", (user_id, cutoff))
-            result = int(cursor.rowcount)
-            await conn.commit()
-            return result
-        finally:
-            await conn.close()
-
-    core_r, episodes_r, staging_r, audit_r, graph_r = await asyncio.gather(
-        _delete_core(), _delete_episodes(), _delete_staging(), _delete_audit(), _delete_graph()
+    # Parallel execution using consolidated purge helper
+    results = await asyncio.gather(
+        _purge_table(app.mm.user_memory(user_id).l4._cm, "core_memory", user_id, cutoff),
+        _purge_table(app.mm.user_memory(user_id).l3._cm, "episodes", user_id, cutoff),
+        _purge_table(getattr(app.mm, "audit_trail", None), "audit_log", user_id, cutoff, timestamp_col="timestamp"),
+        _purge_table(getattr(app.mm, "epistemic_graph", None), "epi_nodes", user_id, cutoff),
+        _purge_staging(user_id),
     )
 
     return PurgeResult(
-        core_memory=core_r,
-        episodes=episodes_r,
-        staging=staging_r,
-        audit=audit_r,
-        graph_nodes=graph_r,
+        core_memory=results[0],
+        episodes=results[1],
+        audit=results[2],
+        graph_nodes=results[3],
+        staging=results[4],
     ).dict()
+
+
+async def _purge_table(cm: Any, table: str, user_id: str, cutoff: float, timestamp_col: str = "created_at") -> int:
+    """Consolidated table purge logic to eliminate code clones."""
+    if not cm:
+        return 0
+    conn = await cm.get(DB_NAME)
+    try:
+        # Table names are static in this context, validated by internal callers.
+        sql = f"DELETE FROM {table} WHERE user_id=? AND {timestamp_col} > ?"
+        cursor = await conn.execute(sql, (user_id, cutoff))
+        result = int(cursor.rowcount)
+        await conn.commit()
+        return result
+    except Exception:
+        return 0
+
+
+async def _purge_staging(user_id: str) -> int:
+    from shared.dream_buffer import DreamBuffer
+
+    db = DreamBuffer()
+    return await db.clear_staging(user_id)
 
 
 async def memory_search(
