@@ -1,5 +1,6 @@
 import os
 import time as _time
+from typing import Any
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
@@ -42,7 +43,8 @@ async def check_rate_limit(request: Request, api_rate_limiter: RateLimiter) -> b
         return True
     user = get_user_from_token(request)
     result = await api_rate_limiter.check(user)
-    return result.get("allowed", True)
+    res: Any = result.get("allowed", True)
+    return bool(res)
 
 
 def create_app(mcp: FastMCP, ctx: AppContext) -> Starlette:

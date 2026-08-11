@@ -47,7 +47,7 @@ class WikiManager:
         self.index = WikiIndex(self._cm, layer)
         self.parser = WikiParser()
 
-    async def init_db(self):
+    async def init_db(self) -> None:
         """Delegate to index layer."""
         await self.index.init_db()
 
@@ -95,7 +95,7 @@ class WikiManager:
         content: str | None = None,
         tags: list[str] | None = None,
         importance: float | None = None,
-    ):
+    ) -> None:
         """Update .md file and re-index."""
         p = safe_resolve(self.base_dir, file_path)
         if not await asyncio.to_thread(p.exists):
@@ -153,10 +153,10 @@ class WikiManager:
         rows = await self.index.list_all(limit)
         return await self._rows_to_entries(rows)
 
-    async def _rows_to_entries(self, rows: list[dict]) -> list[WikiEntry]:
+    async def _rows_to_entries(self, rows: list[dict[str, Any]]) -> list[WikiEntry]:
         entries = []
         for r in rows:
-            entry = await self.get(r["file_path"])
+            entry = await self.get(str(r["file_path"]))
             if entry:
                 entries.append(entry)
         return entries
@@ -187,8 +187,8 @@ class WikiManager:
         md_files = []
         enabled_types = self._get_enabled_types()
 
-        def _collect_files():
-            files = []
+        def _collect_files() -> list[Path]:
+            files: list[Path] = []
             for wiki_type in enabled_types:
                 type_dir = self.base_dir / wiki_type
                 if type_dir.exists() and type_dir.is_dir():
@@ -197,7 +197,7 @@ class WikiManager:
 
         md_files = await asyncio.to_thread(_collect_files)
 
-        async def _process_file(f: Path):
+        async def _process_file(f: Path) -> str:
             try:
                 text = await asyncio.to_thread(f.read_text, encoding="utf-8")
                 entry = self.parser.parse(text, f)
@@ -235,12 +235,12 @@ class WikiManager:
             if not await asyncio.to_thread(p.exists):
                 continue
 
-            def _find_md():
+            def _find_md() -> list[Path]:
                 return list(p.glob("**/*.md"))
 
             md_files = await asyncio.to_thread(_find_md)
 
-            async def _sync_file(f: Path):
+            async def _sync_file(f: Path) -> str:
                 try:
                     content = await asyncio.to_thread(f.read_text, encoding="utf-8")
                     parsed_entry = self.parser.parse(content, f)

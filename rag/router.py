@@ -114,7 +114,13 @@ _ROUTE_TABLE: list[dict[str, Any]] = [
 
 
 class RetrievalRouter:
-    def __init__(self, layer: str = "user", user_id: str = "default", keyword_overrides: dict | None = None, recent_max_chars: int = 60):
+    def __init__(
+        self,
+        layer: str = "user",
+        user_id: str = "default",
+        keyword_overrides: dict[str, Any] | None = None,
+        recent_max_chars: int = 60,
+    ) -> None:
         self.layer = layer
         self.user_id = user_id
         self.recent_max_chars = recent_max_chars
@@ -143,7 +149,7 @@ class RetrievalRouter:
             out.extend(v)
         return [kw.lower() for kw in out]
 
-    async def route(self, query: str, recent_context: list[dict] | None = None) -> RouterResult:
+    async def route(self, query: str, recent_context: list[dict[str, Any]] | None = None) -> RouterResult:
         q = query.lower()
 
         for route in _ROUTE_TABLE:
@@ -164,31 +170,51 @@ class RetrievalRouter:
         keyword_kind: str | None,
         strategy: Strategy,
         confidence: float,
-        recent_context: list[dict] | None,
+        recent_context: list[dict[str, Any]] | None,
     ) -> RouterResult | None:
         """Try to match a single route. Returns RouterResult or None."""
         if keyword_kind == "recent":
-            if self._is_recent_query(q_lower) and recent_context:
-                return RouterResult(strategy, recent_context, confidence)
+            return self._match_recent(q_lower, strategy, confidence, recent_context)
 
-        elif keyword_kind == "wiki":
-            if self._is_wiki_query(q_lower):
-                return await self._route_wiki(query, strategy, confidence)
+        if keyword_kind == "wiki":
+            return await self._match_wiki(q_lower, query, strategy, confidence)
 
-        elif keyword_kind == "entity":
-            entities = self._extract_entities(query)
-            if entities:
-                return await self._route_entities(entities, strategy, confidence)
+        if keyword_kind == "entity":
+            return await self._match_entity(query, strategy, confidence)
 
-        elif keyword_kind == "graph":
-            if self._is_graph_query(q_lower):
-                return await self._route_graph(q_lower, strategy, confidence)
+        if keyword_kind == "graph":
+            return await self._match_graph(q_lower, strategy, confidence)
 
-        elif keyword_kind is None:
-            results = await self._rag.search(query, self.user_id, strategy="hybrid", limit=3)
-            if results:
-                return RouterResult(strategy, results, confidence)
+        if keyword_kind is None:
+            return await self._match_semantic(query, strategy, confidence)
 
+        return None
+
+    def _match_recent(self, q_lower: str, strategy: Strategy, confidence: float, recent_context: list[dict[str, Any]] | None) -> RouterResult | None:
+        if self._is_recent_query(q_lower) and recent_context:
+            return RouterResult(strategy, recent_context, confidence)
+        return None
+
+    async def _match_wiki(self, q_lower: str, query: str, strategy: Strategy, confidence: float) -> RouterResult | None:
+        if self._is_wiki_query(q_lower):
+            return await self._route_wiki(query, strategy, confidence)
+        return None
+
+    async def _match_entity(self, query: str, strategy: Strategy, confidence: float) -> RouterResult | None:
+        entities = self._extract_entities(query)
+        if entities:
+            return await self._route_entities(entities, strategy, confidence)
+        return None
+
+    async def _match_graph(self, q_lower: str, strategy: Strategy, confidence: float) -> RouterResult | None:
+        if self._is_graph_query(q_lower):
+            return await self._route_graph(q_lower, strategy, confidence)
+        return None
+
+    async def _match_semantic(self, query: str, strategy: Strategy, confidence: float) -> RouterResult | None:
+        results = await self._rag.search(query, self.user_id, strategy="hybrid", limit=3)
+        if results:
+            return RouterResult(strategy, results, confidence)
         return None
 
     async def _route_wiki(self, query: str, strategy: Strategy, confidence: float) -> RouterResult:

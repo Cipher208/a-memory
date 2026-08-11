@@ -29,7 +29,7 @@ class RAGIngestor:
         cursor = await conn.execute("SELECT id FROM rag_pages WHERE sha256_hash = ? AND user_id = ?", (content_hash, user_id))
         row = await cursor.fetchone()
         if row:
-            return row[0]
+            return int(row[0]) if row[0] is not None else None
 
         # Split text into chunks
         chunks_text = chunk_text(content)
@@ -81,7 +81,7 @@ class RAGIngestor:
 
             cursor = await conn.execute("SELECT last_insert_rowid()")
             row = await cursor.fetchone()
-            page_id = row[0]
+            page_id = int(row[0]) if row and row[0] is not None else 0
 
             # Batch Insertion
             chunk_data = []

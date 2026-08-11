@@ -7,6 +7,7 @@ L3 EpisodicMemory — async important moments with emotional weight
 import json
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
@@ -26,7 +27,7 @@ class EpisodicMemory:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -47,10 +48,10 @@ class EpisodicMemory:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "INSERT INTO episodes (user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, summary, emotional_weight, json.dumps(tags or []), time.time()),
+            (user_id, summary, emotional_weight, json.dumps(tags or [])),
         )
         await conn.commit()
-        return cursor.lastrowid
+        return int(cursor.lastrowid or 0)
 
     async def get_episodes(self, user_id: str, limit: int = 20, offset: int = 0) -> list[Episode]:
         conn = await self._cm.get(DB_NAME)
@@ -70,7 +71,7 @@ class EpisodicMemory:
         rows = await cursor.fetchall()
         return [self._row_to_episode(r) for r in rows]
 
-    async def search(self, user_id: str, query: str, limit: int = 10) -> list:
+    async def search(self, user_id: str, query: str, limit: int = 10) -> list[Episode]:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "SELECT * FROM episodes WHERE user_id=? AND summary LIKE ? ORDER BY created_at DESC LIMIT ?",
@@ -98,21 +99,21 @@ class EpisodicMemory:
         for row in rows:
             await am.archive(
                 user_id=user_id,
-                content=row["summary"],
+                content=str(row["summary"]),
                 memory_type="episode",
-                importance=row["emotional_weight"],
-                original_id=row["episode_id"],
+                importance=float(row["emotional_weight"]),
+                original_id=int(row["episode_id"]),
                 reason=f"inactive_{days}d",
             )
             archived_count += 1
 
-        ids = [row["episode_id"] for row in rows]
+        ids = [int(row["episode_id"]) for row in rows]
         if not ids:
             return archived_count
 
         placeholders = ",".join(["?"] * len(ids))
         sql = f"DELETE FROM episodes WHERE episode_id IN ({placeholders})"
-        await conn.execute(sql, ids)
+        await conn.execute(sql, tuple(ids))
         await conn.commit()
         return archived_count
 
@@ -124,14 +125,14 @@ class EpisodicMemory:
             (user_id,),
         )
         row = await cursor.fetchone()
-        return row["cnt"] if row else 0
+        return int(row["cnt"]) if row and row[0] is not None else 0
 
-    def _row_to_episode(self, row) -> Episode:
+    def _row_to_episode(self, row: dict[str, Any] | Any) -> Episode:
         return Episode(
-            episode_id=row["episode_id"],
-            user_id=row["user_id"],
-            summary=row["summary"],
-            emotional_weight=row["emotional_weight"],
-            tags=json.loads(row["tags"]) if row["tags"] else [],
-            created_at=row["created_at"],
+            episode_id=int(row["episode_id"]),
+            user_id=str(row["user_id"]),
+            summary=str(row["summary"]),
+            emotional_weight=float(row["emotional_weight"]),
+            tags=list(json.loads(row["tags"])) if row["tags"] else [],
+            created_at=float(row["created_at"]),
         )

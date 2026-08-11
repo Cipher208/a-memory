@@ -67,21 +67,23 @@ class Config:
                 "wiki_agent",
             ],
         }
-        if hook in known_hooks.get(layer, []):
-            return self.get("hooks", layer, hook, default=True)
-        return self.get("hooks", layer, hook, default=False)
+        res = self.get("hooks", layer, hook, default=True) if hook in known_hooks.get(layer, []) else self.get("hooks", layer, hook, default=False)
+        return bool(res)
 
     def is_feature_enabled(self, feature: str) -> bool:
-        return self.get("features", feature, default=False)
+        return bool(self.get("features", feature, default=False))
 
-    def get_wiki_types(self, layer: str) -> list:
-        return self.get("wiki", layer, default=[])
+    def get_wiki_types(self, layer: str) -> list[str]:
+        res: Any = self.get("wiki", layer, default=[])
+        if not isinstance(res, list):
+            return []
+        return [str(x) for x in res]
 
     def get_limit(self, key: str) -> int:
-        return self.get("limits", key, default=0)
+        return int(self.get("limits", key, default=0))
 
     def get_forgetting(self, key: str) -> float:
-        return self.get("forgetting", key, default=0.0)
+        return float(self.get("forgetting", key, default=0.0))
 
 
 config = Config()

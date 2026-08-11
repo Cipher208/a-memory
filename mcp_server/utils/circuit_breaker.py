@@ -113,11 +113,6 @@ class CircuitBreaker:
         self._total_rejections += 1
         return False
 
-    def reset(self) -> None:
-        self._failures = 0
-        self._state = CircuitState.CLOSED
-        self._opened_at = 0.0
-
     def get_metrics(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -177,7 +172,9 @@ class CircuitBreakerRegistry:
 
     def reset_all(self) -> None:
         for breaker in self._breakers.values():
-            breaker.reset()
+            breaker._failures = 0
+            breaker._state = CircuitState.CLOSED
+            breaker._opened_at = 0.0
 
 
 breaker_registry = CircuitBreakerRegistry()

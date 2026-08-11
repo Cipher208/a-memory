@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 class HookHandler:
     """Metadata for a registered hook handler."""
 
-    func: Callable
+    func: Callable[..., Any]
     name: str
     layer: str
     is_async: bool

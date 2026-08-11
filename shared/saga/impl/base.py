@@ -35,7 +35,6 @@ try:
         """Check if file is encrypted (not plain JSON)."""
         if not path.exists():
             return False
-        # noqa: SKY-D325
         with path.open("rb") as f:
             head = f.read(1)
         return _is_crypto_encrypted_blob(head)
@@ -123,7 +122,7 @@ class Saga:
     def _save_state(self) -> None:
         """Save state to disk (encrypted if available)."""
         state_file = SAGA_DIR / (self._saga_id + ".json")
-        state = {
+        state: dict[str, Any] = {
             "name": self.name,
             "saga_id": self._saga_id,
             "status": self._status.value,
@@ -137,15 +136,13 @@ class Saga:
             SAGA_DIR.mkdir(parents=True, exist_ok=True)
             if _HAS_ENCRYPTION:
                 blob = encrypt_json(state)
-                # noqa: SKY-D324
                 state_file.write_bytes(blob)
             else:
-                # noqa: SKY-D324
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
         except Exception:
             logger.exception("Failed to save saga state")
 
-    def _load_state(self, saga_id: str) -> dict | None:
+    def _load_state(self, saga_id: str) -> dict[str, Any] | None:
         """Load state from disk (supports encrypted and legacy plain JSON)."""
         from shared.saga import read_state_legacy_or_encrypted
 
@@ -208,7 +205,8 @@ class Saga:
                 return None
             result_blob = row["result_json"]
             if isinstance(result_blob, (bytes, bytearray)):
-                return decrypt_json(bytes(result_blob))
+                res: Any = decrypt_json(bytes(result_blob))
+                return dict(res) if isinstance(res, dict) else None
             return dict(json.loads(result_blob)) if result_blob else None
         except Exception:
             return None
@@ -280,7 +278,7 @@ class Saga:
             if asyncio.iscoroutine(action_result):
                 result = await asyncio.wait_for(action_result, timeout=float(step_timeout))
             else:
-                result = action_result  # type: ignore[assignment]
+                result = action_result
         return result if isinstance(result, dict) else {"value": result}
 
     async def _handle_retry_pause(self, step: SagaStep, attempt: int, exc: Exception) -> None:
@@ -449,10 +447,8 @@ class SagaWatchdog:
                         state["status"] = "stuck"
                         state["stuck_reason"] = f"timeout_after_{int(age)}s"
                         if _HAS_ENCRYPTION:
-                            # noqa: SKY-D324
                             state_file.write_bytes(encrypt_json(state))
                         else:
-                            # noqa: SKY-D324
                             state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
                         logger.warning("Saga '%s' marked as STUCK (age=%ds)", saga_name, int(age))
 
@@ -500,10 +496,8 @@ class SagaWatchdog:
             state["status"] = "manual_review_required"
             state["recovered_at"] = time.time()
             if _HAS_ENCRYPTION:
-                # noqa: SKY-D324
                 state_file.write_bytes(encrypt_json(state))
             else:
-                # noqa: SKY-D324
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
             return {"status": "manual_review_required", "state": state}

@@ -31,9 +31,9 @@ class RAGEngine:
         binary_dim: int = 384,
         binary_threshold_mode: str = "naive",
         binary_thresholds_path: str | None = None,
-        thresholds=None,
+        thresholds: Any = None,
         search_strategy: StrategyT = "fts",
-    ):
+    ) -> None:
         self._cm = cm or connection_manager
         self.layer = layer
         self.binary_dim = binary_dim
@@ -149,7 +149,7 @@ class RAGEngine:
         rows = await cur.fetchall()
         return [{"id": r[0], "title": r[1], "relation": r[2], "weight": r[3]} for r in rows]
 
-    async def add_relation(self, source_id: int, target_id: int, relation_type: str = "elaborates", weight: float = 0.8):
+    async def add_relation(self, source_id: int, target_id: int, relation_type: str = "elaborates", weight: float = 0.8) -> None:
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT OR REPLACE INTO rag_relations (source_id, target_id, relation_type, weight) VALUES (?, ?, ?, ?)",
@@ -168,4 +168,4 @@ class RAGEngine:
     async def count_chunks(self) -> int:
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM rag_chunks")).fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row and row[0] is not None else 0

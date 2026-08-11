@@ -43,7 +43,8 @@ class ArchivedMemories:
             (user_id, original_id, content, memory_type, importance, reason),
         )
         await conn.commit()
-        return int(cursor.lastrowid)
+        last_id: Any = cursor.lastrowid
+        return int(last_id) if last_id is not None else 0
 
     async def get_archived(self, user_id: str = "default", limit: int = 50) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)

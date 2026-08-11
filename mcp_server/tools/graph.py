@@ -5,9 +5,8 @@ from mcp_server.registry import _get_ctx
 from shared.constants import DB_NAME
 from shared.metrics import metrics
 
-import mcp_server.tools_layer as tl
-from .base import _validate_layer, _check_rate_limit, _get_graph, _invalidate_cache
-from typing import TYPE_CHECKING
+from .base import _validate_layer, _check_rate_limit, _get_graph, _invalidate_cache, _fire_hook
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
@@ -19,8 +18,8 @@ async def memory_graph_add(
     content: str = "",
     node_type: str = "fact",
     tags: list[str] | None = None,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Add a node to the epistemic graph."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -29,7 +28,7 @@ async def memory_graph_add(
 
     rate_limit = await _check_rate_limit(app, user_id)
     if rate_limit:
-        return rate_limit
+        return dict(rate_limit)
 
     node_id = await _get_graph(app, layer).add_node(user_id, content, node_type, tags)
     _invalidate_cache(layer, user_id)
@@ -43,7 +42,7 @@ async def memory_graph_add(
     }
     hook_name = hook_map.get(node_type)
     if hook_name:
-        await tl._fire_hook(hook_name, layer, {"node_type": node_type, "content": content, "user_id": user_id})
+        await _fire_hook(hook_name, layer, {"node_type": node_type, "content": content, "user_id": user_id})
 
     return GraphNodeResult(node_id=node_id).dict()
 
@@ -54,15 +53,15 @@ async def memory_graph_query(
     tag: str = "",
     node_type: str = "",
     limit: int = 20,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Query the epistemic graph by tag or node type."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
     metrics.inc("tool_graph_query")
 
-    await tl._fire_hook("retrieval_router", layer, {"query": tag or node_type, "user_id": user_id, "limit": limit})
+    await _fire_hook("retrieval_router", layer, {"query": tag or node_type, "user_id": user_id, "limit": limit})
 
     graph = _get_graph(app, layer)
     if tag:
@@ -79,8 +78,8 @@ async def memory_graph_nodes(
     user_id: str = "default",
     node_type: str = "",
     limit: int = 20,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """List nodes from the epistemic graph."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -96,7 +95,7 @@ async def memory_graph_nodes(
             (graph.layer, user_id, limit),
         )
         rows = await cur.fetchall()
-        nodes = [graph._row_to_node(r) for r in rows]
+        nodes = [graph._row_to_node(dict(r)) for r in rows]
     return {"nodes": [{"id": n.node_id, "content": n.content, "type": n.node_type, "tags": n.tags} for n in nodes], "count": len(nodes)}
 
 
@@ -105,8 +104,8 @@ async def memory_graph_edges(
     user_id: str = "",
     node_id: int = 0,
     limit: int = 20,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """List edges from the epistemic graph."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)

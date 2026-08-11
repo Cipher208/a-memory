@@ -6,10 +6,13 @@ Temporal Graph - time-based memory relations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
 
 
 @dataclass
@@ -20,14 +23,14 @@ class TemporalEvent:
     content: str
     timestamp: float
     importance: float
-    metadata: dict
+    metadata: dict[str, Any]
 
 
 class TemporalGraph:
-    def __init__(self, cm=None):
+    def __init__(self, cm: AsyncConnectionManager | None = None) -> None:
         self._cm = cm or connection_manager
 
-    async def init_db(self):
+    async def init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -53,7 +56,7 @@ class TemporalGraph:
         """,
         )
 
-    async def add_event(self, user_id: str, event_type: str, content: str, importance: float = 0.5, metadata: dict | None = None) -> int:
+    async def add_event(self, user_id: str, event_type: str, content: str, importance: float = 0.5, metadata: dict[str, Any] | None = None) -> int:
         import json
 
         conn = await self._cm.get(DB_NAME)
@@ -62,9 +65,9 @@ class TemporalGraph:
             (user_id, event_type, content, time.time(), importance, json.dumps(metadata or {})),
         )
         await conn.commit()
-        return cursor.lastrowid
+        return int(cursor.lastrowid or 0)
 
-    async def link_events(self, from_event: int, to_event: int, link_type: str = "follows", strength: float = 0.5):
+    async def link_events(self, from_event: int, to_event: int, link_type: str = "follows", strength: float = 0.5) -> None:
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT OR REPLACE INTO temporal_links (from_event, to_event, link_type, strength) VALUES (?, ?, ?, ?)",

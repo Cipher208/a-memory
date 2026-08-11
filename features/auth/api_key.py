@@ -3,19 +3,20 @@ from __future__ import annotations
 import secrets
 import time
 from pathlib import Path
+from typing import Any
 
 from features.auth.models import APIKeyModel
 from features.auth.store import EncryptedStore
 
 
 class APIKeyAuth:
-    def __init__(self, keys_file: Path | None = None):
+    def __init__(self, keys_file: Path | None = None) -> None:
         if keys_file is None:
             # Default location if not provided
             keys_file = Path("data/auth/keys.enc")
 
         self.store = EncryptedStore(keys_file, APIKeyModel)
-        self._keys: dict[str, dict] = self.store.load()
+        self._keys: dict[str, dict[str, Any]] = self.store.load()
 
     def create_key(self, user_id: str, label: str) -> str:
         """Generate ak_... key, save state."""
@@ -27,7 +28,7 @@ class APIKeyAuth:
         self.store.save(self._keys)
         return key
 
-    def verify(self, key: str) -> dict | None:
+    def verify(self, key: str) -> dict[str, Any] | None:
         """
         Check key validity and enabled status.
         Update last_used timestamp and save() on success.
@@ -68,7 +69,7 @@ class APIKeyAuth:
             return True
         return False
 
-    def list_keys(self) -> list[dict]:
+    def list_keys(self) -> list[dict[str, Any]]:
         """Return masked keys with metadata."""
         result = []
         for key, data in self._keys.items():

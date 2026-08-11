@@ -5,9 +5,8 @@ from mcp_server.registry import _get_ctx
 from shared.constants import DB_NAME
 from shared.metrics import metrics
 
-import mcp_server.tools_layer as tl
-from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache
-from typing import TYPE_CHECKING
+from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache, _fire_hook
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
@@ -19,8 +18,8 @@ async def memory_episode_save(
     summary: str = "",
     weight: float = 0.5,
     tags: list[str] | None = None,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Save an episode to L3 episodic memory."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -29,15 +28,15 @@ async def memory_episode_save(
 
     rate_limit = await _check_rate_limit(app, user_id)
     if rate_limit:
-        return rate_limit
+        return dict(rate_limit)
 
     episode_id = await _get_memory(app, layer, user_id).l3.save(user_id, summary, weight, tags)
     _invalidate_cache(layer, user_id)
 
     # Fire post-save hooks
-    await tl._fire_hook("emotion_trigger", layer, {"summary": summary, "emotional_weight": weight, "user_id": user_id})
-    await tl._fire_hook("state_delta", layer, {"summary": summary, "tags": tags, "user_id": user_id})
-    await tl._fire_hook("consolidation", layer, {"trigger": "episode_save", "user_id": user_id})
+    await _fire_hook("emotion_trigger", layer, {"summary": summary, "emotional_weight": weight, "user_id": user_id})
+    await _fire_hook("state_delta", layer, {"summary": summary, "tags": tags, "user_id": user_id})
+    await _fire_hook("consolidation", layer, {"trigger": "episode_save", "user_id": user_id})
 
     return EpisodeResult(episode_id=episode_id).dict()
 
@@ -47,15 +46,15 @@ async def memory_episode_recall(
     user_id: str = "default",
     tag: str = "",
     limit: int = 10,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Recall episodes, optionally filtered by tag."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
     metrics.inc("tool_episode_recall")
 
-    await tl._fire_hook("retrieval_router", layer, {"query": tag or "episodes", "user_id": user_id, "limit": limit})
+    await _fire_hook("retrieval_router", layer, {"query": tag or "episodes", "user_id": user_id, "limit": limit})
 
     mem = _get_memory(app, layer, user_id)
     if tag:
@@ -70,8 +69,8 @@ async def memory_episode_list(
     user_id: str = "default",
     limit: int = 10,
     offset: int = 0,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """List episodes from L3 episodic memory."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -88,8 +87,8 @@ async def memory_episode_get(
     layer: str = "user",
     user_id: str = "default",
     episode_id: int = 0,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Get a single episode by ID."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)

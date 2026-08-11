@@ -31,16 +31,17 @@ class RAGSearcher:
 
     async def _check_fts(self) -> bool:
         if self._fts_available is not None:
-            return self._fts_available
+            return bool(self._fts_available)
 
         conn = await self._cm.get(DB_NAME)
         try:
             cur = await conn.execute("PRAGMA compile_options")
-            options = [r[0] for r in await cur.fetchall()]
+            rows = await cur.fetchall()
+            options = [str(r[0]) for r in rows]
             self._fts_available = "ENABLE_FTS5" in options
         except Exception:
             self._fts_available = False
-        return self._fts_available or False
+        return bool(self._fts_available)
 
     async def _search_fts5(self, query: str, user_id: str, limit: int) -> list[SearchResult]:
         fts_ready = await self._check_fts()
@@ -59,7 +60,7 @@ class RAGSearcher:
     async def _search_mib(self, query: str, user_id: str, limit: int) -> list[SearchResult]:
         from rag.quantize import embed_to_binary
 
-        def default_bin_for(emb):
+        def default_bin_for(emb: list[float]) -> bytes:
             return embed_to_binary(emb, threshold=0.0, dim=len(emb))
 
         raw_results = await search_binary(self._cm, query, user_id, limit, default_bin_for, self.binary_dim)

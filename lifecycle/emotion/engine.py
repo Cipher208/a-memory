@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+from re import Pattern
 from .models import EmotionMarkerConfig, EmotionResult
 
 
@@ -12,16 +13,16 @@ class EmotionEngine:
     MARKER_SCORE_DEFAULT = 0.4
     EMOJI_SCORE_DEFAULT = 0.3
 
-    def __init__(self, config: EmotionMarkerConfig):
+    def __init__(self, config: EmotionMarkerConfig) -> None:
         self.config = config
-        self.phrase_regex: re.Pattern | None = None
-        self.marker_regex: re.Pattern | None = None
-        self.emoji_regex: re.Pattern | None = None
+        self.phrase_regex: Pattern[str] | None = None
+        self.marker_regex: Pattern[str] | None = None
+        self.emoji_regex: Pattern[str] | None = None
         self._compile()
 
     def _compile(self) -> None:
         """Compile regex patterns once."""
-        phrase_patterns = []
+        phrase_patterns: list[str] = []
         for i, p in enumerate(self.config.phrases):
             pattern = p.pattern.replace(" ", r"\s+(?:\w+\s+)?")
             phrase_patterns.append(f"(?P<p{i}>{pattern})")
@@ -34,7 +35,7 @@ class EmotionEngine:
             [f"(?P<e_{cat.replace(' ', '_')}>{'|'.join(re.escape(i) for i in icons)})" for cat, icons in self.config.emojis.items() if icons]
         )
 
-    def _build_regex(self, parts: list[str], flags: int = 0) -> re.Pattern | None:
+    def _build_regex(self, parts: list[str], flags: int = 0) -> Pattern[str] | None:
         return re.compile("|".join(parts), flags) if parts else None
 
     def detect(self, text: str) -> list[EmotionResult]:

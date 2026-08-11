@@ -7,9 +7,6 @@ from mcp_server.registry import _get_ctx
 from mcp_server.utils.privacy import strip_secrets
 from shared.metrics import metrics
 
-# Import tools_layer to use its _fire_hook which might be monkeypatched
-import mcp_server.tools_layer as tl
-
 from .base import (
     _validate_layer,
     _check_rate_limit,
@@ -19,6 +16,7 @@ from .base import (
     _invalidate_cache,
     _get_recall_cache,
     _set_recall_cache,
+    _fire_hook,
 )
 from typing import TYPE_CHECKING, Any
 
@@ -35,8 +33,8 @@ async def memory_remember(
     value: str = "",
     importance: float = 0.5,
     session_id: str = "",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Save a fact to long-term memory (L4 CoreMemory)."""
     value = strip_secrets(value)
     if session_id and _dedup_cache.is_duplicate(session_id, key, value):
@@ -50,9 +48,9 @@ async def memory_remember(
 
     rate_limit = await _check_rate_limit(app, user_id)
     if rate_limit:
-        return rate_limit
+        return dict(rate_limit)
 
-    gate = await tl._fire_hook("importance_gate", layer, {"text": value, "key": key, "importance": importance})
+    gate = await _fire_hook("importance_gate", layer, {"text": value, "key": key, "importance": importance})
     if gate.get("results") and any(r.get("bypass") for r in gate["results"] if isinstance(r, dict)):
         logger.info("Importance gate bypassed: key=%s, importance=%.2f, user=%s", key, importance, user_id)
         return RememberResult(status="skipped", reason="below_importance_threshold").dict()
@@ -75,22 +73,22 @@ async def memory_remember(
     else:
         entry_id = await mem.remember(key, value, importance)
         node_id = await graph.add_node(user_id, value, "fact", [], importance)
-        await tl._fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
-        await tl._fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
+        await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
+        await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
 
     _invalidate_cache(layer, user_id)
     return RememberResult(status="ok", entry_id=entry_id, graph_node_id=node_id).dict()
 
 
 async def _fire_post_remember_hooks(layer: str, user_id: str, key: str, value: str, mem: Any) -> None:
-    await tl._fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
-    await tl._fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
+    await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
+    await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
     if "error" in key.lower():
-        await tl._fire_hook("error_occurred", layer, {"key": key, "value": value, "user_id": user_id})
+        await _fire_hook("error_occurred", layer, {"key": key, "value": value, "user_id": user_id})
     elif "decision" in key.lower():
-        await tl._fire_hook("decision_made", layer, {"key": key, "value": value, "user_id": user_id})
+        await _fire_hook("decision_made", layer, {"key": key, "value": value, "user_id": user_id})
     elif "correction" in key.lower():
-        await tl._fire_hook("self_correction", layer, {"key": key, "value": value, "user_id": user_id})
+        await _fire_hook("self_correction", layer, {"key": key, "value": value, "user_id": user_id})
 
 
 async def memory_recall(
@@ -98,15 +96,15 @@ async def memory_recall(
     user_id: str = "default",
     query: str = "",
     limit: int = 10,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Search memory across L3 (episodes) and L4 (facts)."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
     metrics.inc("tool_recall")
 
-    await tl._fire_hook("retrieval_router", layer, {"query": query, "user_id": user_id, "limit": limit})
+    await _fire_hook("retrieval_router", layer, {"query": query, "user_id": user_id, "limit": limit})
 
     cached = _get_recall_cache(query, user_id, layer, limit)
     if cached is not None:
@@ -115,7 +113,7 @@ async def memory_recall(
     results = await _get_memory(app, layer, user_id).recall(query, limit)
     _set_recall_cache(query, user_id, layer, limit, results)
 
-    await tl._fire_hook("auto_context", layer, {"query": query, "results_count": len(results), "user_id": user_id})
+    await _fire_hook("auto_context", layer, {"query": query, "results_count": len(results), "user_id": user_id})
 
     return RecallResult(results=results, count=len(results)).dict()
 
@@ -124,8 +122,8 @@ async def memory_forget(
     layer: str = "user",
     user_id: str = "default",
     key: str = "",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Delete a fact from L4 memory."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -134,7 +132,7 @@ async def memory_forget(
 
     rate_limit = await _check_rate_limit(app, user_id)
     if rate_limit:
-        return rate_limit
+        return dict(rate_limit)
 
     deleted = await _get_memory(app, layer, user_id).forget(key)
     _invalidate_cache(layer, user_id)

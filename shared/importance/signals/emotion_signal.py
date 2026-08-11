@@ -12,11 +12,12 @@ class EmotionSignal(IImportanceSignal):
         engine = context.get("_emotion_engine")
         if not engine:
             # Fallback to provided emotion_weight if any
-            return max(0.0, min(1.0, context.get("emotion_weight", 0.0)))
+            val: Any = context.get("emotion_weight", 0.0)
+            return float(max(0.0, min(1.0, float(val))))
 
         results = engine.detect(text)
         if not results:
             return 0.0
 
         # Use max score from detected emotions
-        return max(res.score for res in results)
+        return float(max(float(res.score) for res in results))

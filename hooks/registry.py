@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class HookHandler(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    func: Callable
+    func: Callable[..., Any]
     name: str
     layer: str
     is_async: bool

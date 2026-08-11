@@ -1,13 +1,16 @@
 import os
+from collections.abc import Awaitable, Callable
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
+from starlette.requests import Request
+from starlette.applications import Starlette
 from features.auth import bearer_auth
 from config import config
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
+    async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if request.url.path in ("/mcp", "/health", "/ready", "/alive"):
             return await call_next(request)
         if os.environ.get("MCP_AUTH_DISABLED"):
@@ -18,9 +21,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def add_middlewares(app):
+def add_middlewares(app: Starlette) -> None:
     app.add_middleware(AuthMiddleware)
-    allowed_origins = config.get("cors", "allowed_origins", default=["http://localhost:*", "http://127.0.0.1:*"])
+    allowed_origins: list[str] = config.get("cors", "allowed_origins", default=["http://localhost:*", "http://127.0.0.1:*"])
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
