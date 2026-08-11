@@ -28,12 +28,20 @@ async def lifespan(server: FastMCP):
 
     async def _periodic_tasks():
         from lifecycle.forgetting import ForgettingSystem
+        from lifecycle.compactor import memory_compactor
 
         forgetting = ForgettingSystem()
+        last_compaction = 0
         while True:
             try:
                 await asyncio.sleep(900)  # 15 minutes
                 await forgetting.cleanup()
+
+                # Run compaction every 1 hour
+                now = asyncio.get_event_loop().time()
+                if now - last_compaction >= 3600:
+                    await memory_compactor.run_cleanup(user_id="default")
+                    last_compaction = now
             except asyncio.CancelledError:
                 break
             except Exception as e:
