@@ -21,10 +21,11 @@ class EmotionEngine:
 
     def _compile(self):
         """Compile regex patterns once."""
-        self.phrase_regex = self._build_regex(
-            [f"(?P<p{i}>{p.pattern.replace(' ', r'\s+(?:\w+\s+)?')})" for i, p in enumerate(self.config.phrases)],
-            flags=re.IGNORECASE
-        )
+        phrase_patterns = []
+        for i, p in enumerate(self.config.phrases):
+            pattern = p.pattern.replace(" ", r"\s+(?:\w+\s+)?")
+            phrase_patterns.append(f"(?P<p{i}>{pattern})")
+        self.phrase_regex = self._build_regex(phrase_patterns, flags=re.IGNORECASE)
         self.marker_regex = self._build_regex(
             [f"(?P<m_{cat.replace(' ', '_')}>{'|'.join(re.escape(w) for w in words)})" 
              for cat, words in self.config.markers.items() if words],

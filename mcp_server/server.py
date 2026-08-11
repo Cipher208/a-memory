@@ -20,8 +20,6 @@ mcp = FastMCP(
 
 
 def _register_all_tools():
-    import mcp_server.tools_layer
-    import mcp_server.tools_ops  # noqa: F401
     from mcp_server.registry import get_all_tools
 
     for name, func in get_all_tools().items():

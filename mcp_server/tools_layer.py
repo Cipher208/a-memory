@@ -13,10 +13,21 @@ from .tools.session import memory_session_start, memory_session_end, memory_sess
 from .tools.episodic import memory_episode_save, memory_episode_recall, memory_episode_list, memory_episode_get
 from .tools.graph import memory_graph_add, memory_graph_query, memory_graph_nodes, memory_graph_edges
 from .tools.wiki import wiki_add, wiki_search, wiki_list, wiki_delete
-from .tools.ops import memory_stats, memory_context, memory_context_inject
+from .tools.ops import (
+    memory_stats,
+    memory_context,
+    memory_context_inject,
+    memory_api_key,
+    memory_backup,
+    memory_saga,
+    memory_data,
+    memory_sync_replica,
+    memory_cleanup,
+    memory_lucidity_purge,
+    memory_search,
+)
 
 # Re-export _fire_hook for backward compatibility and tests
-from .tools.base import _fire_hook
 
 # For tests that monkeypatch tl._fire_hook
 def _fire_hook_wrapper(*args, **kwargs):
@@ -42,6 +53,14 @@ _register_tools: dict[str, Any] = {
     "memory_stats": memory_stats,
     "memory_context": memory_context,
     "memory_context_inject": memory_context_inject,
+    "memory_api_key": memory_api_key,
+    "memory_backup": memory_backup,
+    "memory_saga": memory_saga,
+    "memory_data": memory_data,
+    "memory_sync_replica": memory_sync_replica,
+    "memory_cleanup": memory_cleanup,
+    "memory_lucidity_purge": memory_lucidity_purge,
+    "memory_search": memory_search,
     "wiki_add": wiki_add,
     "wiki_search": wiki_search,
     "wiki_list": wiki_list,

@@ -4,11 +4,8 @@ import hashlib
 import logging
 import re
 import time
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from mcp.server.fastmcp import Context
-from mcp_server.registry import _get_ctx
-from mcp_server.utils.privacy import strip_secrets
 
 if TYPE_CHECKING:
     from mcp_server.context import AppContext

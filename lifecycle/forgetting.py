@@ -61,10 +61,10 @@ class ForgettingSystem:
                 updates,
             )
             await conn.commit()
-            logger.info("Decayed %d entries" % len(updates))
+            logger.info("Decayed %d entries", len(updates))
             return len(updates)
-        except Exception as e:
-            logger.exception(f"Decay failed: {e}")
+        except Exception:
+            logger.exception("Decay failed")
             return 0
 
     async def archive_old_entries(self) -> int:
@@ -113,7 +113,7 @@ class ForgettingSystem:
                     memory_type=r["memory_kind"] or "fact",
                     importance=r["importance"],
                     original_id=r["entry_id"],
-                    reason="expired" if (r["expires_at"] and r["expires_at"] < now) else "inactive_%dd" % self.archive_days,
+                    reason="expired" if (r["expires_at"] and r["expires_at"] < now) else f"inactive_{self.archive_days}d",
                 )
                 archived_count += 1
 
@@ -121,10 +121,10 @@ class ForgettingSystem:
             placeholders = ",".join(["?"] * len(ids))
             await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({placeholders})", ids)
             await conn.commit()
-            logger.info("Archived %d entries" % archived_count)
+            logger.info("Archived %d entries", archived_count)
             return archived_count
-        except Exception as e:
-            logger.exception(f"Archive failed: {e}")
+        except Exception:
+            logger.exception("Archive failed")
             return 0
 
     async def compress_duplicates(self) -> int:
@@ -144,8 +144,8 @@ class ForgettingSystem:
                 removed += changes_row[0]
             await conn.commit()
             return removed
-        except Exception as e:
-            logger.exception(f"Compression failed: {e}")
+        except Exception:
+            logger.exception("Compression failed")
             return 0
 
     async def cleanup(self) -> dict[str, int]:

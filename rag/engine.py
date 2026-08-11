@@ -5,10 +5,9 @@ RAG Engine — Unified facade for Ingestor and Searcher.
 Maintains backward compatibility for legacy consumers.
 """
 
+import asyncio
 import logging
-from collections.abc import Sequence
-from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
@@ -16,6 +15,10 @@ from rag.schema import init_rag_db
 from rag.ingestor import RAGIngestor
 from rag.searcher import RAGSearcher, StrategyT
 from shared.importance import ImportanceScorer
+
+if TYPE_CHECKING:
+    from pathlib import Path
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +63,7 @@ class RAGEngine:
             return binary_from_threshold_array(emb, thr)
         return embed_to_binary(emb, threshold=0.0, dim=self.binary_dim)
 
-    def _load_thresholds(self):
+    def _load_thresholds(self) -> Any | None:
         if self.binary_threshold_mode != "supervised_path" or not self.binary_thresholds_path:
             return None
         try:
@@ -78,14 +81,14 @@ class RAGEngine:
             logger.debug(f"[rag] ImportanceScorer not available: {e}")
             return None
 
-    async def init_db(self):
+    async def init_db(self) -> None:
         """Delegate to rag.schema.init_rag_db."""
         fts_available = await self.searcher._check_fts()
         await init_rag_db(self._cm, fts_available)
 
     async def ingest_file(self, filepath: Path, user_id: str = "default", wiki_type: str | None = None) -> str:
         """Delegate to ingestor."""
-        content = filepath.read_text(encoding="utf-8")
+        content = await asyncio.to_thread(filepath.read_text, encoding="utf-8")
         page_id = await self.ingestor.ingest(title=filepath.stem, content=content, user_id=user_id, wiki_type=wiki_type, path=str(filepath))
         if page_id is None:
             return f"[SKIP] {filepath.name} (already ingested or empty)"

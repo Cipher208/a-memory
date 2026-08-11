@@ -5,14 +5,14 @@ from __future__ import annotations
 Tools register themselves here. server.py pulls from here and applies @mcp.tool().
 """
 
-from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
-from mcp.server.fastmcp import Context
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
+    from collections.abc import Callable
 
 # if TYPE_CHECKING:
 
-if TYPE_CHECKING:
-    pass
 
 _tools: dict[str, Callable] = {}
 

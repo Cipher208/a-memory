@@ -1,9 +1,11 @@
 from __future__ import annotations
-from typing import Protocol, runtime_checkable
-from pathlib import Path
+from typing import Protocol, runtime_checkable, TYPE_CHECKING
 import json
 
 from shared.saga.schema import SagaState
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @runtime_checkable

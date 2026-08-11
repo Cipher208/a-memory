@@ -4,6 +4,7 @@ from __future__ import annotations
 AuditTrail — async, SQLite-based audit logging with rotation
 """
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -99,7 +100,7 @@ class AuditTrail:
             from pathlib import Path
 
             archive_path = Path(archive_dir)
-            archive_path.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(archive_path.mkdir, parents=True, exist_ok=True)
             archive_file = archive_path / f"audit_archive_{int(time.time())}.json"
             archive_data = [
                 {
@@ -111,8 +112,7 @@ class AuditTrail:
                 }
                 for r in rows
             ]
-            with archive_file.open("w", encoding="utf-8") as f:
-                f.write(json.dumps(archive_data, indent=2, default=str))
+            await asyncio.to_thread(archive_file.write_text, json.dumps(archive_data, indent=2, default=str), encoding="utf-8")
 
         cursor = await conn.execute("DELETE FROM audit_log WHERE timestamp < ?", (cutoff,))
         await conn.commit()

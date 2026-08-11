@@ -25,8 +25,11 @@ Usage:
 
 import logging
 import time
-from collections.abc import Callable
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 

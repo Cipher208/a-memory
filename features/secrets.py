@@ -10,6 +10,7 @@ Master key resolution order:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -62,11 +63,8 @@ def _load_dotenv() -> None:
 def _save_dotenv(key: str, value: str) -> None:
     """Save a key-value pair to .env file."""
     env_path = Path(".env")
-    try:
-        with env_path.open("a") as f:
-            f.write(f"\n{key}={value}\n")
-    except Exception:
-        pass
+    with contextlib.suppress(Exception), env_path.open("a") as f:
+        f.write(f"\n{key}={value}\n")
 
 
 def _load_master_key() -> bytes:
@@ -78,27 +76,23 @@ def _load_master_key() -> bytes:
         raise ImportError("pynacl is required for encryption. Install with: pip install pynacl")
 
     # Try OS keychain first (recommended for production)
-    try:
+    with contextlib.suppress(Exception):
         import keyring
 
         stored = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
         if stored:
             return bytes.fromhex(stored)
-    except Exception:
-        pass
 
     # Try .env file
     _load_dotenv()
 
     # Try config
-    try:
+    with contextlib.suppress(Exception):
         from config import config
 
         cfg_key = config.get("crypto", "master_key_hex", default="")
         if cfg_key:
             return bytes.fromhex(cfg_key)
-    except Exception:
-        pass
 
     # Try environment variable with argon2id KDF
     env_seed = os.environ.get(_ENV_VAR)

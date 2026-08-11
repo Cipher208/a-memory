@@ -17,6 +17,7 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import sqlite3
@@ -56,7 +57,7 @@ class _SyncConnectionWrapper:
         self._lock = threading.Lock()
 
     async def execute(self, sql: str, params: tuple = ()) -> _SyncCursorWrapper:
-        def _do():
+        def _do() -> sqlite3.Cursor:
             with self._lock:
                 return self._conn.execute(sql, params)
 
@@ -64,35 +65,35 @@ class _SyncConnectionWrapper:
         return _SyncCursorWrapper(cursor)
 
     async def executemany(self, sql: str, params_list: list) -> None:
-        def _do():
+        def _do() -> None:
             with self._lock:
                 self._conn.executemany(sql, params_list)
 
         await asyncio.to_thread(_do)
 
     async def executescript(self, sql: str) -> None:
-        def _do():
+        def _do() -> None:
             with self._lock:
                 self._conn.executescript(sql)
 
         await asyncio.to_thread(_do)
 
     async def commit(self) -> None:
-        def _do():
+        def _do() -> None:
             with self._lock:
                 self._conn.commit()
 
         await asyncio.to_thread(_do)
 
     async def rollback(self) -> None:
-        def _do():
+        def _do() -> None:
             with self._lock:
                 self._conn.rollback()
 
         await asyncio.to_thread(_do)
 
     async def close(self) -> None:
-        def _do():
+        def _do() -> None:
             with self._lock:
                 self._conn.close()
 
@@ -138,7 +139,7 @@ class AsyncConnectionManager:
     # Core API
     # ------------------------------------------------------------------
 
-    async def get(self, db_name: str = "memory.db"):
+    async def get(self, db_name: str = "memory.db") -> Any:
         """Return (or create) a connection to `db_name`."""
         if db_name in self._conns:
             conn = self._conns[db_name]
@@ -160,7 +161,7 @@ class AsyncConnectionManager:
         logger.debug("opened connection %s (%s) [sync=%s]", db_name, db_path, _USE_SYNC)
         return conn
 
-    async def _get_aiosqlite_conn(self, db_path: str):
+    async def _get_aiosqlite_conn(self, db_path: str) -> Any:
         """Create aiosqlite connection (Linux/macOS)."""
         import aiosqlite
 
@@ -177,7 +178,7 @@ class AsyncConnectionManager:
     async def _get_sync_conn(self, db_path: str) -> _SyncConnectionWrapper:
         """Create sync sqlite3 connection wrapped for async (Windows)."""
 
-        def _connect():
+        def _connect() -> sqlite3.Connection:
             conn = sqlite3.connect(db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
@@ -191,17 +192,15 @@ class AsyncConnectionManager:
         raw_conn = await asyncio.to_thread(_connect)
         return _SyncConnectionWrapper(raw_conn)
 
-    async def close_all(self):
+    async def close_all(self) -> None:
         """Close all open connections (on shutdown)."""
         for name, conn in self._conns.items():
-            try:
+            with contextlib.suppress(Exception):
                 await conn.close()
                 logger.debug("closed connection %s", name)
-            except Exception:
-                pass
         self._conns.clear()
 
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, Any]:
         return {
             "connections": len(self._conns),
             "dbs": list(self._conns.keys()),
@@ -212,7 +211,7 @@ class AsyncConnectionManager:
     # Helpers for migrations and init-db
     # ------------------------------------------------------------------
 
-    async def execute_script(self, db_name: str, script: str):
+    async def execute_script(self, db_name: str, script: str) -> None:
         """Execute a SQL script (e.g. CREATE TABLE) and commit."""
         conn = await self.get(db_name)
         await conn.executescript(script)
@@ -228,7 +227,7 @@ class AsyncConnectionManager:
         row = await cur.fetchone()
         return row is not None
 
-    async def vacuum(self, db_name: str):
+    async def vacuum(self, db_name: str) -> None:
         """VACUUM — reclaim space after bulk deletions."""
         conn = await self.get(db_name)
         await conn.execute("VACUUM")

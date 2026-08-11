@@ -1,9 +1,11 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
-from mcp.server.fastmcp import Context
 from mcp_server.registry import _get_ctx
 from .base import _validate_layer, _get_wiki
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
 
 async def wiki_add(
     layer: str = "user",

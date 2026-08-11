@@ -1,9 +1,7 @@
 from __future__ import annotations
 import logging
 import asyncio
-from typing import TYPE_CHECKING
 
-from mcp.server.fastmcp import Context
 from mcp_server.models import RememberResult, RecallResult, ForgetResult
 from mcp_server.registry import _get_ctx
 from mcp_server.utils.privacy import strip_secrets
@@ -17,12 +15,15 @@ from .base import (
     _check_rate_limit,
     _get_memory,
     _get_graph,
-    _get_hooks,
     _dedup_cache,
     _invalidate_cache,
     _get_recall_cache,
     _set_recall_cache,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
 
 logger = logging.getLogger(__name__)
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import Any
-from collections.abc import Callable
+from typing import Any, TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Removed direct config dependency to fix tests
 # from config import config

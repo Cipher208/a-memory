@@ -1,7 +1,5 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
 
-from mcp.server.fastmcp import Context
 from mcp_server.models import EpisodeResult
 from mcp_server.registry import _get_ctx
 from shared.constants import DB_NAME
@@ -9,6 +7,10 @@ from shared.metrics import metrics
 
 import mcp_server.tools_layer as tl
 from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from mcp.server.fastmcp import Context
 
 async def memory_episode_save(
     layer: str = "user",

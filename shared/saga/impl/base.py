@@ -15,11 +15,13 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +119,7 @@ class Saga:
         )
         return self
 
-    def _save_state(self):
+    def _save_state(self) -> None:
         """Save state to disk (encrypted if available)."""
         state_file = SAGA_DIR / (self._saga_id + ".json")
         state = {
@@ -137,8 +139,8 @@ class Saga:
                 state_file.write_bytes(blob)
             else:
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-        except Exception as e:
-            logger.exception(f"Failed to save saga state: {e}")
+        except Exception:
+            logger.exception("Failed to save saga state")
 
     def _load_state(self, saga_id: str) -> dict | None:
         """Load state from disk (supports encrypted and legacy plain JSON)."""
@@ -147,12 +149,11 @@ class Saga:
         state_file = SAGA_DIR / (saga_id + ".json")
         if not state_file.exists():
             return None
-        try:
+        with contextlib.suppress(Exception):
             return read_state_legacy_or_encrypted(state_file)
-        except Exception:
-            return None
+        return None
 
-    def _cleanup_state(self):
+    def _cleanup_state(self) -> None:
         """Delete state file after completion."""
         state_file = SAGA_DIR / (self._saga_id + ".json")
         if state_file.exists():
@@ -330,11 +331,11 @@ class Saga:
             logger.info(f"Saga '{self.name}' completed")
             return self._data
 
-        except Exception as e:
+        except Exception:
             if self._status != SagaStatus.COMPENSATED:
                 self._status = SagaStatus.FAILED
             self._save_state()
-            logger.exception(f"Saga '{self.name}' failed: {e}")
+            logger.exception("Saga '%s' failed", self.name)
             raise
 
     async def _compensate(self, failed_step: int) -> None:
@@ -361,9 +362,9 @@ class Saga:
             if inner_step.status == SagaStatus.COMPLETED and inner_step.compensation:
                 try:
                     await inner_step.compensation(inner_step.data)
-                    logger.info(f"Saga '{self.name}' compensated inner step '{inner_step.name}'")
-                except Exception as e:
-                    logger.exception(f"Saga '{self.name}' inner compensation failed for '{inner_step.name}': {e}")
+                    logger.info("Saga '%s' compensated inner step '%s'", self.name, inner_step.name)
+                except Exception:
+                    logger.exception("Saga '%s' inner compensation failed for '%s'", self.name, inner_step.name)
 
     async def _compensate_step(self, step: SagaStep) -> None:
         """Run compensation for a single step, logging success or failure."""
@@ -371,9 +372,9 @@ class Saga:
             return
         try:
             await step.compensation(step.data)
-            logger.info(f"Saga '{self.name}' compensated step '{step.name}'")
-        except Exception as e:
-            logger.exception(f"Saga '{self.name}' compensation failed for '{step.name}': {e}")
+            logger.info("Saga '%s' compensated step '%s'", self.name, step.name)
+        except Exception:
+            logger.exception("Saga '%s' compensation failed for '%s'", self.name, step.name)
 
     def get_state(self) -> dict:
         return {
@@ -396,29 +397,29 @@ class SagaWatchdog:
         self._running = False
         self._thread: threading.Thread | None = None
 
-    def start(self):
+    def start(self) -> None:
         if self._running:
             return
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        logger.info("Saga watchdog started (interval=%ds)" % self.check_interval)
+        logger.info("Saga watchdog started (interval=%ds)", self.check_interval)
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
 
-    def _loop(self):
+    def _loop(self) -> None:
         while self._running:
             try:
                 self._check_stuck_sagas()
                 time.sleep(self.check_interval)
-            except Exception as e:
-                logger.exception(f"Saga watchdog error: {e}")
+            except Exception:
+                logger.exception("Saga watchdog error")
                 time.sleep(30)
 
-    def _check_stuck_sagas(self):
+    def _check_stuck_sagas(self) -> None:
         """Find and mark stuck sagas."""
         SAGA_DIR.mkdir(parents=True, exist_ok=True)
         now = time.time()
@@ -436,15 +437,15 @@ class SagaWatchdog:
                     age = now - started_at
                     if age > self.max_age_seconds:
                         state["status"] = "stuck"
-                        state["stuck_reason"] = "timeout_after_%ds" % int(age)
+                        state["stuck_reason"] = f"timeout_after_{int(age)}s"
                         if _HAS_ENCRYPTION:
                             state_file.write_bytes(encrypt_json(state))
                         else:
                             state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-                        logger.warning("Saga '%s' marked as STUCK (age=%ds)" % (saga_name, int(age)))
+                        logger.warning("Saga '%s' marked as STUCK (age=%ds)", saga_name, int(age))
 
-            except Exception as e:
-                logger.exception(f"Error checking saga {state_file.name}: {e}")
+            except Exception:
+                logger.exception("Error checking saga %s", state_file.name)
 
     def get_stuck_sagas(self) -> list[dict[str, Any]]:
         """Get list of stuck sagas."""

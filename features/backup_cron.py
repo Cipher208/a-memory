@@ -39,14 +39,12 @@ class BackupCron:
 
     def _load_state(self):
         if self._state_file.exists():
-            try:
+            with contextlib.suppress(Exception):
                 from shared.saga import read_state_legacy_or_encrypted
 
                 state = read_state_legacy_or_encrypted(self._state_file)
                 self._last_backup = state.get("last_backup", 0.0)
                 self._last_wiki_sync = state.get("last_wiki_sync", 0.0)
-            except Exception:
-                pass
 
     def _save_state(self):
         self._state_file.write_text(json.dumps({"last_backup": self._last_backup, "last_wiki_sync": self._last_wiki_sync}), encoding="utf-8")
@@ -89,8 +87,8 @@ class BackupCron:
                     self._sync_wiki()
 
                 time.sleep(60)
-            except Exception as e:
-                logger.exception(f"Backup cron error: {e}")
+            except Exception:
+                logger.exception("Backup cron error")
                 time.sleep(300)
 
     def _fire_nightly_hooks(self):
@@ -102,8 +100,8 @@ class BackupCron:
 
             for layer in ["user", "agent"]:
                 asyncio.run(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
-        except Exception as e:
-            logger.exception(f"Nightly hook error: {e}")
+        except Exception:
+            logger.exception("Nightly hook error")
 
     def _do_backup(self) -> str:
         import shutil
@@ -133,7 +131,7 @@ class BackupCron:
 
         self._last_backup = time.time()
         self._save_state()
-        logger.info("Auto-backup created: %s (%d files)" % (name, len(backed_up)))
+        logger.info("Auto-backup created: %s (%d files)", name, len(backed_up))
         return str(dest)
 
     def _cleanup_old(self):
@@ -146,7 +144,7 @@ class BackupCron:
                 shutil.rmtree(d)
                 removed += 1
         if removed:
-            logger.info("Cleaned up %d old backups" % removed)
+            logger.info("Cleaned up %d old backups", removed)
 
     def _sync_wiki(self):
         """Synchronize wiki files with disk."""
@@ -158,11 +156,11 @@ class BackupCron:
                 raw = fw.reindex_all()
                 result: dict[str, Any] = asyncio.run(raw) if asyncio.iscoroutine(raw) else raw
                 if isinstance(result, dict) and result.get("indexed", 0) > 0:
-                    logger.info("Wiki %s synced: %d files" % (layer, result["indexed"]))
+                    logger.info("Wiki %s synced: %d files", layer, result["indexed"])
             self._last_wiki_sync = time.time()
             self._save_state()
-        except Exception as e:
-            logger.exception(f"Wiki sync error: {e}")
+        except Exception:
+            logger.exception("Wiki sync error")
 
     def backup_now(self) -> str:
         return self._do_backup()

@@ -1,7 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
-from collections.abc import Callable, Coroutine
 import asyncio
 import logging
 import time
@@ -9,6 +8,7 @@ import time
 from shared.saga.schema import SagaState, SagaStatus, SagaStepState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
     from shared.saga.persistence import ISagaStore
 
 logger = logging.getLogger(__name__)

@@ -4,6 +4,7 @@ from __future__ import annotations
 MemoryCompressor — async dedup and compression
 """
 
+import contextlib
 import time
 
 from typing import ClassVar
@@ -63,10 +64,8 @@ class MemoryCompressor:
             for t in tables:
                 if t not in self.ALLOWED_TABLES:
                     continue
-                try:
+                with contextlib.suppress(Exception):
                     row = await (await conn.execute(f"SELECT COUNT(*) FROM [{t}]")).fetchone()
                     total += row[0] if row else 0
-                except Exception:
-                    pass
             stats[name] = total
         return stats

@@ -55,10 +55,8 @@ class EncryptedStore:
             return {}
 
         # 1. Try decrypt
-        try:
+        with contextlib.suppress(Exception):
             return decrypt_json(blob)
-        except Exception:
-            pass
 
         # 2. Try legacy JSON
         try:
@@ -67,6 +65,6 @@ class EncryptedStore:
             self.save(legacy_data)
             logger.info("Rotated legacy JSON in %s to encrypted format", self.file_path)
             return legacy_data
-        except Exception as e:
-            logger.exception("Failed to load %s as encrypted or legacy JSON: %s", self.file_path, e)
+        except Exception:
+            logger.exception("Failed to load %s as encrypted or legacy JSON", self.file_path)
             return {}

@@ -1,10 +1,12 @@
 from __future__ import annotations
 import time
-from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import frontmatter
 from .models import WikiEntry
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class WikiParser:

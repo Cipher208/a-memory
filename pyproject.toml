@@ -135,12 +135,7 @@ ignore = [
     "B017",     # Assert Exception (fine in tests)
     "B007",     # Loop variable unused (pass)
     "E402",     # Module level import not at top (needed for path inserts)
-    "S110",     # try-except-pass (common in this project)
-    "UP031",    # printf-string-formatting (common in legacy)
-    "TRY",      # Exception rules (too strict)
-    "E701",     # Multiple statements on one line (colon)
     "S108",     # hardcoded-temp-file (used in tests)
-    "ASYNC240", # blocking-path-method-in-async-function (legacy)
     "TC010",    # runtime-string-union (type alias issues)
     "G002",     # logging-percent-format (standard here)
     "RUF002",   # ambiguous-unicode-character-docstring (cyrillic)
@@ -149,12 +144,11 @@ ignore = [
     "C901",     # complex-structure (needed for some logic)
     "N806",     # non-lowercase-variable-in-function (standard)
     "PLW0603",  # global-statement (used in some places)
-    "TC003",    # typing-only-standard-library-import (noisy)
     "S603",     # subprocess-untrusted-input (demo only)
     "RUF012",   # mutable-class-default (standard in pydantic/legacy)
     "PLW2901",  # loop-variable-overwritten (noisy)
-    "SIM",      # simplification-suggestions (noisy)
     "RUF006",   # asyncio-task-no-reference (noisy in this setup)
+    "ASYNC240", # blocking-path-method-in-async-function (legacy)
     "S324",     # hashlib-insecure-hash-function (used for cache)
     "DTZ005",   # datetime-now-without-tz (legacy)
     "PTH",      # pathlib-recommendations (legacy)
@@ -185,7 +179,7 @@ max_args = 6
 python_version = "3.12"
 warn_return_any = false
 warn_unused_configs = true
-disallow_untyped_defs = false
+disallow_untyped_defs = true
 check_untyped_defs = true
 ignore_missing_imports = true
 explicit_package_bases = true

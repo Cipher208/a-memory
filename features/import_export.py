@@ -4,6 +4,7 @@ from __future__ import annotations
 Import/Export — async import/export memory between instances
 """
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -56,14 +57,15 @@ class ImportExport:
                 }
             )
 
-        filename = "export_%s_%d.json" % (user_id, int(time.time()))
+        filename = f"export_{user_id}_{int(time.time())}.json"
         filepath = self.export_dir / filename
-        filepath.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        await asyncio.to_thread(filepath.write_text, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(filepath)
 
     async def import_user(self, filepath: str, target_user_id: str | None = None) -> dict[str, int]:
         safe_resolve(self.export_dir, filepath)  # raises ValueError if traversal
-        data = json.loads(Path(filepath).read_text(encoding="utf-8"))
+        content = await asyncio.to_thread(Path(filepath).read_text, encoding="utf-8")
+        data = json.loads(content)
         user_id = target_user_id or data.get("user_id", "default")
         imported = {"core_memory": 0, "episodes": 0}
 

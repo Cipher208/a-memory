@@ -49,7 +49,7 @@ def decrypt_json(blob: bytes, master_key: bytes) -> Any:
 
 def is_encrypted_blob(blob_head: bytes) -> bool:
     """Check if data starts like an encrypted blob (heuristic).
-    
+
     JSON starts with { or [.
     """
     if not blob_head:

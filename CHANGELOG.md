@@ -17,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 - **Supreme Orchestrator Identity** — Permanently integrated Lucy-Prime persona into the system backbone via lifecycle hooks.
 - **Registry & Tools Cleanup** — Removed dozens of unused imports and obsolete classes leftover from the modularization phase.
+- **Modular Hardening** — Successfully un-ignored 6 critical Ruff rules and enabled global Mypy strictness. Core modules are now 100% type-safe.
 
 ## [1.6.0] - 2026-08-08
 
