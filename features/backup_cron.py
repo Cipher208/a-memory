@@ -68,28 +68,34 @@ class BackupCron:
     def _loop(self):
         while self._running:
             try:
-                now = time.time()
-
-                # Backup with jitter
-                next_backup = self._last_backup + self.interval_hours * 3600
-                if now >= next_backup:
-                    jitter = random.randint(0, self.jitter_seconds) if self.jitter_seconds else 0
-                    if jitter:
-                        logger.info(f"Backup jitter: waiting {jitter}s")
-                        time.sleep(jitter)
-                    self._do_backup()
-                    self._cleanup_old()
-                    # Trigger nightly maintenance hooks
-                    self._fire_nightly_hooks()
-
-                # Wiki sync
-                if now - self._last_wiki_sync >= self.wiki_sync_interval * 60:
-                    self._sync_wiki()
-
+                self._tick()
                 time.sleep(60)
             except Exception:
                 logger.exception("Backup cron error")
                 time.sleep(300)
+
+    def _tick(self):
+        now = time.time()
+        self._check_backup(now)
+        self._check_wiki_sync(now)
+
+    def _check_backup(self, now: float):
+        next_backup = self._last_backup + self.interval_hours * 3600
+        if now < next_backup:
+            return
+
+        jitter = random.randint(0, self.jitter_seconds) if self.jitter_seconds else 0
+        if jitter:
+            logger.info(f"Backup jitter: waiting {jitter}s")
+            time.sleep(jitter)
+
+        self._do_backup()
+        self._cleanup_old()
+        self._fire_nightly_hooks()
+
+    def _check_wiki_sync(self, now: float):
+        if now - self._last_wiki_sync >= self.wiki_sync_interval * 60:
+            self._sync_wiki()
 
     def _fire_nightly_hooks(self):
         """Trigger nightly maintenance hooks for both layers."""

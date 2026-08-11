@@ -64,6 +64,7 @@ class MemoryCompressor:
             for t in tables:
                 if t not in self.ALLOWED_TABLES:
                     continue
+                # Whitelisted table name, safe to format
                 with contextlib.suppress(Exception):
                     row = await (await conn.execute(f"SELECT COUNT(*) FROM [{t}]")).fetchone()
                     total += row[0] if row else 0

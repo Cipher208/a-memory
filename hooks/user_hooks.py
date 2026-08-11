@@ -117,31 +117,45 @@ class UserHooks:
         return {"action": "add_to_staging", "content": ctx.get("text", "")}
 
     def _calculate_importance(self, text: str, memory_kind: str | None = None) -> float:
-        from shared.memory_types import default_importance
-
         if not text:
             return 0.0
 
-        # Start with type-based importance if kind specified
-        score = default_importance(memory_kind) if memory_kind else 0.3
+        score = self._get_base_score(memory_kind)
+        score += self._get_length_bonus(text)
+        score += self._get_keyword_bonus(text)
+        score += self._get_structure_bonus(text)
+        score += self._get_emotional_bonus(text)
 
-        # Length heuristics
-        if len(text) > 15:
-            score += 0.15
-        if len(text) > 100:
-            score += 0.1
-        # Semantic keywords
-        keywords = ["important", "critical", "urgent", "preference", "favorite", "hate", "love"]
-        for kw in keywords:
-            if kw in text.lower():
-                score += 0.1
-                break
-        # Structure signals
-        if "?" in text:
-            score += 0.15
-        if text.count("\n") > 2:
-            score += 0.1
-        # Emotional markers
-        if any(c in text for c in ["!", "?"]):
-            score += 0.05
         return min(1.0, score)
+
+    def _get_base_score(self, memory_kind: str | None) -> float:
+        from shared.memory_types import default_importance
+        return default_importance(memory_kind) if memory_kind else 0.3
+
+    def _get_length_bonus(self, text: str) -> float:
+        bonus = 0.0
+        if len(text) > 15:
+            bonus += 0.15
+        if len(text) > 100:
+            bonus += 0.1
+        return bonus
+
+    def _get_keyword_bonus(self, text: str) -> float:
+        keywords = ["important", "critical", "urgent", "preference", "favorite", "hate", "love"]
+        lower_text = text.lower()
+        if any(kw in lower_text for kw in keywords):
+            return 0.1
+        return 0.0
+
+    def _get_structure_bonus(self, text: str) -> float:
+        bonus = 0.0
+        if "?" in text:
+            bonus += 0.15
+        if text.count("\n") > 2:
+            bonus += 0.1
+        return bonus
+
+    def _get_emotional_bonus(self, text: str) -> float:
+        if any(c in text for c in ["!", "?"]):
+            return 0.05
+        return 0.0

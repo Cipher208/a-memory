@@ -152,7 +152,8 @@ _recall_cache: dict[str, tuple[float, list]] = {}
 _RECALL_CACHE_TTL = 10  # seconds
 
 def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list | None:
-    key = hashlib.md5(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
+    # SHA-256 for cache key, MD5 is flagged as weak by security scanners
+    key = hashlib.sha256(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
     if key in _recall_cache:
         ts, results = _recall_cache[key]
         if time.time() - ts < _RECALL_CACHE_TTL:
@@ -160,5 +161,6 @@ def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list 
     return None
 
 def _set_recall_cache(query: str, user_id: str, layer: str, limit: int, results: list) -> None:
-    key = hashlib.md5(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
+    # SHA-256 for cache key, MD5 is flagged as weak by security scanners
+    key = hashlib.sha256(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
     _recall_cache[key] = (time.time(), results)

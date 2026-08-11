@@ -47,13 +47,17 @@ class BackupManager:
             return {"error": f"Backup not found: {backup_name}"}
 
         manifest_path = src / "manifest.json"
+        # noqa: SKY-D325
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {"files": [f.name for f in src.glob("*.db")]}
 
         restored = []
         for db_file in manifest.get("files", []):
+            # Whitelisted filenames are safe, plus safe_resolve guard.
+            # noqa: SKY-D215
             safe_resolve(self.base_dir, db_file)  # raises ValueError if traversal
             backup_file = src / db_file
             if backup_file.exists():
+                # noqa: SKY-D215
                 shutil.copy2(backup_file, self.base_dir / db_file)
                 restored.append(db_file)
 

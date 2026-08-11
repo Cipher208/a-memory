@@ -93,33 +93,39 @@ class ConflictResolver:
         if not keywords:
             return {"content": new_content, "is_conflict": False}
 
+        rows = await self._find_potential_conflicts(conn, user_id, keywords)
+
+        for row in rows:
+            existing_id, existing_content, is_conflict, group_id = row
+            similarity = self._calculate_similarity(new_content, existing_content)
+            if similarity > min_similarity and existing_content != new_content:
+                return await self._handle_conflict(conn, existing_id, existing_content, is_conflict, group_id, new_content, similarity)
+
+        await conn.execute("INSERT INTO memory_conflicts (user_id, content) VALUES (?, ?)", (user_id, new_content))
+        await conn.commit()
+        return {"content": new_content, "is_conflict": False}
+
+    async def _find_potential_conflicts(self, conn, user_id: str, keywords: list[str]):
         like_conditions = " OR ".join(["content LIKE ?" for _ in keywords])
         like_params = [f"%{kw}%" for kw in keywords]
         cur = await conn.execute(
             f"SELECT id, content, is_conflict, conflict_group_id FROM memory_conflicts WHERE user_id=? AND ({like_conditions}) LIMIT 5",
             (user_id, *like_params),
         )
-        rows = await cur.fetchall()
+        return await cur.fetchall()
 
-        for row in rows:
-            existing_id, existing_content, is_conflict, group_id = row
-            similarity = self._calculate_similarity(new_content, existing_content)
-            if similarity > min_similarity and existing_content != new_content:
-                gid = group_id or str(uuid.uuid4())
-                if not is_conflict:
-                    await conn.execute("UPDATE memory_conflicts SET is_conflict=1, conflict_group_id=? WHERE id=?", (gid, existing_id))
-                await conn.commit()
-                return {
-                    "content": new_content,
-                    "is_conflict": True,
-                    "conflict_group_id": gid,
-                    "conflicts_with_id": existing_id,
-                    "similarity": similarity,
-                }
-
-        await conn.execute("INSERT INTO memory_conflicts (user_id, content) VALUES (?, ?)", (user_id, new_content))
+    async def _handle_conflict(self, conn, existing_id, existing_content, is_conflict, group_id, new_content, similarity):
+        gid = group_id or str(uuid.uuid4())
+        if not is_conflict:
+            await conn.execute("UPDATE memory_conflicts SET is_conflict=1, conflict_group_id=? WHERE id=?", (gid, existing_id))
         await conn.commit()
-        return {"content": new_content, "is_conflict": False}
+        return {
+            "content": new_content,
+            "is_conflict": True,
+            "conflict_group_id": gid,
+            "conflicts_with_id": existing_id,
+            "similarity": similarity,
+        }
 
     async def get_conflicts(self, conflict_group_id: str) -> list[dict[str, Any]]:
         await self._init_db()

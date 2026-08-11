@@ -119,6 +119,7 @@ class ForgettingSystem:
 
             ids = [r["entry_id"] for r in all_rows]
             placeholders = ",".join(["?"] * len(ids))
+            # Parameterized via placeholders, safe.
             await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({placeholders})", ids)
             await conn.commit()
             logger.info("Archived %d entries", archived_count)

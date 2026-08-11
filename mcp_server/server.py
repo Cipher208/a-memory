@@ -5,6 +5,7 @@ import sys
 import logging
 from pathlib import Path
 
+from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 # Ensure the root of the repo is in the path
@@ -19,6 +20,9 @@ mcp = FastMCP(
 )
 
 
+STDIO_TRANSPORT = "stdio"
+
+
 def _register_all_tools():
     from mcp_server.registry import get_all_tools
 
@@ -29,14 +33,14 @@ def _register_all_tools():
 _register_all_tools()
 
 
-def main():
+def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Ariel Memory MCP Server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "http"],
-        default="stdio",
+        choices=[STDIO_TRANSPORT, "http"],
+        default=STDIO_TRANSPORT,
         help="Transport: stdio (Claude Desktop) or http (web clients)",
     )
     parser.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")  # noqa: S104
@@ -60,32 +64,37 @@ def main():
                 logging.getLogger(__name__).exception("HTTP transport failed: %s. Try with --dashboard flag.", e)
                 raise
     else:
-        mcp.run(transport="stdio")
+        mcp.run(transport=STDIO_TRANSPORT)
 
 
-def _run_with_dashboard(host: str, port: int):
+def _run_with_dashboard(host: str, port: int) -> None:
     import uvicorn
-    import signal
     from mcp_server.app import create_app
     from mcp_server.context import AppContext
 
     ctx = AppContext()
     app = create_app(mcp, ctx)
 
-    def _shutdown_handler(signum, _frame):
-        from features.backup_cron import backup_cron
-        from shared.read_only import read_only_replica
-        from shared.saga import saga_watchdog
-
-        backup_cron.stop()
-        saga_watchdog.stop()
-        read_only_replica.stop()
-        os._exit(0)
-
-    signal.signal(signal.SIGTERM, _shutdown_handler)
-    signal.signal(signal.SIGINT, _shutdown_handler)
+    _setup_shutdown_signals(_shutdown_handler)
 
     uvicorn.run(app, host=host, port=port)
+
+
+def _setup_shutdown_signals(handler) -> None:
+    import signal
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
+
+
+def _shutdown_handler(signum: int, _frame: Any) -> None:
+    from features.backup_cron import backup_cron
+    from shared.read_only import read_only_replica
+    from shared.saga import saga_watchdog
+
+    backup_cron.stop()
+    saga_watchdog.stop()
+    read_only_replica.stop()
+    os._exit(0)
 
 
 if __name__ == "__main__":

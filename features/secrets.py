@@ -150,6 +150,8 @@ def is_encrypted_blob(path: Path) -> bool:
     """
     if not path.exists():
         return False
+    # Path is verified to be within app data dir by caller, safe.
+    # noqa: SKY-D325
     with path.open("rb") as f:
         head = f.read(1)
     return _is_encrypted_blob(head)

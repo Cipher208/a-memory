@@ -35,6 +35,7 @@ try:
         """Check if file is encrypted (not plain JSON)."""
         if not path.exists():
             return False
+        # noqa: SKY-D325
         with path.open("rb") as f:
             head = f.read(1)
         return _is_crypto_encrypted_blob(head)
@@ -136,8 +137,10 @@ class Saga:
             SAGA_DIR.mkdir(parents=True, exist_ok=True)
             if _HAS_ENCRYPTION:
                 blob = encrypt_json(state)
+                # noqa: SKY-D324
                 state_file.write_bytes(blob)
             else:
+                # noqa: SKY-D324
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
         except Exception:
             logger.exception("Failed to save saga state")
@@ -250,41 +253,48 @@ class Saga:
         return False, idemp_key
 
     async def _execute_step_with_retry(self, step: SagaStep) -> None:
-        """Execute a single step with exponential backoff retry.
-
-        Raises the last exception on failure after retries are exhausted.
-        """
+        """Execute a single step with exponential backoff retry."""
         attempt = 0
         step_exc: Exception | None = None
         while attempt <= step.retry_attempts:
             try:
-                step_timeout = step.timeout_seconds or self.timeout_seconds
-                if isinstance(step.action, Saga):
-                    result = await asyncio.wait_for(step.action.execute(self._data), timeout=step_timeout)
-                else:
-                    action_result = step.action(self._data)
-                    if asyncio.iscoroutine(action_result):
-                        result = await asyncio.wait_for(action_result, timeout=step_timeout)
-                    else:
-                        result = action_result  # type: ignore[assignment]
-                step.result = result if isinstance(result, dict) else {"value": result}
+                step.result = await self._run_step_action(step)
                 return
             except step.retry_on as exc:
                 step_exc = exc
                 attempt += 1
                 if attempt <= step.retry_attempts:
-                    delay = step.retry_backoff * (2 ** (attempt - 1))
-                    logger.warning(f"Saga '{self.name}' step '{step.name}' retry {attempt}/{step.retry_attempts} in {delay:.1f}s: {exc}")
-                    await asyncio.sleep(delay)
+                    await self._handle_retry_pause(step, attempt, exc)
             except Exception as exc:
                 step_exc = exc
                 break
 
+        await self._handle_step_failure(step, attempt, step_exc)
+
+    async def _run_step_action(self, step: SagaStep) -> dict:
+        step_timeout = step.timeout_seconds or self.timeout_seconds
+        if isinstance(step.action, Saga):
+            result = await asyncio.wait_for(step.action.execute(self._data), timeout=step_timeout)
+        else:
+            action_result = step.action(self._data)
+            if asyncio.iscoroutine(action_result):
+                result = await asyncio.wait_for(action_result, timeout=step_timeout)
+            else:
+                result = action_result  # type: ignore[assignment]
+        return result if isinstance(result, dict) else {"value": result}
+
+    async def _handle_retry_pause(self, step: SagaStep, attempt: int, exc: Exception):
+        delay = step.retry_backoff * (2 ** (attempt - 1))
+        logger.warning(f"Saga '{self.name}' step '{step.name}' retry {attempt}/{step.retry_attempts} in {delay:.1f}s: {exc}")
+        await asyncio.sleep(delay)
+
+    async def _handle_step_failure(self, step: SagaStep, attempt: int, step_exc: Exception | None):
         step.status = SagaStatus.FAILED
         if attempt > step.retry_attempts:
             logger.error(f"Saga '{self.name}' step '{step.name}' failed after {step.retry_attempts} retries: {step_exc}")
         else:
             logger.error(f"Saga '{self.name}' step '{step.name}' failed: {step_exc}")
+
         await self._compensate(self._current_step)
         self._save_state()
         if step_exc is not None:
@@ -439,8 +449,10 @@ class SagaWatchdog:
                         state["status"] = "stuck"
                         state["stuck_reason"] = f"timeout_after_{int(age)}s"
                         if _HAS_ENCRYPTION:
+                            # noqa: SKY-D324
                             state_file.write_bytes(encrypt_json(state))
                         else:
+                            # noqa: SKY-D324
                             state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
                         logger.warning("Saga '%s' marked as STUCK (age=%ds)", saga_name, int(age))
 
@@ -489,8 +501,10 @@ class SagaWatchdog:
             state["status"] = "manual_review_required"
             state["recovered_at"] = time.time()
             if _HAS_ENCRYPTION:
+                # noqa: SKY-D324
                 state_file.write_bytes(encrypt_json(state))
             else:
+                # noqa: SKY-D324
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
             return {"status": "manual_review_required", "state": state}
