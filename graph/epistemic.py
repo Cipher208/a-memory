@@ -4,7 +4,6 @@ from __future__ import annotations
 Epistemic Graph — async, layer-aware tags and relations
 """
 
-import contextlib
 import json
 import logging
 import time
@@ -105,8 +104,11 @@ class EpistemicGraph:
         """,
         )
         # Migration: add layer column if missing
-        with contextlib.suppress(Exception):
+        try:
             await self._cm.execute_script(DB_NAME, "ALTER TABLE epi_nodes ADD COLUMN layer TEXT NOT NULL DEFAULT 'user'")
+        except Exception:
+            # Table already has column or other harmless migration error
+            logger.debug("Layer column migration skipped (likely already exists)")
 
     async def add_node(self, user_id: str, content: str, node_type: str, tags: list[str] | None = None, confidence: float = 0.5) -> int:
         if tags:
@@ -138,23 +140,19 @@ class EpistemicGraph:
         await conn.commit()
 
     async def query_by_tag(self, user_id: str, tag: str, limit: int = 20) -> list[EpistemicNode]:
-        conn = await self._cm.get(DB_NAME)
-        cur = await conn.execute(
-            """SELECT n.* FROM epi_nodes n
-               JOIN epi_tags t ON t.node_id = n.node_id
-               WHERE n.layer=? AND n.user_id=? AND t.tag=?
-               ORDER BY n.confidence DESC LIMIT ?""",
-            (self.layer, user_id, tag, limit),
-        )
-        rows = await cur.fetchall()
-        return [self._row_to_node(dict(r)) for r in rows]
+        sql = """SELECT n.* FROM epi_nodes n
+                 JOIN epi_tags t ON t.node_id = n.node_id
+                 WHERE n.layer=? AND n.user_id=? AND t.tag=?
+                 ORDER BY n.confidence DESC LIMIT ?"""
+        return await self._query_nodes(sql, (self.layer, user_id, tag, limit))
 
     async def query_by_type(self, user_id: str, node_type: str, limit: int = 20) -> list[EpistemicNode]:
+        sql = "SELECT * FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=? ORDER BY confidence DESC LIMIT ?"
+        return await self._query_nodes(sql, (self.layer, user_id, node_type, limit))
+
+    async def _query_nodes(self, sql: str, params: tuple[Any, ...]) -> list[EpistemicNode]:
         conn = await self._cm.get(DB_NAME)
-        cur = await conn.execute(
-            "SELECT * FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=? ORDER BY confidence DESC LIMIT ?",
-            (self.layer, user_id, node_type, limit),
-        )
+        cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
         return [self._row_to_node(dict(r)) for r in rows]
 

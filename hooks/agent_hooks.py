@@ -17,15 +17,17 @@ from .shared import (
     run_async,
 )
 
+from shared.constants import DEFAULT_USER, AGENT_LAYER
+
 logger = logging.getLogger(__name__)
 
 
 class AgentHooks:
-    def __init__(self, user_id: str = "default"):
+    def __init__(self, user_id: str = DEFAULT_USER):
         self.user_id = user_id
-        self.graph = EpistemicGraph(layer="agent")
+        self.graph = EpistemicGraph(layer=AGENT_LAYER)
 
-    @hook_registry.mark("importance_gate", layer="agent")
+    @hook_registry.mark("importance_gate", layer=AGENT_LAYER)
     async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
         """Filter agent messages by importance. Type-aware with agent keywords."""
         from shared.adaptive import adaptive_threshold
@@ -57,40 +59,40 @@ class AgentHooks:
 
         return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
-    @hook_registry.mark("error_occurred", layer="agent")
+    @hook_registry.mark("error_occurred", layer=AGENT_LAYER)
     def _error_occurred(self, ctx: dict[str, Any]) -> dict[str, Any]:
         error = ctx.get("error", "")
         node_id: str = run_async(self.graph.add_node(self.user_id, error, "error_analysis", ["error_pattern"], 0.8))
         return {"action": "error_analyzed", "node_id": node_id}
 
-    @hook_registry.mark("decision_made", layer="agent")
+    @hook_registry.mark("decision_made", layer=AGENT_LAYER)
     def _decision_made(self, ctx: dict[str, Any]) -> dict[str, Any]:
         decision = ctx.get("decision", "")
         rationale = ctx.get("rationale", "")
         node_id: str = run_async(self.graph.add_node(self.user_id, f"{decision}: {rationale}", "decision_log", ["decided_because"], 0.7))
         return {"action": "decision_logged", "node_id": node_id}
 
-    @hook_registry.mark("self_correction", layer="agent")
+    @hook_registry.mark("self_correction", layer=AGENT_LAYER)
     def _self_correction(self, ctx: dict[str, Any]) -> dict[str, Any]:
         error = ctx.get("error", "")
         fix = ctx.get("fix", "")
         node_id: str = run_async(self.graph.add_node(self.user_id, f"Error: {error} → Fix: {fix}", "correction", ["correction_pattern"], 0.6))
         return {"action": "correction_logged", "node_id": node_id}
 
-    @hook_registry.mark("personality_shift", layer="agent")
+    @hook_registry.mark("personality_shift", layer=AGENT_LAYER)
     def _personality_shift(self, ctx: dict[str, Any]) -> dict[str, Any]:
         shift = ctx.get("shift", "")
         node_id: str = run_async(self.graph.add_node(self.user_id, shift, "personality_evolution", ["personality_trait", "evolved_to"], 0.9))
         return {"action": "personality_evolved", "node_id": node_id}
 
-    @hook_registry.mark("emotion_context", layer="agent")
+    @hook_registry.mark("emotion_context", layer=AGENT_LAYER)
     def _emotion_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
         emotion = ctx.get("emotion", "")
         context = ctx.get("context", "")
         node_id: str = run_async(self.graph.add_node(self.user_id, f"{emotion} in: {context}", "emotional_context", ["felt_in_context"], 0.6))
         return {"action": "emotion_logged", "node_id": node_id}
 
-    @hook_registry.mark("wiki_agent", layer="agent")
+    @hook_registry.mark("wiki_agent", layer=AGENT_LAYER)
     def _wiki_agent(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return {"action": "wiki_sync", "summary": ctx.get("summary", "")}
 
@@ -104,17 +106,17 @@ class AgentHooks:
 
     @hook_registry.mark("auto_context", layer="both")
     def _auto_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return auto_context(ctx, self.user_id, layer="agent")
+        return auto_context(ctx, self.user_id, layer=AGENT_LAYER)
 
     @hook_registry.mark("retrieval_router", layer="both")
     def _retrieval_router(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return retrieval_router(ctx, self.user_id, layer="agent")
+        return retrieval_router(ctx, self.user_id, layer=AGENT_LAYER)
 
     @hook_registry.mark("conflict_resolver", layer="both")
     def _conflict_resolver(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return conflict_resolver(ctx, self.user_id)
 
-    @hook_registry.mark("emotion", layer="agent")
+    @hook_registry.mark("emotion", layer=AGENT_LAYER)
     def _emotion(self, ctx: dict[str, Any]) -> dict[str, Any]:
         emotion = ctx.get("emotion", "")
         node_id: str = run_async(self.graph.add_node(self.user_id, emotion, "emotional_context", ["felt_in_context"], 0.5))

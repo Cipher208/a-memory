@@ -7,6 +7,7 @@ Forgetting System — type-aware decay, archiving, compression
 import logging
 import time
 from pathlib import Path
+from typing import Any, TYPE_CHECKING
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -16,6 +17,9 @@ from shared.memory_types import (
     apply_decay,
     validate_kind,
 )
+
+if TYPE_CHECKING:
+    import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -74,59 +78,71 @@ class ForgettingSystem:
             conn = await self._cm.get(DB_NAME)
             now = time.time()
 
-            # 1) Expired goals/todos/commitments
-            expired = await (
-                await conn.execute(
-                    """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
-                   FROM core_memory
-                   WHERE memory_kind IN ('goal', 'todo', 'commitment')
-                     AND expires_at IS NOT NULL AND expires_at < ?""",
-                    (now,),
-                )
-            ).fetchall()
-
-            # 2) Old low-importance entries (excluding never-archive types)
-            old = await (
-                await conn.execute(
-                    """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
-                   FROM core_memory
-                   WHERE memory_kind NOT IN ('instruction', 'rule', 'commitment')
-                     AND (expires_at IS NULL OR expires_at > ?)
-                     AND updated_at < ?
-                     AND importance < ?""",
-                    (now, now - self.archive_days * 86400, self.archive_min_importance),
-                )
-            ).fetchall()
-
-            all_rows = expired + old
+            # 1. Find archivable items
+            all_rows = await self._find_archivable_entries(conn, now)
             if not all_rows:
                 return 0
 
-            from shared.archived_memories import ArchivedMemories
+            # 2. Perform archiving
+            archived_count = await self._perform_archiving(all_rows, now)
 
-            am = ArchivedMemories(cm=self._cm)
-            archived_count = 0
-            for r in all_rows:
-                await am.archive(
-                    user_id=r["user_id"],
-                    content="{}={}".format(r["key"], r["value"]),
-                    memory_type=r["memory_kind"] or "fact",
-                    importance=r["importance"],
-                    original_id=r["entry_id"],
-                    reason="expired" if (r["expires_at"] and r["expires_at"] < now) else f"inactive_{self.archive_days}d",
-                )
-                archived_count += 1
+            # 3. Safe deletion
+            await self._delete_archived(conn, all_rows)
 
-            ids = [r["entry_id"] for r in all_rows]
-            placeholders = ",".join(["?"] * len(ids))
-            # Parameterized via placeholders, safe.
-            await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
             await conn.commit()
             logger.info("Archived %d entries", archived_count)
             return archived_count
         except Exception:
             logger.exception("Archive failed")
             return 0
+
+    async def _find_archivable_entries(self, conn: Any, now: float) -> list[sqlite3.Row]:
+        # Expired goals/todos/commitments
+        expired = await (
+            await conn.execute(
+                """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+               FROM core_memory
+               WHERE memory_kind IN ('goal', 'todo', 'commitment')
+                 AND expires_at IS NOT NULL AND expires_at < ?""",
+                (now,),
+            )
+        ).fetchall()
+
+        # Old low-importance entries (excluding never-archive types)
+        old = await (
+            await conn.execute(
+                """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+               FROM core_memory
+               WHERE memory_kind NOT IN ('instruction', 'rule', 'commitment')
+                 AND (expires_at IS NULL OR expires_at > ?)
+                 AND updated_at < ?
+                 AND importance < ?""",
+                (now, now - self.archive_days * 86400, self.archive_min_importance),
+            )
+        ).fetchall()
+
+        return list(expired) + list(old)
+
+    async def _perform_archiving(self, rows: list[sqlite3.Row], now: float) -> int:
+        from shared.archived_memories import ArchivedMemories
+        am = ArchivedMemories(cm=self._cm)
+        count = 0
+        for r in rows:
+            await am.archive(
+                user_id=r["user_id"],
+                content="{}={}".format(r["key"], r["value"]),
+                memory_type=r["memory_kind"] or "fact",
+                importance=r["importance"],
+                original_id=r["entry_id"],
+                reason="expired" if (r["expires_at"] and r["expires_at"] < now) else f"inactive_{self.archive_days}d",
+            )
+            count += 1
+        return count
+
+    async def _delete_archived(self, conn: Any, rows: list[sqlite3.Row]) -> None:
+        ids = [r["entry_id"] for r in rows]
+        placeholders = ",".join(["?"] * len(ids))
+        await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
 
     async def compress_duplicates(self) -> int:
         try:

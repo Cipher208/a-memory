@@ -2,13 +2,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, TypeVar
+from collections.abc import Callable  # noqa: TC003
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import TypeVar
-
     F = TypeVar("F", bound=Callable[..., Any])
 
 # Removed direct config dependency to fix tests
@@ -100,3 +98,4 @@ class HookRegistry:
 
 
 hook_registry = HookRegistry()
+HookHandler.model_rebuild()

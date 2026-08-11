@@ -17,6 +17,8 @@ from lifecycle.forgetting import ForgettingSystem
 from rag.conflict import ConflictResolver
 from rag.router import RetrievalRouter
 
+from shared.constants import DEFAULT_USER
+
 logger = logging.getLogger(__name__)
 
 # Module-level executor — max_workers=1 serializes DB access without blocking the event loop
@@ -45,13 +47,13 @@ def forgetting_ritual(ctx: dict[str, Any]) -> dict[str, Any]:
     return cast("dict[str, Any]", run_async(fs.cleanup()))
 
 
-def conflict_resolver(ctx: dict[str, Any], user_id: str) -> dict[str, Any]:
+def conflict_resolver(ctx: dict[str, Any], user_id: str = DEFAULT_USER) -> dict[str, Any]:
     content = ctx.get("content", "")
     resolver = ConflictResolver()
     return cast("dict[str, Any]", run_async(resolver.check(user_id, content)))
 
 
-def auto_context(ctx: dict[str, Any], user_id: str, layer: str | None = None) -> dict[str, Any]:
+def auto_context(ctx: dict[str, Any], user_id: str = DEFAULT_USER, layer: str | None = None) -> dict[str, Any]:
     query = ctx.get("query", "")
     router = RetrievalRouter(layer=layer, user_id=user_id) if layer is not None else RetrievalRouter(user_id=user_id)
     result = run_async(router.route(query))
@@ -60,7 +62,7 @@ def auto_context(ctx: dict[str, Any], user_id: str, layer: str | None = None) ->
 
 def retrieval_router(
     ctx: dict[str, Any],
-    user_id: str,
+    user_id: str = DEFAULT_USER,
     layer: str | None = None,
     include_count: bool = False,
 ) -> dict[str, Any]:
@@ -78,14 +80,15 @@ def retrieval_router(
 
 def consolidation(
     ctx: dict[str, Any],
-    user_id: str,
+    user_id: str = DEFAULT_USER,
     min_importance: float | None = None,
-    action_key: str = "consolidated",
+    action_key: str | None = None,
 ) -> dict[str, Any]:
     staging = ctx.get("staging_items", [])
     engine = ConsolidationEngine()
+    final_key = action_key or "consolidated"
     if min_importance is not None:
         result = run_async(engine.consolidate_staging(user_id, staging, min_importance=min_importance))
     else:
         result = run_async(engine.consolidate_staging(user_id, staging))
-    return {"action": action_key, **result}
+    return {"action": final_key, **result}
