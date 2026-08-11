@@ -12,29 +12,36 @@ from mcp_server.endpoints.system import SystemEndpoints
 
 def create_app(mcp: FastMCP, ctx: AppContext) -> Starlette:
     """Create Starlette app with modular endpoints."""
+    # Instantiate internal handlers first
+    from features.dashboard import Dashboard
+    from features.rate_limiting import RateLimiter
+
+    dash_logic = Dashboard(mm=ctx.mm)
+    api_limiter = RateLimiter()
+
     # Instantiate endpoint handlers
-    dashboard = DashboardEndpoints(ctx)
-    auth = AuthEndpoints(ctx)
-    backup = BackupEndpoints(ctx)
-    system = SystemEndpoints(ctx)
+    dashboard = DashboardEndpoints(dash_logic, api_limiter)
+    auth = AuthEndpoints(api_limiter)
+    backup = BackupEndpoints(api_limiter)
+    system = SystemEndpoints(api_limiter)
 
     app = Starlette(
         routes=[
-            Route("/health", system.health),
-            Route("/ready", system.ready),
-            Route("/alive", system.alive),
-            Route("/dashboard", dashboard.page),
+            Route("/health", system.health_endpoint),
+            Route("/ready", system.ready_endpoint),
+            Route("/alive", system.alive_endpoint),
+            Route("/dashboard", dashboard.dashboard_page),
             Route("/api/stats", dashboard.api_stats),
             Route("/api/user/facts", dashboard.api_user_facts),
             Route("/api/agent/facts", dashboard.api_agent_facts),
             Route("/api/user/episodes", dashboard.api_user_episodes),
             Route("/api/agent/episodes", dashboard.api_agent_episodes),
             Route("/api/audit", dashboard.api_audit),
-            Route("/api/auth/keys", auth.list_keys),
-            Route("/api/auth/create", auth.create_key, methods=["POST"]),
-            Route("/api/backup/trigger", backup.trigger, methods=["POST"]),
-            Route("/api/backup/list", backup.list_backups),
-            Route("/metrics", system.metrics_prometheus),
+            Route("/api/auth/keys", auth.auth_keys),
+            Route("/api/auth/create", auth.auth_create, methods=["POST"]),
+            Route("/api/backup/trigger", backup.backup_trigger, methods=["POST"]),
+            Route("/api/backup/list", backup.backup_list),
+            Route("/metrics", system.metrics_endpoint),
             Route("/metrics/json", system.metrics_json),
             Mount("/", app=mcp.streamable_http_app()),
         ],

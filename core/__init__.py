@@ -76,17 +76,17 @@ class MemoryManager:
         self._cache: Any = cache
         self.layers: dict[str, MemoryLayer] = {}
 
-    def get_layer(self, layer_type: str, user_id: str = "default") -> MemoryLayer:
+    def get_layer(self, layer_type: str, user_id: str = DEFAULT_USER) -> MemoryLayer:
         key = f"{layer_type}:{user_id}"
         if key not in self.layers:
             self.layers[key] = MemoryLayer(layer_type, user_id, cm=self._cm, cache=self._cache)
         return self.layers[key]
 
-    def user_memory(self, user_id: str = "default") -> MemoryLayer:
-        return self.get_layer("user", user_id)
+    def user_memory(self, user_id: str = DEFAULT_USER) -> MemoryLayer:
+        return self.get_layer(DEFAULT_LAYER, user_id)
 
-    def agent_memory(self, user_id: str = "default") -> MemoryLayer:
-        return self.get_layer("agent", user_id)
+    def agent_memory(self, user_id: str = DEFAULT_USER) -> MemoryLayer:
+        return self.get_layer(AGENT_LAYER, user_id)
 
     async def cleanup_all(self) -> dict[str, dict[str, int]]:
         results: dict[str, dict[str, int]] = {}

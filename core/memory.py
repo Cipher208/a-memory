@@ -63,13 +63,6 @@ class CoreMemory:
         source: str = "manual",
         metadata: dict[str, Any] | None = None,
     ) -> int:
-        from shared.memory_types import (
-            MemoryKind,
-            default_importance,
-            get_policy,
-            kind_for_text,
-            validate_kind,
-        )
 
         now = time.time()
         memory_kind, importance, expires_at = self._prepare_save_params(value, memory_kind, importance, expires_at, now)
@@ -99,7 +92,7 @@ class CoreMemory:
             kind_str = kind_for_text(value).value
         if not validate_kind(kind_str):
             raise ValueError(f"invalid memory_kind: {kind_str!r}")
-        
+
         kind = MemoryKind(kind_str)
         if imp is None:
             imp = default_importance(kind)
@@ -108,7 +101,7 @@ class CoreMemory:
         p = get_policy(kind)
         if p.requires_expires_at and exp is None:
             exp = now + 30 * 86400
-        
+
         return kind_str, imp, exp
 
     async def _find_existing_id(self, conn: Any, user_id: str, key: str) -> int | None:

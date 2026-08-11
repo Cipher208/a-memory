@@ -75,7 +75,7 @@ class EpisodicMemory:
         else:
             sql = "SELECT * FROM episodes WHERE user_id=? AND summary LIKE ? ORDER BY created_at DESC LIMIT ?"
             params = (user_id, f"%{query}%", limit)
-            
+
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [self._row_to_episode(r) for r in rows]

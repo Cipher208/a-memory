@@ -80,14 +80,6 @@ class _SyncConnectionWrapper:
 
         await asyncio.to_thread(_do)
 
-    async def executescript(self, sql: str) -> None:
-        # Caution: executescript is for static scripts only.
-        def _do() -> None:
-            with self._lock:
-                self._conn.executescript(sql)
-
-        await asyncio.to_thread(_do)
-
     async def commit(self) -> None:
         def _do() -> None:
             with self._lock:

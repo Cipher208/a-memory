@@ -431,7 +431,7 @@ class SagaWatchdog:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         logger.info("Saga watchdog started (interval=%ds)", self.check_interval)
 
@@ -439,6 +439,15 @@ class SagaWatchdog:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
+
+    def _run_loop(self) -> None:
+        while self._running:
+            try:
+                self._check_stuck_sagas()
+                time.sleep(self.check_interval)
+            except Exception:
+                logger.exception("Saga watchdog error")
+                time.sleep(30)
 
     def _check_stuck_sagas(self) -> None:
         """Find and mark stuck sagas."""

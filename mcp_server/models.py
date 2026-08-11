@@ -83,6 +83,7 @@ class CleanupResult(BaseModel):
     audit_archive: dict[str, Any] | None = None
     backup_cleanup: int | None = None
     saga_cleanup: int | None = None
+    compaction: int | None = None
 
 
 class PurgeResult(BaseModel):
