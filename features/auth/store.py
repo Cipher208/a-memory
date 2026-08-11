@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -22,7 +22,7 @@ class EncryptedStore:
         self.model_class = model_class
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def save(self, data: dict) -> None:
+    def save(self, data: dict[str, Any]) -> None:
         """Encrypt and save data atomically with restricted permissions."""
         # Validation if needed, though prompt says save(data: dict)
         # We can validate via model_class if it's a single object or a dict of objects.
@@ -42,7 +42,7 @@ class EncryptedStore:
         with contextlib.suppress(OSError):
             os.chmod(self.file_path, 0o600)
 
-    def load(self) -> dict:
+    def load(self) -> dict[str, Any]:
         """Load data, decrypting it. Supports rotation from legacy JSON."""
         if not self.file_path.exists():
             return {}
@@ -56,11 +56,11 @@ class EncryptedStore:
 
         # 1. Try decrypt
         with contextlib.suppress(Exception):
-            return decrypt_json(blob)
+            return cast("dict[str, Any]", decrypt_json(blob))
 
         # 2. Try legacy JSON
         try:
-            legacy_data = json.loads(blob.decode("utf-8"))
+            legacy_data = cast("dict[str, Any]", json.loads(blob.decode("utf-8")))
             # Rotate immediately
             self.save(legacy_data)
             logger.info("Rotated legacy JSON in %s to encrypted format", self.file_path)

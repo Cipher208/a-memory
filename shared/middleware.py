@@ -56,7 +56,7 @@ class RateLimitMiddleware(Middleware):
 
         if len(user_requests) >= self._max:
             ctx.blocked = True
-            ctx.block_reason = "Rate limit exceeded (%d/min)" % self._max
+            ctx.block_reason = f"Rate limit exceeded ({self._max}/min)"
             logger.warning(f"Rate limit hit for user {ctx.user_id}")
             return {"error": ctx.block_reason}
 

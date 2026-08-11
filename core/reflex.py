@@ -28,7 +28,7 @@ class ReflexBuffer:
         if persist_path:
             self._load()
 
-    def add(self, role: str, content: str, tokens: int = 0):
+    def add(self, role: str, content: str, tokens: int = 0) -> None:
         import time
 
         entry = ReflexEntry(role=role, content=content, tokens=tokens, timestamp=time.time())
@@ -44,7 +44,7 @@ class ReflexBuffer:
         with self._lock:
             return list(self._buffer)
 
-    def clear(self):
+    def clear(self) -> None:
         with self._lock:
             self._buffer.clear()
             self._save()
@@ -56,7 +56,7 @@ class ReflexBuffer:
         entries = self.get_recent(max_entries)
         return "\n".join([f"{e.role}: {e.content[:100]}" for e in entries])
 
-    def _load(self):
+    def _load(self) -> None:
         if self.persist_path and Path(self.persist_path).exists():
             try:
                 with Path(self.persist_path).open() as f:
@@ -66,7 +66,7 @@ class ReflexBuffer:
             except (FileNotFoundError, json.JSONDecodeError, KeyError):
                 pass
 
-    def _save(self):
+    def _save(self) -> None:
         if self.persist_path:
             try:
                 with Path(self.persist_path, "w").open() as f:

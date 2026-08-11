@@ -58,26 +58,26 @@ class SagaStatus(str, Enum):
 @dataclass
 class SagaStep:
     name: str
-    action: Callable[[dict], Coroutine[Any, Any, dict]]
-    compensation: Callable[[dict], Coroutine[Any, Any, None]] | None = None
+    action: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
+    compensation: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None = None
     timeout_seconds: int | None = None
     retry_attempts: int = 0
     retry_backoff: float = 0.5
-    retry_on: tuple = (ConnectionError, TimeoutError)
-    idempotency_key_fn: Callable[[dict], str] | None = None
+    retry_on: tuple[type[Exception], ...] = (ConnectionError, TimeoutError)
+    idempotency_key_fn: Callable[[dict[str, Any]], str] | None = None
     status: SagaStatus = SagaStatus.PENDING
-    result: dict = field(default_factory=dict)
-    data: dict = field(default_factory=dict)
+    result: dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 class Saga:
-    def __init__(self, name: str, timeout_seconds: int = 300, saga_id: str | None = None):
+    def __init__(self, name: str, timeout_seconds: int = 300, saga_id: str | None = None) -> None:
         self.name = name
         self._saga_id = saga_id or f"{name}_{uuid.uuid4().hex[:8]}"
         self.timeout_seconds = timeout_seconds
         self._steps: list[SagaStep] = []
         self._status = SagaStatus.PENDING
-        self._data: dict = {}
+        self._data: dict[str, Any] = {}
         self._current_step = 0
         self._started_at: float = 0.0
         self._completed_steps: list[int] = []
@@ -88,7 +88,7 @@ class Saga:
         return self._status
 
     @property
-    def data(self) -> dict:
+    def data(self) -> dict[str, Any]:
         return self._data
 
     @property
@@ -98,13 +98,13 @@ class Saga:
     def add_step(
         self,
         name: str,
-        action: Callable[[dict], Coroutine[Any, Any, dict]],
-        compensation: Callable[[dict], Coroutine[Any, Any, None]] | None = None,
+        action: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]],
+        compensation: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None = None,
         timeout_seconds: int | None = None,
         retry_attempts: int = 0,
         retry_backoff: float = 0.5,
-        retry_on: tuple = (ConnectionError, TimeoutError),
-        idempotency_key_fn: Callable[[dict], str] | None = None,
+        retry_on: tuple[type[Exception], ...] = (ConnectionError, TimeoutError),
+        idempotency_key_fn: Callable[[dict[str, Any]], str] | None = None,
     ) -> Saga:
         self._steps.append(
             SagaStep(
@@ -192,7 +192,7 @@ class Saga:
         except Exception:
             return False
 
-    async def _get_cached_result(self, key: str) -> dict | None:
+    async def _get_cached_result(self, key: str) -> dict[str, Any] | None:
         """Get cached result from idempotency log."""
         from shared.connection import connection_manager
 
@@ -209,11 +209,11 @@ class Saga:
             result_blob = row["result_json"]
             if isinstance(result_blob, (bytes, bytearray)):
                 return decrypt_json(bytes(result_blob))
-            return json.loads(result_blob) if result_blob else None
+            return dict(json.loads(result_blob)) if result_blob else None
         except Exception:
             return None
 
-    async def _record_completed(self, key: str, step_name: str, result: dict) -> None:
+    async def _record_completed(self, key: str, step_name: str, result: dict[str, Any]) -> None:
         """Record completed step in idempotency log."""
         from shared.connection import connection_manager
 
@@ -271,24 +271,24 @@ class Saga:
 
         await self._handle_step_failure(step, attempt, step_exc)
 
-    async def _run_step_action(self, step: SagaStep) -> dict:
+    async def _run_step_action(self, step: SagaStep) -> dict[str, Any]:
         step_timeout = step.timeout_seconds or self.timeout_seconds
         if isinstance(step.action, Saga):
-            result = await asyncio.wait_for(step.action.execute(self._data), timeout=step_timeout)
+            result = await asyncio.wait_for(step.action.execute(self._data), timeout=float(step_timeout))
         else:
             action_result = step.action(self._data)
             if asyncio.iscoroutine(action_result):
-                result = await asyncio.wait_for(action_result, timeout=step_timeout)
+                result = await asyncio.wait_for(action_result, timeout=float(step_timeout))
             else:
                 result = action_result  # type: ignore[assignment]
         return result if isinstance(result, dict) else {"value": result}
 
-    async def _handle_retry_pause(self, step: SagaStep, attempt: int, exc: Exception):
+    async def _handle_retry_pause(self, step: SagaStep, attempt: int, exc: Exception) -> None:
         delay = step.retry_backoff * (2 ** (attempt - 1))
         logger.warning(f"Saga '{self.name}' step '{step.name}' retry {attempt}/{step.retry_attempts} in {delay:.1f}s: {exc}")
         await asyncio.sleep(delay)
 
-    async def _handle_step_failure(self, step: SagaStep, attempt: int, step_exc: Exception | None):
+    async def _handle_step_failure(self, step: SagaStep, attempt: int, step_exc: Exception | None) -> None:
         step.status = SagaStatus.FAILED
         if attempt > step.retry_attempts:
             logger.error(f"Saga '{self.name}' step '{step.name}' failed after {step.retry_attempts} retries: {step_exc}")
@@ -311,7 +311,7 @@ class Saga:
         self._save_state()
         logger.info(f"Saga '{self.name}' step '{step.name}' completed")
 
-    async def execute(self, initial_data: dict | None = None) -> dict:
+    async def execute(self, initial_data: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self._saga_id:
             self._saga_id = self.name + "_" + uuid.uuid4().hex[:8]
         self._data = initial_data or {}
@@ -386,7 +386,7 @@ class Saga:
         except Exception:
             logger.exception("Saga '%s' compensation failed for '%s'", self.name, step.name)
 
-    def get_state(self) -> dict:
+    def get_state(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "saga_id": self._saga_id,
@@ -461,11 +461,11 @@ class SagaWatchdog:
 
     def get_stuck_sagas(self) -> list[dict[str, Any]]:
         """Get list of stuck sagas."""
-        stuck = []
-        SAGA_DIR.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(Exception):
+            stuck = []
+            SAGA_DIR.mkdir(parents=True, exist_ok=True)
 
-        for state_file in SAGA_DIR.glob("*.json"):
-            try:
+            for state_file in SAGA_DIR.glob("*.json"):
                 blob = state_file.read_bytes()
                 state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
 
@@ -480,10 +480,9 @@ class SagaWatchdog:
                             "age_seconds": int(age),
                         }
                     )
-            except Exception:
-                pass
 
-        return stuck
+            return stuck
+        return []
 
     def recover_saga(self, saga_id: str) -> dict[str, Any] | None:
         """Attempt to recover a stuck saga."""
@@ -515,21 +514,23 @@ class SagaWatchdog:
         """Delete completed, compensated, stuck, failed, and manual_review_required sagas older than 1 hour."""
         cutoff = time.time() - 3600
         removed = 0
-        SAGA_DIR.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(Exception):
+            SAGA_DIR.mkdir(parents=True, exist_ok=True)
 
-        for state_file in SAGA_DIR.glob("*.json"):
-            try:
-                blob = state_file.read_bytes()
-                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
+            for state_file in SAGA_DIR.glob("*.json"):
+                with contextlib.suppress(Exception):
+                    blob = state_file.read_bytes()
+                    state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
 
-                if state.get("status") in ("completed", "compensated", "stuck", "failed", "manual_review_required"):
-                    if state.get("started_at", 0) < cutoff:
+                    if (
+                        state.get("status") in ("completed", "compensated", "stuck", "failed", "manual_review_required")
+                        and state.get("started_at", 0) < cutoff
+                    ):
                         state_file.unlink()
                         removed += 1
-            except Exception:
-                pass
 
-        return removed
+            return removed
+        return 0
 
 
 # Singleton watchdog

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from mcp.server.fastmcp import FastMCP
 from mcp_server.context import AppContext
@@ -7,8 +8,9 @@ from shared.read_only import read_only_replica
 from features.backup_cron import backup_cron
 from lifecycle.importance_scheduler import importance_scheduler
 
+
 @asynccontextmanager
-async def lifespan(server: FastMCP):
+async def lifespan(server: FastMCP) -> AsyncGenerator[AppContext, None]:
     from shared.migrations import migration_manager
 
     result = await migration_manager.migrate()
@@ -18,7 +20,7 @@ async def lifespan(server: FastMCP):
 
     ctx = AppContext()
 
-    async def _delayed_start():
+    async def _delayed_start() -> None:
         await asyncio.sleep(5)
         backup_cron.start()
         importance_scheduler.start()
@@ -26,12 +28,12 @@ async def lifespan(server: FastMCP):
 
     asyncio.create_task(_delayed_start())
 
-    async def _periodic_tasks():
+    async def _periodic_tasks() -> None:
         from lifecycle.forgetting import ForgettingSystem
         from lifecycle.compactor import memory_compactor
 
         forgetting = ForgettingSystem()
-        last_compaction = 0
+        last_compaction: float = 0.0
         while True:
             try:
                 await asyncio.sleep(900)  # 15 minutes
@@ -44,8 +46,8 @@ async def lifespan(server: FastMCP):
                     last_compaction = now
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logging.getLogger(__name__).exception("Periodic task error: %s", e)
+            except Exception:
+                logging.getLogger(__name__).exception("Periodic task error")
 
     periodic_task = asyncio.create_task(_periodic_tasks())
     try:

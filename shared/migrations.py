@@ -51,7 +51,7 @@ class MigrationManager:
 
         # Run Alembic upgrade in a thread to avoid blocking async loop
         # (Alembic/SQLAlchemy sync nature)
-        def run_upgrade():
+        def run_upgrade() -> None:
             cfg = self._get_alembic_config()
             alembic_command.upgrade(cfg, "head")
 

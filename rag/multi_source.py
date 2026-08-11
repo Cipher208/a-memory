@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class MultiSourceRAG:
-    def __init__(self, rag, wiki, cm=None):
+    def __init__(self, rag: Any, wiki: Any, cm: Any | None = None):
         self.rag = rag
         self.wiki = wiki
         self.cm = cm

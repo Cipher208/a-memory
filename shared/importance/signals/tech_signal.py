@@ -1,3 +1,4 @@
+from typing import Any
 from .base_signal import IImportanceSignal
 
 
@@ -7,7 +8,7 @@ class TechKeywordSignal(IImportanceSignal):
     Uses regex compiled from importance.json (provided via context).
     """
 
-    def calculate(self, text: str, context: dict) -> float:
+    def calculate(self, text: str, context: dict[str, Any]) -> float:
         tech_re = context.get("tech_re")
         if not tech_re:
             return 0.0

@@ -1,3 +1,4 @@
+from typing import Any
 from .base_signal import IImportanceSignal
 
 
@@ -7,7 +8,7 @@ class LengthSignal(IImportanceSignal):
     Logic: min(1.0, L / 800.0)
     """
 
-    def calculate(self, text: str, context: dict) -> float:
+    def calculate(self, text: str, context: dict[str, Any]) -> float:
         if not text:
             return 0.0
         L = len(text)

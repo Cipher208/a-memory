@@ -51,11 +51,11 @@ class SagaEngine:
                 while attempt <= step_def.retry_attempts:
                     try:
 
-                        async def _run(s=step_def):
+                        async def _run(s: SagaStep = step_def) -> dict[str, Any]:
                             res = s.action(state.context)
                             return await res if asyncio.iscoroutine(res) else res
 
-                        result = await asyncio.wait_for(_run(), timeout=step_def.timeout_seconds)
+                        result: dict[str, Any] = await asyncio.wait_for(_run(), timeout=step_def.timeout_seconds)
                         step_state.result = result or {}
                         step_state.status = SagaStatus.COMPLETED
                         state.context.update(step_state.result)
@@ -80,7 +80,7 @@ class SagaEngine:
             await self.compensate(state, steps)
             raise
 
-    async def compensate(self, state: SagaState, steps: list[SagaStep]):
+    async def compensate(self, state: SagaState, steps: list[SagaStep]) -> None:
         state.status = SagaStatus.COMPENSATING
         self.store.save(state)
         for i in range(state.current_step_index, -1, -1):
@@ -90,13 +90,14 @@ class SagaEngine:
             if step_state.status == SagaStatus.COMPLETED and step_def.compensation:
                 try:
 
-                    async def _run_c(s=step_def):
-                        res = s.compensation(state.context)
-                        if asyncio.iscoroutine(res):
-                            await res
+                    async def _run_c(s: SagaStep = step_def) -> None:
+                        if s.compensation:
+                            res = s.compensation(state.context)
+                            if asyncio.iscoroutine(res):
+                                await res
 
                     await asyncio.wait_for(_run_c(), timeout=step_def.timeout_seconds)
-                except Exception as e:
-                    logger.exception(f"Saga {state.saga_id}: compensation for {step_def.name} failed: {e}")
+                except Exception:
+                    logger.exception(f"Saga {state.saga_id}: compensation for {step_def.name} failed")
         state.status = SagaStatus.COMPENSATED
         self.store.save(state)

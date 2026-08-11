@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from pathlib import Path
+from typing import cast
 
 from features.auth.models import AuthTokenModel
 from features.auth.store import EncryptedStore
@@ -34,7 +35,7 @@ class BearerAuth:
         if env_token:
             return env_token
 
-        return self._current_token
+        return cast("str", self._current_token)
 
     def verify(self, auth_header: str) -> bool:
         """Check if header matches the current token."""

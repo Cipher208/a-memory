@@ -14,7 +14,7 @@ import contextlib
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from shared.crypto import decrypt_json as _decrypt_json
 from shared.crypto import encrypt_json as _encrypt_json
@@ -56,9 +56,8 @@ def _load_dotenv() -> None:
                     value = value.strip().strip("\"'")
                     if key and key not in os.environ:
                         os.environ[key] = value
-    except Exception as e:
-        logger.exception(f"Failed to load .env: {e}")
-
+    except Exception:
+        logger.exception("Failed to load .env")
 
 
 def _save_dotenv(key: str, value: str) -> None:
@@ -98,12 +97,15 @@ def _load_master_key() -> bytes:
     # Try environment variable with argon2id KDF
     env_seed = os.environ.get(_ENV_VAR)
     if env_seed:
-        return argon2id.kdf(
-            size=_MASTER_KEY_LEN,
-            password=env_seed.encode("utf-8"),
-            salt=_KDF_SALT,
-            opslimit=argon2id.OPSLIMIT_MODERATE,
-            memlimit=argon2id.MEMLIMIT_MODERATE,
+        return cast(
+            "bytes",
+            argon2id.kdf(
+                size=_MASTER_KEY_LEN,
+                password=env_seed.encode("utf-8"),
+                salt=_KDF_SALT,
+                opslimit=argon2id.OPSLIMIT_MODERATE,
+                memlimit=argon2id.MEMLIMIT_MODERATE,
+            ),
         )
 
     # Auto-generate key for dev convenience
@@ -112,12 +114,15 @@ def _load_master_key() -> bytes:
     auto_key = _secrets.token_hex(32)
     logger.warning("No master key found. Auto-generating key and saving to .env. For production, use keyring or set MCP_MASTER_KEY explicitly.")
     _save_dotenv(_ENV_VAR, auto_key)
-    return argon2id.kdf(
-        size=_MASTER_KEY_LEN,
-        password=auto_key.encode("utf-8"),
-        salt=_KDF_SALT,
-        opslimit=argon2id.OPSLIMIT_MODERATE,
-        memlimit=argon2id.MEMLIMIT_MODERATE,
+    return cast(
+        "bytes",
+        argon2id.kdf(
+            size=_MASTER_KEY_LEN,
+            password=auto_key.encode("utf-8"),
+            salt=_KDF_SALT,
+            opslimit=argon2id.OPSLIMIT_MODERATE,
+            memlimit=argon2id.MEMLIMIT_MODERATE,
+        ),
     )
 
 
@@ -133,9 +138,9 @@ def _get_master_key() -> bytes:
     return key
 
 
-def encrypt_json(data: dict | list) -> bytes:
+def encrypt_json(data: dict[str, Any] | list[Any]) -> bytes:
     """Encrypt JSON data. Returns nonce(24) || ciphertext."""
-    return _encrypt_json(data, _get_master_key())
+    return cast("bytes", _encrypt_json(data, _get_master_key()))
 
 
 def decrypt_json(blob: bytes) -> Any:
@@ -155,7 +160,7 @@ def is_encrypted_blob(path: Path) -> bool:
     # noqa: SKY-D325
     with path.open("rb") as f:
         head = f.read(1)
-    return _is_encrypted_blob(head)
+    return cast("bool", _is_encrypted_blob(head))
 
 
 def install_master_key_to_keychain(hex_key: str) -> None:

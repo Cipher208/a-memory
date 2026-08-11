@@ -37,7 +37,7 @@ class BackupCron:
         self._state_file = self.base_dir / ".backup_cron_state.json"
         self._load_state()
 
-    def _load_state(self):
+    def _load_state(self) -> None:
         if self._state_file.exists():
             with contextlib.suppress(Exception):
                 from shared.saga import read_state_legacy_or_encrypted
@@ -46,10 +46,10 @@ class BackupCron:
                 self._last_backup = state.get("last_backup", 0.0)
                 self._last_wiki_sync = state.get("last_wiki_sync", 0.0)
 
-    def _save_state(self):
+    def _save_state(self) -> None:
         self._state_file.write_text(json.dumps({"last_backup": self._last_backup, "last_wiki_sync": self._last_wiki_sync}), encoding="utf-8")
 
-    def start(self):
+    def start(self) -> None:
         if self._running:
             return
         if os.environ.get("BACKUP_CRON_DISABLED"):
@@ -60,12 +60,12 @@ class BackupCron:
         jitter_info = f" (+{self.jitter_seconds}s jitter)" if self.jitter_seconds else ""
         logger.info(f"Backup cron started (interval={self.interval_hours}h{jitter_info})")
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
 
-    def _loop(self):
+    def _loop(self) -> None:
         while self._running:
             try:
                 self._tick()
@@ -74,12 +74,12 @@ class BackupCron:
                 logger.exception("Backup cron error")
                 time.sleep(300)
 
-    def _tick(self):
+    def _tick(self) -> None:
         now = time.time()
         self._check_backup(now)
         self._check_wiki_sync(now)
 
-    def _check_backup(self, now: float):
+    def _check_backup(self, now: float) -> None:
         next_backup = self._last_backup + self.interval_hours * 3600
         if now < next_backup:
             return
@@ -93,11 +93,11 @@ class BackupCron:
         self._cleanup_old()
         self._fire_nightly_hooks()
 
-    def _check_wiki_sync(self, now: float):
+    def _check_wiki_sync(self, now: float) -> None:
         if now - self._last_wiki_sync >= self.wiki_sync_interval * 60:
             self._sync_wiki()
 
-    def _fire_nightly_hooks(self):
+    def _fire_nightly_hooks(self) -> None:
         """Trigger nightly maintenance hooks for both layers."""
         try:
             import asyncio
@@ -140,7 +140,7 @@ class BackupCron:
         logger.info("Auto-backup created: %s (%d files)", name, len(backed_up))
         return str(dest)
 
-    def _cleanup_old(self):
+    def _cleanup_old(self) -> None:
         import shutil
 
         cutoff = time.time() - (self.retention_days * 86400)
@@ -152,7 +152,7 @@ class BackupCron:
         if removed:
             logger.info("Cleaned up %d old backups", removed)
 
-    def _sync_wiki(self):
+    def _sync_wiki(self) -> None:
         """Synchronize wiki files with disk."""
         try:
             from wiki import WikiManager

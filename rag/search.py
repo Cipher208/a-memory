@@ -1,6 +1,7 @@
 """RAG search strategies — FTS5, binary, hybrid, RRF."""
 
 import logging
+from contextlib import suppress
 from typing import Any
 
 from shared.connection import AsyncConnectionManager
@@ -20,7 +21,7 @@ async def search_fts5(cm: AsyncConnectionManager, query: str, user_id: str, limi
     """FTS5 search with LIKE fallback."""
     conn = await cm.get(DB_NAME)
     if fts_available:
-        try:
+        with suppress(Exception):
             cur = await conn.execute(
                 """SELECT wp.id, wp.title, wp.content, wp.wiki_type, fts.rank
                    FROM rag_fts fts JOIN rag_pages wp ON fts.rowid = wp.id
@@ -40,8 +41,6 @@ async def search_fts5(cm: AsyncConnectionManager, query: str, user_id: str, limi
                 }
                 for r in rows
             ]
-        except Exception:
-            pass
 
     escaped_query = query.replace("%", "\\%").replace("_", "\\_")
     cur = await conn.execute(
@@ -133,11 +132,9 @@ async def search_rrf(
     fts_ranks = {doc["id"]: rank for rank, doc in enumerate(fts_results)}
 
     bin_ranks = {}
-    try:
+    with suppress(Exception):
         bin_results = await search_binary(cm, query, user_id, limit * 3, binary_for_fn, binary_dim)
         bin_ranks = {r["id"]: rank for rank, r in enumerate(bin_results)}
-    except Exception:
-        pass
 
     def rrf(rank: int) -> float:
         return 1.0 / (k + rank + 1)

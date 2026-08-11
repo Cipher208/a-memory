@@ -27,7 +27,7 @@ class UserHooks:
         self.emotion_trigger = None
 
     @hook_registry.mark("message_received", layer="user")
-    def _message_received(self, ctx: dict[str, Any], mem=None) -> dict[str, Any]:
+    def _message_received(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         """Store message in L1 buffer for recent context."""
         text = ctx.get("text", "")
         importance = self._calculate_importance(text)
@@ -40,7 +40,7 @@ class UserHooks:
         return {"saved_to_l1": False, "importance": importance}
 
     @hook_registry.mark("message_sent", layer="user")
-    def _message_sent(self, ctx: dict[str, Any], mem=None) -> dict[str, Any]:
+    def _message_sent(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         text = ctx.get("text", "")
         if mem:
             try:
@@ -62,7 +62,7 @@ class UserHooks:
         return consolidation(ctx, self.user_id)
 
     @hook_registry.mark("emotion_trigger", layer="user")
-    def _emotion_trigger(self, ctx: dict[str, Any], mem=None) -> dict[str, Any]:
+    def _emotion_trigger(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         """Evaluate emotional content and save episode if weighty."""
         if not self.emotion_trigger:
             return {"saved_episode": False, "error": "emotion_trigger_not_init"}
@@ -130,6 +130,7 @@ class UserHooks:
 
     def _get_base_score(self, memory_kind: str | None) -> float:
         from shared.memory_types import default_importance
+
         return default_importance(memory_kind) if memory_kind else 0.3
 
     def _get_length_bonus(self, text: str) -> float:

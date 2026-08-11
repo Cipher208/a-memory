@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Pydantic models for MCP tool return types."""
 
+from typing import Any
 from pydantic import BaseModel, Field
 
 
@@ -13,7 +14,7 @@ class RememberResult(BaseModel):
 
 
 class RecallResult(BaseModel):
-    results: list[dict] = Field(description="List of matching memories")
+    results: list[dict[str, Any]] = Field(description="List of matching memories")
     count: int = Field(description="Number of results")
 
 
@@ -28,12 +29,12 @@ class SessionResult(BaseModel):
 
 class EpisodeResult(BaseModel):
     episode_id: int | None = Field(default=None, description="Episode database ID")
-    episodes: list[dict] | None = Field(default=None, description="List of episodes")
+    episodes: list[dict[str, Any]] | None = Field(default=None, description="List of episodes")
 
 
 class GraphNodeResult(BaseModel):
     node_id: int | None = Field(default=None, description="Graph node ID")
-    nodes: list[dict] | None = Field(default=None, description="List of graph nodes")
+    nodes: list[dict[str, Any]] | None = Field(default=None, description="List of graph nodes")
 
 
 class StatsResult(BaseModel):
@@ -58,19 +59,19 @@ class ApiKeyResult(BaseModel):
     user_id: str | None = None
     label: str | None = None
     revoked: bool | None = None
-    keys: list[dict] | None = Field(default=None, description="List of API keys")
+    keys: list[dict[str, Any]] | None = Field(default=None, description="List of API keys")
 
 
 class BackupResult(BaseModel):
     path: str | None = Field(default=None, description="Backup path")
-    backups: list[dict] | None = Field(default=None, description="List of backups")
+    backups: list[dict[str, Any]] | None = Field(default=None, description="List of backups")
     running: bool | None = None
     interval_hours: int | None = None
 
 
 class DataResult(BaseModel):
     path: str | None = Field(default=None, description="Export path")
-    exports: list[dict] | None = Field(default=None, description="List of exports")
+    exports: list[dict[str, Any]] | None = Field(default=None, description="List of exports")
     core_memory: int | None = None
     episodes: int | None = None
 
@@ -78,8 +79,8 @@ class DataResult(BaseModel):
 class CleanupResult(BaseModel):
     dedup_core: int | None = None
     compress_episodes: int | None = None
-    dream_buffer_cleanup: dict | None = None
-    audit_archive: dict | None = None
+    dream_buffer_cleanup: dict[str, Any] | None = None
+    audit_archive: dict[str, Any] | None = None
     backup_cleanup: int | None = None
     saga_cleanup: int | None = None
 
@@ -93,6 +94,6 @@ class PurgeResult(BaseModel):
 
 
 class SearchResult(BaseModel):
-    results: list[dict] = Field(description="Search results")
+    results: list[dict[str, Any]] = Field(description="Search results")
     count: int = Field(description="Number of results")
     method: str = Field(default="rrf", description="Search method used")

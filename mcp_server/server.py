@@ -60,8 +60,8 @@ def main() -> None:
                 mcp.settings.host = args.host
                 mcp.settings.port = args.port
                 mcp.run(transport="streamable-http")
-            except Exception as e:
-                logging.getLogger(__name__).exception("HTTP transport failed: %s. Try with --dashboard flag.", e)
+            except Exception:
+                logging.getLogger(__name__).exception("HTTP transport failed. Try with --dashboard flag.")
                 raise
     else:
         mcp.run(transport=STDIO_TRANSPORT)
@@ -82,6 +82,7 @@ def _run_with_dashboard(host: str, port: int) -> None:
 
 def _setup_shutdown_signals(handler) -> None:
     import signal
+
     signal.signal(signal.SIGTERM, handler)
     signal.signal(signal.SIGINT, handler)
 

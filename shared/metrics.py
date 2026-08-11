@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 class MetricsCollector:
     """Centralized metrics management using prometheus_client."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._start_time = time.time()
-        self._dynamic_metrics = {}
+        self._dynamic_metrics: dict[str, Any] = {}
 
         # --- Standard Metrics ---
         self.uptime = Gauge("ariel_memory_uptime_seconds", "Server uptime in seconds")
@@ -33,7 +33,7 @@ class MetricsCollector:
             "ariel_memory_search_latency_seconds", "Latency of memory search operations", buckets=(0.01, 0.05, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0)
         )
 
-    def inc(self, name: str, value: float = 1):
+    def inc(self, name: str, value: float = 1) -> None:
         """Legacy compatibility wrapper."""
         # Map simple counter name to the labeled counter if possible
         if name == "importance_bypassed_total":
@@ -45,7 +45,7 @@ class MetricsCollector:
                 self._dynamic_metrics[m_name] = Counter(m_name, f"Legacy counter: {name}")
             self._dynamic_metrics[m_name].inc(value)
 
-    def gauge(self, name: str, value: float):
+    def gauge(self, name: str, value: float) -> None:
         """Legacy compatibility wrapper."""
         if name == "importance_threshold":
             self.current_importance_threshold.set(value)

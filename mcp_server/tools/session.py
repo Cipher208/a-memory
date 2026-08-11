@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
+
 async def memory_session_start(
     layer: str = "user",
     user_id: str = "default",
@@ -30,6 +31,7 @@ async def memory_session_start(
     await tl._fire_hook("message_received", layer, {"text": "session_started", "session_id": session_id, "user_id": user_id})
 
     return SessionResult(session_id=session_id).dict()
+
 
 async def memory_session_end(
     layer: str = "user",
@@ -54,6 +56,7 @@ async def memory_session_end(
     await tl._fire_hook("state_delta", layer, {"trigger": "session_end", "session_id": session_id, "summary": summary, "user_id": user_id})
 
     return SessionResult(status="ok").dict()
+
 
 async def memory_session_list(
     layer: str = "user",

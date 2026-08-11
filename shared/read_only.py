@@ -38,8 +38,8 @@ class ReadOnlyReplica:
                     dst_conn.close()
                     src_conn.close()
                     synced[db_file] = 1
-                except Exception as e:
-                    logger.exception(f"Replica sync failed for {db_file}: {e}")
+                except Exception:
+                    logger.exception(f"Replica sync failed for {db_file}")
                     try:
                         shutil.copy2(src, dst)
                         synced[db_file] = 1
@@ -48,7 +48,7 @@ class ReadOnlyReplica:
         self._last_sync = time.time()
         return synced
 
-    def start_auto_sync(self, interval_seconds: int = 300):
+    def start_auto_sync(self, interval_seconds: int = 300) -> None:
         self._sync_interval = interval_seconds
         if self._running:
             return
@@ -56,19 +56,19 @@ class ReadOnlyReplica:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         self._running = False
         if self._thread:
             self._thread.join(timeout=5)
 
-    def _loop(self):
+    def _loop(self) -> None:
         while self._running:
             try:
                 if time.time() - self._last_sync >= self._sync_interval:
                     self.sync()
                 time.sleep(60)
-            except Exception as e:
-                logger.exception(f"Replica sync error: {e}")
+            except Exception:
+                logger.exception("Replica sync error")
                 time.sleep(300)
 
     def get_conn(self, db_name: str = "memory.db") -> sqlite3.Connection:

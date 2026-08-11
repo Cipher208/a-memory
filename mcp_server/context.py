@@ -1,6 +1,5 @@
 """AppContext definition."""
 
-
 from core import MemoryManager
 from features.audit_trail import AuditTrail
 from features.backup import BackupManager

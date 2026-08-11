@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
+
 async def wiki_add(
     layer: str = "user",
     title: str = "",
@@ -22,6 +23,7 @@ async def wiki_add(
     await wiki.save(title, content, wiki_type, tags)
     return {"status": "ok", "title": title}
 
+
 async def wiki_search(
     layer: str = "user",
     query: str = "",
@@ -34,6 +36,7 @@ async def wiki_search(
     wiki = _get_wiki(app, layer)
     results = await wiki.search(query, limit)
     return {"results": [{"title": r.title, "type": r.wiki_type, "tags": r.tags} for r in results], "count": len(results)}
+
 
 async def wiki_list(
     layer: str = "user",
@@ -50,6 +53,7 @@ async def wiki_list(
     else:
         pages = await wiki.list_all(limit)
     return {"pages": [{"title": p.title, "type": p.wiki_type, "tags": p.tags} for p in pages], "count": len(pages)}
+
 
 async def wiki_delete(
     layer: str = "user",

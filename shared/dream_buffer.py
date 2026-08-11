@@ -16,7 +16,7 @@ class DreamBuffer:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -38,7 +38,7 @@ class DreamBuffer:
         content: str,
         importance: float = 0.5,
         event_id: str | None = None,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
@@ -46,7 +46,7 @@ class DreamBuffer:
             (user_id, session_id, event_id, content, importance, json.dumps(metadata or {})),
         )
         await conn.commit()
-        return cursor.lastrowid
+        return int(cursor.lastrowid)
 
     async def get_staging(self, user_id: str = "default", session_id: str | None = None) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)
@@ -78,7 +78,7 @@ class DreamBuffer:
         else:
             cursor = await conn.execute("DELETE FROM staging_memories WHERE user_id=?", (user_id,))
         await conn.commit()
-        return cursor.rowcount
+        return int(cursor.rowcount)
 
     async def cleanup_old(self, max_age_hours: int = 24, max_count: int = 500) -> dict[str, int]:
         now = time.time()
@@ -89,7 +89,7 @@ class DreamBuffer:
             "DELETE FROM staging_memories WHERE created_at < datetime(?, 'unixepoch')",
             (cutoff,),
         )
-        result["by_age"] = cursor.rowcount
+        result["by_age"] = int(cursor.rowcount)
 
         rows = await (
             await conn.execute(
@@ -98,21 +98,21 @@ class DreamBuffer:
             )
         ).fetchall()
         for row in rows:
-            excess = row["cnt"] - max_count
+            excess = int(row["cnt"]) - max_count
             cursor = await conn.execute(
                 "DELETE FROM staging_memories WHERE id IN (SELECT id FROM staging_memories WHERE user_id=? ORDER BY created_at ASC LIMIT ?)",
                 (row["user_id"], excess),
             )
-            result["by_count"] += cursor.rowcount
+            result["by_count"] += int(cursor.rowcount)
         await conn.commit()
         return result
 
     async def count(self, user_id: str = "default") -> int:
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM staging_memories WHERE user_id=?", (user_id,))).fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
     async def count_all(self) -> int:
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM staging_memories")).fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0

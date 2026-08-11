@@ -7,7 +7,10 @@ Shared hook utilities — eliminates duplication between agent and user hooks.
 import asyncio
 import concurrent.futures
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Coroutine
 
 from lifecycle.consolidation import ConsolidationEngine
 from lifecycle.forgetting import ForgettingSystem
@@ -20,7 +23,7 @@ logger = logging.getLogger(__name__)
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
 
-def run_async(coro):
+def run_async(coro: Coroutine[Any, Any, Any]) -> Any:
     """Run async coroutine from sync context, handling running event loops.
 
     Uses ThreadPoolExecutor(max_workers=1) to serialize DB access
@@ -39,13 +42,13 @@ def run_async(coro):
 
 def forgetting_ritual(ctx: dict[str, Any]) -> dict[str, Any]:
     fs = ForgettingSystem()
-    return run_async(fs.cleanup())
+    return cast("dict[str, Any]", run_async(fs.cleanup()))
 
 
 def conflict_resolver(ctx: dict[str, Any], user_id: str) -> dict[str, Any]:
     content = ctx.get("content", "")
     resolver = ConflictResolver()
-    return run_async(resolver.check(user_id, content))
+    return cast("dict[str, Any]", run_async(resolver.check(user_id, content)))
 
 
 def auto_context(ctx: dict[str, Any], user_id: str, layer: str | None = None) -> dict[str, Any]:

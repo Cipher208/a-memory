@@ -4,20 +4,21 @@ Two-layer unified memory: Layer 1 (user) + Layer 2 (agent identity)
 """
 
 from pathlib import Path
+from typing import Any, Self
 
 import yaml
 
 
 class Config:
-    _instance = None
+    _instance: Self | None = None
 
-    def __new__(cls):
+    def __new__(cls) -> Self:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._load()
         return cls._instance
 
-    def _load(self):
+    def _load(self) -> None:
         config_path = Path(__file__).parent / "config.yaml"
         try:
             with open(config_path) as f:
@@ -25,7 +26,7 @@ class Config:
         except FileNotFoundError:
             self._data = {}
 
-    def get(self, *keys, default=None):
+    def get(self, *keys: str, default: Any = None) -> Any:
         value = self._data
         for key in keys:
             if isinstance(value, dict):

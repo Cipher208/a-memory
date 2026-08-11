@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
+
 async def memory_episode_save(
     layer: str = "user",
     user_id: str = "default",
@@ -40,6 +41,7 @@ async def memory_episode_save(
 
     return EpisodeResult(episode_id=episode_id).dict()
 
+
 async def memory_episode_recall(
     layer: str = "user",
     user_id: str = "default",
@@ -62,6 +64,7 @@ async def memory_episode_recall(
         episodes = await mem.l3.get_episodes(user_id, limit)
     return EpisodeResult(episodes=[{"id": e.episode_id, "summary": e.summary, "weight": e.emotional_weight} for e in episodes]).dict()
 
+
 async def memory_episode_list(
     layer: str = "user",
     user_id: str = "default",
@@ -79,6 +82,7 @@ async def memory_episode_list(
         "episodes": [{"id": e.episode_id, "summary": e.summary, "weight": e.emotional_weight, "tags": e.tags} for e in episodes],
         "count": len(episodes),
     }
+
 
 async def memory_episode_get(
     layer: str = "user",

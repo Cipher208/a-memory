@@ -18,7 +18,7 @@ class SessionRecord:
     session_id: str
     user_id: str
     summary: str
-    state_deltas: dict = field(default_factory=dict)
+    state_deltas: dict[str, Any] = field(default_factory=dict)
     topics: list[str] = field(default_factory=list)
     message_count: int = 0
     started_at: float = 0.0
@@ -26,10 +26,10 @@ class SessionRecord:
 
 
 class SessionStore:
-    def __init__(self, cm: AsyncConnectionManager | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None) -> None:
         self._cm = cm or connection_manager
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -58,7 +58,9 @@ class SessionStore:
         await conn.commit()
         return session_id
 
-    async def close_session(self, session_id: str, summary: str = "", state_deltas: dict | None = None, topics: list[str] | None = None):
+    async def close_session(
+        self, session_id: str, summary: str = "", state_deltas: dict[str, Any] | None = None, topics: list[str] | None = None
+    ) -> None:
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "UPDATE sessions SET summary=?, state_deltas=?, topics=?, ended_at=? WHERE session_id=?",
@@ -88,9 +90,9 @@ class SessionStore:
         else:
             cursor = await conn.execute("SELECT COUNT(*) FROM sessions")
         row = await cursor.fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
-    def _row_to_record(self, row) -> SessionRecord:
+    def _row_to_record(self, row: dict[str, Any] | Any) -> SessionRecord:
         return SessionRecord(
             session_id=row["session_id"],
             user_id=row["user_id"],

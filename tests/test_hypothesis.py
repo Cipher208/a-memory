@@ -1030,9 +1030,8 @@ def test_chaos_db_locked_graceful(chaos_db_locked):
 
         # Should not crash even with chaotic DB
         try:
-            await at.log("u1", "action")
-        except Exception:
-            pass  # database locked is acceptable
+            with contextlib.suppress(Exception):
+                await at.log("u1", "action")
         finally:
             await cm.close_all()
 
@@ -1078,11 +1077,10 @@ def test_chaos_keyboard_interrupt_during_saga():
     async def t():
         saga = Saga("interrupt_test")
         saga.add_step("s1", lambda d: {"ok": True})
-        try:
+        with contextlib.suppress(KeyboardInterrupt):
             await saga.execute()
-        except KeyboardInterrupt:
-            pass  # acceptable
 
+        # Saga should be in a valid state after interrupt
         # Saga should be in a valid state after interrupt
         assert saga.status.value in ("completed", "failed", "pending")
 

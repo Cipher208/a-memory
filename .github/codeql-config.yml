@@ -1,0 +1,14 @@
+# CodeQL configuration to silence non-Python warnings
+paths-ignore:
+  - 'npm/**'
+  - 'venv/**'
+  - 'node_modules/**'
+  - 'htmlcov/**'
+  - 'strix_runs/**'
+  - 'graphify-out/**'
+  - '**/*.js'
+  - '**/*.ts'
+  - '**/*.c'
+  - '**/*.cpp'
+  - '**/*.h'
+  - '**/*.so'

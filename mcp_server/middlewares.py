@@ -5,6 +5,7 @@ from starlette.responses import JSONResponse
 from features.auth import bearer_auth
 from config import config
 
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         if request.url.path in ("/mcp", "/health", "/ready", "/alive"):
@@ -15,6 +16,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if auth and not bearer_auth.verify(auth):
             return JSONResponse({"error": "Invalid token"}, status_code=401)
         return await call_next(request)
+
 
 def add_middlewares(app):
     app.add_middleware(AuthMiddleware)

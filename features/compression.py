@@ -7,7 +7,7 @@ MemoryCompressor — async dedup and compression
 import contextlib
 import time
 
-from typing import ClassVar
+from typing import ClassVar, cast
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 
@@ -42,7 +42,7 @@ class MemoryCompressor:
             (user_id, min_weight, cutoff),
         )
         await conn.commit()
-        return cursor.rowcount
+        return cast("int", cursor.rowcount)
 
     ALLOWED_TABLES: ClassVar[set[str]] = {
         "core_memory",

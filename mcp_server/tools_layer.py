@@ -29,10 +29,13 @@ from .tools.ops import (
 
 # Re-export _fire_hook for backward compatibility and tests
 
+
 # For tests that monkeypatch tl._fire_hook
 def _fire_hook_wrapper(*args, **kwargs):
     from .tools import base
+
     return base._fire_hook(*args, **kwargs)
+
 
 # Register all layer tools
 _register_tools: dict[str, Any] = {

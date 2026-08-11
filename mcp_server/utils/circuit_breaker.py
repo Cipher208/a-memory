@@ -26,10 +26,11 @@ Usage:
 import logging
 import time
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, Any
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class CircuitBreaker:
         threshold: int = 3,
         recovery_timeout: float = 30.0,
         name: str = "default",
-        on_state_change: Callable | None = None,
+        on_state_change: Callable[[str, CircuitState, CircuitState], Any] | None = None,
     ):
         self.threshold = threshold
         self.recovery_timeout = recovery_timeout
@@ -77,7 +78,7 @@ class CircuitBreaker:
     def failures(self) -> int:
         return self._failures
 
-    def _transition_to(self, new_state: CircuitState):
+    def _transition_to(self, new_state: CircuitState) -> None:
         old_state = self._state
         self._state = new_state
         self._state_changes += 1
@@ -85,13 +86,13 @@ class CircuitBreaker:
         if self._on_state_change:
             self._on_state_change(self.name, old_state, new_state)
 
-    def record_success(self):
+    def record_success(self) -> None:
         self._total_requests += 1
         self._failures = 0
         if self._state == CircuitState.HALF_OPEN:
             self._transition_to(CircuitState.CLOSED)
 
-    def record_failure(self):
+    def record_failure(self) -> None:
         self._total_requests += 1
         self._total_failures += 1
         self._failures += 1
@@ -112,12 +113,12 @@ class CircuitBreaker:
         self._total_rejections += 1
         return False
 
-    def reset(self):
+    def reset(self) -> None:
         self._failures = 0
         self._state = CircuitState.CLOSED
         self._opened_at = 0.0
 
-    def get_metrics(self) -> dict:
+    def get_metrics(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "state": self.state.value,
@@ -131,11 +132,16 @@ class CircuitBreaker:
             "last_failure_at": self._last_failure_at,
         }
 
-    def __enter__(self):
+    def __enter__(self) -> bool:
         self._context_allowed = self.allow_request()
         return self._context_allowed
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> Literal[False]:
         if exc_type is None:
             self.record_success()
         else:
@@ -144,10 +150,16 @@ class CircuitBreaker:
 
 
 class CircuitBreakerRegistry:
-    def __init__(self):
+    def __init__(self) -> None:
         self._breakers: dict[str, CircuitBreaker] = {}
 
-    def get(self, name: str, threshold: int = 3, recovery_timeout: float = 30.0, on_state_change: Callable | None = None) -> CircuitBreaker:
+    def get(
+        self,
+        name: str,
+        threshold: int = 3,
+        recovery_timeout: float = 30.0,
+        on_state_change: Callable[[str, CircuitState, CircuitState], Any] | None = None,
+    ) -> CircuitBreaker:
         if name not in self._breakers:
             self._breakers[name] = CircuitBreaker(
                 threshold=threshold,
@@ -160,10 +172,10 @@ class CircuitBreakerRegistry:
     def get_all(self) -> dict[str, CircuitBreaker]:
         return dict(self._breakers)
 
-    def get_all_metrics(self) -> dict:
+    def get_all_metrics(self) -> dict[str, dict[str, Any]]:
         return {name: breaker.get_metrics() for name, breaker in self._breakers.items()}
 
-    def reset_all(self):
+    def reset_all(self) -> None:
         for breaker in self._breakers.values():
             breaker.reset()
 

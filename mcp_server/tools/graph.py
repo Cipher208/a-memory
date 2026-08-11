@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
+
 async def memory_graph_add(
     layer: str = "user",
     user_id: str = "default",
@@ -46,6 +47,7 @@ async def memory_graph_add(
 
     return GraphNodeResult(node_id=node_id).dict()
 
+
 async def memory_graph_query(
     layer: str = "user",
     user_id: str = "default",
@@ -71,6 +73,7 @@ async def memory_graph_query(
         nodes = []
     return GraphNodeResult(nodes=[{"id": n.node_id, "content": n.content, "type": n.node_type, "tags": n.tags} for n in nodes]).dict()
 
+
 async def memory_graph_nodes(
     layer: str = "user",
     user_id: str = "default",
@@ -95,6 +98,7 @@ async def memory_graph_nodes(
         rows = await cur.fetchall()
         nodes = [graph._row_to_node(r) for r in rows]
     return {"nodes": [{"id": n.node_id, "content": n.content, "type": n.node_type, "tags": n.tags} for n in nodes], "count": len(nodes)}
+
 
 async def memory_graph_edges(
     layer: str = "user",

@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import TypeVar
+
+    F = TypeVar("F", bound=Callable[..., Any])
 
 # Removed direct config dependency to fix tests
 # from config import config
@@ -25,28 +28,33 @@ class HookHandler(BaseModel):
 
 
 class HookRegistry:
-    def __init__(self):
-        self._hooks = {}
-        self._enabled_hooks = set()  # Optional explicit enablement
+    def __init__(self) -> None:
+        self._hooks: dict[str, list[HookHandler]] = {}
+        self._enabled_hooks: set[str] = set()  # Optional explicit enablement
 
-    def register(self, handler):
+    def register(self, handler: HookHandler) -> None:
         if handler.name not in self._hooks:
             self._hooks[handler.name] = []
         self._hooks[handler.name].append(handler)
 
-    def register_instance(self, obj):
+    def register_instance(self, obj: Any) -> None:
         for name, method in inspect.getmembers(obj, predicate=inspect.ismethod):
             meta = getattr(method, "_hook_metadata", None)
             if meta:
                 handler = HookHandler(
-                    func=method, name=meta["name"], layer=meta["layer"], is_async=meta["is_async"], takes_mem=meta["takes_mem"], instance=obj
+                    func=method,
+                    name=meta["name"],
+                    layer=meta["layer"],
+                    is_async=meta["is_async"],
+                    takes_mem=meta["takes_mem"],
+                    instance=obj,
                 )
                 self.register(handler)
 
-    def mark(self, hook_name, layer="both"):
-        def decorator(func):
+    def mark(self, hook_name: str, layer: str = "both") -> Callable[[F], F]:
+        def decorator(func: F) -> F:
             sig = inspect.signature(func)
-            func._hook_metadata = {
+            func._hook_metadata = {  # type: ignore[attr-defined]
                 "name": hook_name,
                 "layer": layer,
                 "is_async": asyncio.iscoroutinefunction(func),
@@ -56,7 +64,7 @@ class HookRegistry:
 
         return decorator
 
-    async def fire(self, hook_name, layer, context, mem=None):
+    async def fire(self, hook_name: str, layer: str, context: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         # Hot path optimization: check if we should skip
         # Note: In production we use config.is_hook_enabled
         try:
@@ -83,11 +91,11 @@ class HookRegistry:
                     res = await res
                 results.append(res)
             except Exception as e:
-                logger.exception(f"Hook {hook_name} failed: {e}")
+                logger.exception(f"Hook {hook_name} failed")
                 results.append({"error": str(e)})
         return {"results": results, "handler_count": fired_count}
 
-    def list_hooks(self):
+    def list_hooks(self) -> dict[str, int]:
         return {n: len(h) for n, h in self._hooks.items()}
 
 

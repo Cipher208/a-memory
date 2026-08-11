@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Any
 
 
-
-
 def load_config() -> dict:
     """Load config.yaml, return {} on failure."""
     try:

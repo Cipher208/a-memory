@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
+
 async def memory_stats(
     layer: str = "user",
     user_id: str = "default",
@@ -57,6 +58,7 @@ async def memory_stats(
         wiki_pages=await wiki.count(),
         graph_nodes=await graph.count_nodes(user_id),
     ).dict()
+
 
 async def memory_context(
     layer: str = "user",
@@ -109,6 +111,7 @@ async def memory_context(
     ).dict()
     _set_cached(cache_key, result)
     return result
+
 
 async def memory_context_inject(
     layer: str = "user",
@@ -174,6 +177,7 @@ async def memory_context_inject(
 
     return result
 
+
 async def memory_api_key(
     action: str = "list",
     user_id: str = "default",
@@ -194,6 +198,7 @@ async def memory_api_key(
         revoked = api_key_auth.revoke(api_key)
         return ApiKeyResult(revoked=revoked).dict()
     return ApiKeyResult(keys=api_key_auth.list_keys()).dict()
+
 
 async def memory_backup(
     action: str = "status",
@@ -216,6 +221,7 @@ async def memory_backup(
         return BackupResult(**result).dict()
     status = backup_cron.status()
     return BackupResult(**status).dict()
+
 
 async def memory_saga(
     action: str = "consolidate",
@@ -242,6 +248,7 @@ async def memory_saga(
     result = await engine.execute(state, steps)
     return {"status": state.status.value, "result": result, "saga_id": state.saga_id}
 
+
 async def memory_data(
     action: str = "list",
     user_id: str = "default",
@@ -262,6 +269,7 @@ async def memory_data(
         return DataResult(**result).dict()
     return DataResult(exports=app.import_export.list_exports()).dict()
 
+
 async def memory_sync_replica(
     ctx: Context | None = None,
 ) -> dict:
@@ -272,6 +280,7 @@ async def memory_sync_replica(
 
     result = await asyncio.to_thread(read_only_replica.sync)
     return {"synced": result, "ready": read_only_replica.is_ready()}
+
 
 async def memory_cleanup(
     user_id: str = "default",
@@ -309,6 +318,7 @@ async def memory_cleanup(
         backup_cleanup=backup_r,
         saga_cleanup=saga_watchdog.cleanup_completed(),
     ).dict()
+
 
 async def memory_lucidity_purge(
     user_id: str = "default",
@@ -385,6 +395,7 @@ async def memory_lucidity_purge(
         graph_nodes=graph_r,
     ).dict()
 
+
 async def memory_search(
     query: str = "",
     user_id: str = "default",
@@ -410,4 +421,3 @@ async def memory_search(
         include_wiki=include_wiki,
     )
     return SearchResult(results=results, count=len(results), method=strategy).dict()
-

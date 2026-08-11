@@ -7,6 +7,7 @@ Embeddings — async SQLite cache with multilingual model
 import hashlib
 import re
 import struct
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
@@ -16,7 +17,7 @@ _model = None
 _model_name = None
 
 
-def _get_model(model_name: str | None = None):
+def _get_model(model_name: str | None = None) -> Any:
     global _model, _model_name
     target = model_name or DEFAULT_MODEL
     if _model is None or _model_name != target:
@@ -31,12 +32,12 @@ def _get_model(model_name: str | None = None):
 
 
 class EmbeddingCache:
-    def __init__(self, cm: AsyncConnectionManager | None = None, model_name: str | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None, model_name: str | None = None) -> None:
         self._cm = cm or connection_manager
         self.model_name = model_name or DEFAULT_MODEL
         self._dimension = 384
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -66,16 +67,16 @@ class EmbeddingCache:
         )
         row = await cursor.fetchone()
         if row:
-            blob = row[0]
-            raw = list(struct.unpack("%df" % (len(blob) // 4), blob))
+            blob: bytes = row[0]
+            raw = list(struct.unpack(f"{len(blob) // 4}f", blob))
             import math
 
             return [v if math.isfinite(v) else 0.0 for v in raw]
         return None
 
-    async def _cache(self, text: str, embedding: list[float]):
+    async def _cache(self, text: str, embedding: list[float]) -> None:
         text_hash = self._hash_text(text)
-        blob = struct.pack("%df" % len(embedding), *embedding)
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",
@@ -114,7 +115,7 @@ class EmbeddingCache:
     async def count(self) -> int:
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM embedding_cache")).fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
 
 async def embed_text(text: str) -> list[float]:
@@ -128,9 +129,9 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
 def similarity(a: list[float], b: list[float]) -> float:
     import math
 
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
+    dot: float = sum(x * y for x, y in zip(a, b, strict=False))
+    na: float = sum(x * x for x in a) ** 0.5
+    nb: float = sum(x * x for x in b) ** 0.5
     if na == 0 or nb == 0 or not math.isfinite(dot):
         return 0.0
     return dot / (na * nb)

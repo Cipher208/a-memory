@@ -1,3 +1,4 @@
+from typing import Any
 from .base_signal import IImportanceSignal
 
 
@@ -7,7 +8,7 @@ class NoiseSignal(IImportanceSignal):
     Uses regex patterns from importance.json.
     """
 
-    def calculate(self, text: str, context: dict) -> float:
+    def calculate(self, text: str, context: dict[str, Any]) -> float:
         noise_re = context.get("noise_re")
         if not noise_re:
             return 0.0

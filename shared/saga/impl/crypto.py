@@ -10,7 +10,7 @@ import json
 import os
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from features.secrets import decrypt_json, encrypt_json
 from shared.crypto import is_encrypted_blob as _is_crypto_encrypted_blob
@@ -25,11 +25,12 @@ def is_encrypted_blob(path: Path) -> bool:
         head = f.read(1)
     return _is_crypto_encrypted_blob(head)
 
+
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-def write_state_atomic(path: Path, state: dict) -> None:
+def write_state_atomic(path: Path, state: dict[str, Any]) -> None:
     """Atomic write with encryption.
 
     Format: nonce(24) || ciphertext (libsodium secretbox).
@@ -49,7 +50,7 @@ def write_state_atomic(path: Path, state: dict) -> None:
         os.chmod(path, 0o600)
 
 
-def read_state(path: Path) -> dict:
+def read_state(path: Path) -> dict[str, Any]:
     """Read encrypted state file."""
     if not path.exists():
         raise FileNotFoundError(path)
@@ -59,7 +60,7 @@ def read_state(path: Path) -> dict:
     return decrypt_json(blob)
 
 
-def read_state_legacy_or_encrypted(path: Path) -> dict:
+def read_state_legacy_or_encrypted(path: Path) -> dict[str, Any]:
     """Backward-compat: reads legacy plain JSON or encrypted, rotates legacy to encrypted."""
     if not path.exists():
         raise FileNotFoundError(path)

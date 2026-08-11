@@ -60,34 +60,34 @@ class AgentHooks:
     @hook_registry.mark("error_occurred", layer="agent")
     def _error_occurred(self, ctx: dict[str, Any]) -> dict[str, Any]:
         error = ctx.get("error", "")
-        node_id = run_async(self.graph.add_node(self.user_id, error, "error_analysis", ["error_pattern"], 0.8))
+        node_id: str = run_async(self.graph.add_node(self.user_id, error, "error_analysis", ["error_pattern"], 0.8))
         return {"action": "error_analyzed", "node_id": node_id}
 
     @hook_registry.mark("decision_made", layer="agent")
     def _decision_made(self, ctx: dict[str, Any]) -> dict[str, Any]:
         decision = ctx.get("decision", "")
         rationale = ctx.get("rationale", "")
-        node_id = run_async(self.graph.add_node(self.user_id, f"{decision}: {rationale}", "decision_log", ["decided_because"], 0.7))
+        node_id: str = run_async(self.graph.add_node(self.user_id, f"{decision}: {rationale}", "decision_log", ["decided_because"], 0.7))
         return {"action": "decision_logged", "node_id": node_id}
 
     @hook_registry.mark("self_correction", layer="agent")
     def _self_correction(self, ctx: dict[str, Any]) -> dict[str, Any]:
         error = ctx.get("error", "")
         fix = ctx.get("fix", "")
-        node_id = run_async(self.graph.add_node(self.user_id, f"Error: {error} → Fix: {fix}", "correction", ["correction_pattern"], 0.6))
+        node_id: str = run_async(self.graph.add_node(self.user_id, f"Error: {error} → Fix: {fix}", "correction", ["correction_pattern"], 0.6))
         return {"action": "correction_logged", "node_id": node_id}
 
     @hook_registry.mark("personality_shift", layer="agent")
     def _personality_shift(self, ctx: dict[str, Any]) -> dict[str, Any]:
         shift = ctx.get("shift", "")
-        node_id = run_async(self.graph.add_node(self.user_id, shift, "personality_evolution", ["personality_trait", "evolved_to"], 0.9))
+        node_id: str = run_async(self.graph.add_node(self.user_id, shift, "personality_evolution", ["personality_trait", "evolved_to"], 0.9))
         return {"action": "personality_evolved", "node_id": node_id}
 
     @hook_registry.mark("emotion_context", layer="agent")
     def _emotion_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
         emotion = ctx.get("emotion", "")
         context = ctx.get("context", "")
-        node_id = run_async(self.graph.add_node(self.user_id, f"{emotion} in: {context}", "emotional_context", ["felt_in_context"], 0.6))
+        node_id: str = run_async(self.graph.add_node(self.user_id, f"{emotion} in: {context}", "emotional_context", ["felt_in_context"], 0.6))
         return {"action": "emotion_logged", "node_id": node_id}
 
     @hook_registry.mark("wiki_agent", layer="agent")
@@ -117,5 +117,5 @@ class AgentHooks:
     @hook_registry.mark("emotion", layer="agent")
     def _emotion(self, ctx: dict[str, Any]) -> dict[str, Any]:
         emotion = ctx.get("emotion", "")
-        node_id = run_async(self.graph.add_node(self.user_id, emotion, "emotional_context", ["felt_in_context"], 0.5))
+        node_id: str = run_async(self.graph.add_node(self.user_id, emotion, "emotional_context", ["felt_in_context"], 0.5))
         return {"action": "emotion_recorded", "node_id": node_id}

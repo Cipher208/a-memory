@@ -1,7 +1,7 @@
 import re
 from re import Pattern
 
-_CREDENTIAL_PATTERNS: list[Pattern] = [
+_CREDENTIAL_PATTERNS: list[Pattern[str]] = [
     re.compile(r"\b(sk-[A-Za-z0-9]{20,})\b"),
     re.compile(r"\b(sk-ant-[A-Za-z0-9-]{20,})\b"),
     re.compile(r"\b(ghp_[A-Za-z0-9]{36})\b"),

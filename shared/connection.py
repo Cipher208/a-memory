@@ -56,7 +56,7 @@ class _SyncConnectionWrapper:
         self.row_factory = conn.row_factory
         self._lock = threading.Lock()
 
-    async def execute(self, sql: str, params: tuple = ()) -> _SyncCursorWrapper:
+    async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _SyncCursorWrapper:
         def _do() -> sqlite3.Cursor:
             with self._lock:
                 return self._conn.execute(sql, params)
@@ -64,7 +64,7 @@ class _SyncConnectionWrapper:
         cursor = await asyncio.to_thread(_do)
         return _SyncCursorWrapper(cursor)
 
-    async def executemany(self, sql: str, params_list: list) -> None:
+    async def executemany(self, sql: str, params_list: list[Any]) -> None:
         def _do() -> None:
             with self._lock:
                 self._conn.executemany(sql, params_list)
@@ -112,10 +112,10 @@ class _SyncCursorWrapper:
     async def fetchone(self) -> Any | None:
         return await asyncio.to_thread(self._cursor.fetchone)
 
-    async def fetchall(self) -> list:
+    async def fetchall(self) -> list[sqlite3.Row]:
         return await asyncio.to_thread(self._cursor.fetchall)
 
-    async def fetchmany(self, size: int) -> list:
+    async def fetchmany(self, size: int) -> list[sqlite3.Row]:
         return await asyncio.to_thread(self._cursor.fetchmany, size)
 
     @property
@@ -139,7 +139,7 @@ class AsyncConnectionManager:
     # Core API
     # ------------------------------------------------------------------
 
-    async def get(self, db_name: str = "memory.db") -> Any:
+    async def get(self, db_name: str = "memory.db") -> _SyncConnectionWrapper | Any:
         """Return (or create) a connection to `db_name`."""
         if db_name in self._conns:
             conn = self._conns[db_name]
@@ -147,7 +147,7 @@ class AsyncConnectionManager:
                 await conn.execute("SELECT 1")
                 return conn
             except Exception:
-                logger.warning("connection %s stale, reopening", db_name)
+                logger.warning(f"connection {db_name} stale, reopening")
                 del self._conns[db_name]
 
         db_path = str(self.base_dir / db_name)
@@ -158,7 +158,7 @@ class AsyncConnectionManager:
             conn = await self._get_sync_conn(db_path)
 
         self._conns[db_name] = conn
-        logger.debug("opened connection %s (%s) [sync=%s]", db_name, db_path, _USE_SYNC)
+        logger.debug(f"opened connection {db_name} ({db_path}) [sync={_USE_SYNC}]")
         return conn
 
     async def _get_aiosqlite_conn(self, db_path: str) -> Any:

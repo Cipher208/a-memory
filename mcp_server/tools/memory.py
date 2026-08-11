@@ -20,12 +20,13 @@ from .base import (
     _get_recall_cache,
     _set_recall_cache,
 )
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
 
 logger = logging.getLogger(__name__)
+
 
 async def memory_remember(
     layer: str = "user",
@@ -80,7 +81,8 @@ async def memory_remember(
     _invalidate_cache(layer, user_id)
     return RememberResult(status="ok", entry_id=entry_id, graph_node_id=node_id).dict()
 
-async def _fire_post_remember_hooks(layer: str, user_id: str, key: str, value: str, mem):
+
+async def _fire_post_remember_hooks(layer: str, user_id: str, key: str, value: str, mem: Any) -> None:
     await tl._fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
     await tl._fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
     if "error" in key.lower():
@@ -89,6 +91,7 @@ async def _fire_post_remember_hooks(layer: str, user_id: str, key: str, value: s
         await tl._fire_hook("decision_made", layer, {"key": key, "value": value, "user_id": user_id})
     elif "correction" in key.lower():
         await tl._fire_hook("self_correction", layer, {"key": key, "value": value, "user_id": user_id})
+
 
 async def memory_recall(
     layer: str = "user",
@@ -115,6 +118,7 @@ async def memory_recall(
     await tl._fire_hook("auto_context", layer, {"query": query, "results_count": len(results), "user_id": user_id})
 
     return RecallResult(results=results, count=len(results)).dict()
+
 
 async def memory_forget(
     layer: str = "user",

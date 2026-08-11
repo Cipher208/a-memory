@@ -7,7 +7,7 @@ AuditTrail — async, SQLite-based audit logging with rotation
 import asyncio
 import json
 import time
-from typing import Any
+from typing import Any, cast
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
@@ -17,7 +17,7 @@ class AuditTrail:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -35,7 +35,14 @@ class AuditTrail:
         """,
         )
 
-    async def log(self, user_id: str, action: str, layer: str | None = None, target_id: str | None = None, details: dict | None = None):
+    async def log(
+        self,
+        user_id: str,
+        action: str,
+        layer: str | None = None,
+        target_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
@@ -82,7 +89,7 @@ class AuditTrail:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute("DELETE FROM audit_log WHERE timestamp < ?", (cutoff,))
         await conn.commit()
-        return cursor.rowcount
+        return cast("int", cursor.rowcount)
 
     async def archive_and_prune(self, retention_days: int = 30, archive_dir: str | None = None) -> dict[str, int]:
         cutoff = time.time() - (retention_days * 86400)

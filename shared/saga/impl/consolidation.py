@@ -22,7 +22,7 @@ async def _consolidation_gather(ctx: dict[str, Any]) -> dict[str, Any]:
         ctx["staging_items"] = memories
         return {"gathered_count": len(memories)}
     except Exception as e:
-        logger.exception(f"Failed to gather memories: {e}")
+        logger.exception("Failed to gather memories")
         return {"gathered_count": 0, "error": str(e)}
 
 
@@ -71,8 +71,8 @@ async def _consolidation_rollback(ctx: dict[str, Any]) -> None:
         try:
             await mm.delete(user_id, key)
             logger.info(f"Rolled back promoted memory: {key}")
-        except Exception as e:
-            logger.exception(f"Failed to rollback memory {key}: {e}")
+        except Exception:
+            logger.exception(f"Failed to rollback memory {key}")
 
 
 def create_consolidation_saga(user_id: str, mm: Any) -> list[SagaStep]:

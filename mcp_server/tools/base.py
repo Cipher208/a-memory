@@ -1,27 +1,31 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import re
 import time
-from typing import TYPE_CHECKING
-
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp_server.context import AppContext
+    from graph import EpistemicGraph
+    from wiki import WikiManager
+    from hooks import AgentHooks, UserHooks
 
 logger = logging.getLogger(__name__)
+
 
 class _DedupCache:
     """SHA-256 dedup with TTL and periodic cleanup."""
 
-    def __init__(self, ttl=300, max_size=10000):
-        self._cache = {}
+    def __init__(self, ttl: int = 300, max_size: int = 10000) -> None:
+        self._cache: dict[str, float] = {}
         self._ttl = ttl
         self._max_size = max_size
         self._last_cleanup = time.time()
 
-    def _cleanup(self):
+    def _cleanup(self) -> None:
         now = time.time()
         if now - self._last_cleanup < 60:
             return
@@ -34,7 +38,7 @@ class _DedupCache:
             for k in oldest:
                 del self._cache[k]
 
-    def is_duplicate(self, session_id, tool, input_text):
+    def is_duplicate(self, session_id: str, tool: str, input_text: str) -> bool:
         self._cleanup()
         key = hashlib.sha256(f"{session_id}:{tool}:{input_text[:500]}".encode()).hexdigest()
         now = time.time()
@@ -43,11 +47,13 @@ class _DedupCache:
         self._cache[key] = now
         return False
 
+
 _dedup_cache = _DedupCache(ttl=300, max_size=10000)
 
 # Token budget configuration
 DEFAULT_TOKEN_BUDGET = 2000
 CHARS_PER_TOKEN = 4
+
 
 def _estimate_tokens(text: str) -> int:
     if not text:
@@ -56,6 +62,7 @@ def _estimate_tokens(text: str) -> int:
     remaining_chars = len(text) - cjk_count
     non_cjk_tokens = remaining_chars // CHARS_PER_TOKEN
     return cjk_count + non_cjk_tokens
+
 
 def _truncate_to_budget(text: str, max_tokens: int) -> tuple[str, bool]:
     estimated = _estimate_tokens(text)
@@ -75,27 +82,33 @@ def _truncate_to_budget(text: str, max_tokens: int) -> tuple[str, bool]:
     truncated += "\n[...truncated to token budget]"
     return truncated, True
 
-def _get_memory(app: AppContext, layer: str, user_id: str):
+
+def _get_memory(app: AppContext, layer: str, user_id: str) -> Any:
     if layer == "agent":
         return app.mm.agent_memory(user_id)
     return app.mm.user_memory(user_id)
 
-def _get_graph(app: AppContext, layer: str):
+
+def _get_graph(app: AppContext, layer: str) -> EpistemicGraph:
     if layer == "agent":
         return app.agent_graph
     return app.user_graph
 
-def _get_wiki(app: AppContext, layer: str):
+
+def _get_wiki(app: AppContext, layer: str) -> WikiManager:
     if layer == "agent":
         return app.agent_wiki
     return app.user_wiki
 
-def _get_hooks(app: AppContext, layer: str):
+
+def _get_hooks(app: AppContext, layer: str) -> AgentHooks | UserHooks:
     if layer == "agent":
         return app.agent_hooks
     return app.user_hooks
 
+
 _VALID_LAYERS = ("user", "agent")
+
 
 def _validate_layer(layer: str) -> str:
     """Validate and normalize layer parameter."""
@@ -103,19 +116,21 @@ def _validate_layer(layer: str) -> str:
         raise ValueError(f"Invalid layer: {layer!r}. Must be one of {_VALID_LAYERS}")
     return layer
 
-async def _fire_hook(hook_name: str, layer: str, context: dict, mem=None) -> dict:
+
+async def _fire_hook(hook_name: str, layer: str, context: dict[str, Any], mem: Any = None) -> dict[str, Any]:
     """Fire a hook safely — logs errors but never breaks the tool."""
     from hooks.registry import hook_registry
 
     try:
         return await hook_registry.fire(hook_name, layer, context, mem=mem)
     except Exception as e:
-        logger.warning("Hook %s failed: %s", hook_name, e)
+        logger.warning(f"Hook {hook_name} failed: {e}")
         return {"error": str(e)}
 
-async def _check_rate_limit(app: AppContext, user_id: str) -> dict | None:
+
+async def _check_rate_limit(app: AppContext, user_id: str) -> dict[str, Any] | None:
     """Check rate limit. Returns error dict if exceeded, None if ok."""
-    try:
+    with contextlib.suppress(Exception):
         result = await app.rate_limiter.check(user_id)
         if not result.get("allowed", True):
             return {
@@ -123,35 +138,40 @@ async def _check_rate_limit(app: AppContext, user_id: str) -> dict | None:
                 "remaining": result.get("remaining", 0),
                 "reset_in": result.get("reset_in", 60),
             }
-    except Exception:
-        pass
     return None
 
+
 # Context cache: {key: (timestamp, data)}
-_context_cache: dict[str, tuple[float, dict]] = {}
+_context_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _CONTEXT_CACHE_TTL = 30  # seconds
+
 
 def _get_cache_key(layer: str, user_id: str) -> str:
     return f"{layer}:{user_id}"
 
-def _get_cached(key: str) -> dict | None:
+
+def _get_cached(key: str) -> dict[str, Any] | None:
     if key in _context_cache:
         ts, data = _context_cache[key]
         if time.time() - ts < _CONTEXT_CACHE_TTL:
             return data
     return None
 
-def _set_cached(key: str, data: dict) -> None:
+
+def _set_cached(key: str, data: dict[str, Any]) -> None:
     _context_cache[key] = (time.time(), data)
 
-def _invalidate_cache(layer: str, user_id: str):
+
+def _invalidate_cache(layer: str, user_id: str) -> None:
     _context_cache.pop(_get_cache_key(layer, user_id), None)
 
+
 # Recall cache
-_recall_cache: dict[str, tuple[float, list]] = {}
+_recall_cache: dict[str, tuple[float, list[Any]]] = {}
 _RECALL_CACHE_TTL = 10  # seconds
 
-def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list | None:
+
+def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list[Any] | None:
     # SHA-256 for cache key, MD5 is flagged as weak by security scanners
     key = hashlib.sha256(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
     if key in _recall_cache:
@@ -160,7 +180,8 @@ def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list 
             return results
     return None
 
-def _set_recall_cache(query: str, user_id: str, layer: str, limit: int, results: list) -> None:
+
+def _set_recall_cache(query: str, user_id: str, layer: str, limit: int, results: list[Any]) -> None:
     # SHA-256 for cache key, MD5 is flagged as weak by security scanners
     key = hashlib.sha256(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
     _recall_cache[key] = (time.time(), results)

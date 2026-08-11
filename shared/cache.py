@@ -14,8 +14,8 @@ class MemoryCache:
     def __init__(self, max_size: int = 1000, ttl: int = 300):
         self._max_size = max_size
         self._ttl = ttl
-        self._cache: OrderedDict = OrderedDict()
-        self._timestamps: dict = {}
+        self._cache: OrderedDict[str, Any] = OrderedDict()
+        self._timestamps: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def get(self, key: str) -> Any | None:
@@ -29,7 +29,7 @@ class MemoryCache:
             self._cache.move_to_end(key)
             return self._cache[key]
 
-    def set(self, key: str, value: Any):
+    def set(self, key: str, value: Any) -> None:
         with self._lock:
             if key in self._cache:
                 self._cache.move_to_end(key)
@@ -48,7 +48,7 @@ class MemoryCache:
                 return True
             return False
 
-    def clear(self):
+    def clear(self) -> None:
         with self._lock:
             self._cache.clear()
             self._timestamps.clear()

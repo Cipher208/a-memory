@@ -49,7 +49,7 @@ class ImportanceScorer:
         with open(path, encoding="utf-8") as f:
             return ImportanceConfig(**json.load(f))
 
-    def _load_data(self):
+    def _load_data(self) -> tuple[re.Pattern[str], re.Pattern[str]]:
         path = self._data_path if self._data_path.is_absolute() else Path("/home/murat/Projects/repos/mcp-ariel-memory") / self._data_path
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -59,7 +59,7 @@ class ImportanceScorer:
             noise_re = re.compile("|".join(noise), re.IGNORECASE)
             return tech_re, noise_re
 
-    def score(self, text: str, context: dict[str, Any] | None = None, **kwargs) -> ScorerResult:
+    def score(self, text: str, context: dict[str, Any] | None = None, **kwargs: Any) -> ScorerResult:
         if context is None:
             context = {}
         # Support legacy kwargs for backward compatibility

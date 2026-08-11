@@ -159,7 +159,7 @@ load();
 
 
 class Dashboard:
-    def __init__(self, mm=None, data_dir: str | None = None):
+    def __init__(self, mm: Any | None = None, data_dir: str | None = None) -> None:
         self.data_dir = Path(data_dir or str(Path.home() / ".mcp-ariel-memory"))
         if mm is None:
             import sys

@@ -7,6 +7,7 @@ Uses BM25 + char-trigram Jaccard hybrid for similarity (B3).
 
 import math
 import uuid
+from contextlib import suppress
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -152,7 +153,7 @@ class ConflictResolver:
         # Archive before deletion
         for row in to_delete:
             del_id, del_content = row
-            try:
+            with suppress(Exception):
                 from shared.archived_memories import ArchivedMemories
 
                 archive = ArchivedMemories(cm=self._cm)
@@ -162,8 +163,6 @@ class ConflictResolver:
                     importance=0.0,
                     reason="conflict_resolved",
                 )
-            except Exception:
-                pass  # Archive table may not exist yet
 
         # Delete and resolve
         await conn.execute("DELETE FROM memory_conflicts WHERE conflict_group_id=? AND id!=?", (conflict_group_id, keep_id))
@@ -171,7 +170,7 @@ class ConflictResolver:
         await conn.commit()
 
         # B3: Log audit trail with conflict_group_id
-        try:
+        with suppress(Exception):
             from features.audit_trail import AuditTrail
 
             at = AuditTrail(cm=self._cm)
@@ -187,8 +186,6 @@ class ConflictResolver:
                     "removed_count": len(to_delete),
                 },
             )
-        except Exception:
-            pass
 
         return True
 

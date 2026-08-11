@@ -13,7 +13,7 @@ class ArchivedMemories:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -43,7 +43,7 @@ class ArchivedMemories:
             (user_id, original_id, content, memory_type, importance, reason),
         )
         await conn.commit()
-        return cursor.lastrowid
+        return int(cursor.lastrowid)
 
     async def get_archived(self, user_id: str = "default", limit: int = 50) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)
@@ -66,7 +66,7 @@ class ArchivedMemories:
     async def count(self, user_id: str = "default") -> int:
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM archived_memories WHERE user_id=?", (user_id,))).fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row else 0
 
     async def restore(self, archived_id: int) -> dict[str, Any] | None:
         conn = await self._cm.get(DB_NAME)

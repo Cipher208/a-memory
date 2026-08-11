@@ -12,10 +12,10 @@ Each type has its own:
 """
 
 from __future__ import annotations
-
 import enum
 import math
 from dataclasses import dataclass
+from typing import Any
 
 
 class MemoryKind(str, enum.Enum):
@@ -248,7 +248,7 @@ def boost_for_query(query: str, candidate_kind: MemoryKind | str, base_boost: fl
     return min(matches * 0.1, 0.5)
 
 
-async def backfill_null_kinds(cm, dry_run: bool = True) -> int:
+async def backfill_null_kinds(cm: Any, dry_run: bool = True) -> int:
     """Set NULL memory_kind to 'fact'. Returns count of affected rows."""
     conn = await cm.get("memory.db")
     if dry_run:

@@ -18,6 +18,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from shared.connection import connection_manager
 from shared.importance import ImportanceScorer
@@ -61,8 +62,8 @@ class ImportanceScheduler:
         while not self._stop_event.is_set():
             try:
                 asyncio.run(self.run_once())
-            except Exception as exc:
-                logger.exception("Scheduler iteration failed: %s", exc)
+            except Exception:
+                logger.exception("Scheduler iteration failed")
             self._stop_event.wait(timeout=self.cfg.interval_seconds)
 
     async def run_once(self) -> dict[str, int]:
@@ -85,14 +86,14 @@ class ImportanceScheduler:
                 uid = u["user_id"]
                 try:
                     await self._rescore_user(uid, conn, stats)
-                except Exception as exc:
-                    logger.exception("rescore for user=%s failed: %s", uid, exc)
+                except Exception:
+                    logger.exception("rescore for user=%s failed", uid)
                     stats["errors"] += 1
 
         await conn.commit()
         return stats
 
-    async def _rescore_user(self, user_id: str, conn, stats: dict) -> None:
+    async def _rescore_user(self, user_id: str, conn: Any, stats: dict[str, int]) -> None:
         rows = await (
             await conn.execute(
                 """SELECT entry_id, "key", value, importance, memory_kind
@@ -146,7 +147,7 @@ class ImportanceScheduler:
             stats["rescored"] += 1
 
     @staticmethod
-    async def _lookup_retrieval_count(conn, source: str, source_id: int) -> int:
+    async def _lookup_retrieval_count(conn: Any, source: str, source_id: int) -> int:
         row = await (
             await conn.execute(
                 """SELECT COUNT(*) c FROM audit_log

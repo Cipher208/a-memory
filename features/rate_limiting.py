@@ -6,7 +6,7 @@ Rate Limiter — async SQLite-based per-user rate limiting + WebSocket connectio
 
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -19,7 +19,7 @@ class RateLimiter:
         self._max_per_user = config.get("security", "rate_limit_per_user") or 100
         self._window_seconds = 60
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -72,7 +72,7 @@ class RateLimiter:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
         await conn.commit()
-        return cursor.rowcount
+        return cast("int", cursor.rowcount)
 
 
 class ConnectionLimiter:
@@ -96,7 +96,7 @@ class ConnectionLimiter:
             self._total += 1
             return {"allowed": True, "user_connections": len(user_conns), "total_connections": self._total}
 
-    def release(self, user_id: str, connection_id: str):
+    def release(self, user_id: str, connection_id: str) -> None:
         with self._lock:
             user_conns = self._connections.get(user_id, set())
             user_conns.discard(connection_id)

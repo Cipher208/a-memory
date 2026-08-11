@@ -23,7 +23,7 @@ _NONCE_SIZE = 24
 _MAC_SIZE = 16
 
 
-def encrypt_json(data: dict | list, master_key: bytes) -> bytes:
+def encrypt_json(data: dict[str, Any] | list[Any], master_key: bytes) -> bytes:
     """Encrypt JSON data with given master_key. Returns nonce(24) || ciphertext."""
     if not _HAS_NACL:
         raise ImportError("pynacl is required for encryption. Install with: pip install pynacl")
