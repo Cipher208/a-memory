@@ -463,11 +463,7 @@ class SagaWatchdog:
         """Read and analyze a single saga state file for timeout."""
         try:
             blob = state_file.read_bytes()
-            state = (
-                decrypt_json(blob)
-                if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
-                else json.loads(blob.decode(UTF8))
-            )
+            state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
 
             status = state.get("status", "")
             started_at = state.get("started_at", 0)
@@ -508,11 +504,7 @@ class SagaWatchdog:
 
     def _read_state_safe(self, state_file: Path) -> dict[str, Any]:
         blob = state_file.read_bytes()
-        return (
-            decrypt_json(blob)
-            if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
-            else json.loads(blob.decode(UTF8))
-        )
+        return decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
 
     def _is_stuck_candidate(self, state: dict[str, Any]) -> bool:
         return state.get("status") in (STATUS_STUCK, STATUS_FAILED, STATUS_RUNNING)

@@ -125,6 +125,7 @@ class ForgettingSystem:
 
     async def _perform_archiving(self, rows: list[sqlite3.Row], now: float) -> int:
         from shared.archived_memories import ArchivedMemories
+
         am = ArchivedMemories(cm=self._cm)
         count = 0
         for r in rows:

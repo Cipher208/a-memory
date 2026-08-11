@@ -16,12 +16,7 @@ from mcp_server.models import (
 )
 from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
-from shared.constants import (
-    DB_NAME, 
-    DEFAULT_USER, 
-    DEFAULT_LAYER, 
-    METRIC_TOOL_CALLS
-)
+from shared.constants import DB_NAME, DEFAULT_USER, DEFAULT_LAYER, METRIC_TOOL_CALLS
 
 from .base import (
     _validate_layer,

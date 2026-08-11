@@ -113,18 +113,13 @@ def train_supervised_thresholds(
     thresholds = np.zeros(dim, dtype=np.float32)
     for i in range(dim):
         thresholds[i] = _find_best_threshold_for_dim(
-            pos_a[:, i], pos_b[:, i], 
-            neg_a[:, i] if len(neg_a) > 0 else None,
-            neg_b[:, i] if len(neg_b) > 0 else None,
-            n_candidates
+            pos_a[:, i], pos_b[:, i], neg_a[:, i] if len(neg_a) > 0 else None, neg_b[:, i] if len(neg_b) > 0 else None, n_candidates
         )
     return thresholds
 
 
 def _prepare_pairs(
-    pairs: list[tuple[Sequence[float], Sequence[float]]],
-    emb_fn: Callable[[Any], Sequence[float]] | None,
-    dim: int
+    pairs: list[tuple[Sequence[float], Sequence[float]]], emb_fn: Callable[[Any], Sequence[float]] | None, dim: int
 ) -> tuple[np.ndarray, np.ndarray]:
     if not pairs:
         return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
@@ -142,11 +137,7 @@ def _prepare_pairs(
 
 
 def _find_best_threshold_for_dim(
-    col_pos_a: np.ndarray, 
-    col_pos_b: np.ndarray, 
-    col_neg_a: np.ndarray | None,
-    col_neg_b: np.ndarray | None,
-    n_candidates: int
+    col_pos_a: np.ndarray, col_pos_b: np.ndarray, col_neg_a: np.ndarray | None, col_neg_b: np.ndarray | None, n_candidates: int
 ) -> float:
     candidates = np.linspace(
         min(col_pos_a.min(), col_pos_b.min()),

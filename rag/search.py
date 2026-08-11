@@ -148,6 +148,7 @@ async def search_rrf(
 
 def _calculate_rrf_scores(fts_ranks: dict[int, int], bin_ranks: dict[int, int], k: int) -> dict[int, float]:
     """Calculate merged RRF scores."""
+
     def rrf(rank: int) -> float:
         return 1.0 / (k + rank + 1)
 
