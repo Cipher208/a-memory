@@ -62,11 +62,8 @@ class HookRegistry:
         try:
             from config import config
 
-            if not config.is_hook_enabled(layer, hook_name):
-                # Only skip if specifically NOT enabled in real config
-                # For tests, we might need a bypass
-                if not context.get("_test_bypass_config"):
-                    return {"skipped": True, "reason": "hook_disabled"}
+            if not config.is_hook_enabled(layer, hook_name) and not context.get("_test_bypass_config"):
+                return {"skipped": True, "reason": "hook_disabled"}
         except ImportError:
             pass
 

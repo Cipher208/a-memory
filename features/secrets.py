@@ -56,8 +56,9 @@ def _load_dotenv() -> None:
                     value = value.strip().strip("\"'")
                     if key and key not in os.environ:
                         os.environ[key] = value
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception(f"Failed to load .env: {e}")
+
 
 
 def _save_dotenv(key: str, value: str) -> None:
