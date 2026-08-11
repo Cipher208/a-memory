@@ -199,8 +199,8 @@ class BackupCron:
 
         return {"restored": restored, "backup": backup_name}
 
-    def list_backups(self) -> list:
-        backups = []
+    def list_backups(self) -> list[dict[str, Any]]:
+        backups: list[dict[str, Any]] = []
         for d in sorted(self.backup_dir.iterdir(), reverse=True):
             if d.is_dir():
                 info = {"name": d.name}

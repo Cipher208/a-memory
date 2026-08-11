@@ -28,9 +28,10 @@ from .base import (
     _set_cached,
     _estimate_tokens,
     _truncate_to_budget,
+    _fire_hook,
     DEFAULT_TOKEN_BUDGET,
 )
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
@@ -39,8 +40,8 @@ if TYPE_CHECKING:
 async def memory_stats(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Get memory statistics for a layer."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -63,8 +64,8 @@ async def memory_stats(
 async def memory_context(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Return compressed context summary for prompt injection."""
     metrics.inc("tool_calls")
     metrics.inc("tool_context")
@@ -116,13 +117,13 @@ async def memory_context(
 async def memory_context_inject(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Return compressed summary for prompt injection (L4 top-10 + L3 top-3)."""
     metrics.inc("tool_calls")
     metrics.inc("tool_context_inject")
 
-    await tl._fire_hook("auto_context", layer, {"query": "context_inject", "user_id": user_id})
+    await _fire_hook("auto_context", layer, {"query": "context_inject", "user_id": user_id})
 
     cache_key = _get_cache_key(layer, user_id)
     cached = _get_cached(cache_key)
@@ -133,7 +134,7 @@ async def memory_context_inject(
     mem = _get_memory(app, layer, user_id)
     wiki = _get_wiki(app, layer)
 
-    await tl._fire_hook("wiki_agent", layer, {"user_id": user_id, "query": "context_inject"})
+    await _fire_hook("wiki_agent", layer, {"user_id": user_id, "query": "context_inject"})
 
     l4_facts = await mem.l4.get_all(user_id, 10)
     facts_text = "; ".join([f"{f.key}={f.value[:30]}" for f in l4_facts])
@@ -173,7 +174,7 @@ async def memory_context_inject(
         "token_budget": DEFAULT_TOKEN_BUDGET,
     }
     _set_cached(cache_key, result)
-    await tl._fire_hook("dream_buffer", layer, {"text": context_text, "user_id": user_id})
+    await _fire_hook("dream_buffer", layer, {"text": context_text, "user_id": user_id})
 
     return result
 
@@ -183,8 +184,8 @@ async def memory_api_key(
     user_id: str = "default",
     label: str = "",
     api_key: str = "",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Manage API keys."""
     from features.auth import api_key_auth
 
@@ -203,8 +204,8 @@ async def memory_api_key(
 async def memory_backup(
     action: str = "status",
     backup_name: str = "",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Manage backups."""
     from features.backup_cron import backup_cron
 
@@ -226,8 +227,8 @@ async def memory_backup(
 async def memory_saga(
     action: str = "consolidate",
     user_id: str = "default",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Run sagas with auto-rollback on failure."""
     metrics.inc("tool_calls")
     metrics.inc("tool_saga")
@@ -254,8 +255,8 @@ async def memory_data(
     user_id: str = "default",
     file_path: str = "",
     target_user_id: str = "",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Import/export memory data."""
     metrics.inc("tool_calls")
     metrics.inc("tool_data")
@@ -271,8 +272,8 @@ async def memory_data(
 
 
 async def memory_sync_replica(
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Sync read-only replica for dashboard/metrics."""
     metrics.inc("tool_calls")
     metrics.inc("tool_sync_replica")
@@ -285,8 +286,8 @@ async def memory_sync_replica(
 async def memory_cleanup(
     user_id: str = "default",
     retention_days: int = 30,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Full memory cleanup: deduplicate, archive, clean staging."""
     metrics.inc("tool_calls")
     metrics.inc("tool_cleanup")
@@ -323,61 +324,61 @@ async def memory_cleanup(
 async def memory_lucidity_purge(
     user_id: str = "default",
     hours: int = 24,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Emergency purge: delete all data from the last N hours."""
     metrics.inc("tool_calls")
     metrics.inc("tool_lucidity_purge")
     app = _get_ctx(ctx)
     cutoff = time.time() - (hours * 3600)
 
-    async def _delete_core():
+    async def _delete_core() -> int:
         conn = await app.mm.user_memory(user_id).l4._cm.get(DB_NAME)
         try:
             cursor = await conn.execute("DELETE FROM core_memory WHERE user_id=? AND created_at > ?", (user_id, cutoff))
-            result = cursor.rowcount
+            result = int(cursor.rowcount)
             await conn.commit()
             return result
         finally:
             await conn.close()
 
-    async def _delete_episodes():
+    async def _delete_episodes() -> int:
         conn = await app.mm.user_memory(user_id).l3._cm.get(DB_NAME)
         try:
             cursor = await conn.execute("DELETE FROM episodes WHERE user_id=? AND created_at > ?", (user_id, cutoff))
-            result = cursor.rowcount
+            result = int(cursor.rowcount)
             await conn.commit()
             return result
         finally:
             await conn.close()
 
-    async def _delete_staging():
+    async def _delete_staging() -> int:
         from shared.dream_buffer import DreamBuffer
 
         db = DreamBuffer()
-        return db.clear_staging(user_id)
+        return await db.clear_staging(user_id)
 
-    async def _delete_audit():
+    async def _delete_audit() -> int:
         from features.audit_trail import AuditTrail
 
         at = AuditTrail()
         conn = await at._cm.get(DB_NAME)
         try:
             cursor = await conn.execute("DELETE FROM audit_log WHERE user_id=? AND timestamp > ?", (user_id, cutoff))
-            result = cursor.rowcount
+            result = int(cursor.rowcount)
             await conn.commit()
             return result
         finally:
             await conn.close()
 
-    async def _delete_graph():
+    async def _delete_graph() -> int:
         from graph.epistemic import EpistemicGraph
 
         eg = EpistemicGraph(layer="user")
         conn = await eg._cm.get(DB_NAME)
         try:
             cursor = await conn.execute("DELETE FROM epi_nodes WHERE user_id=? AND created_at > ?", (user_id, cutoff))
-            result = cursor.rowcount
+            result = int(cursor.rowcount)
             await conn.commit()
             return result
         finally:
@@ -402,8 +403,8 @@ async def memory_search(
     limit: int = 10,
     strategy: str = "hybrid",
     sources: str = "all",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Hybrid search across RAG + Wiki with strategy selection."""
     metrics.inc("tool_calls")
     metrics.inc("tool_search")

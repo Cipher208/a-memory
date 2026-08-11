@@ -93,9 +93,14 @@ class ConsolidationEngine:
     async def get_stats(self, user_id: str) -> dict[str, int]:
         conn = await self._cm.get(DB_NAME)
         total_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id=?", (user_id,))
-        total = (await total_cursor.fetchone())[0]
+        total_row = await total_cursor.fetchone()
+        total = int(total_row[0]) if total_row and total_row[0] is not None else 0
+
         high_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id=? AND importance > 0.7", (user_id,))
-        high = (await high_cursor.fetchone())[0]
+        high_row = await high_cursor.fetchone()
+        high = int(high_row[0]) if high_row and high_row[0] is not None else 0
+
         low_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id=? AND importance < 0.3", (user_id,))
-        low = (await low_cursor.fetchone())[0]
+        low_row = await low_cursor.fetchone()
+        low = int(low_row[0]) if low_row and low_row[0] is not None else 0
         return {"total": total, "high_importance": high, "low_importance": low}

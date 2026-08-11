@@ -7,7 +7,7 @@ from shared.constants import DB_NAME
 logger = logging.getLogger(__name__)
 
 
-async def init_rag_db(cm: AsyncConnectionManager, fts_available: bool):
+async def init_rag_db(cm: AsyncConnectionManager, fts_available: bool) -> None:
     """
     Initialize RAG database schema.
     """

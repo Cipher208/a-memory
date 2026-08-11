@@ -14,19 +14,19 @@ if TYPE_CHECKING:
 # if TYPE_CHECKING:
 
 
-_tools: dict[str, Callable] = {}
+_tools: dict[str, Callable[..., Any]] = {}
 
 
-def _get_ctx(ctx: Context | None) -> Any:
+def _get_ctx(ctx: Context[Any, Any] | None) -> Any:
     """Extract AppContext from FastMCP lifespan context."""
     if ctx is None:
         raise ValueError("Context is required but was None")
     return ctx.request_context.lifespan_context
 
 
-def register_tool(name: str, func: Callable) -> None:
+def register_tool(name: str, func: Callable[..., Any]) -> None:
     _tools[name] = func
 
 
-def get_all_tools() -> dict[str, Callable]:
+def get_all_tools() -> dict[str, Callable[..., Any]]:
     return dict(_tools)

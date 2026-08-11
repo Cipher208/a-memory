@@ -196,23 +196,23 @@ class Dashboard:
             "agent_wiki": await aw.count(user_id),
         }
 
-    async def get_user_facts(self, user_id: str = "default") -> list:
+    async def get_user_facts(self, user_id: str = "default") -> list[dict[str, Any]]:
         facts = await self.mm.user_memory(user_id).l4.get_all(user_id, limit=50)
         return [{"key": f.key, "value": f.value, "importance": f.importance} for f in facts]
 
-    async def get_agent_facts(self, user_id: str = "default") -> list:
+    async def get_agent_facts(self, user_id: str = "default") -> list[dict[str, Any]]:
         facts = await self.mm.agent_memory(user_id).l4.get_all(user_id, limit=50)
         return [{"key": f.key, "value": f.value, "importance": f.importance} for f in facts]
 
-    async def get_user_episodes(self, user_id: str = "default") -> list:
+    async def get_user_episodes(self, user_id: str = "default") -> list[dict[str, Any]]:
         eps = await self.mm.user_memory(user_id).l3.get_episodes(user_id, limit=20)
         return [{"summary": e.summary, "weight": e.emotional_weight, "tags": e.tags} for e in eps]
 
-    async def get_agent_episodes(self, user_id: str = "default") -> list:
+    async def get_agent_episodes(self, user_id: str = "default") -> list[dict[str, Any]]:
         eps = await self.mm.agent_memory(user_id).l3.get_episodes(user_id, limit=20)
         return [{"summary": e.summary, "weight": e.emotional_weight, "tags": e.tags} for e in eps]
 
-    async def get_audit(self, limit: int = 20) -> list:
+    async def get_audit(self, limit: int = 20) -> list[dict[str, Any]]:
         from features.audit_trail import AuditTrail
 
         at = AuditTrail()

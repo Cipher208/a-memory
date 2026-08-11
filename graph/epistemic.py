@@ -9,10 +9,13 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,7 @@ class EpistemicGraph:
     USER_TAGS = USER_TAGS
     AGENT_TAGS = AGENT_TAGS
 
-    def __init__(self, cm=None, layer: str = "user"):
+    def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user") -> None:
         self._cm = cm or connection_manager
         self.layer = layer
 
@@ -66,7 +69,7 @@ class EpistemicGraph:
         """Check whether a tag belongs to USER_TAGS or AGENT_TAGS."""
         return tag in USER_TAGS or tag in AGENT_TAGS
 
-    async def init_db(self):
+    async def init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -116,7 +119,7 @@ class EpistemicGraph:
             "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (self.layer, user_id, content, node_type, json.dumps(tags or []), confidence, time.time()),
         )
-        node_id = cursor.lastrowid
+        node_id = int(cursor.lastrowid or 0)
         if tags:
             for tag in tags:
                 await conn.execute(
@@ -126,7 +129,7 @@ class EpistemicGraph:
         await conn.commit()
         return node_id
 
-    async def add_edge(self, source_id: int, target_id: int, relation: str, weight: float = 0.8):
+    async def add_edge(self, source_id: int, target_id: int, relation: str, weight: float = 0.8) -> None:
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT OR REPLACE INTO epi_edges (source_id, target_id, relation, weight, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -144,7 +147,7 @@ class EpistemicGraph:
             (self.layer, user_id, tag, limit),
         )
         rows = await cur.fetchall()
-        return [self._row_to_node(r) for r in rows]
+        return [self._row_to_node(dict(r)) for r in rows]
 
     async def query_by_type(self, user_id: str, node_type: str, limit: int = 20) -> list[EpistemicNode]:
         conn = await self._cm.get(DB_NAME)
@@ -153,7 +156,7 @@ class EpistemicGraph:
             (self.layer, user_id, node_type, limit),
         )
         rows = await cur.fetchall()
-        return [self._row_to_node(r) for r in rows]
+        return [self._row_to_node(dict(r)) for r in rows]
 
     async def get_neighbors(self, node_id: int, depth: int = 1) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)
@@ -217,14 +220,14 @@ class EpistemicGraph:
         row = await cur.fetchone()
         return row[0] if row else 0
 
-    def _row_to_node(self, row) -> EpistemicNode:
+    def _row_to_node(self, row: dict[str, Any]) -> EpistemicNode:
         return EpistemicNode(
-            node_id=row["node_id"],
-            user_id=row["user_id"],
-            layer=row["layer"],
-            content=row["content"],
-            node_type=row["node_type"],
-            tags=json.loads(row["tags"]) if row["tags"] else [],
-            confidence=row["confidence"],
-            created_at=row["created_at"],
+            node_id=int(row["node_id"]),
+            user_id=str(row["user_id"]),
+            layer=str(row["layer"]),
+            content=str(row["content"]),
+            node_type=str(row["node_type"]),
+            tags=list(json.loads(row["tags"])) if row["tags"] else [],
+            confidence=float(row["confidence"]),
+            created_at=float(row["created_at"]),
         )

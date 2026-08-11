@@ -39,8 +39,8 @@ class ImportanceScorer:
         ]
         self._config_path = Path(config_path)
         self._data_path = Path(data_path)
-        self._tech_re = None
-        self._noise_re = None
+        self._tech_re: re.Pattern[str] | None = None
+        self._noise_re: re.Pattern[str] | None = None
 
     def _load_config(self) -> ImportanceConfig:
         if self._config:
@@ -72,7 +72,7 @@ class ImportanceScorer:
             context["tech_re"] = self._tech_re
             context["noise_re"] = self._noise_re
 
-        results = {}
+        results: dict[str, float] = {}
         for signal in self._signals:
             name = signal.__class__.__name__.lower().replace("signal", "")
             if name == "basetype":
@@ -85,7 +85,7 @@ class ImportanceScorer:
                 name = "noise_penalty"
             elif name == "emotion":
                 name = "emotional"
-            results[name] = signal.calculate(text, context)
+            results[name] = float(signal.calculate(text, context))
 
         signals = ImportanceSignals(**results)
 

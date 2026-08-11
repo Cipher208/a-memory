@@ -2,7 +2,7 @@
 
 import logging
 from contextlib import suppress
-from typing import Any
+from typing import Any, Callable
 
 from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
@@ -67,7 +67,7 @@ async def search_binary(
     query: str,
     user_id: str,
     limit: int,
-    binary_for_fn,
+    binary_for_fn: Callable[[list[float]], bytes],
     binary_dim: int,
 ) -> list[dict[str, Any]]:
     """Exhaustive linear scan over binary embeddings."""
@@ -123,7 +123,7 @@ async def search_rrf(
     user_id: str,
     limit: int,
     k: int = 60,
-    binary_for_fn=None,
+    binary_for_fn: Callable[[list[float]], bytes] | None = None,
     binary_dim: int = 384,
     fts_available: bool = True,
 ) -> list[dict[str, Any]]:
@@ -132,9 +132,10 @@ async def search_rrf(
     fts_ranks = {doc["id"]: rank for rank, doc in enumerate(fts_results)}
 
     bin_ranks = {}
-    with suppress(Exception):
-        bin_results = await search_binary(cm, query, user_id, limit * 3, binary_for_fn, binary_dim)
-        bin_ranks = {r["id"]: rank for rank, r in enumerate(bin_results)}
+    if binary_for_fn:
+        with suppress(Exception):
+            bin_results = await search_binary(cm, query, user_id, limit * 3, binary_for_fn, binary_dim)
+            bin_ranks = {r["id"]: rank for rank, r in enumerate(bin_results)}
 
     def rrf(rank: int) -> float:
         return 1.0 / (k + rank + 1)
@@ -156,7 +157,7 @@ async def search_rrf(
     placeholders = ",".join(["?"] * len(sorted_ids))
     cur = await conn.execute(
         f"SELECT id, title, content, wiki_type FROM rag_pages WHERE id IN ({placeholders})",
-        sorted_ids,
+        tuple(sorted_ids),
     )
     rows = await cur.fetchall()
     by_id = {r[0]: r for r in rows}
@@ -189,7 +190,7 @@ def auto_strategy(query: str) -> str:
     return "hybrid"
 
 
-def materialize_candidates(results: list[dict[str, Any]]) -> list:
+def materialize_candidates(results: list[dict[str, Any]]) -> list[Any]:
     """Convert raw search dicts to ScoredCandidate objects for the Scorer."""
     from rag.scoring import ScoredCandidate
 
@@ -216,16 +217,16 @@ def materialize_candidates(results: list[dict[str, Any]]) -> list:
     return list(seen.values())
 
 
-def format_result(c) -> dict[str, Any]:
+def format_result(c: Any) -> dict[str, Any]:
     """Convert a ScoredCandidate back to a result dict."""
-    content = c.content
+    content: str = str(c.content)
     if len(content) > 500:
         content = content[:500] + "..."
     return {
-        "id": c.id,
-        "title": c.title,
+        "id": int(c.id),
+        "title": str(c.title),
         "content": content,
-        "wiki_type": c.wiki_type,
-        "score": c.final_score or c.rrf_score,
-        "source": c.source,
+        "wiki_type": str(c.wiki_type),
+        "score": float(c.final_score or c.rrf_score),
+        "source": str(c.source),
     }

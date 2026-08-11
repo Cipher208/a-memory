@@ -162,32 +162,29 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-
-[tool.skylos]
-exclude = [".repowise", ".codegraph", "docs", "__pycache__"]
-
-# SQL injection false positives: all findings use parameterized queries (?)
-# or build SQL templates (table names, IN clauses) — not user data injection
-ignore = ["SKY-D211"]
-
-[tool.skylos.quality]
-max_complexity = 15
-max_lines = 100
-max_args = 6
+"tests/*" = ["S101", "ANN", "D", "SLF001", "PLR", "ARG", "FBT", "PT", "B011", "B023", "B904", "RET504", "TRY", "EM", "S", "PLW", "PLR"]
 
 [tool.mypy]
 python_version = "3.12"
-warn_return_any = false
+warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 check_untyped_defs = true
-ignore_missing_imports = true
+ignore_missing_imports = false
 explicit_package_bases = true
-exclude = ["tests"]
+exclude = ["tests", ".venv"]
+strict = true
 
 [[tool.mypy.overrides]]
-module = ["tests.*"]
-ignore_errors = true
+module = [
+    "yaml.*",
+    "pynacl.*",
+    "nacl.*",
+    "prometheus_client.*",
+    "aiosqlite.*",
+    "alembic.*",
+]
+ignore_missing_imports = true
 
 [tool.coverage.run]
 omit = ["demo.py", "__main__.py"]

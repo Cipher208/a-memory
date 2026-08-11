@@ -15,6 +15,15 @@ from typing import TYPE_CHECKING, Any
 from features.secrets import decrypt_json, encrypt_json
 from shared.crypto import is_encrypted_blob as _is_crypto_encrypted_blob
 
+__all__ = [
+    "encrypt_json",
+    "decrypt_json",
+    "write_state_atomic",
+    "read_state",
+    "read_state_legacy_or_encrypted",
+    "is_encrypted_blob",
+]
+
 
 def is_encrypted_blob(path: Path) -> bool:
     """Check if file is encrypted (not plain JSON)."""
@@ -23,7 +32,7 @@ def is_encrypted_blob(path: Path) -> bool:
     # noqa: SKY-D325
     with path.open("rb") as f:
         head = f.read(1)
-    return _is_crypto_encrypted_blob(head)
+    return bool(_is_crypto_encrypted_blob(head))
 
 
 if TYPE_CHECKING:
@@ -57,7 +66,8 @@ def read_state(path: Path) -> dict[str, Any]:
     # noqa: SKY-D325
     with path.open("rb") as f:
         blob = f.read()
-    return decrypt_json(blob)
+    res: Any = decrypt_json(blob)
+    return dict(res) if isinstance(res, dict) else {}
 
 
 def read_state_legacy_or_encrypted(path: Path) -> dict[str, Any]:
@@ -68,8 +78,10 @@ def read_state_legacy_or_encrypted(path: Path) -> dict[str, Any]:
     with path.open("rb") as f:
         blob = f.read()
     if is_encrypted_blob(path):
-        return decrypt_json(blob)
+        res: Any = decrypt_json(blob)
+        return dict(res) if isinstance(res, dict) else {}
     warnings.warn(f"{path} is plain JSON; rotating to encrypted", DeprecationWarning, stacklevel=2)
-    legacy = json.loads(blob.decode("utf-8"))
-    write_state_atomic(path, legacy)
-    return legacy
+    legacy: Any = json.loads(blob.decode("utf-8"))
+    state: dict[str, Any] = dict(legacy) if isinstance(legacy, dict) else {}
+    write_state_atomic(path, state)
+    return state

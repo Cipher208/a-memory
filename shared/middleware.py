@@ -20,9 +20,9 @@ class MiddlewareContext:
 
     tool_name: str = ""
     user_id: str = "default"
-    args: dict = field(default_factory=dict)
+    args: dict[str, Any] = field(default_factory=dict)
     result: Any = None
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     start_time: float = 0.0
     blocked: bool = False
     block_reason: str = ""
@@ -90,7 +90,7 @@ class ImportanceGateMiddleware(Middleware):
         threshold: float = 0.3,
         technical_weight: float = 0.3,
         question_weight: float = 0.2,
-        scorer=None,
+        scorer: Any = None,
         memory_kind_hint: str | None = None,
     ):
         self._min_length = min_length
@@ -145,7 +145,7 @@ class ImportanceGateMiddleware(Middleware):
     def calculate_score(self, text: str) -> float:
         """Calculate importance score using ImportanceScorer."""
         signals = self._scorer.score(text=text, kind=self.memory_kind_hint)
-        return signals.total()
+        return float(signals.total())
 
 
 class ValidationMiddleware(Middleware):
@@ -191,20 +191,20 @@ class DedupMiddleware(Middleware):
 class MiddlewarePipeline:
     """Middleware chain."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._middlewares: list[Middleware] = []
 
     def add(self, middleware: Middleware) -> MiddlewarePipeline:
         self._middlewares.append(middleware)
         return self
 
-    async def execute(self, ctx: MiddlewareContext, handler: Callable) -> Any:
+    async def execute(self, ctx: MiddlewareContext, handler: Callable[[MiddlewareContext], Any]) -> Any:
         async def _run(index: int, ctx: MiddlewareContext) -> Any:
             if index >= len(self._middlewares):
-                result = handler(ctx)
-                if hasattr(result, "__await__"):
-                    return await result
-                return result
+                res = handler(ctx)
+                if hasattr(res, "__await__"):
+                    return await res
+                return res
             return await self._middlewares[index].process(ctx, lambda c: _run(index + 1, c))
 
         return await _run(0, ctx)
@@ -214,7 +214,7 @@ class MiddlewarePipeline:
 
 
 # Default pipeline
-default_pipeline = MiddlewarePipeline()
+default_pipeline: MiddlewarePipeline = MiddlewarePipeline()
 default_pipeline.add(ValidationMiddleware())
 default_pipeline.add(RateLimitMiddleware())
 default_pipeline.add(ImportanceGateMiddleware())

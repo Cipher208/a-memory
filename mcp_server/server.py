@@ -5,7 +5,7 @@ import sys
 import logging
 from pathlib import Path
 
-from typing import Any
+from typing import Any, Literal
 from mcp.server.fastmcp import FastMCP
 
 # Ensure the root of the repo is in the path
@@ -20,10 +20,10 @@ mcp = FastMCP(
 )
 
 
-STDIO_TRANSPORT = "stdio"
+STDIO_TRANSPORT: Literal["stdio"] = "stdio"
 
 
-def _register_all_tools():
+def _register_all_tools() -> None:
     from mcp_server.registry import get_all_tools
 
     for name, func in get_all_tools().items():
@@ -43,7 +43,7 @@ def main() -> None:
         default=STDIO_TRANSPORT,
         help="Transport: stdio (Claude Desktop) or http (web clients)",
     )
-    parser.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")  # noqa: S104
+    parser.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
     parser.add_argument("--dashboard", action="store_true", help="Enable dashboard + metrics endpoints")
     parser.add_argument("--no-auth", action="store_true", help="Disable auth for development")
@@ -80,7 +80,7 @@ def _run_with_dashboard(host: str, port: int) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
-def _setup_shutdown_signals(handler) -> None:
+def _setup_shutdown_signals(handler: Any) -> None:
     import signal
 
     signal.signal(signal.SIGTERM, handler)

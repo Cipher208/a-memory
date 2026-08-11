@@ -120,7 +120,7 @@ class ForgettingSystem:
             ids = [r["entry_id"] for r in all_rows]
             placeholders = ",".join(["?"] * len(ids))
             # Parameterized via placeholders, safe.
-            await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({placeholders})", ids)
+            await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
             await conn.commit()
             logger.info("Archived %d entries", archived_count)
             return archived_count
@@ -142,7 +142,7 @@ class ForgettingSystem:
                 )
                 changes_cursor = await conn.execute("SELECT changes()")
                 changes_row = await changes_cursor.fetchone()
-                removed += changes_row[0]
+                removed += int(changes_row[0]) if changes_row and changes_row[0] is not None else 0
             await conn.commit()
             return removed
         except Exception:

@@ -5,8 +5,8 @@ from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
 
 import mcp_server.tools_layer as tl
-from .base import _validate_layer, _check_rate_limit, _get_memory
-from typing import TYPE_CHECKING
+from .base import _validate_layer, _check_rate_limit, _get_memory, _fire_hook
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 async def memory_session_start(
     layer: str = "user",
     user_id: str = "default",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """Start a new memory session."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -28,7 +28,7 @@ async def memory_session_start(
         return rate_limit
 
     session_id = await _get_memory(app, layer, user_id).l2.create_session(user_id)
-    await tl._fire_hook("message_received", layer, {"text": "session_started", "session_id": session_id, "user_id": user_id})
+    await _fire_hook("message_received", layer, {"text": "session_started", "session_id": session_id, "user_id": user_id})
 
     return SessionResult(session_id=session_id).dict()
 
@@ -38,8 +38,8 @@ async def memory_session_end(
     user_id: str = "default",
     session_id: str = "",
     summary: str = "",
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """End a session and save summary."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -52,8 +52,8 @@ async def memory_session_end(
 
     await _get_memory(app, layer, user_id).l2.close_session(session_id, summary)
 
-    await tl._fire_hook("consolidation", layer, {"trigger": "session_end", "session_id": session_id, "user_id": user_id})
-    await tl._fire_hook("state_delta", layer, {"trigger": "session_end", "session_id": session_id, "summary": summary, "user_id": user_id})
+    await _fire_hook("consolidation", layer, {"trigger": "session_end", "session_id": session_id, "user_id": user_id})
+    await _fire_hook("state_delta", layer, {"trigger": "session_end", "session_id": session_id, "summary": summary, "user_id": user_id})
 
     return SessionResult(status="ok").dict()
 
@@ -62,8 +62,8 @@ async def memory_session_list(
     layer: str = "user",
     user_id: str = "default",
     limit: int = 10,
-    ctx: Context | None = None,
-) -> dict:
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
     """List recent memory sessions."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)

@@ -97,16 +97,14 @@ def _load_master_key() -> bytes:
     # Try environment variable with argon2id KDF
     env_seed = os.environ.get(_ENV_VAR)
     if env_seed:
-        return cast(
-            "bytes",
-            argon2id.kdf(
-                size=_MASTER_KEY_LEN,
-                password=env_seed.encode("utf-8"),
-                salt=_KDF_SALT,
-                opslimit=argon2id.OPSLIMIT_MODERATE,
-                memlimit=argon2id.MEMLIMIT_MODERATE,
-            ),
+        res_kdf = argon2id.kdf(
+            size=_MASTER_KEY_LEN,
+            password=env_seed.encode("utf-8"),
+            salt=_KDF_SALT,
+            opslimit=argon2id.OPSLIMIT_MODERATE,
+            memlimit=argon2id.MEMLIMIT_MODERATE,
         )
+        return bytes(res_kdf)
 
     # Auto-generate key for dev convenience
     import secrets as _secrets
@@ -114,16 +112,14 @@ def _load_master_key() -> bytes:
     auto_key = _secrets.token_hex(32)
     logger.warning("No master key found. Auto-generating key and saving to .env. For production, use keyring or set MCP_MASTER_KEY explicitly.")
     _save_dotenv(_ENV_VAR, auto_key)
-    return cast(
-        "bytes",
-        argon2id.kdf(
-            size=_MASTER_KEY_LEN,
-            password=auto_key.encode("utf-8"),
-            salt=_KDF_SALT,
-            opslimit=argon2id.OPSLIMIT_MODERATE,
-            memlimit=argon2id.MEMLIMIT_MODERATE,
-        ),
+    res_auto = argon2id.kdf(
+        size=_MASTER_KEY_LEN,
+        password=auto_key.encode("utf-8"),
+        salt=_KDF_SALT,
+        opslimit=argon2id.OPSLIMIT_MODERATE,
+        memlimit=argon2id.MEMLIMIT_MODERATE,
     )
+    return bytes(res_auto)
 
 
 _master_cache: dict[str, bytes] = {}
@@ -140,7 +136,7 @@ def _get_master_key() -> bytes:
 
 def encrypt_json(data: dict[str, Any] | list[Any]) -> bytes:
     """Encrypt JSON data. Returns nonce(24) || ciphertext."""
-    return cast("bytes", _encrypt_json(data, _get_master_key()))
+    return _encrypt_json(data, _get_master_key())
 
 
 def decrypt_json(blob: bytes) -> Any:
@@ -160,7 +156,7 @@ def is_encrypted_blob(path: Path) -> bool:
     # noqa: SKY-D325
     with path.open("rb") as f:
         head = f.read(1)
-    return cast("bool", _is_encrypted_blob(head))
+    return bool(_is_encrypted_blob(head))
 
 
 def install_master_key_to_keychain(hex_key: str) -> None:

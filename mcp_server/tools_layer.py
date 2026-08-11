@@ -31,7 +31,7 @@ from .tools.ops import (
 
 
 # For tests that monkeypatch tl._fire_hook
-def _fire_hook_wrapper(*args, **kwargs):
+def _fire_hook_wrapper(*args: Any, **kwargs: Any) -> Any:
     from .tools import base
 
     return base._fire_hook(*args, **kwargs)

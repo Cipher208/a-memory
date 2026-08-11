@@ -17,7 +17,7 @@ from wiki import WikiManager
 
 
 class AppContext:
-    def __init__(self):
+    def __init__(self) -> None:
         self.cache = MemoryCache()
         self.mm = MemoryManager(cache=self.cache)
         self.user_wiki = WikiManager(layer="user")

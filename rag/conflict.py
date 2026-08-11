@@ -72,7 +72,7 @@ class ConflictResolver:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -98,15 +98,15 @@ class ConflictResolver:
 
         for row in rows:
             existing_id, existing_content, is_conflict, group_id = row
-            similarity = self._calculate_similarity(new_content, existing_content)
-            if similarity > min_similarity and existing_content != new_content:
-                return await self._handle_conflict(conn, existing_id, existing_content, is_conflict, group_id, new_content, similarity)
+            similarity = float(self._calculate_similarity(new_content, str(existing_content)))
+            if similarity > min_similarity and str(existing_content) != new_content:
+                return await self._handle_conflict(conn, int(existing_id), str(existing_content), bool(is_conflict), group_id, new_content, similarity)
 
         await conn.execute("INSERT INTO memory_conflicts (user_id, content) VALUES (?, ?)", (user_id, new_content))
         await conn.commit()
         return {"content": new_content, "is_conflict": False}
 
-    async def _find_potential_conflicts(self, conn, user_id: str, keywords: list[str]):
+    async def _find_potential_conflicts(self, conn: Any, user_id: str, keywords: list[str]) -> Any:
         like_conditions = " OR ".join(["content LIKE ?" for _ in keywords])
         like_params = [f"%{kw}%" for kw in keywords]
         cur = await conn.execute(
@@ -115,8 +115,8 @@ class ConflictResolver:
         )
         return await cur.fetchall()
 
-    async def _handle_conflict(self, conn, existing_id, existing_content, is_conflict, group_id, new_content, similarity):
-        gid = group_id or str(uuid.uuid4())
+    async def _handle_conflict(self, conn: Any, existing_id: int, existing_content: str, is_conflict: bool, group_id: str | None, new_content: str, similarity: float) -> dict[str, Any]:
+        gid = str(group_id) if group_id else str(uuid.uuid4())
         if not is_conflict:
             await conn.execute("UPDATE memory_conflicts SET is_conflict=1, conflict_group_id=? WHERE id=?", (gid, existing_id))
         await conn.commit()

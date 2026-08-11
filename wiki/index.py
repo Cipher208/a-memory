@@ -8,9 +8,13 @@ Isolates DB logic from filesystem and business logic.
 import json
 import logging
 import time
+from typing import Any, TYPE_CHECKING
 
 from shared.constants import DB_NAME
-from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from wiki.models import WikiEntry
+    from shared.connection import AsyncConnectionManager
 
 if TYPE_CHECKING:
     from wiki.models import WikiEntry
@@ -26,7 +30,7 @@ class WikiIndex:
         self._cm = connection_manager
         self.layer = layer
 
-    async def init_db(self):
+    async def init_db(self) -> None:
         """Initialize tables and indexes."""
         await self._cm.execute_script(
             DB_NAME,
@@ -57,7 +61,7 @@ class WikiIndex:
             """,
         )
 
-    async def save(self, entry: WikiEntry, content_hash: str):
+    async def save(self, entry: WikiEntry, content_hash: str) -> None:
         """Atomic insert/update in both wiki_index and wiki_fts."""
         now = time.time()
         tags_json = json.dumps(entry.tags)
@@ -120,7 +124,7 @@ class WikiIndex:
 
         await conn.commit()
 
-    async def get_by_path(self, file_path: str) -> dict | None:
+    async def get_by_path(self, file_path: str) -> dict[str, Any] | None:
         """Fetch metadata and hash by file path."""
         conn = await self._cm.get(DB_NAME)
         cur = await conn.execute(
@@ -130,7 +134,7 @@ class WikiIndex:
         row = await cur.fetchone()
         return dict(row) if row else None
 
-    async def search(self, query: str, limit: int = 10) -> list[dict]:
+    async def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """Optimized FTS5 search JOINing wiki_fts with wiki_index."""
         conn = await self._cm.get(DB_NAME)
         try:
@@ -148,7 +152,7 @@ class WikiIndex:
             logger.exception("Search failed for query '%s'", query)
             return []
 
-    async def list_by_type(self, wiki_type: str, limit: int = 20) -> list[dict]:
+    async def list_by_type(self, wiki_type: str, limit: int = 20) -> list[dict[str, Any]]:
         """List entries of a specific type."""
         conn = await self._cm.get(DB_NAME)
         cur = await conn.execute(
@@ -158,7 +162,7 @@ class WikiIndex:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def list_all(self, limit: int = 50) -> list[dict]:
+    async def list_all(self, limit: int = 50) -> list[dict[str, Any]]:
         """List all entries in the current layer."""
         conn = await self._cm.get(DB_NAME)
         cur = await conn.execute(
@@ -168,7 +172,7 @@ class WikiIndex:
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def delete(self, file_path: str):
+    async def delete(self, file_path: str) -> None:
         """Remove from both tables."""
         conn = await self._cm.get(DB_NAME)
         cur = await conn.execute(

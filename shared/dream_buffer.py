@@ -46,7 +46,8 @@ class DreamBuffer:
             (user_id, session_id, event_id, content, importance, json.dumps(metadata or {})),
         )
         await conn.commit()
-        return int(cursor.lastrowid)
+        last_id: Any = cursor.lastrowid
+        return int(last_id) if last_id is not None else 0
 
     async def get_staging(self, user_id: str = "default", session_id: str | None = None) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)

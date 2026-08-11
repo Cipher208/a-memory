@@ -22,7 +22,7 @@ def _get_model(model_name: str | None = None) -> Any:
     target = model_name or DEFAULT_MODEL
     if _model is None or _model_name != target:
         try:
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import SentenceTransformer  # type: ignore[import-not-found]
 
             _model = SentenceTransformer(target)
             _model_name = target

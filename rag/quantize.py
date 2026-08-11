@@ -7,7 +7,7 @@ Supervised variant (per-dimension threshold) activates via
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -23,7 +23,7 @@ except ImportError:
 DEFAULT_DIM = 384
 
 
-def _check_numpy():
+def _check_numpy() -> None:
     if not _HAS_NUMPY:
         raise ImportError("numpy is required for binary embeddings. Install with: pip install mcp-ariel-memory[binary]")
 
@@ -61,7 +61,7 @@ def supervised_threshold(
     pos_pairs: Iterable[tuple[Sequence[float], Sequence[float]]],
     dim: int = DEFAULT_DIM,
     n_candidates: int = 50,
-):
+) -> np.ndarray:
     """Per-dimension threshold maximizing agreement on positive pairs.
 
     Args:
@@ -100,7 +100,7 @@ def supervised_threshold(
 def train_supervised_thresholds(
     pos_pairs: list[tuple[Sequence[float], Sequence[float]]],
     neg_pairs: list[tuple[Sequence[float], Sequence[float]]] | None = None,
-    emb_fn: Callable | None = None,
+    emb_fn: Callable[[Any], Sequence[float]] | None = None,
     n_candidates: int = 50,
     dim: int = DEFAULT_DIM,
 ) -> np.ndarray:
@@ -162,17 +162,18 @@ def train_supervised_thresholds(
     return thresholds
 
 
-def save_thresholds(thresholds: np.ndarray, path: str):
+def save_thresholds(thresholds: np.ndarray, path: str) -> None:
     """Save thresholds to .npy file."""
     _check_numpy()
     np.save(path, thresholds)
 
 
-def load_thresholds(path: str) -> np.ndarray | None:
+def load_thresholds(path: str) -> Any | None:
     """Load thresholds from .npy file. Returns None if file doesn't exist."""
     _check_numpy()
     try:
-        return np.load(path)
+        res: Any = np.load(path)
+        return res
     except (FileNotFoundError, Exception):
         return None
 

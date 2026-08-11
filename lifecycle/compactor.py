@@ -50,7 +50,8 @@ class MemoryCompactor:
                 await conn.execute("DELETE FROM core_memory WHERE entry_id=?", (row["id"],))
                 archived_count += 1
             except (KeyError, RuntimeError):
-                logger.exception("Failed to archive memory %s", row.get("id", "unknown"))
+                rid = row["id"] if isinstance(row, dict) else "unknown"
+                logger.exception("Failed to archive memory %s", rid)
 
         await conn.commit()
         logger.info("Memory compaction: archived %d memories for user %s", archived_count, user_id)

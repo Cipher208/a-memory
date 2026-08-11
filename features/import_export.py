@@ -24,7 +24,8 @@ class ImportExport:
 
     @property
     def base_dir(self) -> Path:
-        return cast("Path", self._cm.base_dir)
+        res: Any = self._cm.base_dir
+        return Path(res) if res else Path.home() / ".mcp-ariel-memory"
 
     async def export_user(self, user_id: str) -> str:
         core_memory: list[dict[str, Any]] = []

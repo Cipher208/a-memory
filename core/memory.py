@@ -32,7 +32,7 @@ class CoreMemory:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
-    async def _init_db(self):
+    async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -61,7 +61,7 @@ class CoreMemory:
         memory_kind: str | None = None,
         expires_at: float | None = None,
         source: str = "manual",
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> int:
         from shared.memory_types import (
             MemoryKind,
@@ -105,9 +105,9 @@ class CoreMemory:
                 """UPDATE core_memory SET value=?, importance=?, memory_kind=?,
                    expires_at=?, source=?, metadata=?, updated_at=?
                    WHERE entry_id=?""",
-                (value, importance, memory_kind, expires_at, source, metadata_json, now, existing["entry_id"]),
+                (value, importance, memory_kind, expires_at, source, metadata_json, now, int(existing["entry_id"])),
             )
-            entry_id = existing["entry_id"]
+            entry_id = int(existing["entry_id"])
         else:
             cursor = await conn.execute(
                 """INSERT INTO core_memory
@@ -116,7 +116,7 @@ class CoreMemory:
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now, now),
             )
-            entry_id = cursor.lastrowid
+            entry_id = int(cursor.lastrowid or 0)
         await conn.commit()
         return entry_id
 
@@ -144,14 +144,14 @@ class CoreMemory:
         await conn.commit()
         return cursor.rowcount > 0
 
-    async def search(self, user_id: str, query: str, limit: int = 10) -> list[dict]:
+    async def search(self, user_id: str, query: str, limit: int = 10) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "SELECT * FROM core_memory WHERE user_id=? AND (key LIKE ? OR value LIKE ?) ORDER BY importance DESC LIMIT ?",
             (user_id, f"%{query}%", f"%{query}%", limit),
         )
         rows = await cursor.fetchall()
-        return [{"key": r["key"], "value": r["value"], "importance": r["importance"]} for r in rows]
+        return [{"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])} for r in rows]
 
     async def count(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
@@ -160,18 +160,18 @@ class CoreMemory:
         else:
             cursor = await conn.execute("SELECT COUNT(*) FROM core_memory")
         row = await cursor.fetchone()
-        return row[0] if row else 0
+        return int(row[0]) if row and row[0] is not None else 0
 
-    def _row_to_entry(self, row) -> CoreEntry:
+    def _row_to_entry(self, row: dict[str, Any] | Any) -> CoreEntry:
         return CoreEntry(
-            entry_id=row["entry_id"],
-            user_id=row["user_id"],
-            key=row["key"],
-            value=row["value"],
-            importance=row["importance"],
-            memory_kind=row["memory_kind"] or "fact",
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
+            entry_id=int(row["entry_id"]),
+            user_id=str(row["user_id"]),
+            key=str(row["key"]),
+            value=str(row["value"]),
+            importance=float(row["importance"]),
+            memory_kind=str(row["memory_kind"] or "fact"),
+            created_at=float(row["created_at"]),
+            updated_at=float(row["updated_at"]),
         )
 
     async def list_by_kind(

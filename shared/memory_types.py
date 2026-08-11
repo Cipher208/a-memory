@@ -256,4 +256,4 @@ async def backfill_null_kinds(cm: Any, dry_run: bool = True) -> int:
         return int(row["c"])
     cur = await conn.execute("UPDATE core_memory SET memory_kind = 'fact' WHERE memory_kind IS NULL")
     await conn.commit()
-    return cur.rowcount
+    return int(cur.rowcount)
