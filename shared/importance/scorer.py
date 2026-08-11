@@ -60,59 +60,53 @@ class ImportanceScorer:
             return tech_re, noise_re
 
     def score(self, text: str, context: dict[str, Any] | None = None, **kwargs: Any) -> ScorerResult:
-        if context is None:
-            context = {}
-        # Support legacy kwargs for backward compatibility
-        context.update(kwargs)
-
+        context = self._prepare_context(context, **kwargs)
         config = self._load_config()
-        if "tech_re" not in context or "noise_re" not in context:
+        results = self._calculate_signals(text, context)
+        signals = ImportanceSignals(**results)
+        return self._compute_final_score(signals, config)
+
+    def _prepare_context(self, context: dict[str, Any] | None, **kwargs: Any) -> dict[str, Any]:
+        ctx = context or {}
+        ctx.update(kwargs)
+        if "tech_re" not in ctx or "noise_re" not in ctx:
             if not self._tech_re or not self._noise_re:
                 self._tech_re, self._noise_re = self._load_data()
-            context["tech_re"] = self._tech_re
-            context["noise_re"] = self._noise_re
+            ctx["tech_re"] = self._tech_re
+            ctx["noise_re"] = self._noise_re
+        return ctx
 
-        results: dict[str, float] = {}
+    def _calculate_signals(self, text: str, context: dict[str, Any]) -> dict[str, float]:
+        res: dict[str, float] = {}
+        name_map = {
+            "basetype": "base",
+            "techkeyword": "tech_keyword",
+            "retrieval": "retrieval_signal",
+            "noise": "noise_penalty",
+            "emotion": "emotional"
+        }
         for signal in self._signals:
-            name = signal.__class__.__name__.lower().replace("signal", "")
-            if name == "basetype":
-                name = "base"
-            elif name == "techkeyword":
-                name = "tech_keyword"
-            elif name == "retrieval":
-                name = "retrieval_signal"
-            elif name == "noise":
-                name = "noise_penalty"
-            elif name == "emotion":
-                name = "emotional"
-            results[name] = float(signal.calculate(text, context))
+            raw_name = signal.__class__.__name__.lower().replace("signal", "")
+            name = name_map.get(raw_name, raw_name)
+            res[name] = float(signal.calculate(text, context))
+        return res
 
-        signals = ImportanceSignals(**results)
-
-        # Calculate score
+    def _compute_final_score(self, signals: ImportanceSignals, config: ImportanceConfig) -> ScorerResult:
         weights = config.weights or {
-            "base": 1.0,
-            "length": 0.6,
-            "question": 0.5,
-            "tech_keyword": 1.0,
-            "emotional": 0.8,
-            "novelty": 0.7,
-            "retrieval_signal": 0.9,
-            "noise_penalty": 1.0,
+            "base": 1.0, "length": 0.6, "question": 0.5, "tech_keyword": 1.0,
+            "emotional": 0.8, "novelty": 0.7, "retrieval_signal": 0.9, "noise_penalty": 1.0
         }
         sum_pos = (
-            signals.base * weights.get("base", 0.0)
-            + signals.length * weights.get("length", 0.0)
-            + signals.question * weights.get("question", 0.0)
-            + signals.tech_keyword * weights.get("tech_keyword", 0.0)
-            + signals.emotional * weights.get("emotional", 0.0)
-            + signals.novelty * weights.get("novelty", 0.0)
-            + signals.retrieval_signal * weights.get("retrieval_signal", 0.0)
+            signals.base * weights.get("base", 0.0) +
+            signals.length * weights.get("length", 0.0) +
+            signals.question * weights.get("question", 0.0) +
+            signals.tech_keyword * weights.get("tech_keyword", 0.0) +
+            signals.emotional * weights.get("emotional", 0.0) +
+            signals.novelty * weights.get("novelty", 0.0) +
+            signals.retrieval_signal * weights.get("retrieval_signal", 0.0)
         )
         max_possible = sum(v for k, v in weights.items() if k != "noise_penalty") or 1.0
         raw = sum_pos / max_possible
-        noise_weight = weights.get("noise_penalty", 1.0)
-        effective_penalty = min(signals.noise_penalty, 1.0) * noise_weight
+        effective_penalty = min(signals.noise_penalty, 1.0) * weights.get("noise_penalty", 1.0)
         score = raw * (1.0 - min(effective_penalty, 1.0))
-
         return ScorerResult(score=max(0.0, min(1.0, score)), signals=signals)

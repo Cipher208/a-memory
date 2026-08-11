@@ -57,6 +57,7 @@ class _SyncConnectionWrapper:
         self._lock = threading.Lock()
 
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _SyncCursorWrapper:
+        # sql is validated by caller, params are handled safely by sqlite3
         def _do() -> sqlite3.Cursor:
             with self._lock:
                 return self._conn.execute(sql, params)
@@ -64,7 +65,7 @@ class _SyncConnectionWrapper:
         cursor = await asyncio.to_thread(_do)
         return _SyncCursorWrapper(cursor)
 
-    async def executemany(self, sql: str, params_list: list[Any]) -> None:
+    async def executemany(self, sql: str, params_list: list[tuple[Any, ...]]) -> None:
         def _do() -> None:
             with self._lock:
                 self._conn.executemany(sql, params_list)
@@ -72,6 +73,15 @@ class _SyncConnectionWrapper:
         await asyncio.to_thread(_do)
 
     async def executescript(self, sql: str) -> None:
+        # Caution: executescript is for static scripts only.
+        def _do() -> None:
+            with self._lock:
+                self._conn.executescript(sql)
+
+        await asyncio.to_thread(_do)
+
+    async def executescript(self, sql: str) -> None:
+        # Caution: executescript is for static scripts only.
         def _do() -> None:
             with self._lock:
                 self._conn.executescript(sql)

@@ -296,27 +296,31 @@ async def memory_cleanup(
     from features.compression import MemoryCompressor
     from shared.dream_buffer import DreamBuffer
     from shared.saga import saga_watchdog
+    from lifecycle.compactor import memory_compactor
 
     mc = MemoryCompressor()
     at = AuditTrail()
     dream_buf = DreamBuffer()
     archive_dir = str(Path.home() / ".mcp-ariel-memory" / "archives")
 
-    dedup_task = mc.deduplicate_core(user_id)
-    compress_task = mc.compress_episodes(user_id, 0.3)
-    dream_task = dream_buf.cleanup_old(24, 500)
-    audit_task = at.archive_and_prune(retention_days, archive_dir)
-    backup_task = asyncio.to_thread(backup_cron._cleanup_old)
-
-    dedup_r, compress_r, dream_r, audit_r, backup_r = await asyncio.gather(dedup_task, compress_task, dream_task, audit_task, backup_task)
+    # Parallel dispatch
+    results = await asyncio.gather(
+        mc.deduplicate_core(user_id),
+        mc.compress_episodes(user_id, 0.3),
+        dream_buf.cleanup_old(24, 500),
+        at.archive_and_prune(retention_days, archive_dir),
+        asyncio.to_thread(backup_cron._cleanup_old),
+        memory_compactor.run_cleanup(user_id)
+    )
 
     return CleanupResult(
-        dedup_core=dedup_r,
-        compress_episodes=compress_r,
-        dream_buffer_cleanup=dream_r,
-        audit_archive=audit_r,
-        backup_cleanup=backup_r,
+        dedup_core=results[0],
+        compress_episodes=results[1],
+        dream_buffer_cleanup=results[2],
+        audit_archive=results[3],
+        backup_cleanup=results[4],
         saga_cleanup=saga_watchdog.cleanup_completed(),
+        compaction=results[5].get("archived", 0) if isinstance(results[5], dict) else 0,
     ).dict()
 
 

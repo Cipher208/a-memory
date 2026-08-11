@@ -20,12 +20,23 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from shared.constants import (
+    UTF8,
+    STATUS_STUCK,
+    STATUS_RUNNING,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_COMPENSATING,
+    STATUS_COMPENSATED,
+    SAGA_DIR_NAME,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
-SAGA_DIR = Path.home() / ".mcp-ariel-memory" / "sagas"
+SAGA_DIR = Path.home() / ".mcp-ariel-memory" / SAGA_DIR_NAME
 
 try:
     from shared.crypto import is_encrypted_blob as _is_crypto_encrypted_blob
@@ -33,11 +44,11 @@ try:
 
     def is_encrypted_blob(path: Path) -> bool:
         """Check if file is encrypted (not plain JSON)."""
-        if not path.exists():
+        if not path.exists() or path.is_symlink():
             return False
         with path.open("rb") as f:
             head = f.read(1)
-        return _is_crypto_encrypted_blob(head)
+        return bool(_is_crypto_encrypted_blob(head))
 
     _HAS_ENCRYPTION = True
 except ImportError:
@@ -46,12 +57,12 @@ except ImportError:
 
 class SagaStatus(str, Enum):
     PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    COMPENSATING = "compensating"
-    COMPENSATED = "compensated"
-    STUCK = "stuck"
+    RUNNING = STATUS_RUNNING
+    COMPLETED = STATUS_COMPLETED
+    FAILED = STATUS_FAILED
+    COMPENSATING = STATUS_COMPENSATING
+    COMPENSATED = STATUS_COMPENSATED
+    STUCK = STATUS_STUCK
 
 
 @dataclass
@@ -121,7 +132,15 @@ class Saga:
 
     def _save_state(self) -> None:
         """Save state to disk (encrypted if available)."""
+        if self._saga_id.startswith(".") or "/" in self._saga_id or "\\" in self._saga_id:
+            logger.error("Invalid saga_id for saving: %s", self._saga_id)
+            return
+
         state_file = SAGA_DIR / (self._saga_id + ".json")
+        if state_file.exists() and state_file.is_symlink():
+            logger.error("Refusing to write to symlink: %s", state_file)
+            return
+
         state: dict[str, Any] = {
             "name": self.name,
             "saga_id": self._saga_id,
@@ -138,7 +157,7 @@ class Saga:
                 blob = encrypt_json(state)
                 state_file.write_bytes(blob)
             else:
-                state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+                state_file.write_text(json.dumps(state, indent=2, default=str), encoding=UTF8)
         except Exception:
             logger.exception("Failed to save saga state")
 
@@ -146,8 +165,11 @@ class Saga:
         """Load state from disk (supports encrypted and legacy plain JSON)."""
         from shared.saga import read_state_legacy_or_encrypted
 
+        if saga_id.startswith(".") or "/" in saga_id or "\\" in saga_id:
+            return None
+
         state_file = SAGA_DIR / (saga_id + ".json")
-        if not state_file.exists():
+        if not state_file.exists() or state_file.is_symlink():
             return None
         with contextlib.suppress(Exception):
             return read_state_legacy_or_encrypted(state_file)
@@ -156,7 +178,7 @@ class Saga:
     def _cleanup_state(self) -> None:
         """Delete state file after completion."""
         state_file = SAGA_DIR / (self._saga_id + ".json")
-        if state_file.exists():
+        if state_file.exists() and not state_file.is_symlink():
             with contextlib.suppress(Exception):
                 state_file.unlink()
 
@@ -418,42 +440,42 @@ class SagaWatchdog:
         if self._thread:
             self._thread.join(timeout=5)
 
-    def _loop(self) -> None:
-        while self._running:
-            try:
-                self._check_stuck_sagas()
-                time.sleep(self.check_interval)
-            except Exception:
-                logger.exception("Saga watchdog error")
-                time.sleep(30)
-
     def _check_stuck_sagas(self) -> None:
         """Find and mark stuck sagas."""
         SAGA_DIR.mkdir(parents=True, exist_ok=True)
         now = time.time()
 
         for state_file in SAGA_DIR.glob("*.json"):
+            if state_file.is_symlink():
+                continue
             try:
                 blob = state_file.read_bytes()
-                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
+                state = (
+                    decrypt_json(blob)
+                    if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
+                    else json.loads(blob.decode(UTF8))
+                )
 
                 status = state.get("status", "")
                 started_at = state.get("started_at", 0)
                 saga_name = state.get("name", "unknown")
 
-                if status in ("running", "compensating"):
+                if status in (STATUS_RUNNING, STATUS_COMPENSATING):
                     age = now - started_at
                     if age > self.max_age_seconds:
-                        state["status"] = "stuck"
-                        state["stuck_reason"] = f"timeout_after_{int(age)}s"
-                        if _HAS_ENCRYPTION:
-                            state_file.write_bytes(encrypt_json(state))
-                        else:
-                            state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
-                        logger.warning("Saga '%s' marked as STUCK (age=%ds)", saga_name, int(age))
+                        self._mark_as_stuck(state_file, state, saga_name, age)
 
             except Exception:
                 logger.exception("Error checking saga %s", state_file.name)
+
+    def _mark_as_stuck(self, state_file: Path, state: dict[str, Any], saga_name: str, age: float) -> None:
+        state["status"] = STATUS_STUCK
+        state["stuck_reason"] = f"timeout_after_{int(age)}s"
+        if _HAS_ENCRYPTION:
+            state_file.write_bytes(encrypt_json(state))
+        else:
+            state_file.write_text(json.dumps(state, indent=2, default=str), encoding=UTF8)
+        logger.warning("Saga '%s' marked as STUCK (age=%ds)", saga_name, int(age))
 
     def get_stuck_sagas(self) -> list[dict[str, Any]]:
         """Get list of stuck sagas."""
@@ -462,10 +484,16 @@ class SagaWatchdog:
             SAGA_DIR.mkdir(parents=True, exist_ok=True)
 
             for state_file in SAGA_DIR.glob("*.json"):
+                if state_file.is_symlink():
+                    continue
                 blob = state_file.read_bytes()
-                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
+                state = (
+                    decrypt_json(blob)
+                    if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
+                    else json.loads(blob.decode(UTF8))
+                )
 
-                if state.get("status") in ("stuck", "failed", "running"):
+                if state.get("status") in (STATUS_STUCK, STATUS_FAILED, STATUS_RUNNING):
                     age = time.time() - state.get("started_at", 0)
                     stuck.append(
                         {
@@ -482,15 +510,22 @@ class SagaWatchdog:
 
     def recover_saga(self, saga_id: str) -> dict[str, Any] | None:
         """Attempt to recover a stuck saga."""
+        if saga_id.startswith(".") or "/" in saga_id or "\\" in saga_id:
+            return {"error": "Invalid saga_id"}
+
         state_file = SAGA_DIR / (saga_id + ".json")
-        if not state_file.exists():
+        if not state_file.exists() or state_file.is_symlink():
             return None
 
         try:
             blob = state_file.read_bytes()
-            state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
+            state = (
+                decrypt_json(blob)
+                if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
+                else json.loads(blob.decode(UTF8))
+            )
 
-            if state.get("status") != "stuck":
+            if state.get("status") != STATUS_STUCK:
                 return {"error": "Saga is not stuck, status: {}".format(state.get("status"))}
 
             state["status"] = "manual_review_required"
@@ -498,7 +533,7 @@ class SagaWatchdog:
             if _HAS_ENCRYPTION:
                 state_file.write_bytes(encrypt_json(state))
             else:
-                state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
+                state_file.write_text(json.dumps(state, indent=2, default=str), encoding=UTF8)
 
             return {"status": "manual_review_required", "state": state}
         except Exception as e:
@@ -512,12 +547,19 @@ class SagaWatchdog:
             SAGA_DIR.mkdir(parents=True, exist_ok=True)
 
             for state_file in SAGA_DIR.glob("*.json"):
+                if state_file.is_symlink():
+                    continue
                 with contextlib.suppress(Exception):
                     blob = state_file.read_bytes()
-                    state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode("utf-8"))
+                    state = (
+                        decrypt_json(blob)
+                        if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
+                        else json.loads(blob.decode(UTF8))
+                    )
 
                     if (
-                        state.get("status") in ("completed", "compensated", "stuck", "failed", "manual_review_required")
+                        state.get("status")
+                        in (STATUS_COMPLETED, STATUS_COMPENSATED, STATUS_STUCK, STATUS_FAILED, "manual_review_required")
                         and state.get("started_at", 0) < cutoff
                     ):
                         state_file.unlink()

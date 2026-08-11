@@ -63,20 +63,20 @@ class EpisodicMemory:
         return [self._row_to_episode(r) for r in rows]
 
     async def search_by_tag(self, user_id: str, tag: str, limit: int = 10) -> list[Episode]:
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT * FROM episodes WHERE user_id=? AND tags LIKE ? ORDER BY created_at DESC LIMIT ?",
-            (user_id, f'%"{tag}"%', limit),
-        )
-        rows = await cursor.fetchall()
-        return [self._row_to_episode(r) for r in rows]
+        """B7: Specialized tag search (part of search() logic, but kept for API compat)."""
+        return await self.search(user_id, tag, limit, use_tag_match=True)
 
-    async def search(self, user_id: str, query: str, limit: int = 10) -> list[Episode]:
+    async def search(self, user_id: str, query: str, limit: int = 10, use_tag_match: bool = False) -> list[Episode]:
+        """Unified search across summary and tags."""
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT * FROM episodes WHERE user_id=? AND summary LIKE ? ORDER BY created_at DESC LIMIT ?",
-            (user_id, f"%{query}%", limit),
-        )
+        if use_tag_match:
+            sql = "SELECT * FROM episodes WHERE user_id=? AND tags LIKE ? ORDER BY created_at DESC LIMIT ?"
+            params = (user_id, f'%"{query}"%', limit)
+        else:
+            sql = "SELECT * FROM episodes WHERE user_id=? AND summary LIKE ? ORDER BY created_at DESC LIMIT ?"
+            params = (user_id, f"%{query}%", limit)
+            
+        cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [self._row_to_episode(r) for r in rows]
 

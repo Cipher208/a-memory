@@ -16,10 +16,12 @@ from .reflex import ReflexBuffer
 from .session import SessionStore
 
 
+from shared.constants import DEFAULT_USER, DEFAULT_LAYER, AGENT_LAYER, UTF8
+
 class MemoryLayer:
     """Unified async memory layer for both user and agent."""
 
-    def __init__(self, layer_type: str, user_id: str = "default", cm: AsyncConnectionManager | None = None, cache: Any = None) -> None:
+    def __init__(self, layer_type: str, user_id: str = DEFAULT_USER, cm: AsyncConnectionManager | None = None, cache: Any = None) -> None:
         self.layer_type = layer_type
         self.user_id = user_id
         self._cm = cm or connection_manager

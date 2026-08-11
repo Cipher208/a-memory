@@ -72,53 +72,67 @@ class CoreMemory:
         )
 
         now = time.time()
-
-        # Auto-classification if kind not specified
-        if memory_kind is None:
-            memory_kind = kind_for_text(value).value
-        if not validate_kind(memory_kind):
-            raise ValueError(f"invalid memory_kind: {memory_kind!r}")
-        kind = MemoryKind(memory_kind)
-
-        # Auto-importance from type policy
-        if importance is None:
-            importance = default_importance(kind)
-        importance = max(0.0, min(1.0, float(importance)))
-
-        # Auto expires_at for types that require it
-        p = get_policy(kind)
-        if p.requires_expires_at and expires_at is None:
-            logger.warning("memory_kind=%s requires expires_at; auto-set +30d", kind.value)
-            expires_at = now + 30 * 86400
-
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT entry_id FROM core_memory WHERE user_id=? AND key=?",
-            (user_id, key),
-        )
-        existing = await cursor.fetchone()
-
+        memory_kind, importance, expires_at = self._prepare_save_params(value, memory_kind, importance, expires_at, now)
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
 
-        if existing:
-            await conn.execute(
-                """UPDATE core_memory SET value=?, importance=?, memory_kind=?,
-                   expires_at=?, source=?, metadata=?, updated_at=?
-                   WHERE entry_id=?""",
-                (value, importance, memory_kind, expires_at, source, metadata_json, now, int(existing["entry_id"])),
-            )
-            entry_id = int(existing["entry_id"])
+        conn = await self._cm.get(DB_NAME)
+        existing_id = await self._find_existing_id(conn, user_id, key)
+
+        if existing_id is not None:
+            await self._update_entry(conn, existing_id, value, importance, memory_kind, expires_at, source, metadata_json, now)
+            entry_id = existing_id
         else:
-            cursor = await conn.execute(
-                """INSERT INTO core_memory
-                   (user_id, key, value, importance, memory_kind, expires_at,
-                    source, metadata, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now, now),
-            )
-            entry_id = int(cursor.lastrowid or 0)
+            entry_id = await self._insert_entry(conn, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now)
+
         await conn.commit()
         return entry_id
+
+    def _prepare_save_params(self, value: str, kind_str: str | None, imp: float | None, exp: float | None, now: float) -> tuple[str, float, float | None]:
+        from shared.memory_types import (
+            MemoryKind,
+            default_importance,
+            get_policy,
+            kind_for_text,
+            validate_kind,
+        )
+        if kind_str is None:
+            kind_str = kind_for_text(value).value
+        if not validate_kind(kind_str):
+            raise ValueError(f"invalid memory_kind: {kind_str!r}")
+        
+        kind = MemoryKind(kind_str)
+        if imp is None:
+            imp = default_importance(kind)
+        imp = max(0.0, min(1.0, float(imp)))
+
+        p = get_policy(kind)
+        if p.requires_expires_at and exp is None:
+            exp = now + 30 * 86400
+        
+        return kind_str, imp, exp
+
+    async def _find_existing_id(self, conn: Any, user_id: str, key: str) -> int | None:
+        cursor = await conn.execute("SELECT entry_id FROM core_memory WHERE user_id=? AND key=?", (user_id, key))
+        row = await cursor.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    async def _update_entry(self, conn: Any, eid: int, val: str, imp: float, kind: str, exp: float | None, src: str, meta: str, now: float) -> None:
+        await conn.execute(
+            """UPDATE core_memory SET value=?, importance=?, memory_kind=?,
+               expires_at=?, source=?, metadata=?, updated_at=?
+               WHERE entry_id=?""",
+            (val, imp, kind, exp, src, meta, now, eid),
+        )
+
+    async def _insert_entry(self, conn: Any, uid: str, key: str, val: str, imp: float, kind: str, exp: float | None, src: str, meta: str, now: float) -> int:
+        cursor = await conn.execute(
+            """INSERT INTO core_memory
+               (user_id, key, value, importance, memory_kind, expires_at,
+                source, metadata, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (uid, key, val, imp, kind, exp, src, meta, now, now),
+        )
+        return int(cursor.lastrowid or 0)
 
     async def get(self, user_id: str, key: str) -> CoreEntry | None:
         """Get a fact by key. Returns None if not found."""
