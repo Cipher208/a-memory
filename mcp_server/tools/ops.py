@@ -310,7 +310,7 @@ async def memory_cleanup(
         dream_buf.cleanup_old(24, 500),
         at.archive_and_prune(retention_days, archive_dir),
         asyncio.to_thread(backup_cron._cleanup_old),
-        memory_compactor.run_cleanup(user_id)
+        memory_compactor.run_cleanup(user_id),
     )
 
     return CleanupResult(

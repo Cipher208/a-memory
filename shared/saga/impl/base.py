@@ -459,11 +459,7 @@ class SagaWatchdog:
                 continue
             try:
                 blob = state_file.read_bytes()
-                state = (
-                    decrypt_json(blob)
-                    if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
-                    else json.loads(blob.decode(UTF8))
-                )
+                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
 
                 status = state.get("status", "")
                 started_at = state.get("started_at", 0)
@@ -496,11 +492,7 @@ class SagaWatchdog:
                 if state_file.is_symlink():
                     continue
                 blob = state_file.read_bytes()
-                state = (
-                    decrypt_json(blob)
-                    if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
-                    else json.loads(blob.decode(UTF8))
-                )
+                state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
 
                 if state.get("status") in (STATUS_STUCK, STATUS_FAILED, STATUS_RUNNING):
                     age = time.time() - state.get("started_at", 0)
@@ -528,11 +520,7 @@ class SagaWatchdog:
 
         try:
             blob = state_file.read_bytes()
-            state = (
-                decrypt_json(blob)
-                if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
-                else json.loads(blob.decode(UTF8))
-            )
+            state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
 
             if state.get("status") != STATUS_STUCK:
                 return {"error": "Saga is not stuck, status: {}".format(state.get("status"))}
@@ -560,15 +548,10 @@ class SagaWatchdog:
                     continue
                 with contextlib.suppress(Exception):
                     blob = state_file.read_bytes()
-                    state = (
-                        decrypt_json(blob)
-                        if _HAS_ENCRYPTION and is_encrypted_blob(state_file)
-                        else json.loads(blob.decode(UTF8))
-                    )
+                    state = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
 
                     if (
-                        state.get("status")
-                        in (STATUS_COMPLETED, STATUS_COMPENSATED, STATUS_STUCK, STATUS_FAILED, "manual_review_required")
+                        state.get("status") in (STATUS_COMPLETED, STATUS_COMPENSATED, STATUS_STUCK, STATUS_FAILED, "manual_review_required")
                         and state.get("started_at", 0) < cutoff
                     ):
                         state_file.unlink()

@@ -80,7 +80,9 @@ class CoreMemory:
         await conn.commit()
         return entry_id
 
-    def _prepare_save_params(self, value: str, kind_str: str | None, imp: float | None, exp: float | None, now: float) -> tuple[str, float, float | None]:
+    def _prepare_save_params(
+        self, value: str, kind_str: str | None, imp: float | None, exp: float | None, now: float
+    ) -> tuple[str, float, float | None]:
         from shared.memory_types import (
             MemoryKind,
             default_importance,
@@ -88,6 +90,7 @@ class CoreMemory:
             kind_for_text,
             validate_kind,
         )
+
         if kind_str is None:
             kind_str = kind_for_text(value).value
         if not validate_kind(kind_str):
@@ -117,7 +120,9 @@ class CoreMemory:
             (val, imp, kind, exp, src, meta, now, eid),
         )
 
-    async def _insert_entry(self, conn: Any, uid: str, key: str, val: str, imp: float, kind: str, exp: float | None, src: str, meta: str, now: float) -> int:
+    async def _insert_entry(
+        self, conn: Any, uid: str, key: str, val: str, imp: float, kind: str, exp: float | None, src: str, meta: str, now: float
+    ) -> int:
         cursor = await conn.execute(
             """INSERT INTO core_memory
                (user_id, key, value, importance, memory_kind, expires_at,

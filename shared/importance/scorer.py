@@ -83,7 +83,7 @@ class ImportanceScorer:
             "techkeyword": "tech_keyword",
             "retrieval": "retrieval_signal",
             "noise": "noise_penalty",
-            "emotion": "emotional"
+            "emotion": "emotional",
         }
         for signal in self._signals:
             raw_name = signal.__class__.__name__.lower().replace("signal", "")
@@ -93,17 +93,23 @@ class ImportanceScorer:
 
     def _compute_final_score(self, signals: ImportanceSignals, config: ImportanceConfig) -> ScorerResult:
         weights = config.weights or {
-            "base": 1.0, "length": 0.6, "question": 0.5, "tech_keyword": 1.0,
-            "emotional": 0.8, "novelty": 0.7, "retrieval_signal": 0.9, "noise_penalty": 1.0
+            "base": 1.0,
+            "length": 0.6,
+            "question": 0.5,
+            "tech_keyword": 1.0,
+            "emotional": 0.8,
+            "novelty": 0.7,
+            "retrieval_signal": 0.9,
+            "noise_penalty": 1.0,
         }
         sum_pos = (
-            signals.base * weights.get("base", 0.0) +
-            signals.length * weights.get("length", 0.0) +
-            signals.question * weights.get("question", 0.0) +
-            signals.tech_keyword * weights.get("tech_keyword", 0.0) +
-            signals.emotional * weights.get("emotional", 0.0) +
-            signals.novelty * weights.get("novelty", 0.0) +
-            signals.retrieval_signal * weights.get("retrieval_signal", 0.0)
+            signals.base * weights.get("base", 0.0)
+            + signals.length * weights.get("length", 0.0)
+            + signals.question * weights.get("question", 0.0)
+            + signals.tech_keyword * weights.get("tech_keyword", 0.0)
+            + signals.emotional * weights.get("emotional", 0.0)
+            + signals.novelty * weights.get("novelty", 0.0)
+            + signals.retrieval_signal * weights.get("retrieval_signal", 0.0)
         )
         max_possible = sum(v for k, v in weights.items() if k != "noise_penalty") or 1.0
         raw = sum_pos / max_possible

@@ -18,6 +18,7 @@ from .session import SessionStore
 
 from shared.constants import DEFAULT_USER, DEFAULT_LAYER, AGENT_LAYER, UTF8
 
+
 class MemoryLayer:
     """Unified async memory layer for both user and agent."""
 
