@@ -17,7 +17,6 @@ from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
 from shared.constants import DB_NAME
 
-import mcp_server.tools_layer as tl
 from .base import (
     _validate_layer,
     _get_memory,

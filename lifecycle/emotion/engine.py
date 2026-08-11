@@ -1,6 +1,6 @@
 from __future__ import annotations
 import re
-from typing import Any, Pattern
+from re import Pattern
 from .models import EmotionMarkerConfig, EmotionResult
 
 

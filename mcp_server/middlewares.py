@@ -1,5 +1,5 @@
 import os
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response

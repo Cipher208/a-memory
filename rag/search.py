@@ -2,7 +2,8 @@
 
 import logging
 from contextlib import suppress
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME

@@ -13,7 +13,7 @@ from typing import Any
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.path_safety import safe_resolve
-from typing import Any, cast
+from typing import Any
 
 
 class ImportExport:

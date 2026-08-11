@@ -67,11 +67,11 @@ class Config:
                 "wiki_agent",
             ],
         }
-        res: Any = False
-        if hook in known_hooks.get(layer, []):
-            res = self.get("hooks", layer, hook, default=True)
-        else:
-            res = self.get("hooks", layer, hook, default=False)
+        res = (
+            self.get("hooks", layer, hook, default=True)
+            if hook in known_hooks.get(layer, [])
+            else self.get("hooks", layer, hook, default=False)
+        )
         return bool(res)
 
     def is_feature_enabled(self, feature: str) -> bool:

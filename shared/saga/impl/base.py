@@ -35,7 +35,6 @@ try:
         """Check if file is encrypted (not plain JSON)."""
         if not path.exists():
             return False
-        # noqa: SKY-D325
         with path.open("rb") as f:
             head = f.read(1)
         return _is_crypto_encrypted_blob(head)
@@ -137,10 +136,8 @@ class Saga:
             SAGA_DIR.mkdir(parents=True, exist_ok=True)
             if _HAS_ENCRYPTION:
                 blob = encrypt_json(state)
-                # noqa: SKY-D324
                 state_file.write_bytes(blob)
             else:
-                # noqa: SKY-D324
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
         except Exception:
             logger.exception("Failed to save saga state")
@@ -450,10 +447,8 @@ class SagaWatchdog:
                         state["status"] = "stuck"
                         state["stuck_reason"] = f"timeout_after_{int(age)}s"
                         if _HAS_ENCRYPTION:
-                            # noqa: SKY-D324
                             state_file.write_bytes(encrypt_json(state))
                         else:
-                            # noqa: SKY-D324
                             state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
                         logger.warning("Saga '%s' marked as STUCK (age=%ds)", saga_name, int(age))
 
@@ -501,10 +496,8 @@ class SagaWatchdog:
             state["status"] = "manual_review_required"
             state["recovered_at"] = time.time()
             if _HAS_ENCRYPTION:
-                # noqa: SKY-D324
                 state_file.write_bytes(encrypt_json(state))
             else:
-                # noqa: SKY-D324
                 state_file.write_text(json.dumps(state, indent=2, default=str), encoding="utf-8")
 
             return {"status": "manual_review_required", "state": state}

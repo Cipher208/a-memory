@@ -183,6 +183,8 @@ module = [
     "prometheus_client.*",
     "aiosqlite.*",
     "alembic.*",
+    "mcp.*",
+    "keyring.*",
 ]
 ignore_missing_imports = true
 

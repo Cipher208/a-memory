@@ -14,7 +14,7 @@ import contextlib
 import logging
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from shared.crypto import decrypt_json as _decrypt_json
 from shared.crypto import encrypt_json as _encrypt_json
@@ -153,7 +153,6 @@ def is_encrypted_blob(path: Path) -> bool:
     if not path.exists():
         return False
     # Path is verified to be within app data dir by caller, safe.
-    # noqa: SKY-D325
     with path.open("rb") as f:
         head = f.read(1)
     return bool(_is_encrypted_blob(head))
