@@ -1,6 +1,6 @@
 # MCP Tools Reference (v1.6.4)
 
-All tools accept a `layer` parameter (`user` or `agent`) to target the appropriate memory layer.
+All 35 tools accept a `layer` parameter (`user` or `agent`) to target the appropriate memory layer.
 
 ## Universal Primitives (High-Level Cognition)
 

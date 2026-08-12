@@ -1,6 +1,6 @@
 # mcp-ariel-memory
 
-> **Give your AI agents real memory** — episodic recall, knowledge graphs, hybrid search, and envelope encryption in a single MCP server. 19 tools. 4-layer hierarchy. 250+ tests.
+> **Give your AI agents real memory** — episodic recall, knowledge graphs, hybrid search, and envelope encryption in a single MCP server. 35 tools. 4-layer hierarchy. 519+ tests.
 
 [![CI](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/Cipher208/mcp-ariel-memory?logo=codecov&logoColor=white)](https://codecov.io/gh/Cipher208/mcp-ariel-memory)
@@ -56,18 +56,15 @@ graph TD
 | Feature | mcp-ariel-memory | Typical Memory |
 |---------|------------------|----------------|
 | **Memory hierarchy** | L1→L2→L3→L4 (4 layers) | Flat key-value store |
+| **Universal Primitives** | `think`, `dream`, `forget`, `evolve` | Simple CRUD |
+| **Shadow Bin** | Soft-delete with archival | Permanent delete |
 | **Adaptive Threshold** | Dynamic EMA-based noise filtering | Static threshold |
 | **Hybrid search** | FTS5 + binary embeddings + RRF | FTS or vector only |
-| **ITS scoring** | Novelty + relevance via document frequency | None |
+| **Token Budgeting** | Managed context overflow | None |
 | **Knowledge graphs** | Epistemic + Temporal | None |
 | **Typed memory** | 13 categories with per-type retention | None |
-| **Two layers** | User (about people) + Agent (self-knowledge) | User only |
-| **Wiki** | 14 types, .md files as source of truth, FTS5 | None |
-| **Auto-Compaction** | Periodic archiving of low-importance items | None |
-| **Encryption** | libsodium secretbox (keychain-first) | Usually none |
-| **Metrics** | Real-time Prometheus exporter (port 9120) | None |
-| **Tests** | 250 (79 property-based/logic/chaos) | — |
-| **Dashboard** | Real-time HTML dashboard | — |
+| **Wiki** | 14 types, .md files as source of truth | None |
+| **Metrics** | Real-time Prometheus exporter | None |
 
 ### Who needs this?
 
