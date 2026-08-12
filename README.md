@@ -229,7 +229,7 @@ Single `memory.db` file — no external database required.
 
 | Feature | Description |
 |---------|-------------|
-| **19 MCP Tools** | Layer tools (11): remember, recall, forget, session, episode, graph, stats, context. Ops tools (8): api_key, backup, saga, data, replica, cleanup, purge, search |
+| **35 MCP Tools** | Universal Primitives (5), Layer CRUD (14), Wiki (4), Ops & Maintenance (12) |
 | **Two-Layer Memory** | L1 ReflexBuffer → L2 SessionStore → L3 EpisodicMemory → L4 CoreMemory |
 | **Envelope Encryption** | libsodium secretbox (AES-256-GCM) for API keys, tokens, saga state |
 | **Unified Search API** | Single `search()` method with 4 strategies: `fts`, `mib`, `hybrid`, `auto` |
