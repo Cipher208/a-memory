@@ -1,219 +1,125 @@
-# MCP Tools Reference
+# MCP Tools Reference (v1.6.4)
 
-All 19 tools accept a `layer` parameter (`user` or `agent`) to target the appropriate memory layer.
+All tools accept a `layer` parameter (`user` or `agent`) to target the appropriate memory layer.
 
-## Memory Operations
+## Universal Primitives (High-Level Cognition)
 
-### memory_remember
+These tools represent the core cognitive functions of the Ariel-Memory system.
 
-Store a new memory entry.
+### memory_think
+Routes thoughts to correct memory layers based on content size, importance, and emotional weight.
 
-```json
-{
-  "layer": "user",
-  "content": "I prefer dark mode",
-  "kind": "preference",
-  "importance": 3,
-  "entities": ["display", "theme"],
-  "tags": ["ui", "preference"]
-}
-```
-
-### memory_recall
-
-Search memories by query.
+**Logic:**
+- **Wiki Save:** If text > 2000 chars, saves to Wiki (`decision_log` for agent, `diary` for user).
+- **L4 CoreMemory:** If text < 60 chars and importance > 0.7.
+- **L3 EpisodicMemory:** If text >= 60 chars or emotional weight > 0.5.
+- **Graph Auto-Expansion:** Detects relationships (e.g., "A is related to B") and adds nodes to the Knowledge Graph.
 
 ```json
 {
   "layer": "user",
-  "query": "display preferences",
-  "limit": 10,
-  "strategy": "auto"
-}
-```
-
-Strategies: `fts` (keyword), `mib` (semantic), `hybrid` (combined), `auto` (adaptive)
-
-### memory_forget
-
-Soft-delete a memory by ID.
-
-```json
-{
-  "layer": "user",
-  "memory_id": "abc123"
-}
-```
-
-### memory_stats
-
-Get memory statistics.
-
-```json
-{
-  "layer": "user"
-}
-```
-
-## Session Operations
-
-### memory_session_create
-
-Create a new session.
-
-```json
-{
-  "layer": "user",
-  "summary": "Discussed architecture decisions"
-}
-```
-
-### memory_session_list
-
-List recent sessions.
-
-```json
-{
-  "layer": "user",
-  "limit": 10
-}
-```
-
-## Graph Operations
-
-### memory_graph_add
-
-Add a node to the knowledge graph.
-
-```json
-{
-  "layer": "user",
-  "node_type": "fact",
-  "content": "PostgreSQL is used for production"
-}
-```
-
-### memory_graph_query
-
-Query the knowledge graph.
-
-```json
-{
-  "layer": "user",
-  "query": "database decisions",
-  "limit": 10
-}
-```
-
-### memory_graph_path
-
-Find path between two nodes.
-
-```json
-{
-  "layer": "user",
-  "from_id": "node1",
-  "to_id": "node2"
-}
-```
-
-## Wiki Operations
-
-### memory_wiki_add
-
-Add or update a wiki page.
-
-```json
-{
-  "layer": "user",
-  "title": "Architecture Overview",
-  "content": "# Architecture\n\nTwo-layer memory system...",
-  "wiki_type": "spec"
-}
-```
-
-### memory_wiki_search
-
-Search wiki pages.
-
-```json
-{
-  "layer": "user",
-  "query": "architecture",
-  "limit": 5
-}
-```
-
-## Operations
-
-### memory_backup_create
-
-Create a backup.
-
-```json
-{
-  "layer": "user"
-}
-```
-
-### memory_backup_list
-
-List available backups.
-
-```json
-{
-  "layer": "user"
-}
-```
-
-### memory_export
-
-Export memories to JSON.
-
-```json
-{
-  "layer": "user",
-  "format": "json"
-}
-```
-
-### memory_import
-
-Import memories from JSON.
-
-```json
-{
-  "layer": "user",
-  "data": "{...}"
-}
-```
-
-### memory_compress
-
-Compress old memories.
-
-```json
-{
-  "layer": "user"
-}
-```
-
-### memory_consolidate
-
-Run memory consolidation.
-
-```json
-{
-  "layer": "user"
+  "text": "The new architecture uses PostgreSQL for persistence. It is connected to the staging buffer.",
+  "user_id": "default"
 }
 ```
 
 ### memory_dream
+Performs a powerful hybrid search across ALL layers (L3, L4, Wiki, Graph) with automatic context construction and token budgeting.
 
-Process dream buffer (background consolidation).
+**Parameters:**
+- `query`: Search query.
+- `intent`: weight bias (`recent`, `core`, `balanced`).
+- `limit`: result count.
+
+**Returns:** `DreamResult` with `summary` (truncated to `DEFAULT_TOKEN_BUDGET`), `truncated` flag, and `result_count`.
 
 ```json
 {
-  "layer": "user"
+  "layer": "user",
+  "query": "database architecture",
+  "intent": "core",
+  "limit": 10
 }
 ```
+
+### memory_forget
+Context-aware forgetting with Shadow Bin (soft-delete) support.
+
+**Parameters:**
+- `key`: Target key or search pattern.
+- `scope`: `exact` (specific key), `fuzzy` (pattern search), `recent` (time-based).
+- `minutes`: For `recent` scope, how far back to purge.
+- `shadow_bin`: If true, archives deleted items before removal.
+
+**Returns:** `ForgetResult` (counts of `deleted_l4`, `deleted_l3`, `deleted_graph`).
+
+```json
+{
+  "layer": "user",
+  "key": "old project config",
+  "scope": "fuzzy",
+  "shadow_bin": true
+}
+```
+
+## Layer Operations (Standard CRUD)
+
+### memory_remember
+Store a specific key-value fact to long-term memory (L4).
+
+```json
+{
+  "layer": "user",
+  "key": "favorite_color",
+  "value": "deep purple",
+  "importance": 0.8
+}
+```
+
+### memory_recall
+Search memories across L3 (episodes) and L4 (facts).
+
+```json
+{
+  "layer": "user",
+  "query": "preferences",
+  "limit": 5
+}
+```
+
+### memory_stats
+Get detailed metrics for the specified layer.
+
+```json
+{
+  "layer": "agent"
+}
+```
+
+## Advanced Operations
+
+### memory_evolve
+Updates agent personality and triggers behavioral evolution hooks.
+
+```json
+{
+  "instruction": "Be more assertive and focused on security in code reviews.",
+  "user_id": "default"
+}
+```
+
+### memory_project
+Managing project-specific context, file mapping, and gap analysis.
+
+**Actions:** `init`, `update`, `archive`, `mapping`, `audit`.
+
+```json
+{
+  "action": "audit",
+  "name": "mcp-ariel-memory",
+  "layer": "agent"
+}
+```
+
+### memory_backup_create
+Manual trigger for the Saga-based backup system.

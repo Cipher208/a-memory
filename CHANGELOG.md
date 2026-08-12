@@ -3,6 +3,25 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.4] - 2026-08-12
+
+### Added
+- **Ariel-Memory Constitution** — Established the core law for development: strict typing, async mandate, and modular aesthetics.
+- **Shadow Bin Support** — The `forget` primitive now supports soft-deletion via `ArchivedMemories`, preventing accidental loss of high-importance facts.
+- **Intelligent Thought Routing** — The `think` primitive now automatically directs large thoughts (>2000 chars) to Wiki pages while maintaining links in CoreMemory.
+- **Automatic Relation Extraction** — Integrated regex-based detection of entity relationships in the `think` primitive for seamless knowledge graph expansion.
+- **Token Budgeting for Dreams** — The `dream` primitive now enforces a `DEFAULT_TOKEN_BUDGET` to prevent context overflow in LLM agents.
+
+### Changed
+- **Engineering Excellence** — Achieved 100% Mypy strict compliance and zero Ruff linting issues repo-wide.
+- **Systemic Typing** — Resolved external library typing for `sentence_transformers` via `pyproject.toml` configuration, removing non-compliant inline ignores.
+- **Forget API Evolution** — `memory_forget` and the `forget` primitive now return detailed `ForgetResult` objects (deleted_l4, deleted_l3, deleted_graph) for granular traceability.
+- **Docstring Standards** — All core modules updated with Lucy-style docstrings explaining **WHY** components exist.
+
+### Fixed
+- **Null Safety in RAG** — Added connection manager guards in `MultiSourceRAG` to prevent crashes in environments with partial storage availability.
+- **Model Signature Alignment** — Synchronized `ForgetResult` model fields between definition and implementation.
+
 ## [1.6.3] - 2026-08-08
 
 ### Fixed
