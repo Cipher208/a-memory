@@ -1,4 +1,5 @@
 """Metrics — Professional Prometheus-compatible metrics collection.
+
 Uses prometheus_client for standard compliance and advanced histograms.
 """
 

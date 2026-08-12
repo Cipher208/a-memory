@@ -7,6 +7,7 @@ if TYPE_CHECKING:
 
 class EmotionTrigger:
     """Facade for emotional and non-emotional message triggers.
+
     Re-implements logic from old lifecycle/emotion_trigger.py using EmotionEngine.
     """
 
@@ -18,7 +19,8 @@ class EmotionTrigger:
     def should_save(
         self, message: str, emotional_state: dict[str, float] | None = None, state_delta: dict[str, float] | None = None
     ) -> tuple[bool, str, float]:
-        """Evaluates if a message should be saved based on emotional content and structural markers.
+        """Evaluate if a message should be saved based on emotional content and structural markers.
+
         Returns (should_save, trigger_name, score).
         """
         candidates: list[tuple[str, float]] = []

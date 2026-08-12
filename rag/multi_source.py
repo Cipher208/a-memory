@@ -63,7 +63,7 @@ class MultiSourceRAG:
             w_core = 1.5
             w_wiki = 1.2
             w_episodic = 0.8
-        
+
         if include_rag:
             try:
                 rag_results = await self.rag.search(query, user_id=user_id, strategy=strategy, limit=limit * 2)
@@ -98,14 +98,14 @@ class MultiSourceRAG:
                 from core.episodic import EpisodicMemory
                 episodic = EpisodicMemory(cm=self.cm)
                 episodes = await episodic.search(user_id, query, limit=limit * 2)
-                for e in episodes:
+                for episode in episodes:
                     results.append({
-                        "id": -e.episode_id - 2000000,
-                        "title": f"Episode {e.episode_id}",
-                        "content": e.summary,
-                        "score": e.emotional_weight * w_episodic,
+                        "id": -episode.episode_id - 2000000,
+                        "title": f"Episode {episode.episode_id}",
+                        "content": episode.summary,
+                        "score": episode.emotional_weight * w_episodic,
                         "source": "episodic",
-                        "created_at": e.created_at
+                        "created_at": episode.created_at
                     })
             except Exception as e:
                 logger.warning("Episodic search failed: %s", e)
@@ -126,7 +126,7 @@ class MultiSourceRAG:
             except Exception as e:
                 logger.warning("Core search failed: %s", e)
 
-        if include_graph:
+        if include_graph and self.cm:
             try:
                 # Basic graph content search via LIKE (primitive)
                 from shared.constants import DB_NAME

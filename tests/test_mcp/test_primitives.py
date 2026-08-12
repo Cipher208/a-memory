@@ -6,20 +6,20 @@ from mcp_server.tools.primitives import think, dream
 async def test_dream_search_and_budgeting():
     """Test dream tool hybrid search and token budgeting."""
     ctx, app = _make_ctx()
-    
+
     # Mock search results
     mock_results = [
         {"title": f"Doc {i}", "content": "Some content " * 10, "source": "rag"}
         for i in range(5)
     ]
     app.user_multi.search = AsyncMock(return_value=mock_results)
-    
+
     # Test normal summary
     result = await dream(query="test query", ctx=ctx)
     assert "Doc 0" in result["summary"]
     assert result["result_count"] == 5
     assert result["truncated"] is False
-    
+
     # Test budgeting (mocking _truncate_to_budget via long content)
     long_results = [
         {"title": "Huge Doc", "content": "A" * 10000, "source": "wiki"}
@@ -37,13 +37,13 @@ async def test_think_routing_l4():
     app.importance.score = MagicMock()
     app.importance.score.return_value.score = 0.9
     app.importance.score.return_value.signals.emotional = 0.1
-    
+
     mem = app.mm.user_memory.return_value
     mem.remember = AsyncMock(return_value=1)
     mem.l3.save = AsyncMock()
-    
+
     result = await think(text="Short important thought", ctx=ctx)
-    
+
     assert result["status"] == "ok"
     assert any(a["type"] == "L4_remember" for a in result["actions"])
     mem.remember.assert_called_once()
@@ -56,14 +56,14 @@ async def test_think_routing_l3_length():
     app.importance.score = MagicMock()
     app.importance.score.return_value.score = 0.4
     app.importance.score.return_value.signals.emotional = 0.1
-    
+
     mem = app.mm.user_memory.return_value
     mem.remember = AsyncMock()
     mem.l3.save = AsyncMock(return_value=1)
-    
+
     long_text = "This is a very long text that should definitely exceed the sixty character limit for episodic memory storage."
     result = await think(text=long_text, ctx=ctx)
-    
+
     assert result["status"] == "ok"
     assert any(a["type"] == "L3_episodic_save" for a in result["actions"])
     mem.l3.save.assert_called_once()
@@ -80,13 +80,13 @@ async def test_think_routing_l3_emotion():
     app.importance.score = MagicMock()
     app.importance.score.return_value.score = 0.5
     app.importance.score.return_value.signals.emotional = 0.8
-    
+
     mem = app.mm.user_memory.return_value
     mem.remember = AsyncMock()
     mem.l3.save = AsyncMock(return_value=1)
-    
+
     result = await think(text="I am very happy today!", ctx=ctx)
-    
+
     assert result["status"] == "ok"
     assert any(a["type"] == "L3_episodic_save" for a in result["actions"])
     mem.l3.save.assert_called_once()
@@ -98,11 +98,11 @@ async def test_think_routing_graph():
     app.importance.score = MagicMock()
     app.importance.score.return_value.score = 0.5
     app.importance.score.return_value.signals.emotional = 0.1
-    
+
     app.user_graph.add_node = AsyncMock(return_value=1)
-    
+
     result = await think(text="Alice is related to Bob", ctx=ctx)
-    
+
     assert result["status"] == "ok"
     assert any(a["type"] == "Graph_node_add" for a in result["actions"])
     app.user_graph.add_node.assert_called_once()

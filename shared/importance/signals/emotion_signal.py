@@ -4,6 +4,7 @@ from .base_signal import IImportanceSignal
 
 class EmotionSignal(IImportanceSignal):
     """Signal based on emotional intensity.
+
     Integration: uses _emotion_engine from context if available.
     """
 

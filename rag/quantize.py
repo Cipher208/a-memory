@@ -29,7 +29,7 @@ def _check_numpy() -> None:
 
 
 def _packed_bytes(dim: int) -> int:
-    """Number of packed bytes for given dimension."""
+    """Calculate number of packed bytes for given dimension."""
     return (dim + 7) // 8
 
 
@@ -193,7 +193,7 @@ def binary_from_threshold_array(
 
 
 def hamming_distance(a: bytes, b: bytes) -> int:
-    """Number of differing bits. Optimized via numpy bitwise XOR."""
+    """Calculate number of differing bits. Optimized via numpy bitwise XOR."""
     _check_numpy()
     if len(a) != len(b):
         raise ValueError(f"length mismatch: {len(a)} vs {len(b)}")

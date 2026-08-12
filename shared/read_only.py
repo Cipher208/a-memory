@@ -43,7 +43,7 @@ class ReadOnlyReplica:
         return synced
 
     def _backup_db(self, src: Path, dst: Path) -> bool:
-        """Internal helper for SQLite online backup."""
+        """Perform internal helper for SQLite online backup."""
         try:
             with sqlite3.connect(str(src)) as src_conn, sqlite3.connect(str(dst)) as dst_conn:
                 src_conn.backup(dst_conn)

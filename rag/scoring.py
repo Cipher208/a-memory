@@ -95,7 +95,7 @@ class Scorer:
         return min(surprise, 1.0)
 
     def _type_boost(self, wiki_type: str | None) -> float:
-        """Simple type boost based on wiki_type."""
+        """Calculate simple type boost based on wiki_type."""
         if not wiki_type:
             return 0.0
         boosts = {

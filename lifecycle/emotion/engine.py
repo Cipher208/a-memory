@@ -36,7 +36,7 @@ class EmotionEngine:
         return re.compile("|".join(parts), flags) if parts else None
 
     def detect(self, text: str) -> list[EmotionResult]:
-        """Detects emotions in the given text with Phrase > Marker > Emoji priority."""
+        """Detect emotions in the given text with Phrase > Marker > Emoji priority."""
         if not text:
             return []
 

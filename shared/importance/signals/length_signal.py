@@ -4,6 +4,7 @@ from .base_signal import IImportanceSignal
 
 class LengthSignal(IImportanceSignal):
     """Signal based on text length.
+
     Logic: min(1.0, L / 800.0).
     """
 

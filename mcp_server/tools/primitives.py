@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from mcp_server.models import ThinkResult, DreamResult, ForgetResult, EvolveResult, ProjectResult
 from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
-from shared.constants import DB_NAME, DEFAULT_USER
+from shared.constants import DB_NAME
 
 from .base import (
     _validate_layer,
@@ -48,12 +48,12 @@ async def think(
     # 2. Importance Scoring
     scorer_result = app.importance.score(text)
     importance = scorer_result.score
-    
+
     # 3. Layer Resolution
     resolved_layer = layer
     if layer == "auto":
         resolved_layer = "user" 
-    
+
     _validate_layer(resolved_layer)
 
     # 4. Routing Logic
@@ -75,34 +75,34 @@ async def think(
     if len(text) > 2000:
         thought_title = f"Thought_{int(time.time())}"
         wiki_path = await wiki.add(wiki_type="decision_log" if resolved_layer == "agent" else "diary", title=thought_title, content=text)
-        
+
         summary = text[:200] + "..."
         text_to_save = f"Summary: {summary} | Path: {wiki_path}"
         actions.append({"type": "Wiki_thought_save", "path": wiki_path})
-        
+
         # Also save summary/link to memory
         if importance > 0.7:
             tasks.append(mem.remember("thought_link", text_to_save, importance))
-            actions.append({"type": "L4_remember_link", "importance": importance})
+            actions.append({"type": "L4_remember_link", "importance": str(importance)})
         else:
             tasks.append(mem.l3.save(user_id, text_to_save, float(scorer_result.signals.emotional)))
-            actions.append({"type": "L3_episodic_save_link", "weight": scorer_result.signals.emotional})
+            actions.append({"type": "L3_episodic_save_link", "weight": str(scorer_result.signals.emotional)})
     else:
         # Standard routing
         # If len(text) < 60 and importance is high -> Save to CoreMemory (L4)
         if len(text) < 60 and importance > 0.7:
             tasks.append(mem.remember("thought", text, importance))
-            actions.append({"type": "L4_remember", "importance": importance})
+            actions.append({"type": "L4_remember", "importance": str(importance)})
 
         # If len(text) >= 60 or emotional weight is detected -> Save to Episodic (L3)
         if len(text) >= 60 or scorer_result.signals.emotional > 0.5:
             tasks.append(mem.l3.save(user_id, text, float(scorer_result.signals.emotional)))
-            actions.append({"type": "L3_episodic_save", "weight": scorer_result.signals.emotional})
+            actions.append({"type": "L3_episodic_save", "weight": str(scorer_result.signals.emotional)})
 
     # Relation detection
     relation_patterns = [r"\b\w+\s+(is|related\s+to|connected\s+to|part\s+of)\s+\w+\b"]
     has_relation = any(re.search(p, text, re.IGNORECASE) for p in relation_patterns)
-    
+
     if has_relation:
         tasks.append(graph.add_node(user_id, text[:500], "relation", ["think_primitive"], importance))
         actions.append({"type": "Graph_node_add", "node_type": "relation"})
@@ -265,7 +265,7 @@ async def forget(
                     original_id=n["node_id"],
                     reason="forget_primitive_fuzzy_graph"
                 )
-        
+
         cur = await conn.execute(
             "DELETE FROM epi_nodes WHERE layer=? AND user_id=? AND content LIKE ?",
             (layer, user_id, f"%{key}%"),
@@ -382,23 +382,23 @@ async def project(
         # 1. Gather Context
         multi_rag = app.agent_multi if layer == "agent" else app.user_multi
         context_results = await multi_rag.search(name, user_id=user_id, limit=20, intent="balanced")
-        
+
         # 2. Gap Analysis
         has_arch = any("architecture" in (r.get("title", "") + r.get("content", "")).lower() or "design" in (r.get("title", "") + r.get("content", "")).lower() for r in context_results)
         has_sec = any("security" in (r.get("title", "") + r.get("content", "")).lower() or "hardening" in (r.get("title", "") + r.get("content", "")).lower() for r in context_results)
         has_test = any("testing" in (r.get("title", "") + r.get("content", "")).lower() or "verification" in (r.get("title", "") + r.get("content", "")).lower() for r in context_results)
-        
+
         verdicts = []
         if has_arch:
             verdicts.append("Architecture/Design is documented.")
         else:
             verdicts.append("Architecture/Design documentation is missing.")
-            
+
         if has_sec:
             verdicts.append("Security/Hardening entries found.")
         else:
             verdicts.append("Security/Hardening information is missing.")
-            
+
         if has_test:
             verdicts.append("Testing/Verification protocols exist.")
         else:
@@ -406,7 +406,7 @@ async def project(
 
         # 3. Conflict Detection in L4 (CoreMemory)
         l4_hits = await mem.l4.search(user_id, name, limit=50)
-        keys_seen = {}
+        keys_seen: dict[str, Any] = {}
         conflicts = []
         for hit in l4_hits:
             key = hit.get("key")
@@ -414,7 +414,7 @@ async def project(
             if key in keys_seen and keys_seen[key] != val:
                 conflicts.append(f"Memory conflict: '{key}' has multiple values ('{keys_seen[key]}' vs '{val}')")
             keys_seen[key] = val
-            
+
         if conflicts:
             verdicts.extend(conflicts)
         else:

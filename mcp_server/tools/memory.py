@@ -136,4 +136,4 @@ async def memory_forget(
 
     deleted = await _get_memory(app, layer, user_id).forget(key)
     _invalidate_cache(layer, user_id)
-    return ForgetResult(deleted=deleted).dict()
+    return ForgetResult(deleted_l4=deleted).dict()

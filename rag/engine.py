@@ -120,6 +120,7 @@ class RAGEngine:
 
     async def search(self, query: str, user_id: str = "default", strategy: StrategyT | None = None, limit: int = 10) -> list[dict[str, Any]]:
         """Delegate to searcher.search().
+
         Converts SearchResult models back to dict for backward compatibility.
         """
         results = await self.searcher.search(query=query, user_id=user_id, strategy=strategy or self.search_strategy, limit=limit)

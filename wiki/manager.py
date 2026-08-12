@@ -252,7 +252,7 @@ class WikiManager:
         return result
 
     async def _sync_one_file(self, f: Path, enabled_types: list[str]) -> str:
-        """Internal helper for single file synchronization."""
+        """Perform internal helper for single file synchronization."""
         try:
             content = await asyncio.to_thread(f.read_text, encoding="utf-8")
             parsed_entry = self.parser.parse(content, f)

@@ -26,7 +26,9 @@ class BearerAuth:
             self.rotate()
 
     def get_token(self) -> str:
-        """1. Check os.environ.get("MCP_AUTH_TOKEN").
+        """Get the authentication token.
+
+        1. Check os.environ.get("MCP_AUTH_TOKEN").
         2. If not found, load from Store (already done in init/load_or_create).
         3. If still not found, create new mt_... token and save to Store.
         """

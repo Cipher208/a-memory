@@ -4,6 +4,7 @@ from .base_signal import IImportanceSignal
 
 class TechKeywordSignal(IImportanceSignal):
     """Signal based on technical keywords.
+
     Uses regex compiled from importance.json (provided via context).
     """
 
