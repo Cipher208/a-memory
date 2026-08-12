@@ -1,6 +1,8 @@
 """
-Universal Memory MCP Server
-Two-layer unified memory: Layer 1 (user) + Layer 2 (agent identity)
+Global Configuration Management for Ariel-Memory.
+
+Handles environment-based settings, feature flags, and hook orchestration
+using a singleton pattern to ensure consistent state across the server.
 """
 
 from pathlib import Path

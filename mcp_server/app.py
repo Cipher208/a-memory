@@ -1,3 +1,10 @@
+"""
+FastMCP Application Factory and Route Orchestrator.
+
+Decomposes the server logic into a Starlette-based application structure,
+managing API endpoints, health checks, and dashboard rendering.
+"""
+
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
 from mcp.server.fastmcp import FastMCP

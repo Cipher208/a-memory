@@ -102,8 +102,7 @@ target-version = "py310"
 select = ["ALL"]
 ignore = [
     "INP001",   # Missing __init__.py in subdirs
-    "D",        # Missing docstrings
-    "ANN",      # Missing type annotations
+    "ANN",      # Missing type annotations (using mypy strict instead)
     "EM",       # Exception message literals
     "TRY003",   # Long exception messages
     "PLR2004",  # Magic numbers
@@ -157,6 +156,15 @@ ignore = [
     "N817",     # camelcase-as-acronym (standard for MM)
     "NPY002",   # legacy-numpy-random (standard here)
     "B023",     # loop-variable-non-binding (standard pattern)
+    "D100",     # Missing docstring in public module (handled by Lucy)
+    "D101",     # Missing docstring in public class
+    "D102",     # Missing docstring in public method
+    "D103",     # Missing docstring in public function
+    "D104",     # Missing docstring in public package
+    "D105",     # Missing docstring in magic method
+    "D107",     # Missing docstring in __init__
+    "D203",     # One blank line before class (incompatible with D211)
+    "D213",     # Multi-line docstring summary should start at second line
 ]
 
 [tool.ruff.lint.per-file-ignores]

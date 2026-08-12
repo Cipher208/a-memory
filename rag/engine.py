@@ -1,3 +1,10 @@
+"""
+RAG Engine Facade — Unified semantic and keyword search.
+
+Orchestrates ingestion, binarization, and multi-strategy retrieval
+across all memory layers with high-performance async I/O.
+"""
+
 from __future__ import annotations
 
 """
