@@ -96,33 +96,39 @@ class MultiSourceRAG:
         if include_episodic:
             try:
                 from core.episodic import EpisodicMemory
+
                 episodic = EpisodicMemory(cm=self.cm)
                 episodes = await episodic.search(user_id, query, limit=limit * 2)
                 for episode in episodes:
-                    results.append({
-                        "id": -episode.episode_id - 2000000,
-                        "title": f"Episode {episode.episode_id}",
-                        "content": episode.summary,
-                        "score": episode.emotional_weight * w_episodic,
-                        "source": "episodic",
-                        "created_at": episode.created_at
-                    })
+                    results.append(
+                        {
+                            "id": -episode.episode_id - 2000000,
+                            "title": f"Episode {episode.episode_id}",
+                            "content": episode.summary,
+                            "score": episode.emotional_weight * w_episodic,
+                            "source": "episodic",
+                            "created_at": episode.created_at,
+                        }
+                    )
             except Exception as e:
                 logger.warning("Episodic search failed: %s", e)
 
         if include_core:
             try:
                 from core.memory import CoreMemory
+
                 core = CoreMemory(cm=self.cm)
                 facts = await core.search(user_id, query, limit=limit * 2)
                 for f in facts:
-                    results.append({
-                        "id": hash(f["key"]) % 10000000,
-                        "title": f["key"],
-                        "content": f["value"],
-                        "score": f["importance"] * w_core,
-                        "source": "core",
-                    })
+                    results.append(
+                        {
+                            "id": hash(f["key"]) % 10000000,
+                            "title": f["key"],
+                            "content": f["value"],
+                            "score": f["importance"] * w_core,
+                            "source": "core",
+                        }
+                    )
             except Exception as e:
                 logger.warning("Core search failed: %s", e)
 
@@ -130,20 +136,23 @@ class MultiSourceRAG:
             try:
                 # Basic graph content search via LIKE (primitive)
                 from shared.constants import DB_NAME
+
                 conn = await self.cm.get(DB_NAME)
                 cur = await conn.execute(
                     "SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE user_id=? AND content LIKE ? LIMIT ?",
-                    (user_id, f"%{query}%", limit * 2)
+                    (user_id, f"%{query}%", limit * 2),
                 )
                 graph_rows = await cur.fetchall()
                 for r in graph_rows:
-                    results.append({
-                        "id": -r["node_id"] - 3000000,
-                        "title": f"Graph Node {r['node_id']} ({r['node_type']})",
-                        "content": r["content"],
-                        "score": float(r["confidence"]) * w_graph,
-                        "source": "graph",
-                    })
+                    results.append(
+                        {
+                            "id": -r["node_id"] - 3000000,
+                            "title": f"Graph Node {r['node_id']} ({r['node_type']})",
+                            "content": r["content"],
+                            "score": float(r["confidence"]) * w_graph,
+                            "source": "graph",
+                        }
+                    )
             except Exception as e:
                 logger.warning("Graph search failed: %s", e)
 

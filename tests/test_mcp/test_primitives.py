@@ -2,16 +2,14 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from mcp_server.tools.primitives import think, dream
 
+
 @pytest.mark.asyncio
 async def test_dream_search_and_budgeting():
     """Test dream tool hybrid search and token budgeting."""
     ctx, app = _make_ctx()
 
     # Mock search results
-    mock_results = [
-        {"title": f"Doc {i}", "content": "Some content " * 10, "source": "rag"}
-        for i in range(5)
-    ]
+    mock_results = [{"title": f"Doc {i}", "content": "Some content " * 10, "source": "rag"} for i in range(5)]
     app.user_multi.search = AsyncMock(return_value=mock_results)
 
     # Test normal summary
@@ -21,13 +19,12 @@ async def test_dream_search_and_budgeting():
     assert result["truncated"] is False
 
     # Test budgeting (mocking _truncate_to_budget via long content)
-    long_results = [
-        {"title": "Huge Doc", "content": "A" * 10000, "source": "wiki"}
-    ]
+    long_results = [{"title": "Huge Doc", "content": "A" * 10000, "source": "wiki"}]
     app.user_multi.search = AsyncMock(return_value=long_results)
     result_truncated = await dream(query="test budget", ctx=ctx)
     assert result_truncated["truncated"] is True
     assert "[...truncated to token budget]" in result_truncated["summary"]
+
 
 @pytest.mark.asyncio
 async def test_think_routing_l4():
@@ -48,6 +45,7 @@ async def test_think_routing_l4():
     assert any(a["type"] == "L4_remember" for a in result["actions"])
     mem.remember.assert_called_once()
     mem.l3.save.assert_not_called()
+
 
 @pytest.mark.asyncio
 async def test_think_routing_l3_length():
@@ -70,9 +68,6 @@ async def test_think_routing_l3_length():
     mem.remember.assert_not_called()
 
 
-
-
-
 @pytest.mark.asyncio
 async def test_think_routing_l3_emotion():
     """Test think routes emotional text to L3."""
@@ -91,6 +86,7 @@ async def test_think_routing_l3_emotion():
     assert any(a["type"] == "L3_episodic_save" for a in result["actions"])
     mem.l3.save.assert_called_once()
 
+
 @pytest.mark.asyncio
 async def test_think_routing_graph():
     """Test think routes relations to graph."""
@@ -106,6 +102,7 @@ async def test_think_routing_graph():
     assert result["status"] == "ok"
     assert any(a["type"] == "Graph_node_add" for a in result["actions"])
     app.user_graph.add_node.assert_called_once()
+
 
 def _make_ctx():
     """Helper to create mock ctx."""

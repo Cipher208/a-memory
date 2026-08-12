@@ -124,4 +124,3 @@ class DreamResult(BaseModel):
     summary: str = Field(description="Formatted search results")
     truncated: bool = Field(description="Whether the output was truncated to budget")
     result_count: int = Field(description="Number of results found")
-

@@ -52,18 +52,13 @@ async def think(
     # 3. Layer Resolution
     resolved_layer = layer
     if layer == "auto":
-        resolved_layer = "user" 
+        resolved_layer = "user"
 
     _validate_layer(resolved_layer)
 
     # 4. Routing Logic
     actions = []
-    routing = {
-        "importance": importance,
-        "length": len(text),
-        "emotional_weight": scorer_result.signals.emotional,
-        "resolved_layer": resolved_layer
-    }
+    routing = {"importance": importance, "length": len(text), "emotional_weight": scorer_result.signals.emotional, "resolved_layer": resolved_layer}
 
     mem = _get_memory(app, resolved_layer, user_id)
     graph = _get_graph(app, resolved_layer)
@@ -110,10 +105,11 @@ async def think(
     # 5. Hooks
     hook_tasks = [
         _fire_hook("message_received", resolved_layer, {"text": text, "user_id": user_id}, mem=mem),
-        _fire_hook("emotion_trigger", resolved_layer, {"text": text, "user_id": user_id, "importance": importance}, mem=mem)
+        _fire_hook("emotion_trigger", resolved_layer, {"text": text, "user_id": user_id, "importance": importance}, mem=mem),
     ]
 
     import inspect
+
     awaitable_tasks = [t for t in tasks + hook_tasks if inspect.isawaitable(t)]
 
     if awaitable_tasks:
@@ -192,6 +188,7 @@ async def forget(
     archived_graph = 0
 
     from shared.archived_memories import ArchivedMemories
+
     am = ArchivedMemories(cm=app.mm._cm)
     await am._init_db()
 
@@ -205,7 +202,7 @@ async def forget(
                     memory_type=entry.memory_kind,
                     importance=entry.importance,
                     original_id=entry.entry_id,
-                    reason="forget_primitive_exact"
+                    reason="forget_primitive_exact",
                 )
             await mem.forget(key)
             archived_l4 = 1
@@ -223,7 +220,7 @@ async def forget(
                         memory_type=entry.memory_kind,
                         importance=entry.importance,
                         original_id=entry.entry_id,
-                        reason="forget_primitive_fuzzy_l4"
+                        reason="forget_primitive_fuzzy_l4",
                     )
                 if await mem.l4.delete(user_id, hit["key"]):
                     archived_l4 += 1
@@ -239,7 +236,7 @@ async def forget(
                         memory_type="episode",
                         importance=e.emotional_weight,
                         original_id=e.episode_id,
-                        reason="forget_primitive_fuzzy_l3"
+                        reason="forget_primitive_fuzzy_l3",
                     )
             conn = await mem.l3._cm.get(DB_NAME)
             ids = [e.episode_id for e in episodes]
@@ -263,7 +260,7 @@ async def forget(
                     memory_type=f"graph:{n['node_type']}",
                     importance=n["confidence"],
                     original_id=n["node_id"],
-                    reason="forget_primitive_fuzzy_graph"
+                    reason="forget_primitive_fuzzy_graph",
                 )
 
         cur = await conn.execute(
@@ -384,9 +381,18 @@ async def project(
         context_results = await multi_rag.search(name, user_id=user_id, limit=20, intent="balanced")
 
         # 2. Gap Analysis
-        has_arch = any("architecture" in (r.get("title", "") + r.get("content", "")).lower() or "design" in (r.get("title", "") + r.get("content", "")).lower() for r in context_results)
-        has_sec = any("security" in (r.get("title", "") + r.get("content", "")).lower() or "hardening" in (r.get("title", "") + r.get("content", "")).lower() for r in context_results)
-        has_test = any("testing" in (r.get("title", "") + r.get("content", "")).lower() or "verification" in (r.get("title", "") + r.get("content", "")).lower() for r in context_results)
+        has_arch = any(
+            "architecture" in (r.get("title", "") + r.get("content", "")).lower() or "design" in (r.get("title", "") + r.get("content", "")).lower()
+            for r in context_results
+        )
+        has_sec = any(
+            "security" in (r.get("title", "") + r.get("content", "")).lower() or "hardening" in (r.get("title", "") + r.get("content", "")).lower()
+            for r in context_results
+        )
+        has_test = any(
+            "testing" in (r.get("title", "") + r.get("content", "")).lower() or "verification" in (r.get("title", "") + r.get("content", "")).lower()
+            for r in context_results
+        )
 
         verdicts = []
         if has_arch:
@@ -428,4 +434,3 @@ async def project(
         path = None
 
     return ProjectResult(status=status_res, title=name, path=path, audit_report=audit_report).dict()
-
