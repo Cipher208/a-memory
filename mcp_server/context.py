@@ -13,6 +13,7 @@ from lifecycle.consolidation import ConsolidationEngine
 from rag.engine import RAGEngine
 from rag.multi_source import MultiSourceRAG
 from shared.cache import MemoryCache
+from shared.importance import ImportanceScorer
 from wiki import WikiManager
 
 
@@ -20,6 +21,7 @@ class AppContext:
     def __init__(self) -> None:
         self.cache = MemoryCache()
         self.mm = MemoryManager(cache=self.cache)
+        self.importance = ImportanceScorer()
         self.user_wiki = WikiManager(layer="user")
         self.agent_wiki = WikiManager(layer="agent")
         self.user_rag = RAGEngine(layer="user")

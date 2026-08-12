@@ -9,6 +9,7 @@ from typing import Any
 from mcp_server.registry import register_tool
 
 from .tools.memory import memory_remember, memory_recall, memory_forget
+from .tools.primitives import think, dream, forget, evolve, project
 from .tools.session import memory_session_start, memory_session_end, memory_session_list
 from .tools.episodic import memory_episode_save, memory_episode_recall, memory_episode_list, memory_episode_get
 from .tools.graph import memory_graph_add, memory_graph_query, memory_graph_nodes, memory_graph_edges
@@ -64,6 +65,11 @@ _register_tools: dict[str, Any] = {
     "memory_cleanup": memory_cleanup,
     "memory_lucidity_purge": memory_lucidity_purge,
     "memory_search": memory_search,
+    "think": think,
+    "dream": dream,
+    "forget": forget,
+    "evolve": evolve,
+    "project": project,
     "wiki_add": wiki_add,
     "wiki_search": wiki_search,
     "wiki_list": wiki_list,

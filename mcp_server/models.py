@@ -19,7 +19,21 @@ class RecallResult(BaseModel):
 
 
 class ForgetResult(BaseModel):
-    deleted: bool = Field(description="Whether the fact was deleted")
+    deleted_l4: int = Field(default=0, description="Deleted core memory records")
+    deleted_l3: int = Field(default=0, description="Deleted episodes")
+    deleted_graph: int = Field(default=0, description="Deleted graph nodes")
+
+
+class EvolveResult(BaseModel):
+    status: str = Field(description="ok or error")
+    summary: str = Field(description="Summary of personality shift")
+
+
+class ProjectResult(BaseModel):
+    status: str = Field(description="ok, updated, archived, or audit")
+    title: str = Field(description="Project title")
+    path: str | None = Field(default=None, description="Wiki page path or archive path")
+    audit_report: str | None = Field(default=None, description="Project health audit report")
 
 
 class SessionResult(BaseModel):
@@ -98,3 +112,16 @@ class SearchResult(BaseModel):
     results: list[dict[str, Any]] = Field(description="Search results")
     count: int = Field(description="Number of results")
     method: str = Field(default="rrf", description="Search method used")
+
+
+class ThinkResult(BaseModel):
+    status: str = Field(description="ok or error")
+    routing: dict[str, Any] = Field(description="Routing decision details")
+    actions: list[dict[str, Any]] = Field(description="Actions taken (L3 save, L4 remember, Graph add)")
+
+
+class DreamResult(BaseModel):
+    summary: str = Field(description="Formatted search results")
+    truncated: bool = Field(description="Whether the output was truncated to budget")
+    result_count: int = Field(description="Number of results found")
+

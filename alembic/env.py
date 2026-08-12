@@ -11,7 +11,7 @@ from alembic import context
 config = context.config
 
 
-def get_url():
+def get_url() -> str:
     # Priority:
     # 1. URL from alembic config (passed via MigrationManager)
     # 2. environment variable
