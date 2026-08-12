@@ -5,9 +5,7 @@ from .models import EmotionMarkerConfig, EmotionResult
 
 
 class EmotionEngine:
-    """
-    Engine for detecting emotions in text using optimized regex matching.
-    """
+    """Engine for detecting emotions in text using optimized regex matching."""
 
     MARKER_SCORE_DEFAULT = 0.4
     EMOJI_SCORE_DEFAULT = 0.3

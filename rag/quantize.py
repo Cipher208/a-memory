@@ -47,6 +47,7 @@ def embed_to_binary(
 
     Returns:
         packed bits, MSB-first. Length = _packed_bytes(dim).
+
     """
     _check_numpy()
     arr = np.asarray(emb, dtype=np.float32)
@@ -71,6 +72,7 @@ def supervised_threshold(
 
     Returns:
         np.ndarray of length dim — thresholds t_i.
+
     """
     _check_numpy()
     pos_pairs = list(pos_pairs)

@@ -4,9 +4,7 @@ from .base_signal import IImportanceSignal
 
 
 class RetrievalSignal(IImportanceSignal):
-    """
-    Signal based on retrieval frequency.
-    """
+    """Signal based on retrieval frequency."""
 
     def calculate(self, text: str, context: dict[str, Any]) -> float:
         retrieval_count = context.get("retrieval_count", 0)

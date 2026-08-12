@@ -4,9 +4,7 @@ from .base_signal import IImportanceSignal
 
 
 class BaseSignal(IImportanceSignal):
-    """
-    Signal based on MemoryKind policy.
-    """
+    """Signal based on MemoryKind policy."""
 
     def calculate(self, text: str, context: dict[str, Any]) -> float:
         kind = context.get("kind")

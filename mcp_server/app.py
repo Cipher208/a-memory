@@ -1,5 +1,4 @@
-"""
-FastMCP Application Factory and Route Orchestrator.
+"""FastMCP Application Factory and Route Orchestrator.
 
 Decomposes the server logic into a Starlette-based application structure,
 managing API endpoints, health checks, and dashboard rendering.

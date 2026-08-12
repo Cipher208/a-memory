@@ -1,5 +1,4 @@
-"""
-SQLite Connection Manager — Thread-safe, platform-aware async I/O.
+"""SQLite Connection Manager — Thread-safe, platform-aware async I/O.
 
 Ensures singleton connections per database file with optimized
 concurrency settings (WAL mode, busy_timeout) for VPS environments.

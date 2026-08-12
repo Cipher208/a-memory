@@ -1,6 +1,4 @@
-"""
-Hooks Module - 24 hooks (12 user + 12 agent)
-"""
+"""Hooks Module - 24 hooks (12 user + 12 agent)."""
 
 from .agent_hooks import AgentHooks
 from .loader import load_all_hooks

@@ -1,6 +1,4 @@
-"""
-Wiki Module — .md files as source of truth + SQLite FTS5 index
-"""
+"""Wiki Module — .md files as source of truth + SQLite FTS5 index."""
 
 from .index import WikiIndex
 from .manager import ALL_AGENT_TYPES, ALL_USER_TYPES, WikiManager

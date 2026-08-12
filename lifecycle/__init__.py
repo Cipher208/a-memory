@@ -1,6 +1,4 @@
-"""
-Lifecycle Module - forgetting, emotion trigger, consolidation
-"""
+"""Lifecycle Module - forgetting, emotion trigger, consolidation."""
 
 from .consolidation import ConsolidationEngine
 from .emotion import EmotionTrigger, EmotionEngine

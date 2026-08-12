@@ -1,4 +1,4 @@
-"""init_v8_schema
+"""init_v8_schema.
 
 Revision ID: a38d67fcd99e
 Revises:

@@ -76,8 +76,7 @@ async def _consolidation_rollback(ctx: dict[str, Any]) -> None:
 
 
 def create_consolidation_saga(user_id: str, mm: Any) -> list[SagaStep]:
-    """
-    Returns steps for the memory consolidation saga.
+    """Returns steps for the memory consolidation saga.
     Logic: Gather (L1) -> Distill (Filter) -> Promote (L2).
     Compensation: Rollback promoted items (forget).
     """

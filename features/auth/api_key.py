@@ -29,8 +29,7 @@ class APIKeyAuth:
         return key
 
     def verify(self, key: str) -> dict[str, Any] | None:
-        """
-        Check key validity and enabled status.
+        """Check key validity and enabled status.
         Update last_used timestamp and save() on success.
         Return {"user_id": ..., "label": ...}.
         """

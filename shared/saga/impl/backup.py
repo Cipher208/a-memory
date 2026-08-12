@@ -79,8 +79,7 @@ async def _backup_compensate(ctx: dict[str, Any]) -> None:
 
 
 def create_backup_saga() -> list[SagaStep]:
-    """
-    Returns steps for the database backup saga.
+    """Returns steps for the database backup saga.
     Logic: Copy DB file -> Verify existence.
     Compensation: Delete backup dir on failure.
     """

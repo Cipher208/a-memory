@@ -1,4 +1,4 @@
-"""add_audit_log_index_and_optimize
+"""add_audit_log_index_and_optimize.
 
 Revision ID: 4f9d5ab34719
 Revises: a38d67fcd99e

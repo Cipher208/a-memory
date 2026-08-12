@@ -1,6 +1,4 @@
-"""
-Agent Layer Hooks - 12 hooks for agent identity events
-"""
+"""Agent Layer Hooks - 12 hooks for agent identity events."""
 
 import logging
 from typing import Any

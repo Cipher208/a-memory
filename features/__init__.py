@@ -1,6 +1,4 @@
-"""
-Features Module - import/export, backup, compression, audit, rate limiting, dashboard
-"""
+"""Features Module - import/export, backup, compression, audit, rate limiting, dashboard."""
 
 from .audit_trail import AuditTrail
 from .backup import BackupManager

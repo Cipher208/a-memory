@@ -1,6 +1,4 @@
-"""
-Shared Module - connection manager, cache, embeddings, metrics, saga, middleware, dream buffer, archived memories, migrations, read-only replica
-"""
+"""Shared Module - connection manager, cache, embeddings, metrics, saga, middleware, dream buffer, archived memories, migrations, read-only replica."""
 
 from .archived_memories import ArchivedMemories
 from .cache import MemoryCache

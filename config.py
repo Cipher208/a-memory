@@ -1,5 +1,4 @@
-"""
-Global Configuration Management for Ariel-Memory.
+"""Global Configuration Management for Ariel-Memory.
 
 Handles environment-based settings, feature flags, and hook orchestration
 using a singleton pattern to ensure consistent state across the server.

@@ -73,7 +73,8 @@ class ForgettingSystem:
 
     async def archive_old_entries(self) -> int:
         """Type-aware archive: instruction/rule/commitment never archived.
-        Goal/todo/commitment archived by expires_at. Others by age + importance."""
+        Goal/todo/commitment archived by expires_at. Others by age + importance.
+        """
         try:
             conn = await self._cm.get(DB_NAME)
             now = time.time()

@@ -36,6 +36,7 @@ class MultiSourceRAG:
             include_rag: Include RAG results (default True)
             include_wiki: Include Wiki results (default True)
             strategy: RAG search strategy (fts, mib, hybrid, auto)
+
         """
         results: list[dict[str, Any]] = []
 

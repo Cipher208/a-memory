@@ -155,6 +155,7 @@ class Scorer:
         Args:
             feedback: dict with keys 'relevance', 'novelty', 'type_boost'
                      and float values (higher = more important).
+
         """
         if "relevance" in feedback:
             self.weights = ScoringWeights(

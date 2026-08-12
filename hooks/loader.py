@@ -1,6 +1,4 @@
-"""
-Hook Loader - triggers decorator-based registration by importing hook modules.
-"""
+"""Hook Loader - triggers decorator-based registration by importing hook modules."""
 
 
 def load_all_hooks() -> None:
