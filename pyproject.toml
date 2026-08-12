@@ -185,12 +185,7 @@ strict = true
 [[tool.mypy.overrides]]
 module = [
     "yaml.*",
-    "pynacl.*",
-    "nacl.*",
-    "prometheus_client.*",
-    "aiosqlite.*",
     "alembic.*",
-    "mcp.*",
     "keyring.*",
     "sentence_transformers.*",
 ]
