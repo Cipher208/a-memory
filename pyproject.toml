@@ -192,6 +192,7 @@ module = [
     "alembic.*",
     "mcp.*",
     "keyring.*",
+    "sentence_transformers.*",
 ]
 ignore_missing_imports = true
 
