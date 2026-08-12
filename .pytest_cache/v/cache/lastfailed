@@ -74,5 +74,6 @@
   "tests/test_hypothesis.py::TestImportanceGateLogic::test_high_importance_allowed": true,
   "tests/test_hypothesis.py::TestImportanceGateLogic::test_non_matching_tool_passes": true,
   "tests/test_hypothesis.py::TestRateLimiterLogic::test_allows_under_limit": true,
-  "tests/test_hypothesis.py::TestRateLimiterLogic::test_stats_tracks_requests": true
+  "tests/test_hypothesis.py::TestRateLimiterLogic::test_stats_tracks_requests": true,
+  "tests/test_infra_overhaul.py": true
 }

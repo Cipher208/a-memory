@@ -148,7 +148,6 @@ ignore = [
     "RUF012",   # mutable-class-default (standard in pydantic/legacy)
     "PLW2901",  # loop-variable-overwritten (noisy)
     "RUF006",   # asyncio-task-no-reference (noisy in this setup)
-    "ASYNC240", # blocking-path-method-in-async-function (legacy)
     "S324",     # hashlib-insecure-hash-function (used for cache)
     "DTZ005",   # datetime-now-without-tz (legacy)
     "PTH",      # pathlib-recommendations (legacy)
@@ -162,7 +161,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"tests/*" = ["S101", "ANN", "D", "SLF001", "PLR", "ARG", "FBT", "PT", "B011", "B023", "B904", "RET504", "TRY", "EM", "S", "PLW", "PLR"]
+"tests/*" = ["S101", "ANN", "D", "SLF001", "PLR", "ARG", "FBT", "PT", "B011", "B023", "B904", "RET504", "TRY", "EM", "S", "PLW", "PLR", "ASYNC240"]
 
 [tool.mypy]
 python_version = "3.12"

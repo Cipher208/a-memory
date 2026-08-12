@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, cast, TYPE_CHECKING
 
 from shared.constants import (
     UTF8,
@@ -504,7 +504,8 @@ class SagaWatchdog:
 
     def _read_state_safe(self, state_file: Path) -> dict[str, Any]:
         blob = state_file.read_bytes()
-        return decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
+        res: Any = decrypt_json(blob) if _HAS_ENCRYPTION and is_encrypted_blob(state_file) else json.loads(blob.decode(UTF8))
+        return cast("dict[str, Any]", res)
 
     def _is_stuck_candidate(self, state: dict[str, Any]) -> bool:
         return state.get("status") in (STATUS_STUCK, STATUS_FAILED, STATUS_RUNNING)

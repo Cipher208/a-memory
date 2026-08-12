@@ -144,7 +144,8 @@ def _find_best_threshold_for_dim(
         max(col_pos_a.max(), col_pos_b.max()),
         n_candidates,
     )
-    best_t, best_score = candidates[0], -1.0
+    best_t: float = float(candidates[0])
+    best_score = -1.0
 
     for t in candidates:
         agree_pos = ((col_pos_a > t) == (col_pos_b > t)).mean()
@@ -152,10 +153,10 @@ def _find_best_threshold_for_dim(
         if col_neg_a is not None and col_neg_b is not None:
             agree_neg = 1.0 - ((col_neg_a > t) == (col_neg_b > t)).mean()
 
-        score = 0.7 * agree_pos + 0.3 * agree_neg
+        score = float(0.7 * agree_pos + 0.3 * agree_neg)
         if score > best_score:
             best_score = score
-            best_t = t
+            best_t = float(t)
     return best_t
 
 

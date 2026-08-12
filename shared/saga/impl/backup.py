@@ -1,6 +1,7 @@
 import shutil
 import time
 import logging
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -14,17 +15,26 @@ async def _backup_copy_db(ctx: dict[str, Any]) -> dict[str, Any]:
     """Copy the main database file to a new backup directory."""
     base = Path.home() / ".mcp-ariel-memory"
     backup_root = base / "backups"
-    backup_root.mkdir(parents=True, exist_ok=True)
 
-    timestamp = int(time.time())
-    backup_dir = backup_root / f"backup_{timestamp}"
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    def _prepare_dirs() -> Path:
+        backup_root.mkdir(parents=True, exist_ok=True)
+        timestamp = int(time.time())
+        b_dir = backup_root / f"backup_{timestamp}"
+        b_dir.mkdir(parents=True, exist_ok=True)
+        return b_dir
 
+    backup_dir = await asyncio.to_thread(_prepare_dirs)
     src = base / DB_NAME
-    if src.exists():
-        dest = backup_dir / DB_NAME
-        shutil.copy2(src, dest)
-        logger.info(f"Database backed up to {dest}")
+
+    def _copy() -> bool:
+        if src.exists():
+            dest = backup_dir / DB_NAME
+            shutil.copy2(src, dest)
+            return True
+        return False
+
+    if await asyncio.to_thread(_copy):
+        logger.info(f"Database backed up to {backup_dir / DB_NAME}")
         ctx["backup_path"] = str(backup_dir)
         return {"backup_path": str(backup_dir), "status": "copied"}
 
@@ -41,8 +51,15 @@ async def _backup_verify(ctx: dict[str, Any]) -> dict[str, Any]:
     backup_path = Path(backup_path_str)
     db_file = backup_path / DB_NAME
 
-    if db_file.exists() and db_file.stat().st_size > 0:
-        return {"verified": True, "size": db_file.stat().st_size}
+    def _check() -> tuple[bool, int]:
+        if db_file.exists():
+            size = db_file.stat().st_size
+            return size > 0, int(size)
+        return False, 0
+
+    exists, size = await asyncio.to_thread(_check)
+    if exists:
+        return {"verified": True, "size": size}
 
     return {"verified": False, "reason": "file_missing_or_empty"}
 
@@ -52,9 +69,13 @@ async def _backup_compensate(ctx: dict[str, Any]) -> None:
     backup_path_str = ctx.get("backup_path")
     if backup_path_str:
         backup_path = Path(backup_path_str)
-        if backup_path.exists():
-            shutil.rmtree(backup_path)
-            logger.info(f"Backup directory {backup_path} removed during compensation")
+
+        def _cleanup() -> None:
+            if backup_path.exists():
+                shutil.rmtree(backup_path)
+
+        await asyncio.to_thread(_cleanup)
+        logger.info(f"Backup directory {backup_path} removed during compensation")
 
 
 def create_backup_saga() -> list[SagaStep]:

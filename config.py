@@ -11,6 +11,7 @@ import yaml
 
 class Config:
     _instance: Self | None = None
+    _data: dict[str, Any] = {}
 
     def __new__(cls) -> Self:
         if cls._instance is None:

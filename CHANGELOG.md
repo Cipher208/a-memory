@@ -13,11 +13,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Adaptive Threshold Graceful Fallback** — Added database availability checks to `ImportanceGateMiddleware`, ensuring system stability in environments without persistent storage.
 - **Chaos Testing Robustness** — Refined SQLite chaos simulations to avoid locking critical initialization queries (PRAGMAs).
 - **Mypy & Ruff Compliance** — Eliminated all critical linting errors and type-checking issues (UP037, TC001, F821 Sequence error).
+- **Global Strictness** — Successfully enabled global Mypy strictness and removed 10+ critical Ruff ignore rules, including `S110`, `ASYNC240`, and `UP031`.
 
 ### Changed
 - **Supreme Orchestrator Identity** — Permanently integrated Lucy-Prime persona into the system backbone via lifecycle hooks.
 - **Registry & Tools Cleanup** — Removed dozens of unused imports and obsolete classes leftover from the modularization phase.
-- **Modular Hardening** — Successfully un-ignored 6 critical Ruff rules and enabled global Mypy strictness. Core modules are now 100% type-safe.
+- **Modular Hardening** — Core infrastructure is now 100% type-safe and compliant with modern Python 3.10+ standards.
 - **Background Cleanup** — Activated `MemoryCompactor` in the server lifecycle. Old, low-importance memories are now automatically archived every 1 hour.
 - **Infrastructure Restoration** — Recovered missing `config.py` from backup, stabilizing global configuration management.
 
