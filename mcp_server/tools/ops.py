@@ -4,6 +4,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from mcp.server.fastmcp import Context
+
 from mcp_server.models import (
     StatsResult,
     ContextResult,
@@ -32,8 +34,6 @@ from .base import (
     DEFAULT_TOKEN_BUDGET,
 )
 
-if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
 
 
 async def memory_stats(

@@ -5,6 +5,8 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Literal
 
+from mcp.server.fastmcp import Context
+
 from mcp_server.models import ThinkResult, DreamResult, ForgetResult, EvolveResult, ProjectResult
 from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
@@ -22,9 +24,8 @@ from .base import (
     DEFAULT_TOKEN_BUDGET,
 )
 
-if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
-    from mcp_server.context import AppContext
+from mcp.server.fastmcp import Context
+from mcp_server.context import AppContext
 
 logger = logging.getLogger(__name__)
 

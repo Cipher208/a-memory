@@ -8,8 +8,8 @@ from shared.metrics import metrics
 from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache, _fire_hook
 from typing import TYPE_CHECKING, Any
 
-if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
+from mcp.server.fastmcp import Context
+
 
 
 async def memory_episode_save(

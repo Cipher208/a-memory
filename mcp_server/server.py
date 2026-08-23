@@ -24,6 +24,7 @@ STDIO_TRANSPORT: Literal["stdio"] = "stdio"
 
 
 def _register_all_tools() -> None:
+    import mcp_server.tools_layer  # noqa: F401 — populates the tool registry
     from mcp_server.registry import get_all_tools
 
     for name, func in get_all_tools().items():
