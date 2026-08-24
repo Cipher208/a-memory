@@ -29,16 +29,3 @@ def strip_secrets(text: str, replacement: str = "[REDACTED]") -> str:
     for pattern in _CREDENTIAL_PATTERNS:
         result = pattern.sub(replacement, result)
     return result
-
-
-def has_secrets(text: str) -> bool:
-    if not text:
-        return False
-    return any(pattern.search(text) for pattern in _CREDENTIAL_PATTERNS)
-
-
-def get_redacted_preview(text: str, max_length: int = 100) -> str:
-    redacted = strip_secrets(text)
-    if len(redacted) > max_length:
-        return redacted[:max_length] + "..."
-    return redacted

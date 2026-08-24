@@ -137,10 +137,6 @@ def _get_wiki(app: AppContext, layer: str) -> WikiManager:
     return get_layer(layer).wiki(app)
 
 
-def _get_hooks(app: AppContext, layer: str) -> AgentHooks | UserHooks:
-    return get_layer(layer).hooks(app)
-
-
 def _get_rag(app: AppContext, layer: str) -> Any:
     return get_layer(layer).rag(app)
 

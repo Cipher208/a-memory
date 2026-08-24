@@ -133,16 +133,6 @@ class ConflictResolver:
             "similarity": similarity,
         }
 
-    async def get_conflicts(self, conflict_group_id: str) -> list[dict[str, Any]]:
-        await self._init_db()
-        conn = await self._cm.get(DB_NAME)
-        cur = await conn.execute(
-            "SELECT id, content, created_at FROM memory_conflicts WHERE conflict_group_id=? ORDER BY created_at DESC",
-            (conflict_group_id,),
-        )
-        rows = await cur.fetchall()
-        return [{"id": r[0], "content": r[1], "created_at": r[2]} for r in rows]
-
     async def resolve(self, conflict_group_id: str, keep_id: int) -> bool:
         """B3: Archive deleted conflicts before removal, add audit trail."""
         await self._init_db()

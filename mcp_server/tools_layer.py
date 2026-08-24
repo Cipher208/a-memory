@@ -32,13 +32,6 @@ from .tools.ops import (
 from .tools.base import _fire_hook  # noqa: F401
 
 
-# For tests that monkeypatch tl._fire_hook
-def _fire_hook_wrapper(*args: Any, **kwargs: Any) -> Any:
-    from .tools import base
-
-    return base._fire_hook(*args, **kwargs)
-
-
 # Register all layer tools
 _register_tools: dict[str, Any] = {
     "memory_remember": memory_remember,

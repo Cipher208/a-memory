@@ -15,7 +15,6 @@ AGENT_LAYER = "agent"
 
 # Sagas
 SAGA_DIR_NAME = "sagas"
-SAGA_EXT = ".json"
 STATUS_STUCK = "stuck"
 STATUS_RUNNING = "running"
 STATUS_COMPLETED = "completed"
@@ -27,8 +26,6 @@ STATUS_COMPENSATED = "compensated"
 METRIC_TOOL_CALLS = "tool_calls"
 
 # Wiki
-WIKI_DIR_NAME = "wiki"
-WIKI_TYPE_GENERAL = "general"
 
 # Files & Backups
 MANIFEST_FILE = "manifest.json"
@@ -38,4 +35,3 @@ UTF8 = "utf-8"
 # Tooling
 METRIC_TOOL_CALLS = "tool_calls"
 DEFAULT_USER = "default"
-USER_ID_KEY = "user_id"

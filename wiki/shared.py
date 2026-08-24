@@ -5,7 +5,6 @@ Shared wiki utilities — config loading, type helpers, query builders.
 Eliminates duplication across agent_wiki, file_wiki, user_wiki.
 """
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -40,14 +39,3 @@ def get_external_dirs(layer: str) -> list[str]:
     layer_cfg: dict[str, Any] = wiki_cfg.get(layer, {})
     res: Any = layer_cfg.get("external_dirs", [])
     return [str(x) for x in res] if isinstance(res, list) else []
-
-
-ALLOWED_TABLES = {"user_wiki", "agent_wiki", "wiki_index"}
-
-
-def parse_tags(raw_tags: Any) -> list[str]:
-    """Parse tags from JSON string or list."""
-    if isinstance(raw_tags, str):
-        res: Any = json.loads(raw_tags) if raw_tags else []
-        return [str(x) for x in res] if isinstance(res, list) else []
-    return [str(x) for x in raw_tags] if isinstance(raw_tags, list) else []
