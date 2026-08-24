@@ -68,7 +68,7 @@ async def test_dream_hook_stages_into_buffer(tmp_path):
 
     async def spy(hook_name, layer, context, mem=None):
         out = await hook_registry.fire(hook_name, layer, context, mem=mem)
-        fired[hook_name] = {"out": out, "mem_cm": getattr(mem, "_cm", None)}
+        fired[hook_name] = {"out": out, "mem_cm": str(getattr(mem, "_cm", None))}
         return out
 
     import mcp_server.tools.primitives as prim
@@ -87,7 +87,10 @@ async def test_dream_hook_stages_into_buffer(tmp_path):
 
     buf = DreamBuffer(cm=cm, layer="user")
     items = await buf.get_staging("du")
-    assert len(items) == 1 and "v2" in items[0]["content"], f"staged={items}"
+    assert len(items) == 1 and "v2" in items[0]["content"], (
+        f"staged={items} | out={fired['dream_buffer']['out'] if 'dream_buffer' in fired else list(fired)} | "
+        f"mem_cm={fired.get('dream_buffer', {}).get('mem_cm')}"
+    )
     assert "v2" in items[0]["content"]
 
     agent_buf = DreamBuffer(cm=cm, layer="agent")
