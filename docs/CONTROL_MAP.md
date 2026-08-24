@@ -1,5 +1,15 @@
 # Control Map & Config Audit — mcp-ariel-memory
 
+> **UPDATE 2026-08-24 (59c798a):** the audit below triggered a config rework.
+> `MCP_CONFIG_PATH` now enables per-agent configs; formerly-dead sections
+> embeddings/binary/typed_memory(TTL)/forgetting.consolidate_weight_threshold/
+> performance.wal_mode/logging/dashboard/layers-gate/cors are WIRED and live.
+> Hooks: yaml is the single source (known_hooks duplicate removed).
+> Phantom keys removed: webhooks, cross_user_learning, versioning,
+> features.auth, api_keys_enabled, rag fts/vec flags, graph temporal/epistemic.
+> Section table below kept as the historical audit record; live-status column
+> is superseded by this banner for the listed sections.
+
 _Audited 2026-08-24 against master @ c2c7c19. Every claim verified by grep over consumers._
 
 ## 1. Control planes (who controls what)
