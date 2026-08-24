@@ -5,6 +5,8 @@ import hashlib
 import logging
 import re
 import time
+from collections.abc import Callable  # noqa: TC003 — runtime dataclass field types
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -83,38 +85,72 @@ def _truncate_to_budget(text: str, max_tokens: int) -> tuple[str, bool]:
     return truncated, True
 
 
+# ── Layer registry ──
+# A layer is one bundle of backends. Primitives and tools never branch on
+# layer names; a new layer (skill, tool, persona-graph) registers here once
+# and every tool/primitive accepts it immediately.
+@dataclass(frozen=True)
+class LayerBinding:
+    memory: Callable[[AppContext, str], Any]  # (app, user_id) -> MemoryManager (L3 + L4)
+    graph: Callable[[AppContext], EpistemicGraph]
+    wiki: Callable[[AppContext], WikiManager]
+    hooks: Callable[[AppContext], AgentHooks | UserHooks]
+    rag: Callable[[AppContext], Any]  # hybrid multi-RAG for dream/audit
+
+
+_LAYER_BINDINGS: dict[str, LayerBinding] = {
+    "user": LayerBinding(
+        memory=lambda app, uid: app.mm.user_memory(uid),
+        graph=lambda app: app.user_graph,
+        wiki=lambda app: app.user_wiki,
+        hooks=lambda app: app.user_hooks,
+        rag=lambda app: app.user_multi,
+    ),
+    "agent": LayerBinding(
+        memory=lambda app, uid: app.mm.agent_memory(uid),
+        graph=lambda app: app.agent_graph,
+        wiki=lambda app: app.agent_wiki,
+        hooks=lambda app: app.agent_hooks,
+        rag=lambda app: app.agent_multi,
+    ),
+}
+
+
+def register_layer(name: str, binding: LayerBinding) -> None:
+    """Add a new memory layer. All tools and primitives accept it right away."""
+    _LAYER_BINDINGS[name.lower()] = binding
+
+
+def get_layer(name: str) -> LayerBinding:
+    return _LAYER_BINDINGS[_validate_layer(name)]
+
+
 def _get_memory(app: AppContext, layer: str, user_id: str) -> Any:
-    if layer == "agent":
-        return app.mm.agent_memory(user_id)
-    return app.mm.user_memory(user_id)
+    return get_layer(layer).memory(app, user_id)
 
 
 def _get_graph(app: AppContext, layer: str) -> EpistemicGraph:
-    if layer == "agent":
-        return app.agent_graph
-    return app.user_graph
+    return get_layer(layer).graph(app)
 
 
 def _get_wiki(app: AppContext, layer: str) -> WikiManager:
-    if layer == "agent":
-        return app.agent_wiki
-    return app.user_wiki
+    return get_layer(layer).wiki(app)
 
 
 def _get_hooks(app: AppContext, layer: str) -> AgentHooks | UserHooks:
-    if layer == "agent":
-        return app.agent_hooks
-    return app.user_hooks
+    return get_layer(layer).hooks(app)
 
 
-_VALID_LAYERS = ("user", "agent")
+def _get_rag(app: AppContext, layer: str) -> Any:
+    return get_layer(layer).rag(app)
 
 
 def _validate_layer(layer: str) -> str:
-    """Validate and normalize layer parameter."""
-    if layer not in _VALID_LAYERS:
-        raise ValueError(f"Invalid layer: {layer!r}. Must be one of {_VALID_LAYERS}")
-    return layer
+    """Validate and normalize layer parameter against the layer registry."""
+    normalized = (layer or "").strip().lower()
+    if normalized not in _LAYER_BINDINGS:
+        raise ValueError(f"Invalid layer: {layer!r}. Must be one of {tuple(_LAYER_BINDINGS)}")
+    return normalized
 
 
 async def _fire_hook(hook_name: str, layer: str, context: dict[str, Any], mem: Any = None) -> dict[str, Any]:

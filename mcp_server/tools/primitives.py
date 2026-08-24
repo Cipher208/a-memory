@@ -18,6 +18,7 @@ from .base import (
     _get_memory,
     _get_graph,
     _get_wiki,
+    _get_rag,
     _fire_hook,
     _truncate_to_budget,
     _invalidate_cache,
@@ -30,6 +31,27 @@ from mcp.server.mcpserver import Context  # noqa: TC002
 from mcp_server.context import AppContext  # noqa: TC001
 
 logger = logging.getLogger(__name__)
+
+# Auto-routing signals. Agent layer stores identity/decisions/errors/personality
+# (first-person agent voice); user layer stores facts ABOUT the user.
+_AGENT_SIGNALS = re.compile(
+    r"\b(i|we)\s+(decided|choose|chose|prefer|fixed|broke|learned|mistook|failed|solved)\b"
+    r"|\b(my|our)\s+(personality|style|approach|rule|policy)\b"
+    r"|\b(decision_log|error_analysis|mistake|lesson_learned)\b",
+    re.IGNORECASE,
+)
+_USER_SIGNALS = re.compile(
+    r"\b(user|he|she|they|(?:mr|mrs|ms)?\.?\s?[A-Z][a-z]+)\s+(likes?|prefers?|wants?|hates?|said|asked|is)\b"
+    r"|\b(the user)'?s?\b",
+    re.IGNORECASE,
+)
+
+
+def _auto_route(text: str) -> str:
+    """Route auto-layer thoughts: agent-voice content → agent, user facts → user."""
+    agent_score = len(_AGENT_SIGNALS.findall(text))
+    user_score = len(_USER_SIGNALS.findall(text))
+    return "agent" if agent_score > user_score else "user"
 
 
 async def think(
@@ -53,9 +75,9 @@ async def think(
     importance = scorer_result.score
 
     # 3. Layer Resolution
-    resolved_layer = layer
+    resolved_layer: str = layer
     if layer == "auto":
-        resolved_layer = "user"
+        resolved_layer = _auto_route(text)
 
     _validate_layer(resolved_layer)
 
@@ -137,7 +159,7 @@ async def dream(
     _validate_layer(layer)
 
     # 1. Hybrid Search
-    multi_rag = app.agent_multi if layer == "agent" else app.user_multi
+    multi_rag = _get_rag(app, layer)
     results = await multi_rag.search(query, user_id=user_id, limit=limit, intent=intent)
 
     # 2. Context Construction
@@ -286,9 +308,10 @@ async def forget(
             _purge_table(graph._cm, "epi_nodes", user_id, cutoff),
             _purge_staging(user_id),
         )
+        # gather order: [l4, l3, graph, staging]
         archived_l4 = results[0]
         archived_l3 = results[1]
-        archived_graph = results[3]
+        archived_graph = results[2]
 
     _invalidate_cache(layer, user_id)
     return ForgetResult(deleted_l4=archived_l4, deleted_l3=archived_l3, deleted_graph=archived_graph).dict()
@@ -380,7 +403,7 @@ async def project(
             status_res = "not_found"
     elif action == "audit":
         # 1. Gather Context
-        multi_rag = app.agent_multi if layer == "agent" else app.user_multi
+        multi_rag = _get_rag(app, layer)
         context_results = await multi_rag.search(name, user_id=user_id, limit=20, intent="balanced")
 
         # 2. Gap Analysis

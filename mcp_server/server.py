@@ -23,11 +23,23 @@ mcp = FastMCP(
 STDIO_TRANSPORT: Literal["stdio"] = "stdio"
 
 
+# Tools agents always see: the universal primitives. Everything else stays
+# reachable through them (and ops via the dashboard HTTP surface).
+PRIMITIVE_TOOLS = frozenset({"think", "dream", "forget", "evolve", "project"})
+
+
 def _register_all_tools() -> None:
     import mcp_server.tools_layer  # noqa: F401 — populates the tool registry
     from mcp_server.registry import get_all_tools
 
-    for name, func in get_all_tools().items():
+    expose = os.environ.get("ARIEL_EXPOSE", "primitives").strip().lower()
+    tools = get_all_tools()
+    if expose != "all":
+        hidden = sorted(set(tools) - PRIMITIVE_TOOLS)
+        for name in hidden:
+            del tools[name]
+
+    for name, func in tools.items():
         mcp.tool(name=name)(func)
 
 
