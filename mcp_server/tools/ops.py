@@ -6,7 +6,7 @@ from typing import Any
 
 # Runtime import: FastMCP evaluates tool annotations at registration;
 # hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
-from mcp.server.fastmcp import Context  # noqa: TC002
+from mcp.server.mcpserver import Context  # noqa: TC002
 
 from mcp_server.models import (
     StatsResult,

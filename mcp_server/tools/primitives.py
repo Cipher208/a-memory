@@ -5,7 +5,7 @@ import asyncio
 import time
 from typing import Any, Literal
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 
 from mcp_server.models import ThinkResult, DreamResult, ForgetResult, EvolveResult, ProjectResult
 from mcp_server.registry import _get_ctx
@@ -26,7 +26,7 @@ from .base import (
 
 # Runtime imports: FastMCP evaluates tool annotations at registration;
 # hiding Context/AppContext under TYPE_CHECKING breaks tools/list (fix 419d577).
-from mcp.server.fastmcp import Context  # noqa: TC002
+from mcp.server.mcpserver import Context  # noqa: TC002
 from mcp_server.context import AppContext  # noqa: TC001
 
 logger = logging.getLogger(__name__)

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from typing import Any, Literal
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 # Ensure the root of the repo is in the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -58,9 +58,8 @@ def main() -> None:
             _run_with_dashboard(args.host, args.port)
         else:
             try:
-                mcp.settings.host = args.host
-                mcp.settings.port = args.port
-                mcp.run(transport="streamable-http")
+                # mcp 2.x: host/port are run() kwargs, not Settings fields
+                mcp.run(transport="streamable-http", host=args.host, port=args.port)
             except Exception:
                 logging.getLogger(__name__).exception("HTTP transport failed. Try with --dashboard flag.")
                 raise

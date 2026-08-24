@@ -8,7 +8,7 @@ Tools register themselves here. server.py pulls from here and applies @mcp.tool(
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import Context
+    from mcp.server.mcpserver import Context
     from collections.abc import Callable
 
 # if TYPE_CHECKING:

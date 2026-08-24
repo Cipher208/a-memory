@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from mcp_server.context import AppContext
 from shared.read_only import read_only_replica
 from features.backup_cron import backup_cron

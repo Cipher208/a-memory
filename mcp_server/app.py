@@ -6,7 +6,7 @@ managing API endpoints, health checks, and dashboard rendering.
 
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 from mcp_server.context import AppContext
 from mcp_server.middlewares import add_middlewares
