@@ -114,9 +114,7 @@ class CoreMemory:
         return kind_str, imp, exp
 
     async def _find_existing_id(self, conn: Any, layer: str, user_id: str, key: str) -> int | None:
-        cursor = await conn.execute(
-            "SELECT entry_id FROM core_memory WHERE layer=? AND user_id=? AND key=?", (layer, user_id, key)
-        )
+        cursor = await conn.execute("SELECT entry_id FROM core_memory WHERE layer=? AND user_id=? AND key=?", (layer, user_id, key))
         row = await cursor.fetchone()
         return int(row[0]) if row and row[0] is not None else None
 
@@ -143,9 +141,7 @@ class CoreMemory:
     async def get(self, user_id: str, key: str) -> CoreEntry | None:
         """Get a fact by key. Returns None if not found."""
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT * FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key)
-        )
+        cursor = await conn.execute("SELECT * FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
         row = await cursor.fetchone()
         return self._row_to_entry(row) if row else None
 
@@ -165,9 +161,7 @@ class CoreMemory:
 
     async def delete(self, user_id: str, key: str) -> bool:
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key)
-        )
+        cursor = await conn.execute("DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
         await conn.commit()
         return cursor.rowcount > 0
 
@@ -184,9 +178,7 @@ class CoreMemory:
     async def count(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         if user_id:
-            cursor = await conn.execute(
-                "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id)
-            )
+            cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id))
         else:
             cursor = await conn.execute("SELECT COUNT(*) FROM core_memory")
         row = await cursor.fetchone()
