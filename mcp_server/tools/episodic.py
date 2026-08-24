@@ -6,10 +6,11 @@ from shared.constants import DB_NAME
 from shared.metrics import metrics
 
 from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache, _fire_hook
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from mcp.server.fastmcp import Context
-
+# Runtime import: FastMCP evaluates tool annotations at registration;
+# hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
+from mcp.server.fastmcp import Context  # noqa: TC002
 
 
 async def memory_episode_save(

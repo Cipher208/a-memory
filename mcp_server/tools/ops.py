@@ -2,9 +2,11 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from mcp.server.fastmcp import Context
+# Runtime import: FastMCP evaluates tool annotations at registration;
+# hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
+from mcp.server.fastmcp import Context  # noqa: TC002
 
 from mcp_server.models import (
     StatsResult,
@@ -33,7 +35,6 @@ from .base import (
     _fire_hook,
     DEFAULT_TOKEN_BUDGET,
 )
-
 
 
 async def memory_stats(

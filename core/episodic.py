@@ -48,7 +48,7 @@ class EpisodicMemory:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "INSERT INTO episodes (user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, summary, emotional_weight, json.dumps(tags or [])),
+            (user_id, summary, emotional_weight, json.dumps(tags or []), time.time()),
         )
         await conn.commit()
         return int(cursor.lastrowid or 0)

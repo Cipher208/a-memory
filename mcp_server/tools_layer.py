@@ -29,6 +29,7 @@ from .tools.ops import (
 )
 
 # Re-export _fire_hook for backward compatibility and tests
+from .tools.base import _fire_hook  # noqa: F401
 
 
 # For tests that monkeypatch tl._fire_hook

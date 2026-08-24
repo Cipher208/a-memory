@@ -3,7 +3,7 @@ import re
 import logging
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from mcp.server.fastmcp import Context
 
@@ -24,8 +24,10 @@ from .base import (
     DEFAULT_TOKEN_BUDGET,
 )
 
-from mcp.server.fastmcp import Context
-from mcp_server.context import AppContext
+# Runtime imports: FastMCP evaluates tool annotations at registration;
+# hiding Context/AppContext under TYPE_CHECKING breaks tools/list (fix 419d577).
+from mcp.server.fastmcp import Context  # noqa: TC002
+from mcp_server.context import AppContext  # noqa: TC001
 
 logger = logging.getLogger(__name__)
 
