@@ -95,6 +95,51 @@ def test_register_layer_extends_every_resolver():
     del base._LAYER_BINDINGS["skill"]
 
 
+# ── manager delete APIs (backing forget primitive) ──
+
+
+@pytest.mark.asyncio
+async def test_episodic_delete_by_ids(tmp_path):
+    from core.episodic import EpisodicMemory
+    from shared.connection import AsyncConnectionManager
+
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    l3 = EpisodicMemory(cm=cm)
+    await l3._init_db()
+    id_a = await l3.save("u", "alpha")
+    id_b = await l3.save("u", "beta")
+    await l3.save("u", "gamma")
+
+    deleted = await l3.delete_by_ids([id_a, id_b])
+    assert deleted == 2
+    assert len(await l3.get_episodes("u")) == 1
+    assert await l3.delete_by_ids([]) == 0
+
+
+@pytest.mark.asyncio
+async def test_graph_find_and_delete_nodes(tmp_path):
+    from graph.epistemic import EpistemicGraph
+    from shared.connection import AsyncConnectionManager
+
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    g = EpistemicGraph(layer="user", cm=cm)
+    await g.init_db()
+    hit = await g.add_node("u", "secret plan details", "fact")
+    miss = await g.add_node("u", "unrelated note", "fact")
+    await g.add_edge(hit, miss, "related")
+
+    found = await g.find_nodes_matching("u", "%secret%")
+    assert [n.node_id for n in found] == [hit]
+
+    assert await g.delete_nodes([hit]) == 1
+    remaining = await g.count_nodes("u")
+    assert remaining == 1
+    # touching edge was cleaned too
+    neighbors = await g.get_neighbors(miss)
+    assert neighbors == []
+    assert await g.delete_nodes([]) == 0
+
+
 # ── helpers ──
 
 

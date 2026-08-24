@@ -127,6 +127,16 @@ class EpisodicMemory:
         row = await cursor.fetchone()
         return int(row["cnt"]) if row and row[0] is not None else 0
 
+    async def delete_by_ids(self, episode_ids: list[int]) -> int:
+        """Delete episodes by id. Returns the number of rows removed."""
+        if not episode_ids:
+            return 0
+        conn = await self._cm.get(DB_NAME)
+        placeholders = ",".join(["?"] * len(episode_ids))
+        cur = await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({placeholders})", tuple(episode_ids))
+        await conn.commit()
+        return int(cur.rowcount)
+
     def _row_to_episode(self, row: dict[str, Any] | Any) -> Episode:
         return Episode(
             episode_id=int(row["episode_id"]),

@@ -10,7 +10,6 @@ from mcp.server.mcpserver import Context
 from mcp_server.models import ThinkResult, DreamResult, ForgetResult, EvolveResult, ProjectResult
 from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
-from shared.constants import DB_NAME
 
 from .base import (
     _validate_layer,
@@ -252,48 +251,31 @@ async def forget(
 
         # 2. Search and Archive L3 (Episodic)
         episodes = await mem.l3.search(user_id, key, limit=10)
-        if episodes:
-            for e in episodes:
-                if shadow_bin:
-                    await am.archive(
-                        user_id=user_id,
-                        content=e.summary,
-                        memory_type="episode",
-                        importance=e.emotional_weight,
-                        original_id=e.episode_id,
-                        reason="forget_primitive_fuzzy_l3",
-                    )
-            conn = await mem.l3._cm.get(DB_NAME)
-            ids = [e.episode_id for e in episodes]
-            placeholders = ",".join(["?"] * len(ids))
-            cur = await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({placeholders})", tuple(ids))
-            archived_l3 = int(cur.rowcount)
-            await conn.commit()
+        for e in episodes:
+            if shadow_bin:
+                await am.archive(
+                    user_id=user_id,
+                    content=e.summary,
+                    memory_type="episode",
+                    importance=e.emotional_weight,
+                    original_id=e.episode_id,
+                    reason="forget_primitive_fuzzy_l3",
+                )
+        archived_l3 = await mem.l3.delete_by_ids([e.episode_id for e in episodes])
 
         # 3. Search and Archive Graph Nodes
-        conn = await graph._cm.get(DB_NAME)
-        cur = await conn.execute(
-            "SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE layer=? AND user_id=? AND content LIKE ?",
-            (layer, user_id, f"%{key}%"),
-        )
-        nodes = await cur.fetchall()
+        nodes = await graph.find_nodes_matching(user_id, f"%{key}%")
         for n in nodes:
             if shadow_bin:
                 await am.archive(
                     user_id=user_id,
-                    content=n["content"],
-                    memory_type=f"graph:{n['node_type']}",
-                    importance=n["confidence"],
-                    original_id=n["node_id"],
+                    content=n.content,
+                    memory_type=f"graph:{n.node_type}",
+                    importance=n.confidence,
+                    original_id=n.node_id,
                     reason="forget_primitive_fuzzy_graph",
                 )
-
-        cur = await conn.execute(
-            "DELETE FROM epi_nodes WHERE layer=? AND user_id=? AND content LIKE ?",
-            (layer, user_id, f"%{key}%"),
-        )
-        archived_graph = int(cur.rowcount)
-        await conn.commit()
+        archived_graph = await graph.delete_nodes([n.node_id for n in nodes])
 
     elif scope == "recent":
         # Purge last N minutes

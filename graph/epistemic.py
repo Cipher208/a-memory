@@ -218,6 +218,27 @@ class EpistemicGraph:
         row = await cur.fetchone()
         return row[0] if row else 0
 
+    async def find_nodes_matching(self, user_id: str, content_pattern: str, limit: int = 50) -> list[EpistemicNode]:
+        """Nodes in this layer whose content matches a SQL LIKE pattern."""
+        sql = "SELECT * FROM epi_nodes WHERE layer=? AND user_id=? AND content LIKE ? LIMIT ?"
+        return await self._query_nodes(sql, (self.layer, user_id, content_pattern, limit))
+
+    async def delete_nodes(self, node_ids: list[int]) -> int:
+        """Delete nodes by id along with their tags and touching edges."""
+        if not node_ids:
+            return 0
+        conn = await self._cm.get(DB_NAME)
+        placeholders = ",".join(["?"] * len(node_ids))
+        ids = tuple(node_ids)
+        await conn.execute(f"DELETE FROM epi_tags WHERE node_id IN ({placeholders})", ids)
+        await conn.execute(
+            f"DELETE FROM epi_edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+            ids + ids,
+        )
+        cur = await conn.execute(f"DELETE FROM epi_nodes WHERE node_id IN ({placeholders})", ids)
+        await conn.commit()
+        return int(cur.rowcount)
+
     def _row_to_node(self, row: dict[str, Any]) -> EpistemicNode:
         return EpistemicNode(
             node_id=int(row["node_id"]),
