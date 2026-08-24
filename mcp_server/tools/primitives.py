@@ -3,6 +3,7 @@ import re
 import logging
 import asyncio
 import time
+from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server.mcpserver import Context
@@ -327,16 +328,24 @@ async def evolve(
 
 
 async def project(
-    action: Literal["init", "update", "archive", "mapping", "audit"],
+    action: Literal["init", "update", "archive", "mapping", "audit", "decision", "recall"],
     name: str,
     details: str = "",
     role: str = "",
     status: str = "",
+    path: str = "",
+    decision: str = "",
+    outcome: str = "",
     layer: Literal["user", "agent"] = "user",
     user_id: str = "default",
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Universal Primitive: managing project-specific context and file mapping."""
+    """Universal Primitive: managing project-specific context and file mapping.
+
+    Projects are global (keyed by name). Structured data (identity,
+    decisions, artifact map, code index) lives in projects.db; large
+    documents go to the Wiki as project_spec pages.
+    """
     app: AppContext = _get_ctx(ctx)
     metrics.inc("tool_calls")
     metrics.inc("tool_project")
@@ -345,29 +354,71 @@ async def project(
     wiki = _get_wiki(app, layer)
     mem = _get_memory(app, layer, user_id)
 
-    path = None
-    audit_report = None
+    from core.projects import ProjectMemory
+
+    pm = ProjectMemory(cm=app.mm._cm)
+    await pm._init_db()
+
+    result_extra: dict[str, Any] = {}
+    wiki_path: str | None = None
+    audit_report: str | None = None
 
     if action == "init":
         # Create a new project page in Wiki under type project_spec
-        path = await wiki.add(wiki_type="project_spec", title=name, content=details)
+        wiki_path = await wiki.add(wiki_type="project_spec", title=name, content=details)
+        await pm.upsert_project(name, summary=details[:500], path=path)
+        result_extra["wiki_ref"] = wiki_path
         status_res = "ok"
     elif action == "update":
-        # Update existing project context
+        # Update existing project context + refresh the code map
         results = await wiki.index.search(name, limit=1)
         if results and results[0]["title"] == name:
             await wiki.update(file_path=results[0]["file_path"], content=details)
-            path = results[0]["file_path"]
+            wiki_path = results[0]["file_path"]
             status_res = "updated"
         else:
-            path = await wiki.add(wiki_type="project_spec", title=name, content=details)
+            wiki_path = await wiki.add(wiki_type="project_spec", title=name, content=details)
             status_res = "ok"
+        existing = await pm.get_project(name)
+        fs_path = path or str((existing or {}).get("path") or "")
+        await pm.upsert_project(name, summary=details[:500], status=status, path=fs_path)
+        result_extra["code_map"] = await _refresh_code_map(pm, name, fs_path)
     elif action == "mapping":
-        # Store file roles and statuses in project_spec
-        # Format: [name] mapping: role=X, status=Y
-        mapping_content = f"File: {name} | Role: {role} | Status: {status} | Details: {details}"
-        path = await wiki.add(wiki_type="project_spec", title=f"Map_{name}", content=mapping_content)
+        # name = PROJECT, details = artifact path. Registers the file in the
+        # project map (SQLite) with role/status, plus a Wiki page for notes.
+        mapping_content = f"File: {details} | Role: {role} | Status: {status}"
+        wiki_path = await wiki.add(wiki_type="project_spec", title=f"Map_{details or name}", content=mapping_content)
+        await pm.upsert_artifact(name, path=details or name, role=role, status=status, wiki_ref=wiki_path)
         status_res = "mapped"
+    elif action == "decision":
+        if not decision:
+            return ProjectResult(status="error", title=name, audit_report="decision text required").dict()
+        await pm.add_decision(name, decision=decision, rationale=details, outcome=outcome)
+        status_res = "decided"
+    elif action == "recall":
+        proj = await pm.get_project(name)
+        decisions = await pm.list_decisions(name)
+        artifacts = await pm.list_artifacts(name)
+        symbols_n = await pm.count_symbols(name)
+        audit_report = "\n".join(
+            [
+                f"Project: {name}",
+                f"Status: {(proj or {}).get('status', 'unknown')} | Summary: {(proj or {}).get('summary', '—')[:200]}",
+                f"Decisions ({len(decisions)}):",
+                *[f"  - [{d['created_at']:.0f}] {d['decision'][:100]} → {d['outcome'][:80]}" for d in decisions[:10]],
+                f"Artifacts: {len(artifacts)} tracked",
+                f"Code index: {symbols_n} symbols",
+            ]
+        )
+        result_extra.update(
+            {
+                "project": proj,
+                "decisions": decisions,
+                "artifacts": artifacts,
+                "code_symbols": symbols_n,
+            }
+        )
+        status_res = "recalled"
     elif action == "archive":
         # Move project memories to archive
         results = await wiki.index.search(name, limit=1)
@@ -387,7 +438,7 @@ async def project(
             path = "archived"
             status_res = "archived"
         else:
-            path = None
+            wiki_path = None
             status_res = "not_found"
     elif action == "audit":
         # 1. Gather Context
@@ -442,9 +493,43 @@ async def project(
 
         audit_report = "\n".join(verdicts)
         status_res = "audit"
-        path = None
+        wiki_path = None
     else:
         status_res = "error"
         path = None
 
-    return ProjectResult(status=status_res, title=name, path=path, audit_report=audit_report).dict()
+    return {**ProjectResult(status=status_res, title=name, path=wiki_path, audit_report=audit_report).dict(), **result_extra}
+
+
+async def _refresh_code_map(pm: Any, project_name: str, project_path: str) -> str:
+    """Refresh the code-symbol index via graphify.
+
+    Optional capability: if the binary is absent or the path is not a
+    code project, skip with a note.
+    """
+    import json
+    import shutil
+
+    if not project_path or not Path(project_path).is_dir():  # noqa: ASYNC240 — stat-only check
+        return "skipped: no local path"
+    if shutil.which("graphify") is None:
+        return "skipped: graphify not installed"
+
+    graph_file = Path(project_path) / "graphify-out" / "graph.json"
+    try:
+        cmd = ["graphify", "update", project_path, "--no-viz"] if graph_file.exists() else ["graphify", "extract", project_path]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=project_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=600)
+        if proc.returncode != 0 or not graph_file.exists():
+            return f"skipped: graphify exit {proc.returncode}"
+
+        graph = json.loads(graph_file.read_text(encoding="utf-8"))
+        indexed = await pm.replace_symbols(project_name, graph.get("nodes", []))
+        return f"ok: {indexed} symbols"
+    except Exception as e:
+        return f"skipped: {type(e).__name__}: {e}"
