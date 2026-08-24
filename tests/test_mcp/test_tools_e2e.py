@@ -102,16 +102,19 @@ async def test_remember_agent_full_flow(app):
 async def test_remember_triggers_hooks(app):
     ctx = _make_ctx(app)
     fired = set()
-    import mcp_server.tools_layer as tl
+    # Tool modules import _fire_hook from mcp_server.tools.base at module level,
+    # so patching tools_layer._fire_hook has no effect. The seam every caller
+    # routes through is hook_registry.fire.
+    from hooks.registry import hook_registry
 
-    orig = tl._fire_hook
+    orig = hook_registry.fire
 
     async def track(name, layer, ctx, mem=None):
         fired.add(name)
         return await orig(name, layer, ctx, mem=mem)
 
     with pytest.MonkeyPatch.context() as m:
-        m.setattr(tl, "_fire_hook", track)
+        m.setattr(hook_registry, "fire", track)
         await memory_remember(layer="user", user_id="eh", key="e_hk", value="test", importance=0.5, ctx=ctx)
     assert "message_received" in fired
     assert "emotion_trigger" in fired
@@ -147,7 +150,7 @@ async def test_forget_removes_data(app):
     ctx = _make_ctx(app)
     await memory_remember(layer="user", user_id="ef", key="e_tmp", value="temp", importance=0.5, ctx=ctx)
     result = await memory_forget(layer="user", user_id="ef", key="e_tmp", ctx=ctx)
-    assert result.get("deleted") is True
+    assert result.get("deleted_l4", 0) >= 1
     mem = app.mm.user_memory("ef")
     entry = await mem.l4.get("ef", "e_tmp")
     assert entry is None
@@ -294,16 +297,17 @@ async def test_hook_dispatch_all_tools(app):
     """Verify hooks fire through tool calls."""
     ctx = _make_ctx(app)
     fired = set()
-    import mcp_server.tools_layer as tl
+    # Patch the shared seam — see test_remember_triggers_hooks.
+    from hooks.registry import hook_registry
 
-    orig = tl._fire_hook
+    orig = hook_registry.fire
 
     async def track(name, layer, ctx, mem=None):
         fired.add(name)
         return await orig(name, layer, ctx, mem=mem)
 
     with pytest.MonkeyPatch.context() as m:
-        m.setattr(tl, "_fire_hook", track)
+        m.setattr(hook_registry, "fire", track)
 
         await memory_remember(layer="user", user_id="eha", key="e_hk2", value="hook test", importance=0.5, ctx=ctx)
 

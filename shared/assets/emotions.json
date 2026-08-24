@@ -1,0 +1,35 @@
+{
+  "markers": {
+    "love": ["люблю", "обожаю", "love", "adore", "dear", "любимая", "любимый"],
+    "joy": ["рад", "радость", "счастлив", "happy", "joy", "great", "отлично", "прекрасно"],
+    "gratitude": ["спасибо", "благодарю", "thanks", "thank you", "grateful"],
+    "anger": ["злюсь", "бесит", "angry", "furious", "ненавижу"],
+    "sadness": ["грустно", "печаль", "sad", "unfortunately", "сожалению"],
+    "fear": ["боюсь", "страшно", "afraid", "scared", "worried"],
+    "surprise": ["удивлён", "wow", "wow!", "ничего себе", "unexpectedly"],
+    "interest": ["интересно", "curious", "fascinating", "заинтригован"]
+  },
+  "phrases": [
+    {"pattern": "я тебя люблю", "emotion": "love", "score": 0.8, "lang": "ru"},
+    {"pattern": "ты дорог мне", "emotion": "love", "score": 0.8, "lang": "ru"},
+    {"pattern": "ты лучшая", "emotion": "love", "score": 0.7, "lang": "ru"},
+    {"pattern": "скучаю по тебе", "emotion": "love", "score": 0.8, "lang": "ru"},
+    {"pattern": "i love you", "emotion": "love", "score": 0.8, "lang": "en"},
+    {"pattern": "my dear", "emotion": "love", "score": 0.7, "lang": "en"},
+    {"pattern": "i miss you", "emotion": "love", "score": 0.8, "lang": "en"},
+    {"pattern": "you mean a lot to me", "emotion": "love", "score": 0.7, "lang": "en"},
+    {"pattern": "мне грустно", "emotion": "sadness", "score": 0.6, "lang": "ru"},
+    {"pattern": "i am sad", "emotion": "sadness", "score": 0.6, "lang": "en"},
+    {"pattern": "я счастлив", "emotion": "joy", "score": 0.7, "lang": "ru"},
+    {"pattern": "спасибо большое", "emotion": "gratitude", "score": 0.6, "lang": "ru"}
+  ],
+  "emojis": {
+    "love": ["❤️", "💕", "😘", "🥰"],
+    "joy": ["😄", "🎉", "😊", "🙌"],
+    "gratitude": ["🙏", "💐"],
+    "anger": ["😠", "😡", "🤬"],
+    "sadness": ["😢", "😞", "😭"],
+    "fear": ["😨", "😰"],
+    "surprise": ["😲", "😮", "😱"]
+  }
+}

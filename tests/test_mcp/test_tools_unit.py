@@ -97,7 +97,7 @@ async def test_forget():
     ctx, app = _make_ctx()
     app.mm.user_memory.return_value.forget = AsyncMock(return_value=True)
     result = await memory_forget(layer="user", user_id="u1", key="k", ctx=ctx)
-    assert result.get("deleted") is True
+    assert result.get("deleted_l4", 0) >= 1
 
 
 # ── memory_session_start/end ──

@@ -9,6 +9,6 @@ def test_compression():
     async def t():
         mc = MemoryCompressor()
         stats = await mc.get_stats("test_feat")
-        assert "core" in stats
+        assert "core_memory" in stats
 
     asyncio.run(t())
