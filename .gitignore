@@ -8,6 +8,7 @@ build/
 *.db
 *.json
 !pyproject.toml
+!shared/assets/*.json
 .mcp-ariel-memory/
 backups/
 exports/
