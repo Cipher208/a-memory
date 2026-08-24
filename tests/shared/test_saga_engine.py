@@ -1,4 +1,17 @@
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _pin_master_key(monkeypatch):
+    """Saga files are encrypted with the session master key; other tests may
+    clear/re-resolve the key cache mid-suite. Pin it so save/load always agree."""
+
+    monkeypatch.setenv("MCP_MASTER_KEY", "test-secret-for-unit-tests-only")
+    from features import secrets as _secrets
+
+    _secrets._master_cache.clear()
+
+
 import asyncio
 from unittest.mock import MagicMock
 from pathlib import Path

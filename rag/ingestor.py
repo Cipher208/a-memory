@@ -89,13 +89,22 @@ class RAGIngestor:
             row = await cursor.fetchone()
             page_id = int(row[0]) if row and row[0] is not None else 0
 
-            # Batch Insertion
-            chunk_data = []
-            for i, (text, bin_emb) in enumerate(zip(chunks_text, bin_embeddings, strict=False)):
-                chunk_data.append((page_id, i, text, bin_emb))
+            # Batch Insertion. Float blobs (dense embeddings) are kept only when
+            # rag.storage.keep_float_blobs is on — they exist for supervised
+            # threshold training; search runs purely on binary embeddings.
+            from config import config
+
+            keep_floats = bool(config.get("rag", "storage", "keep_float_blobs", default=True))
+            import numpy as np
+
+            def _row(i: int, text: str, bin_emb: bytes) -> tuple[int, int, str, bytes, bytes | None]:
+                float_blob = np.asarray(embeddings[i], dtype=np.float32).tobytes() if keep_floats else None
+                return (page_id, i, text, bin_emb, float_blob)
+
+            chunk_data = [_row(i, t, b) for i, (t, b) in enumerate(zip(chunks_text, bin_embeddings, strict=False))]
 
             await conn.executemany(
-                "INSERT INTO rag_chunks (page_id, chunk_index, content, bin_embedding) VALUES (?, ?, ?, ?)",
+                "INSERT INTO rag_chunks (page_id, chunk_index, content, bin_embedding, float_embedding) VALUES (?, ?, ?, ?, ?)",
                 chunk_data,
             )
             await conn.commit()

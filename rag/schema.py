@@ -29,7 +29,8 @@ async def init_rag_db(cm: AsyncConnectionManager, fts_available: bool) -> None:
             page_id INTEGER NOT NULL,
             chunk_index INTEGER NOT NULL,
             content TEXT NOT NULL,
-            bin_embedding BLOB
+            bin_embedding BLOB,
+            float_embedding BLOB
         );
         CREATE TABLE IF NOT EXISTS rag_relations (
             source_id INTEGER NOT NULL,
@@ -43,6 +44,12 @@ async def init_rag_db(cm: AsyncConnectionManager, fts_available: bool) -> None:
         CREATE INDEX IF NOT EXISTS idx_rag_chunks_page_idx ON rag_chunks(page_id, chunk_index);
         """,
     )
+    # Migration: float blobs for supervised threshold training (rag.storage.keep_float_blobs).
+    # Fresh DBs get the column above; existing ones via ALTER (duplicate → ignore).
+    with contextlib.suppress(Exception):
+        conn = await cm.get(DB_NAME)
+        await conn.execute("ALTER TABLE rag_chunks ADD COLUMN float_embedding BLOB")
+        await conn.commit()
 
     if fts_available:
         with contextlib.suppress(Exception):

@@ -64,6 +64,8 @@ forgetting:
 
 # === RAG ===
 rag:
+  storage:
+    keep_float_blobs: true   # dense embeddings kept for threshold training; false saves disk
   chunk_size: 500          # max chars per chunk (sliding window with overlap)
   chunk_overlap: 100       # overlap between consecutive chunks
   search_limit: 10         # default result count when caller omits limit

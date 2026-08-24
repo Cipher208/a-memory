@@ -1263,6 +1263,19 @@ class TestConnectionPoolLogic:
 class TestImportanceGateLogic:
     """Verify importance gate blocks/allows based on threshold."""
 
+    @pytest.fixture(autouse=True)
+    def _fresh_ema(self, monkeypatch):
+        """Hermetic EMA: the singleton persists via global DB and drifts with
+        the rest of the suite — pin it to the default and swallow saves."""
+        from shared.adaptive import adaptive_threshold
+
+        monkeypatch.setattr(adaptive_threshold, "_current_value", adaptive_threshold.DEFAULT_THRESHOLD)
+
+        async def _noop(_value: float) -> None:
+            return None
+
+        monkeypatch.setattr(adaptive_threshold, "_save", _noop)
+
     def test_low_importance_blocked(self):
         from shared.middleware import ImportanceGateMiddleware, MiddlewareContext
 
