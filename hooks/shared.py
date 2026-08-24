@@ -78,6 +78,24 @@ def retrieval_router(
     return resp
 
 
+async def dream_buffer_staging(
+    ctx: dict[str, Any],
+    user_id: str = DEFAULT_USER,
+    layer: str | None = None,
+    cm: Any | None = None,
+) -> dict[str, Any]:
+    """Stage dream output into DreamBuffer for the hourly consolidation sweep."""
+    from shared.dream_buffer import DreamBuffer
+
+    content = ctx.get("summary") or ctx.get("text") or ""
+    if not content:
+        return {"action": "dream_buffer_skip", "reason": "empty"}
+
+    buf = DreamBuffer(cm=cm, layer=layer or "user")
+    row_id = await buf.add(user_id=user_id, session_id="dream", content=content[:2000], importance=float(ctx.get("importance", 0.5)))
+    return {"action": "add_to_staging", "staging_id": row_id}
+
+
 def consolidation(
     ctx: dict[str, Any],
     user_id: str = DEFAULT_USER,

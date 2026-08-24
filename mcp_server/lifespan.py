@@ -46,16 +46,42 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                     await forgetting_system.run_cleanup(user_id="default")
                     last_compaction = now
 
-                # Consolidation sweep every 1 hour: promote high-weight episodes
-                # into L4 per layer. Housekeeping must not depend on an agent
-                # calling a tool first.
+                # Consolidation sweep every 1 hour: drain dream staging, then
+                # promote high-weight episodes into L4 — per layer. Housekeeping
+                # must not depend on an agent calling a tool first.
                 if now - last_consolidation >= 3600:
+                    from shared.dream_buffer import DreamBuffer
+
                     min_weight = float(config.get_forgetting("consolidate_weight_threshold") or 0.7)
                     for layer in ("user", "agent"):
                         engine = ConsolidationEngine(layer=layer)
+                        buf = DreamBuffer(layer=layer)
+                        await buf._init_db()
+
+                        conn = await buf._cm.get("memory.db")
+                        cur = await conn.execute("SELECT DISTINCT user_id FROM staging_memories WHERE layer=?", (layer,))
+                        users = {r[0] for r in await cur.fetchall()}
+                        staged_any = False
+                        for uid in sorted(users):
+                            items = await buf.get_staging(uid)
+                            if not items:
+                                continue
+                            res = await engine.consolidate_staging(uid, items, min_importance=min_weight)
+                            await buf.clear_staging(uid)
+                            staged_any = True
+                            logging.getLogger(__name__).info("Staging drained (layer=%s user=%s): %s", layer, uid, res)
+
                         promoted = await engine.consolidate_episodes("default", min_weight=min_weight)
-                        if promoted:
-                            logging.getLogger(__name__).info("Consolidation sweep: %d episodes promoted (layer=%s)", promoted, layer)
+
+                        await buf.cleanup_old()  # unpromoted staging >24h is ephemeral
+
+                        if promoted or staged_any:
+                            logging.getLogger(__name__).info(
+                                "Consolidation sweep done (layer=%s): episodes_promoted=%d staged_drained=%s",
+                                layer,
+                                promoted,
+                                staged_any,
+                            )
                     last_consolidation = now
             except asyncio.CancelledError:
                 break

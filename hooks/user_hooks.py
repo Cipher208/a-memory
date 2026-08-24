@@ -13,6 +13,7 @@ from .shared import (
     auto_context,
     conflict_resolver,
     consolidation,
+    dream_buffer_staging,
     forgetting_ritual,
     retrieval_router,
 )
@@ -113,8 +114,8 @@ class UserHooks:
         return conflict_resolver(ctx, self.user_id)
 
     @hook_registry.mark("dream_buffer", layer="user")
-    def _dream_buffer(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return {"action": "add_to_staging", "content": ctx.get("text", "")}
+    async def _dream_buffer(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        return await dream_buffer_staging(ctx, self.user_id, cm=mem._cm if mem else None)
 
     def _calculate_importance(self, text: str, memory_kind: str | None = None) -> float:
         if not text:

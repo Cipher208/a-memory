@@ -10,6 +10,7 @@ from .shared import (
     auto_context,
     conflict_resolver,
     consolidation,
+    dream_buffer_staging,
     forgetting_ritual,
     retrieval_router,
     run_async,
@@ -93,6 +94,10 @@ class AgentHooks:
     @hook_registry.mark("wiki_agent", layer=AGENT_LAYER)
     def _wiki_agent(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return {"action": "wiki_sync", "summary": ctx.get("summary", "")}
+
+    @hook_registry.mark("dream_buffer", layer=AGENT_LAYER)
+    async def _dream_buffer(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        return await dream_buffer_staging(ctx, self.user_id, layer=AGENT_LAYER, cm=mem._cm if mem else None)
 
     @hook_registry.mark("consolidation", layer="both")
     def _consolidation(self, ctx: dict[str, Any]) -> dict[str, Any]:
