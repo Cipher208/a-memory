@@ -1,4 +1,4 @@
-"""MCP Server — FastMCP setup, AppContext, lifespan, main()."""
+"""MCP Server — MCPServer setup, AppContext, lifespan, main()."""
 
 import os
 import sys
@@ -6,14 +6,14 @@ import logging
 from pathlib import Path
 
 from typing import Any, Literal
-from mcp.server.mcpserver import MCPServer as FastMCP
+from mcp.server.mcpserver import MCPServer
 
 # Ensure the root of the repo is in the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mcp_server.lifespan import lifespan
 
-mcp = FastMCP(
+mcp = MCPServer(
     "ariel-memory",
     instructions="Universal Two-Layer Memory MCP Server. Layer 1 (user) stores facts about users. Layer 2 (agent) stores agent identity, decisions, errors, and personality.",
     lifespan=lifespan,

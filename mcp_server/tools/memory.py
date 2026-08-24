@@ -20,7 +20,7 @@ from .base import (
 )
 from typing import Any
 
-# Runtime import: FastMCP evaluates tool annotations at registration;
+# Runtime import: MCPServer evaluates tool annotations at registration;
 # hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
 from mcp.server.mcpserver import Context  # noqa: TC002
 

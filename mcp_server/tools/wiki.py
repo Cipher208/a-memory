@@ -4,7 +4,7 @@ from mcp_server.registry import _get_ctx
 from .base import _validate_layer, _get_wiki
 from typing import Any
 
-# Runtime import: FastMCP evaluates tool annotations at registration;
+# Runtime import: MCPServer evaluates tool annotations at registration;
 # hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
 from mcp.server.mcpserver import Context  # noqa: TC002
 

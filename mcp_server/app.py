@@ -1,4 +1,4 @@
-"""FastMCP Application Factory and Route Orchestrator.
+"""MCPServer Application Factory and Route Orchestrator.
 
 Decomposes the server logic into a Starlette-based application structure,
 managing API endpoints, health checks, and dashboard rendering.
@@ -6,7 +6,7 @@ managing API endpoints, health checks, and dashboard rendering.
 
 from starlette.applications import Starlette
 from starlette.routing import Mount, Route
-from mcp.server.mcpserver import MCPServer as FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from mcp_server.context import AppContext
 from mcp_server.middlewares import add_middlewares
@@ -16,7 +16,7 @@ from mcp_server.endpoints.backup import BackupEndpoints
 from mcp_server.endpoints.system import SystemEndpoints
 
 
-def create_app(mcp: FastMCP, ctx: AppContext) -> Starlette:
+def create_app(mcp: MCPServer, ctx: AppContext) -> Starlette:
     """Create Starlette app with modular endpoints."""
     # Instantiate internal handlers first
     from features.dashboard import Dashboard

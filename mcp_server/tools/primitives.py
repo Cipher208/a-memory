@@ -24,7 +24,7 @@ from .base import (
     DEFAULT_TOKEN_BUDGET,
 )
 
-# Runtime imports: FastMCP evaluates tool annotations at registration;
+# Runtime imports: MCPServer evaluates tool annotations at registration;
 # hiding Context/AppContext under TYPE_CHECKING breaks tools/list (fix 419d577).
 from mcp.server.mcpserver import Context  # noqa: TC002
 from mcp_server.context import AppContext  # noqa: TC001

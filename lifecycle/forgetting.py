@@ -150,14 +150,15 @@ class ForgettingSystem:
     async def compress_duplicates(self) -> int:
         try:
             conn = await self._cm.get(DB_NAME)
-            cursor = await conn.execute("SELECT user_id, key, COUNT(*) as cnt FROM core_memory GROUP BY user_id, key HAVING cnt > 1")
+            # Same key in DIFFERENT layers is not a duplicate — dedupe per layer.
+            cursor = await conn.execute("SELECT layer, user_id, key, COUNT(*) as cnt FROM core_memory GROUP BY layer, user_id, key HAVING cnt > 1")
             duplicates = await cursor.fetchall()
             removed = 0
             for dup in duplicates:
                 await conn.execute(
-                    """DELETE FROM core_memory WHERE user_id=? AND key=? AND entry_id NOT IN
-                       (SELECT entry_id FROM core_memory WHERE user_id=? AND key=? ORDER BY updated_at DESC LIMIT 1)""",
-                    (dup["user_id"], dup["key"], dup["user_id"], dup["key"]),
+                    """DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=? AND entry_id NOT IN
+                       (SELECT entry_id FROM core_memory WHERE layer=? AND user_id=? AND key=? ORDER BY updated_at DESC LIMIT 1)""",
+                    (dup["layer"], dup["user_id"], dup["key"], dup["layer"], dup["user_id"], dup["key"]),
                 )
                 changes_cursor = await conn.execute("SELECT changes()")
                 changes_row = await changes_cursor.fetchone()

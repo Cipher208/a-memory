@@ -8,7 +8,7 @@ from shared.metrics import metrics
 from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache, _fire_hook
 from typing import Any
 
-# Runtime import: FastMCP evaluates tool annotations at registration;
+# Runtime import: MCPServer evaluates tool annotations at registration;
 # hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
 from mcp.server.mcpserver import Context  # noqa: TC002
 

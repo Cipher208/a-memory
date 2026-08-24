@@ -13,8 +13,9 @@ from shared.memory_types import MemoryKind, get_policy, validate_kind
 
 
 class ConsolidationEngine:
-    def __init__(self, cm: AsyncConnectionManager | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
+        self.layer = layer
 
     async def consolidate_staging(
         self,
@@ -66,14 +67,19 @@ class ConsolidationEngine:
         episodic_db: str | None = None,
         min_weight: float = 0.7,
     ) -> int:
+        """Promote high-weight episodes of THIS engine's layer into L4 facts.
+
+        Idempotent: the L4 key is derived from the summary, re-runs update
+        in place instead of duplicating.
+        """
         from core.memory import CoreMemory
 
-        cm = CoreMemory(cm=self._cm)
+        cm = CoreMemory(cm=self._cm, layer=self.layer)
         epi_db = episodic_db or "memory.db"
         epi_conn = await self._cm.get(epi_db)
         cursor = await epi_conn.execute(
-            "SELECT summary, emotional_weight, memory_kind FROM episodes WHERE user_id=? AND emotional_weight > ? ORDER BY created_at DESC LIMIT 10",
-            (user_id, min_weight),
+            "SELECT summary, emotional_weight, tags FROM episodes WHERE layer=? AND user_id=? AND emotional_weight > ? ORDER BY created_at DESC LIMIT 10",
+            (self.layer, user_id, min_weight),
         )
         rows = await cursor.fetchall()
 
@@ -84,23 +90,28 @@ class ConsolidationEngine:
         for row in rows:
             summary = row["summary"]
             weight = row["emotional_weight"]
-            kind = row["memory_kind"] or "fact"
             key = "ep_{}".format(summary[:30].replace(" ", "_").lower())
-            await cm.save(user_id, key, summary[:200], importance=weight, memory_kind=kind, source="episode_promotion")
+            await cm.save(user_id, key, summary[:200], importance=weight, memory_kind="fact", source="episode_promotion")
             consolidated += 1
         return consolidated
 
     async def get_stats(self, user_id: str) -> dict[str, int]:
         conn = await self._cm.get(DB_NAME)
-        total_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id=?", (user_id,))
+        total_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id))
         total_row = await total_cursor.fetchone()
         total = int(total_row[0]) if total_row and total_row[0] is not None else 0
 
-        high_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id=? AND importance > 0.7", (user_id,))
+        high_cursor = await conn.execute(
+            "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND importance > 0.7",
+            (self.layer, user_id),
+        )
         high_row = await high_cursor.fetchone()
         high = int(high_row[0]) if high_row and high_row[0] is not None else 0
 
-        low_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id=? AND importance < 0.3", (user_id,))
+        low_cursor = await conn.execute(
+            "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND importance < 0.3",
+            (self.layer, user_id),
+        )
         low_row = await low_cursor.fetchone()
         low = int(low_row[0]) if low_row and low_row[0] is not None else 0
         return {"total": total, "high_importance": high, "low_importance": low}
