@@ -2,6 +2,9 @@ from __future__ import annotations
 
 """
 L4 CoreMemory — async key-value facts with importance and typed memory (B7)
+
+Layer-isolated: every row carries the memory layer ('user' | 'agent', ...),
+so agent identity never collides with user facts.
 """
 
 import json
@@ -29,15 +32,17 @@ class CoreEntry:
 
 
 class CoreMemory:
-    def __init__(self, cm: AsyncConnectionManager | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
+        self.layer = layer
 
     async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS core_memory (
                 entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                layer TEXT NOT NULL DEFAULT '{self.layer}',
                 user_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
                 importance REAL DEFAULT 0.5, memory_kind TEXT, expires_at REAL,
                 source TEXT DEFAULT 'manual', metadata TEXT,
@@ -45,10 +50,10 @@ class CoreMemory:
             );
             CREATE INDEX IF NOT EXISTS idx_core_user ON core_memory(user_id);
             CREATE INDEX IF NOT EXISTS idx_core_key ON core_memory(key);
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_core_user_key ON core_memory(user_id, key);
             CREATE INDEX IF NOT EXISTS idx_core_created ON core_memory(created_at);
             CREATE INDEX IF NOT EXISTS idx_core_updated ON core_memory(updated_at);
             CREATE INDEX IF NOT EXISTS idx_core_memory_kind ON core_memory(user_id, memory_kind);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_core_layer_user_key ON core_memory(layer, user_id, key);
         """,
         )
 
@@ -62,20 +67,21 @@ class CoreMemory:
         expires_at: float | None = None,
         source: str = "manual",
         metadata: dict[str, Any] | None = None,
+        layer: str | None = None,
     ) -> int:
-
+        layer = layer or self.layer
         now = time.time()
         memory_kind, importance, expires_at = self._prepare_save_params(value, memory_kind, importance, expires_at, now)
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
 
         conn = await self._cm.get(DB_NAME)
-        existing_id = await self._find_existing_id(conn, user_id, key)
+        existing_id = await self._find_existing_id(conn, layer, user_id, key)
 
         if existing_id is not None:
             await self._update_entry(conn, existing_id, value, importance, memory_kind, expires_at, source, metadata_json, now)
             entry_id = existing_id
         else:
-            entry_id = await self._insert_entry(conn, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now)
+            entry_id = await self._insert_entry(conn, layer, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now)
 
         await conn.commit()
         return entry_id
@@ -107,8 +113,10 @@ class CoreMemory:
 
         return kind_str, imp, exp
 
-    async def _find_existing_id(self, conn: Any, user_id: str, key: str) -> int | None:
-        cursor = await conn.execute("SELECT entry_id FROM core_memory WHERE user_id=? AND key=?", (user_id, key))
+    async def _find_existing_id(self, conn: Any, layer: str, user_id: str, key: str) -> int | None:
+        cursor = await conn.execute(
+            "SELECT entry_id FROM core_memory WHERE layer=? AND user_id=? AND key=?", (layer, user_id, key)
+        )
         row = await cursor.fetchone()
         return int(row[0]) if row and row[0] is not None else None
 
@@ -121,21 +129,23 @@ class CoreMemory:
         )
 
     async def _insert_entry(
-        self, conn: Any, uid: str, key: str, val: str, imp: float, kind: str, exp: float | None, src: str, meta: str, now: float
+        self, conn: Any, layer: str, uid: str, key: str, val: str, imp: float, kind: str, exp: float | None, src: str, meta: str, now: float
     ) -> int:
         cursor = await conn.execute(
             """INSERT INTO core_memory
-               (user_id, key, value, importance, memory_kind, expires_at,
+               (layer, user_id, key, value, importance, memory_kind, expires_at,
                 source, metadata, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (uid, key, val, imp, kind, exp, src, meta, now, now),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (layer, uid, key, val, imp, kind, exp, src, meta, now, now),
         )
         return int(cursor.lastrowid or 0)
 
     async def get(self, user_id: str, key: str) -> CoreEntry | None:
         """Get a fact by key. Returns None if not found."""
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("SELECT * FROM core_memory WHERE user_id=? AND key=?", (user_id, key))
+        cursor = await conn.execute(
+            "SELECT * FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key)
+        )
         row = await cursor.fetchone()
         return self._row_to_entry(row) if row else None
 
@@ -146,21 +156,27 @@ class CoreMemory:
 
     async def get_all(self, user_id: str, limit: int = 50) -> list[CoreEntry]:
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("SELECT * FROM core_memory WHERE user_id=? ORDER BY importance DESC LIMIT ?", (user_id, limit))
+        cursor = await conn.execute(
+            "SELECT * FROM core_memory WHERE layer=? AND user_id=? ORDER BY importance DESC LIMIT ?",
+            (self.layer, user_id, limit),
+        )
         rows = await cursor.fetchall()
         return [self._row_to_entry(r) for r in rows]
 
     async def delete(self, user_id: str, key: str) -> bool:
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("DELETE FROM core_memory WHERE user_id=? AND key=?", (user_id, key))
+        cursor = await conn.execute(
+            "DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key)
+        )
         await conn.commit()
         return cursor.rowcount > 0
 
-    async def search(self, user_id: str, query: str, limit: int = 10) -> list[dict[str, Any]]:
+    async def search(self, user_id: str, query: str, limit: int = 10, layer: str | None = None) -> list[dict[str, Any]]:
+        layer = layer or self.layer
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
-            "SELECT * FROM core_memory WHERE user_id=? AND (key LIKE ? OR value LIKE ?) ORDER BY importance DESC LIMIT ?",
-            (user_id, f"%{query}%", f"%{query}%", limit),
+            "SELECT * FROM core_memory WHERE layer=? AND user_id=? AND (key LIKE ? OR value LIKE ?) ORDER BY importance DESC LIMIT ?",
+            (layer, user_id, f"%{query}%", f"%{query}%", limit),
         )
         rows = await cursor.fetchall()
         return [{"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])} for r in rows]
@@ -168,7 +184,9 @@ class CoreMemory:
     async def count(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         if user_id:
-            cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id=?", (user_id,))
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id)
+            )
         else:
             cursor = await conn.execute("SELECT COUNT(*) FROM core_memory")
         row = await cursor.fetchone()
@@ -200,10 +218,10 @@ class CoreMemory:
                 """SELECT key, value, importance, memory_kind, expires_at,
                       created_at, updated_at
                FROM core_memory
-               WHERE user_id=? AND memory_kind=? AND importance >= ?
+               WHERE layer=? AND user_id=? AND memory_kind=? AND importance >= ?
                ORDER BY importance DESC, updated_at DESC
                LIMIT ?""",
-                (user_id, memory_kind, min_importance, limit),
+                (self.layer, user_id, memory_kind, min_importance, limit),
             )
         ).fetchall()
         return [dict(r) for r in rows]

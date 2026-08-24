@@ -15,12 +15,13 @@ async def cm(tmp_path):
         """
         CREATE TABLE core_memory (
             entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            layer TEXT NOT NULL DEFAULT 'user',
             user_id TEXT, "key" TEXT, value TEXT,
             importance REAL, memory_kind TEXT,
             expires_at REAL, source TEXT DEFAULT 'manual', metadata TEXT,
             created_at REAL, updated_at REAL
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_core_user_key ON core_memory(user_id, "key");
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_core_layer_user_key ON core_memory(layer, user_id, "key");
     """,
     )
     return m

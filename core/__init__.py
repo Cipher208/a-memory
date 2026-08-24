@@ -29,8 +29,8 @@ class MemoryLayer:
         self._cache: Any = cache
         self.l1 = ReflexBuffer(max_size=config.get_limit("l1_buffer_size"))
         self.l2 = SessionStore(cm=self._cm)
-        self.l3 = EpisodicMemory(cm=self._cm)
-        self.l4 = CoreMemory(cm=self._cm)
+        self.l3 = EpisodicMemory(cm=self._cm, layer=layer_type)
+        self.l4 = CoreMemory(cm=self._cm, layer=layer_type)
 
     async def remember(self, key: str, value: str, importance: float = 0.5) -> int:
         return await self.l4.save(self.user_id, key, value, importance)

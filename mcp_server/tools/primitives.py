@@ -118,6 +118,12 @@ async def think(
             tasks.append(mem.l3.save(user_id, text, float(scorer_result.signals.emotional)))
             actions.append({"type": "L3_episodic_save", "weight": str(scorer_result.signals.emotional)})
 
+        # Fallback: a write primitive must never silently drop content that
+        # matched neither the L4 nor the L3 rule.
+        if not any(a["type"].startswith(("L4_", "L3_", "Wiki_")) for a in actions):
+            tasks.append(mem.l3.save(user_id, text, float(scorer_result.signals.emotional)))
+            actions.append({"type": "L3_episodic_save_fallback", "weight": str(scorer_result.signals.emotional)})
+
     # Relation detection
     relation_patterns = [r"\b\w+\s+(is|related\s+to|connected\s+to|part\s+of)\s+\w+\b"]
     has_relation = any(re.search(p, text, re.IGNORECASE) for p in relation_patterns)

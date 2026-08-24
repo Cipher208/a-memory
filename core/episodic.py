@@ -24,15 +24,17 @@ class Episode:
 
 
 class EpisodicMemory:
-    def __init__(self, cm: AsyncConnectionManager | None = None):
+    def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
+        self.layer = layer
 
     async def _init_db(self) -> None:
         await self._cm.execute_script(
             DB_NAME,
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS episodes (
                 episode_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                layer TEXT NOT NULL DEFAULT '{self.layer}',
                 user_id TEXT NOT NULL,
                 summary TEXT NOT NULL,
                 emotional_weight REAL DEFAULT 0.5,
@@ -41,14 +43,15 @@ class EpisodicMemory:
             );
             CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
             CREATE INDEX IF NOT EXISTS idx_episodes_time ON episodes(created_at);
+            CREATE INDEX IF NOT EXISTS idx_episodes_layer ON episodes(layer, user_id);
         """,
         )
 
     async def save(self, user_id: str, summary: str, emotional_weight: float = 0.5, tags: list[str] | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
-            "INSERT INTO episodes (user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?)",
-            (user_id, summary, emotional_weight, json.dumps(tags or []), time.time()),
+            "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (self.layer, user_id, summary, emotional_weight, json.dumps(tags or []), time.time()),
         )
         await conn.commit()
         return int(cursor.lastrowid or 0)
@@ -56,8 +59,8 @@ class EpisodicMemory:
     async def get_episodes(self, user_id: str, limit: int = 20, offset: int = 0) -> list[Episode]:
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
-            "SELECT * FROM episodes WHERE user_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (user_id, limit, offset),
+            "SELECT * FROM episodes WHERE layer=? AND user_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (self.layer, user_id, limit, offset),
         )
         rows = await cursor.fetchall()
         return [self._row_to_episode(r) for r in rows]
@@ -70,11 +73,11 @@ class EpisodicMemory:
         """Unified search across summary and tags."""
         conn = await self._cm.get(DB_NAME)
         if use_tag_match:
-            sql = "SELECT * FROM episodes WHERE user_id=? AND tags LIKE ? ORDER BY created_at DESC LIMIT ?"
-            params = (user_id, f'%"{query}"%', limit)
+            sql = "SELECT * FROM episodes WHERE layer=? AND user_id=? AND tags LIKE ? ORDER BY created_at DESC LIMIT ?"
+            params = (self.layer, user_id, f'%"{query}"%', limit)
         else:
-            sql = "SELECT * FROM episodes WHERE user_id=? AND summary LIKE ? ORDER BY created_at DESC LIMIT ?"
-            params = (user_id, f"%{query}%", limit)
+            sql = "SELECT * FROM episodes WHERE layer=? AND user_id=? AND summary LIKE ? ORDER BY created_at DESC LIMIT ?"
+            params = (self.layer, user_id, f"%{query}%", limit)
 
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
@@ -85,8 +88,8 @@ class EpisodicMemory:
         conn = await self._cm.get(DB_NAME)
         cutoff = time.time() - (days * 86400)
         cursor = await conn.execute(
-            "SELECT * FROM episodes WHERE user_id=? AND created_at < ? AND emotional_weight < 0.3",
-            (user_id, cutoff),
+            "SELECT * FROM episodes WHERE layer=? AND user_id=? AND created_at < ? AND emotional_weight < 0.3",
+            (self.layer, user_id, cutoff),
         )
         rows = await cursor.fetchall()
         if not rows:
@@ -121,8 +124,8 @@ class EpisodicMemory:
         """Count episodes for a user (fast COUNT query)."""
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
-            "SELECT COUNT(*) as cnt FROM episodes WHERE user_id=?",
-            (user_id,),
+            "SELECT COUNT(*) as cnt FROM episodes WHERE layer=? AND user_id=?",
+            (self.layer, user_id),
         )
         row = await cursor.fetchone()
         return int(row["cnt"]) if row and row[0] is not None else 0
