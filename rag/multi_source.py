@@ -22,7 +22,7 @@ class MultiSourceRAG:
         self,
         query: str,
         user_id: str = "default",
-        limit: int = 10,
+        limit: int | None = None,
         include_rag: bool = True,
         include_wiki: bool = True,
         include_episodic: bool = True,
@@ -46,6 +46,10 @@ class MultiSourceRAG:
             intent: weight bias ("recent", "core", "balanced")
 
         """
+        if limit is None:
+            from config import config
+
+            limit = int(config.get("rag", "search_limit", default=10))
         results: list[dict[str, Any]] = []
 
         # Weights based on intent

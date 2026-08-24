@@ -110,7 +110,17 @@ class RAGSearcher:
         candidates.sort(key=lambda x: x.score, reverse=True)
         return candidates[:limit]
 
-    async def search(self, query: str, user_id: str = "default", strategy: StrategyT = "auto", limit: int = 10) -> list[SearchResult]:
+    async def search(
+        self,
+        query: str,
+        user_id: str = "default",
+        strategy: StrategyT = "auto",
+        limit: int | None = None,
+    ) -> list[SearchResult]:
+        if limit is None:
+            from config import config
+
+            limit = int(config.get("rag", "search_limit", default=10))
         if strategy == "auto":
             strategy = cast("StrategyT", auto_strategy(query))
 

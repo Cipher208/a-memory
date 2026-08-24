@@ -121,7 +121,7 @@ class RAGEngine:
 
         return page_id or 0
 
-    async def search(self, query: str, user_id: str = "default", strategy: StrategyT | None = None, limit: int = 10) -> list[dict[str, Any]]:
+    async def search(self, query: str, user_id: str = "default", strategy: StrategyT | None = None, limit: int | None = None) -> list[dict[str, Any]]:
         """Delegate to searcher.search().
 
         Converts SearchResult models back to dict for backward compatibility.

@@ -32,7 +32,13 @@ class RAGIngestor:
             return int(row[0]) if row[0] is not None else None
 
         # Split text into chunks
-        chunks_text = chunk_text(content)
+        from config import config
+
+        chunks_text = chunk_text(
+            content,
+            max_size=int(config.get("rag", "chunk_size", default=500)),
+            overlap=int(config.get("rag", "chunk_overlap", default=100)),
+        )
         if not chunks_text:
             return None
 

@@ -62,6 +62,12 @@ forgetting:
   archive_min_importance: 0.3
   consolidate_weight_threshold: 0.7   # episode weight needed for L3→L4 promotion sweep
 
+# === RAG ===
+rag:
+  chunk_size: 500          # max chars per chunk (sliding window with overlap)
+  chunk_overlap: 100       # overlap between consecutive chunks
+  search_limit: 10         # default result count when caller omits limit
+
 # === Embeddings ===
 # Multilingual (100+ languages incl. Russian). If sentence-transformers is not
 # installed the system falls back to deterministic hash embeddings ("hash").

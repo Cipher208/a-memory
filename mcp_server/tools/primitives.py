@@ -151,7 +151,7 @@ async def think(
 
 async def dream(
     query: str,
-    limit: int = 10,
+    limit: int | None = None,
     layer: Literal["user", "agent"] = "user",
     user_id: str = "default",
     intent: Literal["recent", "core", "balanced"] = "balanced",
