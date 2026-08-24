@@ -109,6 +109,13 @@ wiki:
     principle_log: true
     external_dirs: []
 
+# === Storage ===
+storage:
+  db_warn_mb: 50              # WARN log when a *.db exceeds this
+  db_alert_mb: 200            # ERROR log threshold
+  vacuum_min_mb: 10           # only auto-VACUUM files at least this big
+  vacuum_freelist_ratio: 0.25 # and with at least this share of free pages
+
 # === Auth ===
 auth:
   bearer_token_enabled: true

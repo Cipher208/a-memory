@@ -130,6 +130,16 @@ class EpisodicMemory:
         row = await cursor.fetchone()
         return int(row["cnt"]) if row and row[0] is not None else 0
 
+    async def delete_older_than(self, user_id: str, cutoff: float) -> int:
+        """Delete this layer's episodes with created_at > cutoff (recent purge)."""
+        conn = await self._cm.get(DB_NAME)
+        cursor = await conn.execute(
+            "DELETE FROM episodes WHERE layer=? AND user_id=? AND created_at > ?",
+            (self.layer, user_id, cutoff),
+        )
+        await conn.commit()
+        return int(cursor.rowcount)
+
     async def delete_by_ids(self, episode_ids: list[int]) -> int:
         """Delete episodes by id. Returns the number of rows removed."""
         if not episode_ids:

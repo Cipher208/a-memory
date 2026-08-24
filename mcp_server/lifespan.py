@@ -83,6 +83,17 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                                 staged_any,
                             )
                     last_consolidation = now
+
+                # DB size monitoring + auto-VACUUM (same hourly cadence)
+                try:
+                    from features.db_maintenance import run_db_maintenance
+
+                    reports = await run_db_maintenance()
+                    for r in reports:
+                        if r.vacuumed_mb:
+                            logging.getLogger(__name__).info("DB maintenance: %s vacuumed %.1f MB -> %.1f MB", r.name, r.vacuumed_mb, r.size_mb)
+                except Exception:
+                    logging.getLogger(__name__).exception("DB maintenance failed")
             except asyncio.CancelledError:
                 break
             except Exception:

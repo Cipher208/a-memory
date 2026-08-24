@@ -183,7 +183,7 @@ async def dream(
     mem = _get_memory(app, layer, user_id)
     hook_tasks = [
         _fire_hook("auto_context", layer, {"query": query, "results": results}, mem=mem),
-        _fire_hook("dream_buffer", layer, {"query": query, "summary": summary}, mem=mem),
+        _fire_hook("dream_buffer", layer, {"query": query, "summary": summary, "user_id": user_id}, mem=mem),
     ]
     awaitable_hooks = [t for t in hook_tasks if asyncio.iscoroutine(t)]
     if awaitable_hooks:
@@ -288,19 +288,13 @@ async def forget(
         # Purge last N minutes
         # Recent doesn't easily support shadow bin without complex query-before-delete
         # But for consistency, we skip shadow bin for mass purge or implement simple one
-        from .ops import _purge_table, _purge_staging
+        from .ops import _purge_staging
 
         cutoff = time.time() - (minutes * 60)
-        results = await asyncio.gather(
-            _purge_table(mem.l4._cm, "core_memory", user_id, cutoff),
-            _purge_table(mem.l3._cm, "episodes", user_id, cutoff),
-            _purge_table(graph._cm, "epi_nodes", user_id, cutoff),
-            _purge_staging(user_id),
-        )
-        # gather order: [l4, l3, graph, staging]
-        archived_l4 = results[0]
-        archived_l3 = results[1]
-        archived_graph = results[2]
+        archived_l4 = await mem.l4.delete_older_than(user_id, cutoff)
+        archived_l3 = await mem.l3.delete_older_than(user_id, cutoff)
+        archived_graph = await graph.delete_nodes_older_than(user_id, cutoff)
+        await _purge_staging(user_id)
 
     _invalidate_cache(layer, user_id)
     return ForgetResult(deleted_l4=archived_l4, deleted_l3=archived_l3, deleted_graph=archived_graph).dict()

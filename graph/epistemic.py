@@ -218,6 +218,14 @@ class EpistemicGraph:
         row = await cur.fetchone()
         return row[0] if row else 0
 
+    async def delete_nodes_older_than(self, user_id: str, cutoff: float) -> int:
+        """Delete this layer's nodes created after cutoff; cleans tags/edges."""
+        sql_ids = "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND created_at > ?"
+        conn = await self._cm.get(DB_NAME)
+        cur = await conn.execute(sql_ids, (self.layer, user_id, cutoff))
+        ids = [int(r[0]) for r in await cur.fetchall()]
+        return await self.delete_nodes(ids)
+
     async def find_nodes_matching(self, user_id: str, content_pattern: str, limit: int = 50) -> list[EpistemicNode]:
         """Nodes in this layer whose content matches a SQL LIKE pattern."""
         sql = "SELECT * FROM epi_nodes WHERE layer=? AND user_id=? AND content LIKE ? LIMIT ?"

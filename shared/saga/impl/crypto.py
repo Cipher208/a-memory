@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import warnings
 from pathlib import Path
@@ -14,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from features.secrets import decrypt_json, encrypt_json
 from shared.crypto import is_encrypted_blob as _is_crypto_encrypted_blob
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "decrypt_json",
@@ -67,14 +70,20 @@ def read_state(path: Path) -> dict[str, Any]:
 
 
 def read_state_legacy_or_encrypted(path: Path) -> dict[str, Any]:
-    """Backward-compat: reads legacy plain JSON or encrypted, rotates legacy to encrypted."""
+    """Read encrypted state, falling back to legacy plain JSON (then rotating).
+
+    Decrypt-first is deterministic; the old magic-byte sniff misclassified
+    encrypted files (~1/256 of writes) as plain JSON and crashed on decode.
+    """
     if not path.exists():
         raise FileNotFoundError(path)
     with path.open("rb") as f:
         blob = f.read()
-    if is_encrypted_blob(path):
+    try:
         res: Any = decrypt_json(blob)
         return dict(res) if isinstance(res, dict) else {}
+    except Exception as decrypt_error:
+        logger.debug("not an encrypted saga state (%s); trying legacy JSON", decrypt_error)
     warnings.warn(f"{path} is plain JSON; rotating to encrypted", DeprecationWarning, stacklevel=2)
     legacy: Any = json.loads(blob.decode("utf-8"))
     state: dict[str, Any] = dict(legacy) if isinstance(legacy, dict) else {}

@@ -168,6 +168,16 @@ class CoreMemory:
         await conn.commit()
         return cursor.rowcount > 0
 
+    async def delete_older_than(self, user_id: str, cutoff: float) -> int:
+        """Delete this layer's rows with created_at > cutoff (recent purge)."""
+        conn = await self._cm.get(DB_NAME)
+        cursor = await conn.execute(
+            "DELETE FROM core_memory WHERE layer=? AND user_id=? AND created_at > ?",
+            (self.layer, user_id, cutoff),
+        )
+        await conn.commit()
+        return int(cursor.rowcount)
+
     async def search(self, user_id: str, query: str, limit: int = 10, layer: str | None = None) -> list[dict[str, Any]]:
         layer = layer or self.layer
         conn = await self._cm.get(DB_NAME)
