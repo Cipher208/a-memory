@@ -34,17 +34,20 @@ class RAGEngine:
         self,
         cm: AsyncConnectionManager | None = None,
         layer: str = "user",
-        binary_dim: int = 384,
-        binary_threshold_mode: str = "naive",
+        binary_dim: int | None = None,
+        binary_threshold_mode: str | None = None,
         binary_thresholds_path: str | None = None,
         thresholds: Any = None,
         search_strategy: StrategyT = "fts",
     ) -> None:
         self._cm = cm or connection_manager
         self.layer = layer
-        self.binary_dim = binary_dim
-        self.binary_threshold_mode = binary_threshold_mode
-        self.binary_thresholds_path = binary_thresholds_path
+        # yaml `binary:` section is the source of truth; args override
+        from config import config as _cfg
+
+        self.binary_dim = binary_dim if binary_dim is not None else int(_cfg.get("binary", "dim", default=384))
+        self.binary_threshold_mode = binary_threshold_mode or str(_cfg.get("binary", "mode", default="naive"))
+        self.binary_thresholds_path = binary_thresholds_path or _cfg.get("binary", "thresholds_path")
         self.thresholds = thresholds
         self.search_strategy: StrategyT = search_strategy
 

@@ -52,6 +52,10 @@ class BackupCron:
     def start(self) -> None:
         if self._running:
             return
+        from config import config
+
+        if not config.is_feature_enabled("backup_cron"):
+            return
         if os.environ.get("BACKUP_CRON_DISABLED"):
             return
         self._running = True

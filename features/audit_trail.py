@@ -43,6 +43,10 @@ class AuditTrail:
         target_id: str | None = None,
         details: dict[str, Any] | None = None,
     ) -> None:
+        from config import config
+
+        if not config.is_feature_enabled("audit_trail"):
+            return
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)",

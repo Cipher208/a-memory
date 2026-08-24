@@ -150,6 +150,10 @@ def _validate_layer(layer: str) -> str:
     normalized = (layer or "").strip().lower()
     if normalized not in _LAYER_BINDINGS:
         raise ValueError(f"Invalid layer: {layer!r}. Must be one of {tuple(_LAYER_BINDINGS)}")
+    from config import config
+
+    if not config.get("layers", normalized, "enabled", default=True):
+        raise ValueError(f"Layer {normalized!r} is disabled in config")
     return normalized
 
 

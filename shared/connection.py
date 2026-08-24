@@ -34,6 +34,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def _wal_enabled() -> bool:
+    # Imported lazily: config.py sits at repo root, shared/ must stay import-light.
+    from config import config
+
+    return bool(config.get("performance", "wal_mode", default=True))
+
+
 _DEFAULT_DIR = os.environ.get(
     "MCP_MEMORY_DATA_DIR",
     str(Path.home() / ".mcp-ariel-memory"),
@@ -175,7 +183,8 @@ class AsyncConnectionManager:
 
         conn = await aiosqlite.connect(db_path)
         conn.row_factory = aiosqlite.Row
-        await conn.execute("PRAGMA journal_mode=WAL")
+        if _wal_enabled():
+            await conn.execute("PRAGMA journal_mode=WAL")
         await conn.execute("PRAGMA busy_timeout=5000")
         await conn.execute("PRAGMA synchronous=NORMAL")
         await conn.execute("PRAGMA foreign_keys=ON")
@@ -189,7 +198,8 @@ class AsyncConnectionManager:
         def _connect() -> sqlite3.Connection:
             conn = sqlite3.connect(db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
+            if _wal_enabled():
+                conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")

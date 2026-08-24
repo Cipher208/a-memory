@@ -1,7 +1,12 @@
 # === Two-Layer Unified Memory MCP ===
 # Layer 1: User facts | Layer 2: Agent identity
+#
+# EVERY key here is read by code (see docs/CONTROL_MAP.md).
+# Per-agent override: copy this file and point the agent's MCP env at it:
+#   MCP_CONFIG_PATH=/home/<user>/.mcp-ariel-memory-<agent>/config.yaml
 
 # === Layers ===
+# Disable a layer to reject all reads/writes for it at the API boundary.
 layers:
   user:
     enabled: true
@@ -15,7 +20,9 @@ limits:
   l3_episodic_limit: 1000
   l4_core_limit: 5000
 
-# === Hooks (24 hooks: 12 user + 12 agent) ===
+# === Hooks ===
+# Single source of truth — no code-side duplicate list.
+# Missing key = hook enabled; disable explicitly with `false`.
 hooks:
   user:
     message_received: true
@@ -43,62 +50,39 @@ hooks:
     retrieval_router: true
     conflict_resolver: true
     emotion: true
+    # Explicit agent saves must not be silently dropped by the adaptive
+    # threshold (short notes score ~0.2 vs EMA that drifts up to 0.6).
+    # Noise filtering for agents happens in think()'s routing instead.
+    importance_gate: false
 
-# === Forgetting ===
+# === Forgetting & Consolidation ===
 forgetting:
   decay_rate: 0.01
   archive_threshold_days: 90
   archive_min_importance: 0.3
-  consolidate_weight_threshold: 0.7
+  consolidate_weight_threshold: 0.7   # episode weight needed for L3→L4 promotion sweep
 
-# === RAG ===
-rag:
-  fts_enabled: true
-  vec_enabled: true
-  embedding_model: "BAAI/bge-small-en-v1.5"
-  chunk_size: 500
-  search_limit: 10
-  storage:
-    keep_float_blobs: true  # Set false to save disk (float embeddings only needed for threshold training)
-
-# === Typed Memory ===
-typed_memory:
-  enabled: true
-  default_for_null: "fact"
-  reclassify_on_save: false  # true: always call kind_for_text() on save()
-  boost_cap: 0.5
-  archive:
-    goal_todo_default_ttl_days: 30
-    commitment_ttl_days: 365
+# === Embeddings ===
+# Multilingual (100+ languages incl. Russian). If sentence-transformers is not
+# installed the system falls back to deterministic hash embeddings ("hash").
+embeddings:
+  model: "intfloat/multilingual-e5-small"
+  fallback: "hash"
 
 # === Binary Embeddings (MIB) ===
 binary:
-  enabled: true
-  mode: "naive"  # naive | supervised_path
-  dim: 384
-  thresholds_path: "~/.mcp-ariel-memory/thresholds.npy"  # only for supervised_path
-
-# === Embeddings ===
-embeddings:
-  # Мультиязычная модель (100+ языков включая русский)
-  # Доступные: intfloat/multilingual-e5-small (384d), sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 (384d)
-  model: "intfloat/multilingual-e5-small"
-  dimension: 384
-  fallback: "hash"  # hash если sentence-transformers не установлен
+  mode: "naive"                        # naive | supervised_path
+  dim: 384                             # must match embeddings dimension
+  thresholds_path: "~/.mcp-ariel-memory/thresholds.npy"  # supervised_path only
 
 # === Graph ===
 graph:
-  temporal_enabled: true
-  epistemic_enabled: true
   max_depth: 3
 
 # === Wiki ===
-# Каждый тип можно включить/выключить.
-# external_dirs — внешние папки для автосинхронизации.
-# Папки сканируются при старте и при вызове sync_external.
+# Type flags + external dirs synced on start / sync_external.
 wiki:
   user:
-    # Типы wiki (true = включен, false = отключен)
     diary: true
     relationships: true
     desires: true
@@ -106,15 +90,8 @@ wiki:
     work_notes: true
     preferences: true
     retrospective: true
-    # Внешние папки пользователя (автосинхронизация .md файлов)
     external_dirs: []
-    # Пример:
-    # external_dirs:
-    #   - "/home/user/notes"          # личные заметки
-    #   - "/home/user/projects/docs"  # документация проектов
-    #   - "C:\Users\me\journal"       # дневник
   agent:
-    # Типы wiki
     decision_log: true
     error_analysis: true
     personality_evolution: true
@@ -122,70 +99,54 @@ wiki:
     wiki_agent: true
     learning_journal: true
     principle_log: true
-    # Внешние папки агента (лор, справочники, знания)
     external_dirs: []
-    # Пример:
-    # external_dirs:
-    #   - "/path/to/lore"             # лор персонажа
-    #   - "/path/to/knowledge-base"   # справочник знаний
-    #   - "/path/to/style-guide"      # гайд по стилю
 
 # === Auth ===
 auth:
-  api_keys_enabled: true
   bearer_token_enabled: true
-  # Токен генерируется автоматически, или задайте вручную:
+  # bearer_token generated automatically, or set manually:
   # bearer_token: "mt_your_custom_token_here"
 
 # === Features ===
 features:
-  import_export: true
-  versioning: true
-  cross_user_learning: false
   compression: true
-  webhooks: false
   backup: true
-  dashboard: false  # Enable with --dashboard flag
-  plugins: false
+  backup_cron: true          # periodic DB backups inside the server
   rate_limiting: true
-  audit_trail: true
-  auth: true
-  backup_cron: true
-  embeddings: true
+  audit_trail: true          # audit_log writes (see AuditTrail)
 
 # === Performance ===
 performance:
-  connection_pool_size: 10
-  prepared_statements: true
-  batch_size: 100
-  wal_mode: true
-  cache_l1_size: 1000
-  cache_l2_ttl: 300
+  wal_mode: true             # PRAGMA journal_mode=WAL on every connection
 
 # === Security ===
 security:
-  per_user_isolation: true
-  input_validation: true
-  sql_injection_prevention: true
   rate_limit_per_user: 100
-  max_ws_per_user: 5           # макс. WebSocket соединений на пользователя
-  max_ws_total: 100            # макс. WebSocket соединений всего
-  audit_logging: true
+  max_ws_per_user: 5         # connection caps used by RateLimiter
+  max_ws_total: 100
+
+# === CORS (HTTP transport / dashboard) ===
+cors:
+  allowed_origins:
+    - "http://localhost:*"
+    - "http://127.0.0.1:*"
 
 # === Backup ===
 backup:
   auto_backup: true
   backup_interval_hours: 24
   backup_retention_days: 30
-  jitter_seconds: 3600              # случайная задержка 0-3600 сек перед бэкапом
-  wiki_sync_interval_minutes: 30   # синхронизация wiki каждые 30 мин
+  jitter_seconds: 3600              # random 0-3600s delay before each backup
+  wiki_sync_interval_minutes: 30    # wiki sync cadence
 
-# === Dashboard ===
+# === Dashboard (HTTP transport only) ===
+# Synced with --dashboard CLI flag: flag OR this section enables it.
 dashboard:
-  enabled: true
-  port: 8000
+  enabled: false           # stdio agents don't need it; flip for http runs
+  port: 8000               # default for --port when not passed explicitly
 
 # === Logging ===
+# Rotating file log under <MCP_MEMORY_DATA_DIR>/logs/
 logging:
   level: INFO
   file: memory.log

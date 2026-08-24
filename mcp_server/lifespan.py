@@ -3,6 +3,7 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from mcp.server.mcpserver import MCPServer
+from config import config
 from mcp_server.context import AppContext
 from shared.read_only import read_only_replica
 from features.backup_cron import backup_cron
@@ -49,9 +50,10 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                 # into L4 per layer. Housekeeping must not depend on an agent
                 # calling a tool first.
                 if now - last_consolidation >= 3600:
+                    min_weight = float(config.get_forgetting("consolidate_weight_threshold") or 0.7)
                     for layer in ("user", "agent"):
                         engine = ConsolidationEngine(layer=layer)
-                        promoted = await engine.consolidate_episodes("default")
+                        promoted = await engine.consolidate_episodes("default", min_weight=min_weight)
                         if promoted:
                             logging.getLogger(__name__).info("Consolidation sweep: %d episodes promoted (layer=%s)", promoted, layer)
                     last_consolidation = now

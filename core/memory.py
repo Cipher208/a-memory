@@ -89,6 +89,7 @@ class CoreMemory:
     def _prepare_save_params(
         self, value: str, kind_str: str | None, imp: float | None, exp: float | None, now: float
     ) -> tuple[str, float, float | None]:
+        from config import config
         from shared.memory_types import (
             MemoryKind,
             default_importance,
@@ -97,7 +98,7 @@ class CoreMemory:
             validate_kind,
         )
 
-        if kind_str is None:
+        if kind_str is None or config.get("typed_memory", "reclassify_on_save", default=False):
             kind_str = kind_for_text(value).value
         if not validate_kind(kind_str):
             raise ValueError(f"invalid memory_kind: {kind_str!r}")
@@ -109,7 +110,9 @@ class CoreMemory:
 
         p = get_policy(kind)
         if p.requires_expires_at and exp is None:
-            exp = now + 30 * 86400
+            ttl_key = "commitment_ttl_days" if kind is MemoryKind.COMMITMENT else "goal_todo_default_ttl_days"
+            ttl_days = int(config.get("typed_memory", "archive", ttl_key, default=30))
+            exp = now + ttl_days * 86400
 
         return kind_str, imp, exp
 

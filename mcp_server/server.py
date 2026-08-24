@@ -46,6 +46,29 @@ def _register_all_tools() -> None:
 _register_all_tools()
 
 
+def _setup_logging() -> None:
+    """Configure logging from the logging.* section of config.yaml."""
+    import logging.handlers
+
+    from config import config
+
+    level = str(config.get("logging", "level", default="INFO")).upper()
+    max_mb = int(config.get("logging", "max_size_mb", default=10))
+    backups = int(config.get("logging", "backup_count", default=5))
+    rel_file = str(config.get("logging", "file", default="memory.log"))
+    data_dir = os.environ.get("MCP_MEMORY_DATA_DIR", os.path.expanduser("~/.mcp-ariel-memory"))
+    log_dir = os.path.join(data_dir, "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(os.path.join(log_dir, rel_file), maxBytes=max_mb * 1024 * 1024, backupCount=backups)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        root = logging.getLogger()
+        root.setLevel(getattr(logging, level, logging.INFO))
+        root.addHandler(handler)
+    except OSError:
+        pass  # unwritable dir — console logging still works
+
+
 def main() -> None:
     import argparse
 
@@ -58,9 +81,25 @@ def main() -> None:
     )
     parser.add_argument("--host", default="0.0.0.0", help="HTTP host (default: 0.0.0.0)")  # noqa: S104
     parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
-    parser.add_argument("--dashboard", action="store_true", help="Enable dashboard + metrics endpoints")
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Enable dashboard + metrics endpoints (default: dashboard.enabled from config.yaml)",
+    )
     parser.add_argument("--no-auth", action="store_true", help="Disable auth for development")
     args = parser.parse_args()
+
+    # CLI flag OR config — they synchronize instead of fighting.
+    if not args.dashboard:
+        from config import config as _cfg
+
+        args.dashboard = bool(_cfg.get("dashboard", "enabled", default=False))
+    if args.port == 8000:
+        from config import config as _cfg
+
+        args.port = int(_cfg.get("dashboard", "port", default=8000))
+
+    _setup_logging()
 
     if args.no_auth:
         os.environ["MCP_AUTH_DISABLED"] = "1"

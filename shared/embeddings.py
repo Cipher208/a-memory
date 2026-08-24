@@ -12,7 +12,14 @@ from typing import Any
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 
-DEFAULT_MODEL = "intfloat/multilingual-e5-small"
+
+def _configured_model() -> str:
+    from config import config
+
+    return str(config.get("embeddings", "model") or "intfloat/multilingual-e5-small")
+
+
+DEFAULT_MODEL = _configured_model()
 _model = None
 _model_name = None
 
