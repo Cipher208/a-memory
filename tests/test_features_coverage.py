@@ -389,7 +389,7 @@ def test_backup_cron_state_persistence(tmp_path):
 
 
 def test_saga_save_load_state(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
     from shared.saga import Saga
 
     orig_dir = saga_base.SAGA_DIR
@@ -409,7 +409,7 @@ def test_saga_save_load_state(tmp_path):
 
 
 def test_saga_cleanup_state(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
     from shared.saga import Saga
 
     orig_dir = saga_base.SAGA_DIR

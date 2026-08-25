@@ -1,0 +1,398 @@
+from __future__ import annotations
+
+"""
+Saga — multi-step operations with compensation (rollback).
+
+Includes exponential-backoff retry, idempotent step replay via the
+saga_step_log table, and nested-saga compensation.
+"""
+
+import asyncio
+import contextlib
+import hashlib
+import json
+import logging
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, TYPE_CHECKING
+
+from shared.constants import (
+    STATUS_STUCK,
+    STATUS_RUNNING,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_COMPENSATING,
+    STATUS_COMPENSATED,
+)
+from shared.saga.impl import storage
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
+logger = logging.getLogger(__name__)
+
+
+class SagaStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = STATUS_RUNNING
+    COMPLETED = STATUS_COMPLETED
+    FAILED = STATUS_FAILED
+    COMPENSATING = STATUS_COMPENSATING
+    COMPENSATED = STATUS_COMPENSATED
+    STUCK = STATUS_STUCK
+
+
+@dataclass
+class SagaStep:
+    name: str
+    action: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]]
+    compensation: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None = None
+    timeout_seconds: int | None = None
+    retry_attempts: int = 0
+    retry_backoff: float = 0.5
+    retry_on: tuple[type[Exception], ...] = (ConnectionError, TimeoutError)
+    idempotency_key_fn: Callable[[dict[str, Any]], str] | None = None
+    status: SagaStatus = SagaStatus.PENDING
+    result: dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+class Saga:
+    def __init__(self, name: str, timeout_seconds: int = 300, saga_id: str | None = None) -> None:
+        self.name = name
+        self._saga_id = saga_id or f"{name}_{uuid.uuid4().hex[:8]}"
+        self.timeout_seconds = timeout_seconds
+        self._steps: list[SagaStep] = []
+        self._status = SagaStatus.PENDING
+        self._data: dict[str, Any] = {}
+        self._current_step = 0
+        self._started_at: float = 0.0
+        self._completed_steps: list[int] = []
+        storage.SAGA_DIR.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def status(self) -> SagaStatus:
+        return self._status
+
+    @property
+    def data(self) -> dict[str, Any]:
+        return self._data
+
+    @property
+    def saga_id(self) -> str:
+        return self._saga_id
+
+    def add_step(
+        self,
+        name: str,
+        action: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]],
+        compensation: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None = None,
+        timeout_seconds: int | None = None,
+        retry_attempts: int = 0,
+        retry_backoff: float = 0.5,
+        retry_on: tuple[type[Exception], ...] = (ConnectionError, TimeoutError),
+        idempotency_key_fn: Callable[[dict[str, Any]], str] | None = None,
+    ) -> Saga:
+        self._steps.append(
+            SagaStep(
+                name=name,
+                action=action,
+                compensation=compensation,
+                timeout_seconds=timeout_seconds,
+                retry_attempts=retry_attempts,
+                retry_backoff=retry_backoff,
+                retry_on=retry_on,
+                idempotency_key_fn=idempotency_key_fn,
+            )
+        )
+        return self
+
+    def _save_state(self) -> None:
+        """Save state to disk (encrypted if available)."""
+        if self._saga_id.startswith(".") or "/" in self._saga_id or "\\" in self._saga_id:
+            logger.error("Invalid saga_id for saving: %s", self._saga_id)
+            return
+
+        state_file = storage.SAGA_DIR / (self._saga_id + ".json")
+        if state_file.exists() and state_file.is_symlink():
+            logger.error("Refusing to write to symlink: %s", state_file)
+            return
+
+        state: dict[str, Any] = {
+            "name": self.name,
+            "saga_id": self._saga_id,
+            "status": self._status.value,
+            "current_step": self._current_step,
+            "started_at": self._started_at,
+            "data": self._data,
+            "completed_steps": self._completed_steps,
+            "steps": [{"name": s.name, "status": s.status.value, "result": s.result} for s in self._steps],
+        }
+        try:
+            storage.write_state_file(state_file, state)
+        except Exception:
+            logger.exception("Failed to save saga state")
+
+    def _load_state(self, saga_id: str) -> dict[str, Any] | None:
+        """Load state from disk (supports encrypted and legacy plain JSON)."""
+        if saga_id.startswith(".") or "/" in saga_id or "\\" in saga_id:
+            return None
+
+        state_file = storage.SAGA_DIR / (saga_id + ".json")
+        if not state_file.exists() or state_file.is_symlink():
+            return None
+        try:
+            return storage.read_state_file(state_file)
+        except Exception:
+            return None
+
+    def _cleanup_state(self) -> None:
+        """Delete state file after completion."""
+        state_file = storage.SAGA_DIR / (self._saga_id + ".json")
+        if state_file.exists() and not state_file.is_symlink():
+            with contextlib.suppress(OSError):
+                state_file.unlink()
+
+    # ─── Idempotency helpers ───
+
+    def _compute_idempotency_key(self, step: SagaStep) -> str | None:
+        """Compute SHA-256 hash for idempotent step replay."""
+        if not step.idempotency_key_fn:
+            return None
+        try:
+            seed = step.idempotency_key_fn(self._data)
+        except Exception:
+            return None
+        raw = f"{step.name}|{seed}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    async def _is_already_completed(self, key: str) -> bool:
+        """Check idempotency log for completed step."""
+        from shared.connection import connection_manager
+
+        conn = await connection_manager.get("memory.db")
+        try:
+            row = await (
+                await conn.execute(
+                    "SELECT 1 FROM saga_step_log WHERE saga_id=? AND params_hash=? LIMIT 1",
+                    (self._saga_id, key),
+                )
+            ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
+    async def _get_cached_result(self, key: str) -> dict[str, Any] | None:
+        """Get cached result from idempotency log."""
+        from shared.connection import connection_manager
+
+        conn = await connection_manager.get("memory.db")
+        try:
+            row = await (
+                await conn.execute(
+                    "SELECT result_json FROM saga_step_log WHERE saga_id=? AND params_hash=?",
+                    (self._saga_id, key),
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            result_blob = row["result_json"]
+            if isinstance(result_blob, (bytes, bytearray)):
+                from features.secrets import decrypt_json
+
+                res: Any = decrypt_json(bytes(result_blob))
+                return dict(res) if isinstance(res, dict) else None
+            return dict(json.loads(result_blob)) if result_blob else None
+        except Exception:
+            return None
+
+    async def _record_completed(self, key: str, step_name: str, result: dict[str, Any]) -> None:
+        """Record completed step in idempotency log."""
+        from shared.connection import connection_manager
+
+        conn = await connection_manager.get("memory.db")
+        try:
+            if storage._HAS_ENCRYPTION:
+                from features.secrets import encrypt_json
+
+                encrypted = encrypt_json(result)
+            else:
+                encrypted = json.dumps(result).encode()
+            await conn.execute(
+                """INSERT INTO saga_step_log (saga_id, step_name, params_hash, result_json, completed_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(saga_id, step_name, params_hash) DO NOTHING""",
+                (self._saga_id, step_name, key, encrypted, time.time()),
+            )
+            await conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to record idempotency log: {e}")
+
+    # ─── Execute with retry + idempotency ───
+
+    async def _check_idempotency(self, step: SagaStep) -> tuple[bool, str | None]:
+        """Check if step was already executed via idempotency log.
+
+        Returns (replayed, idempotency_key). If replayed, step state is restored
+        from cache and the caller should skip execution.
+        """
+        idemp_key = self._compute_idempotency_key(step)
+        if idemp_key and await self._is_already_completed(idemp_key):
+            cached = await self._get_cached_result(idemp_key)
+            if cached is not None:
+                step.result = cached
+                step.status = SagaStatus.COMPLETED
+                step.data = self._data.copy()
+                self._data.update(step.result)
+                self._completed_steps.append(self._current_step)
+                self._save_state()
+                logger.info(f"Saga '{self.name}' step '{step.name}' replayed from cache")
+                return True, idemp_key
+        return False, idemp_key
+
+    async def _execute_step_with_retry(self, step: SagaStep) -> None:
+        """Execute a single step with exponential backoff retry."""
+        attempt = 0
+        step_exc: Exception | None = None
+        while attempt <= step.retry_attempts:
+            try:
+                step.result = await self._run_step_action(step)
+                return
+            except step.retry_on as exc:
+                step_exc = exc
+                attempt += 1
+                if attempt <= step.retry_attempts:
+                    await self._handle_retry_pause(step, attempt, exc)
+            except Exception as exc:
+                step_exc = exc
+                break
+
+        await self._handle_step_failure(step, attempt, step_exc)
+
+    async def _run_step_action(self, step: SagaStep) -> dict[str, Any]:
+        step_timeout = step.timeout_seconds or self.timeout_seconds
+        if isinstance(step.action, Saga):
+            result = await asyncio.wait_for(step.action.execute(self._data), timeout=float(step_timeout))
+        else:
+            action_result = step.action(self._data)
+            if asyncio.iscoroutine(action_result):
+                result = await asyncio.wait_for(action_result, timeout=float(step_timeout))
+            else:
+                result = action_result
+        return result if isinstance(result, dict) else {"value": result}
+
+    async def _handle_retry_pause(self, step: SagaStep, attempt: int, exc: Exception) -> None:
+        delay = step.retry_backoff * (2 ** (attempt - 1))
+        logger.warning(f"Saga '{self.name}' step '{step.name}' retry {attempt}/{step.retry_attempts} in {delay:.1f}s: {exc}")
+        await asyncio.sleep(delay)
+
+    async def _handle_step_failure(self, step: SagaStep, attempt: int, step_exc: Exception | None) -> None:
+        step.status = SagaStatus.FAILED
+        if attempt > step.retry_attempts:
+            logger.error(f"Saga '{self.name}' step '{step.name}' failed after {step.retry_attempts} retries: {step_exc}")
+        else:
+            logger.error(f"Saga '{self.name}' step '{step.name}' failed: {step_exc}")
+
+        await self._compensate(self._current_step)
+        self._save_state()
+        if step_exc is not None:
+            raise step_exc
+
+    async def _record_step(self, step: SagaStep, idemp_key: str | None) -> None:
+        """Record completed step in idempotency log and update saga state."""
+        if idemp_key:
+            await self._record_completed(idemp_key, step.name, step.result)
+        step.data = self._data.copy()
+        self._data.update(step.result)
+        step.status = SagaStatus.COMPLETED
+        self._completed_steps.append(self._current_step)
+        self._save_state()
+        logger.info(f"Saga '{self.name}' step '{step.name}' completed")
+
+    async def execute(self, initial_data: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self._saga_id:
+            self._saga_id = self.name + "_" + uuid.uuid4().hex[:8]
+        self._data = initial_data or {}
+        self._status = SagaStatus.RUNNING
+        self._current_step = 0
+        self._started_at = time.time()
+        self._completed_steps = []
+        self._save_state()
+
+        logger.info(f"Saga '{self.name}' started (id={self._saga_id})")
+
+        try:
+            for i, step in enumerate(self._steps):
+                self._current_step = i
+                step.status = SagaStatus.RUNNING
+                self._save_state()
+
+                replayed, idemp_key = await self._check_idempotency(step)
+                if replayed:
+                    continue
+
+                await self._execute_step_with_retry(step)
+                await self._record_step(step, idemp_key)
+
+            self._status = SagaStatus.COMPLETED
+            self._cleanup_state()
+            logger.info(f"Saga '{self.name}' completed")
+            return self._data
+
+        except Exception:
+            if self._status != SagaStatus.COMPENSATED:
+                self._status = SagaStatus.FAILED
+            self._save_state()
+            logger.exception("Saga '%s' failed", self.name)
+            raise
+
+    async def _compensate(self, failed_step: int) -> None:
+        self._status = SagaStatus.COMPENSATING
+        self._save_state()
+        logger.info(f"Saga '{self.name}' compensating from step {failed_step}")
+
+        for i in range(failed_step - 1, -1, -1):
+            step = self._steps[i]
+            if step.status != SagaStatus.COMPLETED:
+                continue
+
+            if isinstance(step.action, Saga):
+                await self._compensate_inner_saga(step.action)
+            elif step.compensation:
+                await self._compensate_step(step)
+
+        self._status = SagaStatus.COMPENSATED
+
+    async def _compensate_inner_saga(self, inner: Saga) -> None:
+        """Compensate all completed steps of a nested saga in reverse order."""
+        for j in range(len(inner._steps) - 1, -1, -1):
+            inner_step = inner._steps[j]
+            if inner_step.status == SagaStatus.COMPLETED and inner_step.compensation:
+                try:
+                    await inner_step.compensation(inner_step.data)
+                    logger.info("Saga '%s' compensated inner step '%s'", self.name, inner_step.name)
+                except Exception:
+                    logger.exception("Saga '%s' inner compensation failed for '%s'", self.name, inner_step.name)
+
+    async def _compensate_step(self, step: SagaStep) -> None:
+        """Run compensation for a single step, logging success or failure."""
+        if not step.compensation:
+            return
+        try:
+            await step.compensation(step.data)
+            logger.info("Saga '%s' compensated step '%s'", self.name, step.name)
+        except Exception:
+            logger.exception("Saga '%s' compensation failed for '%s'", self.name, step.name)
+
+    def get_state(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "saga_id": self._saga_id,
+            "status": self._status.value,
+            "current_step": self._current_step,
+            "started_at": self._started_at,
+            "data": self._data.copy(),
+            "steps": [{"name": s.name, "status": s.status.value, "result": s.result} for s in self._steps],
+        }

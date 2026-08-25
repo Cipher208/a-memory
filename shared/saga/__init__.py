@@ -1,4 +1,6 @@
-from shared.saga.impl.base import Saga, SAGA_DIR, saga_watchdog, SagaWatchdog
+from shared.saga.impl.storage import SAGA_DIR
+from shared.saga.impl.saga import Saga
+from shared.saga.impl.watchdog import saga_watchdog, SagaWatchdog
 from shared.saga.impl.backup import create_backup_saga
 from shared.saga.impl.consolidation import create_consolidation_saga
 from shared.saga.impl.crypto import (

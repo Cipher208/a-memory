@@ -27,7 +27,7 @@ async def _failing(data):
 
 
 def test_save_state_creates_file(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -43,7 +43,7 @@ def test_save_state_creates_file(tmp_path):
 
 
 def test_load_state_roundtrip(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -67,7 +67,7 @@ def test_load_state_roundtrip(tmp_path):
 
 
 def test_load_state_missing(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -79,7 +79,7 @@ def test_load_state_missing(tmp_path):
 
 
 def test_cleanup_state(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -127,7 +127,7 @@ def test_get_cached_result_none():
 
 
 def test_watchdog_get_stuck_sagas(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -152,7 +152,7 @@ def test_watchdog_get_stuck_sagas(tmp_path):
 
 
 def test_watchdog_recover_sets_manual_review(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -177,7 +177,7 @@ def test_watchdog_recover_sets_manual_review(tmp_path):
 
 
 def test_watchdog_recover_nonexistent(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -189,7 +189,7 @@ def test_watchdog_recover_nonexistent(tmp_path):
 
 
 def test_watchdog_cleanup_completed(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
@@ -226,7 +226,7 @@ def test_watchdog_cleanup_completed(tmp_path):
 
 
 def test_watchdog_start_stop(tmp_path):
-    from shared.saga.impl import base as saga_base
+    from shared.saga.impl import storage as saga_base
 
     orig = saga_mod.SAGA_DIR
     saga_base.SAGA_DIR = tmp_path
