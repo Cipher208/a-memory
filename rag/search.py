@@ -18,7 +18,9 @@ except ImportError:
     _HAS_BINARY = False
 
 
-async def search_fts5(cm: AsyncConnectionManager, query: str, user_id: str, limit: int, fts_available: bool, layer: str = "user") -> list[dict[str, Any]]:
+async def search_fts5(
+    cm: AsyncConnectionManager, query: str, user_id: str, limit: int, fts_available: bool, layer: str = "user"
+) -> list[dict[str, Any]]:
     """FTS5 search with LIKE fallback. Layer-scoped: never returns other layers' pages."""
     conn = await cm.get(DB_NAME)
     if fts_available:
