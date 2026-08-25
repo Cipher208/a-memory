@@ -19,7 +19,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 | Feature | Description |
 |---------|-------------|
-| **25 MCP tools** | Unified layer-based API (`user`/`agent` parameter) |
+| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; full layer-tool surface behind `ARIEL_EXPOSE=all` |
 | **4-layer memory** | L1 ReflexBuffer → L2 Episodic → L3 Session → L4 Core |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
 | **RAG search** | FTS5 + binary embeddings + hybrid scoring |
@@ -73,7 +73,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 | Section | Description |
 |---------|-------------|
 | [Architecture](architecture/overview.md) | Two-layer model, L1-L4, consolidation, 22 DB tables |
-| [MCP Tools](tools/reference.md) | All 19 tools with parameters and examples |
+| [MCP Tools](tools/reference.md) | Tool reference (layer ops; agents normally see only the 5 primitives) |
 | [RAG & Search](rag/engine.md) | Unified search, BM25 conflict similarity, type-aware boost |
 | [Hooks](hooks/system.md) | 24 hooks (12 user + 12 agent), type-aware gating |
 | [Operations](operations/deployment.md) | Transports, health, auth, configuration |

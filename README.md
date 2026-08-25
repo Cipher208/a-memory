@@ -1,6 +1,6 @@
 # mcp-ariel-memory
 
-> **Give your AI agents real memory** — episodic recall, knowledge graphs, hybrid search, and envelope encryption in a single MCP server. 35 tools. 4-layer hierarchy. 519+ tests.
+> **Give your AI agents real memory** — episodic recall, knowledge graphs, hybrid search, and envelope encryption in a single MCP server. 5 universal primitives (`think` / `dream` / `forget` / `evolve` / `project`). Layer-isolated storage. 500+ tests.
 
 [![CI](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/Cipher208/mcp-ariel-memory?logo=codecov&logoColor=white)](https://codecov.io/gh/Cipher208/mcp-ariel-memory)
@@ -20,7 +20,7 @@ mcp-ariel-memory is a production-ready MCP (Model Context Protocol) server that 
 - **Layer 1 (User)** — stores facts about users: preferences, conversation history, emotional context, relationships
 - **Layer 2 (Agent)** — stores agent identity: decisions, errors, personality evolution, learning patterns
 
-The server is built with the official MCP Python SDK (FastMCP), supports both stdio and HTTP transports, and includes enterprise features like authentication, rate limiting, automatic backups, and a real-time dashboard.
+The server is built on the native mcp 2.x Python SDK (`mcp.server.mcpserver.MCPServer`), supports both stdio and HTTP transports, and includes enterprise features like authentication, rate limiting, automatic backups, and a real-time dashboard.
 
 ### Architecture
 
@@ -321,7 +321,7 @@ python -m tests.benchmark_perf
 
 | Operation | Speed | Notes |
 |-----------|-------|-------|
-| `memory_remember` | 1533 ops/s | SQLite + encryption |
+| `memory_remember` (layer op) | 1533 ops/s | SQLite + encryption |
 | `memory_recall` | 6739 q/s | FTS5 search |
 | `encrypt+decrypt` | 402 ops/s | argon2id KDF |
 | `fts_search` | 1817 ops/s | FTS5 full-text search |

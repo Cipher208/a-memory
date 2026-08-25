@@ -3,6 +3,31 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.7.0] - 2026-08-24
+
+### Added
+- **mcp 2.x native** — server migrated from `mcp.server.fastmcp` (removed in SDK 2.0) to `mcp.server.mcpserver.MCPServer`; dependency range `mcp[cli]>=2,<3`.
+- **Universal primitives by default** — agents see exactly `think` / `dream` / `forget` / `evolve` / `project`; the full layer-tool surface stays available via `ARIEL_EXPOSE=all`.
+- **Layer registry** — `LayerBinding` bundles per-layer stores (L3+L4 memory, graph, wiki, hooks, hybrid RAG); new layers register once and every primitive accepts them.
+- **Project memory layer** — `projects.db` (separate file) with identity, decision log (decision/rationale/outcome), artifact map and a graphify-fed code index; `project` gains `decision`/`recall` actions, `update` auto-refreshes the code map.
+- **Dream staging pipeline restored** — dream output lands in staging_memories via layer-aware handlers; the hourly sweep drains it through consolidation before episode promotion.
+- **DB maintenance loop** — hourly size check of `*.db` with WARN/ERROR thresholds (`storage.*`), prometheus gauges, auto-VACUUM on big fragmented files.
+- **Config drift warning** — per-agent configs (`MCP_CONFIG_PATH`) are checked at startup for keys added by newer repo defaults.
+- **`rag.chunk_size` / `chunk_overlap` / `search_limit`**, `embeddings.model`, `binary.*`, typed-memory TTLs, `performance.wal_mode`, `logging.*`, `dashboard.enabled/port`, `layers.<name>.enabled` — previously dead yaml keys are now read by their subsystems.
+
+### Changed
+- **think auto-routing is real** — agent-voice signals route to the agent layer instead of always defaulting to user.
+- **forget(scope=recent)** uses manager APIs (`delete_older_than`) instead of raw SQL; fuzzy branch likewise via `delete_by_ids`/`delete_nodes`.
+- **Wiki taxonomy**: `project_spec` added as a user-layer type.
+- Hooks: config.yaml is the single source of truth (code-side duplicate list removed). Agent-layer `importance_gate` is explicitly disabled — explicit saves must not be silently dropped by the adaptive threshold.
+
+### Fixed
+- **Layer isolation for L3/L4** — core_memory and episodes gained a `layer` column (alembic c7e21a94b0d5); user facts and agent identity no longer share one namespace, unique key is now `(layer, user_id, key)`.
+- **Episode save** bound 4 params to 5 placeholders (created_at lost) — every insert raised OperationalError.
+- **forget(recent)** reported the staging purge count as graph deletions.
+- **Saga state reader** misclassified ~1/256 encrypted files as plain JSON (magic-byte sniff); decrypt-first now.
+- **tools/list was always empty** since inception: Literal imported from a nonexistent path, Context hidden under TYPE_CHECKING broke annotation eval, stdio entrypoint never registered tools (fix 419d577).
+
 ## [1.6.4] - 2026-08-12
 
 ### Added
