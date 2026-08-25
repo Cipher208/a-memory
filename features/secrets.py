@@ -125,7 +125,9 @@ def _load_master_key() -> bytes:
     import secrets as _secrets
 
     auto_key = _secrets.token_hex(32)
-    logger.warning("No master key found. Auto-generating key and saving to %s. For production, use keyring or set MCP_MASTER_KEY explicitly.", _dotenv_path())
+    logger.warning(
+        "No master key found. Auto-generating key and saving to %s. For production, use keyring or set MCP_MASTER_KEY explicitly.", _dotenv_path()
+    )
     _save_dotenv(_ENV_VAR, auto_key)
     res_auto = argon2id.kdf(
         size=_MASTER_KEY_LEN,
