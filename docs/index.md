@@ -4,8 +4,8 @@
 
 **Universal Two-Layer Memory MCP Server for AI agents**
 
-[![CI](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-372 passed-brightgreen)](https://github.com/Cipher208/mcp-ariel-memory/actions)
+[![CI](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-372 passed-brightgreen)](https://github.com/Cipher208/a-memory/actions)
 [![Python](https://img.shields.io/badge/python-3.10--3.13-blue)](https://www.python.org/)
 
 ---
@@ -46,7 +46,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 === "pip"
 
     ```bash
-    pip install git+https://github.com/Cipher208/mcp-ariel-memory.git
+    pip install git+https://github.com/Cipher208/a-memory.git
     python -m mcp_server --transport stdio
     ```
 

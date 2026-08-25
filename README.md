@@ -3,17 +3,17 @@
 > **Your AI agents forget. a-memory makes them remember.**
 > 4-tier agent memory with hybrid search, a real knowledge graph, and envelope encryption — all in plain SQLite files. Zero cloud. Zero external APIs.
 
-[![CI](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml)
-[![codecov](https://img.shields.io/codecov/c/github/Cipher208/mcp-ariel-memory?logo=codecov&logoColor=white)](https://codecov.io/gh/Cipher208/mcp-ariel-memory)
+[![CI](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml)
+[![codecov](https://img.shields.io/codecov/c/github/Cipher208/a-memory?logo=codecov&logoColor=white)](https://codecov.io/gh/Cipher208/a-memory)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
-[![Docs](https://img.shields.io/badge/docs-MkDocs%20Material-blue)](https://cipher208.github.io/mcp-ariel-memory/)
-[![Release](https://img.shields.io/github/v/release/Cipher208/mcp-ariel-memory)](https://github.com/Cipher208/mcp-ariel-memory/releases)
+[![Docs](https://img.shields.io/badge/docs-MkDocs%20Material-blue)](https://cipher208.github.io/a-memory/)
+[![Release](https://img.shields.io/github/v/release/Cipher208/a-memory)](https://github.com/Cipher208/a-memory/releases)
 
 > **Naming note:** the product name is **a-memory**; this repository is still
-> `Cipher208/mcp-ariel-memory` (renaming is pending — all links above use the
+> `Cipher208/a-memory` (renaming is pending — all links above use the
 > current name).
 
 ---
@@ -46,8 +46,8 @@ Three problems a-memory solves:
 ## Get started
 
 ```bash
-git clone https://github.com/Cipher208/mcp-ariel-memory.git
-cd mcp-ariel-memory
+git clone https://github.com/Cipher208/a-memory.git
+cd a-memory
 uv sync
 uv run ariel-memory          # MCP server on stdio — connect from any MCP client
 ```
@@ -58,7 +58,7 @@ Point your MCP client at it:
 {
   "mcpServers": {
     "a-memory": {
-      "command": "/path/to/mcp-ariel-memory/.venv/bin/python",
+      "command": "/path/to/a-memory/.venv/bin/python",
       "args": ["mcp_server/server.py", "--transport", "stdio"]
     }
   }
@@ -189,4 +189,4 @@ MIT © Cipher208
 
 ⭐ **If this project helps you, star it on GitHub.**
 
-[![Star History](https://api.star-history.com/svg?repos=Cipher208/mcp-ariel-memory&type=Timeline)](https://star-history.com/#Cipher208/mcp-ariel-memory&Timeline)
+[![Star History](https://api.star-history.com/svg?repos=Cipher208/a-memory&type=Timeline)](https://star-history.com/#Cipher208/a-memory&Timeline)

@@ -1,8 +1,8 @@
 site_name: mcp-ariel-memory
 site_description: Universal Two-Layer Memory MCP Server for AI agents
-site_url: https://cipher208.github.io/mcp-ariel-memory/
-repo_url: https://github.com/Cipher208/mcp-ariel-memory
-repo_name: Cipher208/mcp-ariel-memory
+site_url: https://cipher208.github.io/a-memory/
+repo_url: https://github.com/Cipher208/a-memory
+repo_name: Cipher208/a-memory
 
 theme:
   name: material

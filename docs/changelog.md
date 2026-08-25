@@ -1,6 +1,6 @@
 # Changelog
 
-Full history lives in [CHANGELOG.md](https://github.com/Cipher208/mcp-ariel-memory/blob/master/CHANGELOG.md).
+Full history lives in [CHANGELOG.md](https://github.com/Cipher208/a-memory/blob/master/CHANGELOG.md).
 
 ## v1.7.0 (2026-08-24)
 

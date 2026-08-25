@@ -11,7 +11,7 @@ Requires Python 3.10+ on the system. The npm wrapper automatically installs the 
 ## pip
 
 ```bash
-pip install git+https://github.com/Cipher208/mcp-ariel-memory.git
+pip install git+https://github.com/Cipher208/a-memory.git
 python -m mcp_server --transport stdio
 ```
 
@@ -25,7 +25,7 @@ docker run -p 8000:8000 ariel-memory
 ## From source
 
 ```bash
-git clone https://github.com/Cipher208/mcp-ariel-memory.git
+git clone https://github.com/Cipher208/a-memory.git
 cd mcp-ariel-memory
 pip install -e ".[all]"
 python -m mcp_server --transport stdio

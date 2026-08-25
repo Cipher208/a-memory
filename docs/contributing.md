@@ -3,7 +3,7 @@
 ## Development Setup
 
 ```bash
-git clone https://github.com/Cipher208/mcp-ariel-memory.git
+git clone https://github.com/Cipher208/a-memory.git
 cd mcp-ariel-memory
 pip install -e ".[dev,binary]"
 ```

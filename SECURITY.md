@@ -12,7 +12,7 @@
 
 Instead, use **GitHub Private Vulnerability Reporting**:
 
-1. Go to the [Security tab](https://github.com/Cipher208/mcp-ariel-memory/security) of the repository
+1. Go to the [Security tab](https://github.com/Cipher208/a-memory/security) of the repository
 2. Click "Report a vulnerability"
 3. Fill in the form with details about the vulnerability
 
