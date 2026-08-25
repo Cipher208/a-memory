@@ -5,6 +5,8 @@ WikiIndex Layer — handles all SQLite and FTS5 operations for Wiki.
 Isolates DB logic from filesystem and business logic.
 """
 
+import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -16,11 +18,12 @@ if TYPE_CHECKING:
     from wiki.models import WikiEntry
     from shared.connection import AsyncConnectionManager
 
-if TYPE_CHECKING:
-    from wiki.models import WikiEntry
-    from shared.connection import AsyncConnectionManager
-
 logger = logging.getLogger(__name__)
+
+# All WikiIndex instances (user/agent layers) share one SQLite connection;
+# multi-statement mutations must be serialized or a concurrent commit()
+# can land another task's half-finished transaction.
+_mutation_lock = asyncio.Lock()
 
 
 class WikiIndex:
@@ -48,7 +51,6 @@ class WikiIndex:
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_path ON wiki_index(file_path);
             CREATE INDEX IF NOT EXISTS idx_wiki_layer ON wiki_index(layer);
             CREATE INDEX IF NOT EXISTS idx_wiki_type ON wiki_index(wiki_type);
             CREATE INDEX IF NOT EXISTS idx_wiki_updated ON wiki_index(updated_at);
@@ -60,32 +62,52 @@ class WikiIndex:
             );
             """,
         )
+        # Layer-scoped path uniqueness. Created separately and guarded:
+        # a legacy DB holding the same file_path in both layers would make
+        # the new UNIQUE index fail, and init must not die on that.
+        try:
+            await self._cm.execute_script(
+                DB_NAME,
+                """
+                DROP INDEX IF EXISTS idx_wiki_path;
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_layer_path ON wiki_index(layer, file_path);
+                """,
+            )
+        except Exception as e:
+            logger.warning("Could not enforce (layer, file_path) uniqueness: %s", e)
 
     async def save(self, entry: WikiEntry, content_hash: str) -> None:
         """Atomic insert/update in both wiki_index and wiki_fts."""
-        now = time.time()
-        conn = await self._cm.get(DB_NAME)
+        async with _mutation_lock:
+            conn = await self._cm.get(DB_NAME)
+            try:
+                existing = await self._get_existing(conn, entry.file_path)
 
-        existing = await self._get_existing(conn, entry.file_path)
+                if existing:
+                    if existing["content_hash"] == content_hash:
+                        return
+                    await self._update_entry_and_fts(conn, entry, existing, content_hash)
+                else:
+                    await self._insert_entry_and_fts(conn, entry, content_hash, time.time())
 
-        if existing:
-            if existing["content_hash"] == content_hash:
-                return
-            await self._update_entry_and_fts(conn, entry, existing, content_hash, now)
-        else:
-            await self._insert_entry_and_fts(conn, entry, content_hash, now)
-
-        await conn.commit()
+                await conn.commit()
+            except Exception:
+                # Never leave a half-done index+FTS pair for the next
+                # unrelated commit() to finalize.
+                with contextlib.suppress(Exception):
+                    await conn.rollback()
+                raise
 
     async def _get_existing(self, conn: Any, file_path: str) -> dict[str, Any] | None:
         cur = await conn.execute(
-            "SELECT entry_id, title, content, wiki_type, tags, content_hash FROM wiki_index WHERE file_path=?",
-            (file_path,),
+            "SELECT entry_id, title, content, wiki_type, tags, content_hash FROM wiki_index WHERE layer=? AND file_path=?",
+            (self.layer, file_path),
         )
         row = await cur.fetchone()
         return dict(row) if row else None
 
-    async def _update_entry_and_fts(self, conn: Any, entry: WikiEntry, existing: dict[str, Any], content_hash: str, now: float) -> None:
+    async def _update_entry_and_fts(self, conn: Any, entry: WikiEntry, existing: dict[str, Any], content_hash: str) -> None:
+        now = time.time()
         entry_id = existing["entry_id"]
         tags_json = json.dumps(entry.tags)
 
@@ -97,9 +119,9 @@ class WikiIndex:
 
         await conn.execute(
             """UPDATE wiki_index
-               SET title=?, tags=?, importance=?, content=?, content_hash=?, updated_at=?
+               SET title=?, tags=?, importance=?, content=?, content_hash=?, wiki_type=?, updated_at=?
                WHERE entry_id=?""",
-            (entry.title, tags_json, entry.importance, entry.content, content_hash, now, entry_id),
+            (entry.title, tags_json, entry.importance, entry.content, content_hash, entry.wiki_type, now, entry_id),
         )
 
         await conn.execute(
@@ -125,8 +147,8 @@ class WikiIndex:
         """Fetch metadata and hash by file path."""
         conn = await self._cm.get(DB_NAME)
         cur = await conn.execute(
-            "SELECT * FROM wiki_index WHERE file_path=?",
-            (file_path,),
+            "SELECT * FROM wiki_index WHERE layer=? AND file_path=?",
+            (self.layer, file_path),
         )
         row = await cur.fetchone()
         return dict(row) if row else None
@@ -171,24 +193,30 @@ class WikiIndex:
 
     async def delete(self, file_path: str) -> None:
         """Remove from both tables."""
-        conn = await self._cm.get(DB_NAME)
-        cur = await conn.execute(
-            "SELECT entry_id, title, content, wiki_type, tags FROM wiki_index WHERE file_path=?",
-            (file_path,),
-        )
-        row = await cur.fetchone()
-        if not row:
-            return
+        async with _mutation_lock:
+            conn = await self._cm.get(DB_NAME)
+            try:
+                cur = await conn.execute(
+                    "SELECT entry_id, title, content, wiki_type, tags FROM wiki_index WHERE layer=? AND file_path=?",
+                    (self.layer, file_path),
+                )
+                row = await cur.fetchone()
+                if not row:
+                    return
 
-        entry_id = row["entry_id"]
-        # Delete from FTS first (using the 'delete' special command)
-        await conn.execute(
-            "INSERT INTO wiki_fts(wiki_fts, rowid, title, content, wiki_type, tags) VALUES ('delete', ?, ?, ?, ?, ?)",
-            (entry_id, row["title"], row["content"], row["wiki_type"], row["tags"]),
-        )
-        # Delete from main index
-        await conn.execute("DELETE FROM wiki_index WHERE entry_id=?", (entry_id,))
-        await conn.commit()
+                entry_id = row["entry_id"]
+                # Delete from FTS first (using the 'delete' special command)
+                await conn.execute(
+                    "INSERT INTO wiki_fts(wiki_fts, rowid, title, content, wiki_type, tags) VALUES ('delete', ?, ?, ?, ?, ?)",
+                    (entry_id, row["title"], row["content"], row["wiki_type"], row["tags"]),
+                )
+                # Delete from main index
+                await conn.execute("DELETE FROM wiki_index WHERE entry_id=?", (entry_id,))
+                await conn.commit()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    await conn.rollback()
+                raise
 
     async def count(self, wiki_type: str | None = None) -> int:
         """Count entries, optionally filtered by type."""
