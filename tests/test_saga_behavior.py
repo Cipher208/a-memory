@@ -15,12 +15,16 @@ def test_compensation_rolls_back():
     from core import memory_manager
 
     async def t():
-        try:
-            mm = memory_manager
-            await mm.user_memory("saga_c").remember("k1", "v1", 0.9)
-        except Exception as e:
-            print(f"DEBUG: Setup failed: {e}")
-            raise
+        mm = memory_manager
+        # Explicit schema init: recall() touches both L4 and L3, so this
+        # test must not depend on other tests having created those tables
+        # earlier in the session (isolated runs start with an empty DB).
+        layer = mm.user_memory("saga_c")
+        await layer.l4._init_db()
+        await layer.l3._init_db()
+
+        # Setup: k1 survives the saga, k2 gets compensated away
+        await mm.user_memory("saga_c").remember("k1", "v1", 0.9)
 
         async def step1(d):
             await mm.user_memory("saga_c").remember("k2", "v2", 0.8)
