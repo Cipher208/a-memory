@@ -39,8 +39,7 @@ class AgentHooks:
         score = default_importance(kind) if kind else 0.2
 
         # Agent-specific keywords
-        agent_keywords = ["error", "decision", "principle", "lesson", "pattern"]
-        for kw in agent_keywords:
+        for kw in ("error", "decision", "principle", "lesson", "pattern"):
             if kw in text.lower():
                 score += 0.15
         # General heuristics
@@ -49,13 +48,7 @@ class AgentHooks:
         if "?" in text:
             score += 0.1
 
-        score = min(1.0, score)
-
-        # Update EMA
-        threshold = await adaptive_threshold.get_threshold()
-        await adaptive_threshold.update(score)
-
-        return {"importance": score, "threshold": threshold, "bypass": score < threshold}
+        return await adaptive_threshold.gate(min(1.0, score))
 
     @hook_registry.mark("error_occurred", layer=AGENT_LAYER)
     async def _error_occurred(self, ctx: dict[str, Any]) -> dict[str, Any]:

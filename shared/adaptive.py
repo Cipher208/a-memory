@@ -6,6 +6,7 @@ Adaptive Threshold Management — EMA-based dynamic importance filtering.
 
 import logging
 import time
+from typing import Any
 
 from shared.connection import connection_manager
 
@@ -71,6 +72,16 @@ class AdaptiveThresholdManager:
         metrics.current_importance_threshold.set(updated)
 
         return updated
+
+    async def gate(self, score: float) -> dict[str, Any]:
+        """Gate a scored text against the current EMA threshold.
+
+        Reads the threshold, feeds the score back into the EMA, and returns
+        the verdict dict shared by all importance_gate hook handlers.
+        """
+        threshold = await self.get_threshold()
+        await self.update(score)
+        return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
     async def _save(self, value: float) -> None:
         """Persist threshold to DB."""

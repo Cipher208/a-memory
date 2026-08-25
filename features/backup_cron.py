@@ -192,8 +192,6 @@ class BackupCron:
         return self._do_backup()
 
     def restore(self, backup_name: str) -> dict[str, Any]:
-        import shutil
-
         src = self.backup_dir / backup_name
         if not src.exists() or src.is_symlink():
             return {"error": f"Backup not found or invalid: {backup_name}"}
@@ -204,28 +202,34 @@ class BackupCron:
         else:
             manifest = {"files": [f.name for f in src.glob("*.db")]}
 
-        restored = []
+        restored: list[str] = []
         for db_file in manifest.get("files", []):
             dest_path = self.base_dir / db_file
             if dest_path.exists() and dest_path.is_symlink():
                 logger.error("Refusing to restore over symlink: %s", dest_path)
                 continue
 
-            safe_resolve(self.base_dir, db_file)  # raises ValueError if traversal
-            if db_file.endswith("/"):
-                # Restore wiki directory
-                src_wiki = src / db_file
-                if src_wiki.exists() and not src_wiki.is_symlink():
-                    shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True)
-                    restored.append(db_file)
-            else:
-                backup_file = src / db_file
-                if backup_file.exists() and not backup_file.is_symlink():
-                    # skylos: ignore [SKY-D215, SKY-D325] - Safe via safe_resolve and symlink checks
-                    shutil.copy2(backup_file, dest_path)
-                    restored.append(db_file)
+            self._restore_entry(src, db_file, dest_path, restored)
 
         return {"restored": restored, "backup": backup_name}
+
+    def _restore_entry(self, src: Path, db_file: str, dest_path: Path, restored: list[str]) -> None:
+        """Restore one manifest entry — a wiki/ directory or a db file."""
+        import shutil
+
+        safe_resolve(self.base_dir, db_file)  # raises ValueError if traversal
+        if db_file.endswith("/"):
+            src_wiki = src / db_file
+            if src_wiki.exists() and not src_wiki.is_symlink():
+                shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True)
+                restored.append(db_file)
+            return
+
+        backup_file = src / db_file
+        if backup_file.exists() and not backup_file.is_symlink():
+            # skylos: ignore [SKY-D215, SKY-D325] - Safe via safe_resolve and symlink checks
+            shutil.copy2(backup_file, dest_path)
+            restored.append(db_file)
 
     def list_backups(self) -> list[dict[str, Any]]:
         backups: list[dict[str, Any]] = []
