@@ -18,7 +18,16 @@ from wiki.shared import (
 
 logger = logging.getLogger(__name__)
 
-ALL_USER_TYPES = ["diary", "relationships", "desires", "aspirations", "work_notes", "preferences", "retrospective"]
+ALL_USER_TYPES = [
+    "diary",
+    "relationships",
+    "desires",
+    "aspirations",
+    "work_notes",
+    "preferences",
+    "retrospective",
+]
+PROJECT_TYPES = ["project_spec"]  # projects are global; pages live in the user wiki
 ALL_AGENT_TYPES = [
     "decision_log",
     "error_analysis",
@@ -30,9 +39,9 @@ ALL_AGENT_TYPES = [
 ]
 
 LAYER_TYPES = {
-    "user": ALL_USER_TYPES,
+    "user": ALL_USER_TYPES + PROJECT_TYPES,
     "agent": ALL_AGENT_TYPES,
-    "shared": ALL_USER_TYPES + ALL_AGENT_TYPES,
+    "shared": ALL_USER_TYPES + ALL_AGENT_TYPES + PROJECT_TYPES,
 }
 
 

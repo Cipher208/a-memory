@@ -435,59 +435,62 @@ async def project(
             wiki_path = None
             status_res = "not_found"
     elif action == "audit":
-        # 1. Gather Context
+        """Dream-based gap analysis + project-store completeness."""
         multi_rag = _get_rag(app, layer)
-        context_results = await multi_rag.search(name, user_id=user_id, limit=20, intent="balanced")
+        verdicts: list[str] = []
 
-        # 2. Gap Analysis
-        has_arch = any(
-            "architecture" in (r.get("title", "") + r.get("content", "")).lower() or "design" in (r.get("title", "") + r.get("content", "")).lower()
-            for r in context_results
-        )
-        has_sec = any(
-            "security" in (r.get("title", "") + r.get("content", "")).lower() or "hardening" in (r.get("title", "") + r.get("content", "")).lower()
-            for r in context_results
-        )
-        has_test = any(
-            "testing" in (r.get("title", "") + r.get("content", "")).lower() or "verification" in (r.get("title", "") + r.get("content", "")).lower()
-            for r in context_results
-        )
+        # 1. Targeted searches per dimension (dream-style, not substring scans)
+        dimensions = {
+            "Architecture/Design": f"{name} architecture design schema",
+            "Security/Hardening": f"{name} security hardening secrets",
+            "Testing/Verification": f"{name} testing verification coverage",
+        }
+        for label, query in dimensions.items():
+            hits = await multi_rag.search(query, user_id=user_id, limit=5, intent="balanced")
+            if hits:
+                verdicts.append(f"{label}: {len(hits)} related entries found.")
+            else:
+                verdicts.append(f"{label} documentation is missing.")
 
-        verdicts = []
-        if has_arch:
-            verdicts.append("Architecture/Design is documented.")
-        else:
-            verdicts.append("Architecture/Design documentation is missing.")
-
-        if has_sec:
-            verdicts.append("Security/Hardening entries found.")
-        else:
-            verdicts.append("Security/Hardening information is missing.")
-
-        if has_test:
-            verdicts.append("Testing/Verification protocols exist.")
-        else:
-            verdicts.append("Testing/Verification entries are missing.")
-
-        # 3. Conflict Detection in L4 (CoreMemory)
+        # 2. Conflict Detection in L4 (CoreMemory)
         l4_hits = await mem.l4.search(user_id, name, limit=50)
         keys_seen: dict[str, Any] = {}
-        conflicts = []
+        conflicts: list[str] = []
         for hit in l4_hits:
             key = hit.get("key")
             val = hit.get("value")
             if key in keys_seen and keys_seen[key] != val:
                 conflicts.append(f"Memory conflict: '{key}' has multiple values ('{keys_seen[key]}' vs '{val}')")
             keys_seen[key] = val
-
         if conflicts:
             verdicts.extend(conflicts)
         else:
             verdicts.append("No memory conflicts detected in CoreMemory.")
 
+        # 3. Project store completeness (projects.db)
+        proj = await pm.get_project(name)
+        decisions = await pm.list_decisions(name)
+        artifacts = await pm.list_artifacts(name)
+        if not proj:
+            verdicts.append("Project identity is missing from projects.db (run init).")
+        else:
+            if proj.get("summary"):
+                verdicts.append("Project summary is present.")
+            else:
+                verdicts.append("Project summary is empty.")
+        if decisions:
+            latest = decisions[0]
+            age_days = max(0.0, (time.time() - float(latest.get("created_at", time.time()))) / 86400)
+            verdicts.append(f"Decisions recorded: {len(decisions)} (latest {age_days:.0f}d ago).")
+        else:
+            verdicts.append("No decisions recorded — outcome history is missing.")
+        verdicts.append(f"Artifact map: {len(artifacts)} tracked files.")
         audit_report = "\n".join(verdicts)
+        result_extra["decisions"] = decisions
+        result_extra["artifacts"] = artifacts
         status_res = "audit"
         wiki_path = None
+
     else:
         status_res = "error"
         path = None
