@@ -32,3 +32,10 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+      - name: Publish to PyPI
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          pip install twine
+          twine upload --non-interactive --config-file /dev/null -u __token__ -p "$PYPI_TOKEN" dist/*
