@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.connection import _DEFAULT_DIR
 from shared.path_safety import safe_resolve
 from wiki.models import WikiEntry
 from wiki.parser import WikiParser
@@ -50,7 +51,9 @@ class WikiManager:
 
     def __init__(self, layer: str = "user", base_dir: str | None = None, cm: AsyncConnectionManager | None = None):
         self.layer = layer
-        self.base_dir = Path(base_dir or str(Path.home() / ".mcp-ariel-memory" / "wiki" / layer))
+        # Same data dir the connection manager uses — wiki files must live
+        # inside the instance's own MCP_MEMORY_DATA_DIR, not a shared folder.
+        self.base_dir = Path(base_dir or str(Path(_DEFAULT_DIR) / "wiki" / layer))
         self._cm = cm or connection_manager
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index = WikiIndex(self._cm, layer)
