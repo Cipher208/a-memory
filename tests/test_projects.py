@@ -67,7 +67,7 @@ async def test_symbols_replace(cm):
 async def test_primitive_init_decision_recall(tmp_path):
     import importlib
 
-    prim = importlib.import_module('mcp_server.tools.primitives.project')
+    prim = importlib.import_module("mcp_server.tools.primitives.project")
     project = prim.project
 
     cm = AsyncConnectionManager(base_dir=tmp_path)
@@ -132,7 +132,7 @@ async def test_update_without_graphify_skips_code_map(tmp_path):
     """graphify absent -> update still succeeds, code_map reports skipped."""
     import importlib
 
-    prim = importlib.import_module('mcp_server.tools.primitives.project')
+    prim = importlib.import_module("mcp_server.tools.primitives.project")
     project = prim.project
 
     cm = AsyncConnectionManager(base_dir=tmp_path)
