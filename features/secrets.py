@@ -112,6 +112,17 @@ def _load_master_key() -> bytes:
     # Try environment variable with argon2id KDF
     env_seed = os.environ.get(_ENV_VAR)
     if env_seed:
+        # The KDF salt is a fixed constant by design: it makes keys portable
+        # (same seed + same data file decrypt on any machine). This is safe
+        # for high-entropy seeds — the auto-generated ones are 256-bit. It
+        # does NOT protect weak user-chosen seeds from cross-install
+        # precomputation, so warn loudly about those instead of pretending.
+        if len(env_seed) < 32:
+            logger.warning(
+                "MCP_MASTER_KEY is shorter than 32 chars — a low-entropy seed is "
+                "vulnerable to precomputed attacks (argon2id hardens but cannot "
+                "salvage weak seeds). Prefer the auto-generated key or keyring."
+            )
         res_kdf = argon2id.kdf(
             size=_MASTER_KEY_LEN,
             password=env_seed.encode("utf-8"),
