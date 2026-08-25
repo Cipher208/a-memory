@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from config import config
+from features.backup import snapshot_sqlite
 from shared.path_safety import safe_resolve
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class BackupCron:
         self.jitter_seconds = config.get("backup", "jitter_seconds") or 3600
         self.wiki_sync_interval = config.get("backup", "wiki_sync_interval_minutes") or 30
         self._running = False
+        self._main_loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._last_backup = 0.0
         self._last_wiki_sync = 0.0
@@ -63,6 +65,22 @@ class BackupCron:
         self._thread.start()
         jitter_info = f" (+{self.jitter_seconds}s jitter)" if self.jitter_seconds else ""
         logger.info(f"Backup cron started (interval={self.interval_hours}h{jitter_info})")
+
+    def capture_main_loop(self) -> None:
+        """Remember the server's event loop for cron-thread jobs.
+
+        aiosqlite connections are bound to that loop; scheduling coroutines
+        onto it avoids the cross-loop deadlock class.
+        """
+        try:
+            self._main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._main_loop = None
+
+    def _await_on_main_loop(self, coro: Any, timeout: float = 120) -> Any:
+        if self._main_loop is not None and self._main_loop.is_running():
+            return asyncio.run_coroutine_threadsafe(coro, self._main_loop).result(timeout=timeout)
+        return asyncio.run(coro)
 
     def stop(self) -> None:
         self._running = False
@@ -104,12 +122,10 @@ class BackupCron:
     def _fire_nightly_hooks(self) -> None:
         """Trigger nightly maintenance hooks for both layers."""
         try:
-            import asyncio
-
             from hooks.registry import hook_registry
 
             for layer in ["user", "agent"]:
-                asyncio.run(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
+                self._await_on_main_loop(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
         except Exception:
             logger.exception("Nightly hook error")
 
@@ -127,7 +143,7 @@ class BackupCron:
         for db_file in db_files:
             src = self.base_dir / db_file
             if src.exists():
-                shutil.copy2(src, dest / db_file)
+                snapshot_sqlite(src, dest / db_file)
                 backed_up.append(db_file)
 
         # Backup wiki .md files
@@ -164,7 +180,7 @@ class BackupCron:
             for layer in ["user", "agent"]:
                 fw = WikiManager(layer=layer)
                 raw = fw.reindex_all()
-                result: dict[str, Any] = asyncio.run(raw) if asyncio.iscoroutine(raw) else raw
+                result: dict[str, Any] = self._await_on_main_loop(raw) if asyncio.iscoroutine(raw) else raw
                 if isinstance(result, dict) and result.get("indexed", 0) > 0:
                     logger.info("Wiki %s synced: %d files", layer, result["indexed"])
             self._last_wiki_sync = time.time()

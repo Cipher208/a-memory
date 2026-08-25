@@ -23,6 +23,7 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
 
     async def _delayed_start() -> None:
         await asyncio.sleep(5)
+        backup_cron.capture_main_loop()
         backup_cron.start()
         importance_scheduler.start()
         logging.getLogger(__name__).info("Background tasks started after delay")

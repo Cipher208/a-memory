@@ -41,6 +41,9 @@ class RAGSearcher:
             self._fts_available = "ENABLE_FTS5" in options
         except Exception:
             self._fts_available = False
+        if not self._fts_available:
+            version_row = await (await conn.execute("SELECT sqlite_version()")).fetchone()
+            logger.warning("SQLite %s lacks FTS5 — falling back to LIKE search", version_row[0] if version_row else "unknown")
         return bool(self._fts_available)
 
     async def _search_fts5(self, query: str, user_id: str, limit: int) -> list[SearchResult]:

@@ -2,7 +2,7 @@
 
 Master key resolution order:
 1. OS keychain (keyring library) — recommended for production
-2. .env file in project root (MCP_MASTER_KEY=...)
+2. .env file in the data dir (MCP_MASTER_KEY=...); legacy repo-root .env is still read
 3. crypto.master_key_hex in config.yaml
 4. MCP_MASTER_KEY environment variable (argon2id KDF)
 5. Fail loud if none available
@@ -37,32 +37,47 @@ _KDF_SALT = b"ariel-memory-v1\x00"
 _MASTER_KEY_LEN = 32
 
 
+def _dotenv_path() -> Path:
+    """Canonical .env location: the data dir, not CWD.
+
+    A repo root or web-servable directory is the wrong place to
+    persist a master key.
+    """
+    data_dir = os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")
+    return Path(data_dir) / ".env"
+
+
 def _load_dotenv() -> None:
-    """Load .env file if it exists and MCP_MASTER_KEY is not already set."""
+    """Load .env values if MCP_MASTER_KEY is not already set.
+
+    Reads both the canonical data-dir path and the legacy repo-root
+    path (older installs auto-generated their key there).
+    """
     if os.environ.get(_ENV_VAR):
         return
-    env_path = Path(".env")
-    if not env_path.exists():
-        return
-    try:
-        with Path(env_path).open() as f:
-            for raw_line in f:
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if "=" in line:
-                    key, _, value = line.partition("=")
-                    key = key.strip()
-                    value = value.strip().strip("\"'")
-                    if key and key not in os.environ:
-                        os.environ[key] = value
-    except Exception:
-        logger.exception("Failed to load .env")
+    for env_path in (_dotenv_path(), Path(".env")):
+        if not env_path.exists():
+            continue
+        try:
+            with Path(env_path).open() as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        key, _, value = line.partition("=")
+                        key = key.strip()
+                        value = value.strip().strip("\"'")
+                        if key and key not in os.environ:
+                            os.environ[key] = value
+        except Exception:
+            logger.exception("Failed to load .env at %s", env_path)
 
 
 def _save_dotenv(key: str, value: str) -> None:
-    """Save a key-value pair to .env file."""
-    env_path = Path(".env")
+    """Save a key-value pair to the data-dir .env file."""
+    env_path = _dotenv_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     with contextlib.suppress(Exception), env_path.open("a") as f:
         f.write(f"\n{key}={value}\n")
 
@@ -110,7 +125,7 @@ def _load_master_key() -> bytes:
     import secrets as _secrets
 
     auto_key = _secrets.token_hex(32)
-    logger.warning("No master key found. Auto-generating key and saving to .env. For production, use keyring or set MCP_MASTER_KEY explicitly.")
+    logger.warning("No master key found. Auto-generating key and saving to %s. For production, use keyring or set MCP_MASTER_KEY explicitly.", _dotenv_path())
     _save_dotenv(_ENV_VAR, auto_key)
     res_auto = argon2id.kdf(
         size=_MASTER_KEY_LEN,

@@ -48,10 +48,12 @@ def test_dotenv_roundtrip(tmp_path, monkeypatch, env_content, expected_key):
     """_save_dotenv writes, _load_dotenv reads. Comments/blanks ignored."""
     from features.secrets import _load_dotenv, _save_dotenv
 
+    monkeypatch.setenv("MCP_MEMORY_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("MCP_MASTER_KEY", raising=False)
 
     if env_content.startswith("#"):
+        # legacy repo-root .env — still read
         (tmp_path / ".env").write_text(env_content)
     else:
         _save_dotenv("MCP_MASTER_KEY", env_content.split("=", 1)[1])

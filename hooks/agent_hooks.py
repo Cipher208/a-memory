@@ -13,7 +13,6 @@ from .shared import (
     dream_buffer_staging,
     forgetting_ritual,
     retrieval_router,
-    run_async,
 )
 
 from shared.constants import DEFAULT_USER, AGENT_LAYER
@@ -59,40 +58,40 @@ class AgentHooks:
         return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
     @hook_registry.mark("error_occurred", layer=AGENT_LAYER)
-    def _error_occurred(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _error_occurred(self, ctx: dict[str, Any]) -> dict[str, Any]:
         error = ctx.get("error", "")
-        node_id: str = run_async(self.graph.add_node(self.user_id, error, "error_analysis", ["error_pattern"], 0.8))
+        node_id = await self.graph.add_node(self.user_id, error, "error_analysis", ["error_pattern"], 0.8)
         return {"action": "error_analyzed", "node_id": node_id}
 
     @hook_registry.mark("decision_made", layer=AGENT_LAYER)
-    def _decision_made(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _decision_made(self, ctx: dict[str, Any]) -> dict[str, Any]:
         decision = ctx.get("decision", "")
         rationale = ctx.get("rationale", "")
-        node_id: str = run_async(self.graph.add_node(self.user_id, f"{decision}: {rationale}", "decision_log", ["decided_because"], 0.7))
+        node_id = await self.graph.add_node(self.user_id, f"{decision}: {rationale}", "decision_log", ["decided_because"], 0.7)
         return {"action": "decision_logged", "node_id": node_id}
 
     @hook_registry.mark("self_correction", layer=AGENT_LAYER)
-    def _self_correction(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _self_correction(self, ctx: dict[str, Any]) -> dict[str, Any]:
         error = ctx.get("error", "")
         fix = ctx.get("fix", "")
-        node_id: str = run_async(self.graph.add_node(self.user_id, f"Error: {error} → Fix: {fix}", "correction", ["correction_pattern"], 0.6))
+        node_id = await self.graph.add_node(self.user_id, f"Error: {error} → Fix: {fix}", "correction", ["correction_pattern"], 0.6)
         return {"action": "correction_logged", "node_id": node_id}
 
     @hook_registry.mark("personality_shift", layer=AGENT_LAYER)
-    def _personality_shift(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _personality_shift(self, ctx: dict[str, Any]) -> dict[str, Any]:
         shift = ctx.get("shift", "")
-        node_id: str = run_async(self.graph.add_node(self.user_id, shift, "personality_evolution", ["personality_trait", "evolved_to"], 0.9))
+        node_id = await self.graph.add_node(self.user_id, shift, "personality_evolution", ["personality_trait", "evolved_to"], 0.9)
         return {"action": "personality_evolved", "node_id": node_id}
 
     @hook_registry.mark("emotion_context", layer=AGENT_LAYER)
-    def _emotion_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _emotion_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
         emotion = ctx.get("emotion", "")
         context = ctx.get("context", "")
-        node_id: str = run_async(self.graph.add_node(self.user_id, f"{emotion} in: {context}", "emotional_context", ["felt_in_context"], 0.6))
+        node_id = await self.graph.add_node(self.user_id, f"{emotion} in: {context}", "emotional_context", ["felt_in_context"], 0.6)
         return {"action": "emotion_logged", "node_id": node_id}
 
     @hook_registry.mark("wiki_agent", layer=AGENT_LAYER)
-    def _wiki_agent(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _wiki_agent(self, ctx: dict[str, Any]) -> dict[str, Any]:
         return {"action": "wiki_sync", "summary": ctx.get("summary", "")}
 
     @hook_registry.mark("dream_buffer", layer=AGENT_LAYER)
@@ -100,27 +99,27 @@ class AgentHooks:
         return await dream_buffer_staging(ctx, self.user_id, layer=AGENT_LAYER, cm=mem._cm if mem else None)
 
     @hook_registry.mark("consolidation", layer="both")
-    def _consolidation(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return consolidation(ctx, self.user_id, min_importance=0.6, action_key="agent_consolidated")
+    async def _consolidation(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        return await consolidation(ctx, self.user_id, min_importance=0.6, action_key="agent_consolidated")
 
     @hook_registry.mark("forgetting_ritual", layer="both")
-    def _forgetting_ritual(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return forgetting_ritual(ctx)
+    async def _forgetting_ritual(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        return await forgetting_ritual(ctx)
 
     @hook_registry.mark("auto_context", layer="both")
-    def _auto_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return auto_context(ctx, self.user_id, layer=AGENT_LAYER)
+    async def _auto_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        return await auto_context(ctx, self.user_id, layer=AGENT_LAYER)
 
     @hook_registry.mark("retrieval_router", layer="both")
-    def _retrieval_router(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return retrieval_router(ctx, self.user_id, layer=AGENT_LAYER)
+    async def _retrieval_router(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        return await retrieval_router(ctx, self.user_id, layer=AGENT_LAYER)
 
     @hook_registry.mark("conflict_resolver", layer="both")
-    def _conflict_resolver(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return conflict_resolver(ctx, self.user_id)
+    async def _conflict_resolver(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        return await conflict_resolver(ctx, self.user_id)
 
     @hook_registry.mark("emotion", layer=AGENT_LAYER)
-    def _emotion(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _emotion(self, ctx: dict[str, Any]) -> dict[str, Any]:
         emotion = ctx.get("emotion", "")
-        node_id: str = run_async(self.graph.add_node(self.user_id, emotion, "emotional_context", ["felt_in_context"], 0.5))
+        node_id = await self.graph.add_node(self.user_id, emotion, "emotional_context", ["felt_in_context"], 0.5)
         return {"action": "emotion_recorded", "node_id": node_id}

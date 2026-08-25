@@ -6,9 +6,15 @@ L1 ReflexBuffer - ring buffer for recent messages
 
 import json
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+
+# ponytail: debounced persistence — L1 is a 50-entry ring, losing the last
+# few seconds on a crash is acceptable; per-add fsync is not.
+_SAVE_INTERVAL_SEC = 30.0
+_SAVE_EVERY_ADDS = 10
 
 
 @dataclass
@@ -25,16 +31,21 @@ class ReflexBuffer:
         self.persist_path = persist_path
         self._buffer: deque[ReflexEntry] = deque(maxlen=max_size)
         self._lock = threading.Lock()
+        self._adds_since_save = 0
+        self._last_save_ts = 0.0
         if persist_path:
             self._load()
 
     def add(self, role: str, content: str, tokens: int = 0) -> None:
-        import time
-
         entry = ReflexEntry(role=role, content=content, tokens=tokens, timestamp=time.time())
         with self._lock:
             self._buffer.append(entry)
-            self._save()
+            self._adds_since_save += 1
+            now = time.time()
+            if self._last_save_ts == 0.0 or now - self._last_save_ts >= _SAVE_INTERVAL_SEC or self._adds_since_save >= _SAVE_EVERY_ADDS:
+                self._save()
+                self._adds_since_save = 0
+                self._last_save_ts = now
 
     def get_recent(self, n: int = 10) -> list[ReflexEntry]:
         with self._lock:

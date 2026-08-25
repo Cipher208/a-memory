@@ -19,6 +19,25 @@ from shared.path_safety import safe_resolve
 logger = logging.getLogger(__name__)
 
 
+def snapshot_sqlite(src: Path, dest: Path) -> None:
+    """Consistent copy of a live SQLite DB via the online backup API.
+
+    shutil.copy2 on a WAL-mode database can capture torn pages; the
+    backup API copies a transactionally consistent snapshot instead.
+    """
+    import sqlite3
+
+    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    try:
+        dst_conn = sqlite3.connect(dest)
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+
+
 class BackupManager:
     def __init__(self, base_dir: str | None = None):
         self.base_dir = Path(base_dir or str(Path.home() / ".mcp-ariel-memory"))
@@ -38,7 +57,7 @@ class BackupManager:
         for db_file in db_files:
             src = self.base_dir / db_file
             if src.exists() and not src.is_symlink():
-                shutil.copy2(src, dest / db_file)
+                snapshot_sqlite(src, dest / db_file)
                 backed_up.append(db_file)
 
         manifest = {"name": name, "timestamp": timestamp, "files": backed_up}

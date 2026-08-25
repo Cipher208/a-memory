@@ -193,20 +193,24 @@ async def test_agent_hooks_importance_gate():
     assert r2["bypass"] is True
 
 
-def test_agent_hooks_error_occurred():
+@pytest.mark.asyncio
+async def test_agent_hooks_error_occurred():
     from hooks.agent_hooks import AgentHooks
 
     ah = AgentHooks("test_hooks")
-    r = ah._error_occurred({"error": "NullPointerException"})
+    await ah.graph.init_db()
+    r = await ah._error_occurred({"error": "NullPointerException"})
     assert "node_id" in r
     assert r["action"] == "error_analyzed"
 
 
-def test_agent_hooks_decision_made():
+@pytest.mark.asyncio
+async def test_agent_hooks_decision_made():
     from hooks.agent_hooks import AgentHooks
 
     ah = AgentHooks("test_hooks")
-    r = ah._decision_made({"decision": "Use async", "rationale": "performance"})
+    await ah.graph.init_db()
+    r = await ah._decision_made({"decision": "Use async", "rationale": "performance"})
     assert "node_id" in r
     assert r["action"] == "decision_logged"
 

@@ -185,13 +185,13 @@ class Dashboard:
         return {
             "l1_buffer": um.l1.size(),
             "l2_sessions": await um.l2.count_sessions(user_id),
-            "l3_episodes": len(await um.l3.get_episodes(user_id, 1000)),
+            "l3_episodes": await um.l3.count(user_id),
             "l4_facts": await um.l4.count(user_id),
             "wiki_pages": await uw.count(user_id),
             "graph_nodes": await ug.count_nodes(user_id),
             "agent_l1": am.l1.size(),
             "agent_l2": await am.l2.count_sessions(user_id),
-            "agent_l3": len(await am.l3.get_episodes(user_id, 1000)),
+            "agent_l3": await am.l3.count(user_id),
             "agent_l4": await am.l4.count(user_id),
             "agent_wiki": await aw.count(user_id),
         }
