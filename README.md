@@ -1,6 +1,7 @@
-# mcp-ariel-memory
+# a-memory
 
-> **Give your AI agents real memory** — episodic recall, knowledge graphs, hybrid search, and envelope encryption in a single MCP server. 5 universal primitives (`think` / `dream` / `forget` / `evolve` / `project`). Layer-isolated storage. 500+ tests.
+> **Your AI agents forget. a-memory makes them remember.**
+> 4-tier agent memory with hybrid search, a real knowledge graph, and envelope encryption — all in plain SQLite files. Zero cloud. Zero external APIs.
 
 [![CI](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/mcp-ariel-memory/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/Cipher208/mcp-ariel-memory?logo=codecov&logoColor=white)](https://codecov.io/gh/Cipher208/mcp-ariel-memory)
@@ -11,401 +12,181 @@
 [![Docs](https://img.shields.io/badge/docs-MkDocs%20Material-blue)](https://cipher208.github.io/mcp-ariel-memory/)
 [![Release](https://img.shields.io/github/v/release/Cipher208/mcp-ariel-memory)](https://github.com/Cipher208/mcp-ariel-memory/releases)
 
+> **Naming note:** the product name is **a-memory**; this repository is still
+> `Cipher208/mcp-ariel-memory` (renaming is pending — all links above use the
+> current name).
+
 ---
 
-## About
+## Why SQLite?
 
-mcp-ariel-memory is a production-ready MCP (Model Context Protocol) server that provides persistent, searchable memory for AI agents. It implements a two-layer architecture:
+Every other memory server sends your agent's data through a cloud API or requires a separate vector database.
 
-- **Layer 1 (User)** — stores facts about users: preferences, conversation history, emotional context, relationships
-- **Layer 2 (Agent)** — stores agent identity: decisions, errors, personality evolution, learning patterns
+**a-memory stores everything in SQLite files on your machine.**
 
-The server is built on the native mcp 2.x Python SDK (`mcp.server.mcpserver.MCPServer`), supports both stdio and HTTP transports, and includes enterprise features like authentication, rate limiting, automatic backups, and a real-time dashboard.
+- **Zero infrastructure.** No Docker, no database server, no embedding API keys.
+- **Zero data leaving your network.** Works air-gapped.
+- **Layer-isolated by design.** User facts and agent identity never share a namespace.
+- **One directory = entire memory.** Back up with `cp`, sync with rsync.
 
-### Architecture
+---
 
-```mermaid
-graph TD
-    A[LLM Agent] -->|MCP Protocol| B[mcp_server]
-    B --> C{ImportanceGate}
-    C -->|score > 0.3| D[L1: ReflexBuffer]
-    C -->|score ≤ 0.3| E[Filtered Out]
-    D --> F[L2: SessionStore]
-    F --> G{EmotionTrigger?}
-    G -->|high emotion| H[L3: EpisodicMemory]
-    G -->|normal| I[Consolidation]
-    H --> J[L4: CoreMemory]
-    I --> J
+## Why this exists
 
-    B --> K[RAG Engine]
-    K --> L[FTS5 Search]
-    K --> M[MIB Binary Search]
-    K --> N[Hybrid Scoring]
+Three problems a-memory solves:
 
-    B --> O[Wiki System]
-    O --> P[.md Files]
-    O --> Q[SQLite Index]
+**① Agent self-evolution** — your AI stops repeating mistakes between sessions. It remembers decisions, errors, and corrections in a dedicated agent layer, and an hourly consolidation sweep promotes what matters into long-term facts.
 
-    B --> R[Knowledge Graphs]
-    R --> S[Epistemic Graph]
-    R --> T[Temporal Graph]
-```
+**② User persona persistence** — your agent knows who it's talking to even after weeks of silence. Preferences, history, emotional context live in the user layer, isolated from agent identity.
 
-### Why mcp-ariel-memory?
+**③ Project continuity** — `project` tracks per-project context: decisions with rationale and outcomes, artifact maps, a graphify-powered code index — so a fresh session picks up where the last one left off.
 
-| Feature | mcp-ariel-memory | Typical Memory |
-|---------|------------------|----------------|
-| **Memory hierarchy** | L1→L2→L3→L4 (4 layers) | Flat key-value store |
-| **Universal Primitives** | `think`, `dream`, `forget`, `evolve` | Simple CRUD |
-| **Shadow Bin** | Soft-delete with archival | Permanent delete |
-| **Adaptive Threshold** | Dynamic EMA-based noise filtering | Static threshold |
-| **Hybrid search** | FTS5 + binary embeddings + RRF | FTS or vector only |
-| **Token Budgeting** | Managed context overflow | None |
-| **Knowledge graphs** | Epistemic + Temporal | None |
-| **Typed memory** | 13 categories with per-type retention | None |
-| **Wiki** | 14 types, .md files as source of truth | None |
-| **Metrics** | Real-time Prometheus exporter | None |
+---
 
-### Who needs this?
-
-- **AI agent developers** — give your agent memory that persists across sessions
-- **Multi-agent systems** — one database, isolated tables, shared memory on demand
-- **Anyone tired of "forget context every request"** — mcp-ariel-memory remembers for you
-- **Data-conscious teams** — everything local, no cloud dependency
-
-## Installation
-
-### Option 1: npm (recommended for MCP clients)
-
-```bash
-npx mcp-ariel-memory --transport stdio
-```
-
-Requires Python 3.10+ on the system. The npm wrapper automatically installs the Python package.
-
-### Option 2: pip
-
-```bash
-pip install git+https://github.com/Cipher208/mcp-ariel-memory.git
-python -m mcp_server --transport stdio
-```
-
-### Option 3: Docker
-
-```bash
-docker build -t ariel-memory .
-docker run -p 8000:8000 ariel-memory
-```
-
-### Option 4: From source
+## Get started
 
 ```bash
 git clone https://github.com/Cipher208/mcp-ariel-memory.git
 cd mcp-ariel-memory
-pip install -e ".[all]"
-python -m mcp_server.server --transport stdio
+uv sync
+uv run ariel-memory          # MCP server on stdio — connect from any MCP client
 ```
 
-### Monitoring & Maintenance
-
-mcp-ariel-memory includes built-in tools for keeping the system healthy:
-
-- **Prometheus Metrics** — The server exports real-time metrics on port `9120`. Monitor search latency, operation counts, and memory growth.
-- **Memory Auto-Compaction** — Automatically archives old memories with low importance scores to keep the context window efficient.
-- **Adaptive Threshold (EMA)** — The importance filter dynamically adjusts to your conversation style, ensuring only high-signal data reaches long-term storage.
-- **Alembic Migrations** — Versioned database schema management for reliable updates.
-
----
-
-## Quick Start
-
-### Claude Desktop
-
-Add to `claude_desktop_config.json`:
+Point your MCP client at it:
 
 ```json
 {
   "mcpServers": {
-    "ariel-memory": {
-      "command": "npx",
-      "args": ["mcp-ariel-memory", "--transport", "stdio"]
+    "a-memory": {
+      "command": "/path/to/mcp-ariel-memory/.venv/bin/python",
+      "args": ["mcp_server/server.py", "--transport", "stdio"]
     }
   }
 }
 ```
 
-Or with Docker:
-
-```json
-{
-  "mcpServers": {
-    "ariel-memory": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "ariel-memory", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-### Hermes Agent
-
-Add to Hermes config (YAML format):
-
-```yaml
-mcpServers:
-  ariel-memory:
-    command: npx
-    args:
-      - mcp-ariel-memory
-      - --transport
-      - stdio
-```
-
-### HTTP Server
+HTTP transport with dashboard:
 
 ```bash
-# Start HTTP server (no auth required for MCP endpoint)
-python -m mcp_server.server --transport http --port 8000
-
-# With dashboard (disabled by default)
-python -m mcp_server.server --transport http --port 8000 --dashboard
-
-# Development mode (no auth at all)
-python -m mcp_server.server --transport http --port 8000 --no-auth
-
-# Or with Docker
-docker run -p 8000:8000 ariel-memory --transport http --port 8000
+uv run ariel-memory --transport http --port 8000 --dashboard
 ```
 
-### docker-compose
-
-```bash
-docker-compose up
-```
+> PyPI package (`pip install a-memory`) ships with the repo rename. See [Roadmap](#roadmap).
 
 ---
 
-## Platform Support
+## The five primitives
 
-| Platform | Method | Notes |
-|----------|--------|-------|
-| **Windows** | npm / pip / Docker | aiosqlite fallback (sync sqlite3 + to_thread) |
-| **Linux** | npm / pip / Docker | aiosqlite (native async) |
-| **macOS** | npm / pip / Docker | aiosqlite (native async) |
-| **Docker** | Any | Works on all platforms with Docker |
+Agents see exactly five tools — one verb per intent, no tool-choice paralysis:
 
----
+| Primitive | Intent | What it does |
+|---|---|---|
+| **`think`** | remember | Routes content to the right layer (L4 facts / L3 episodes / wiki / graph) based on importance, emotion, and relations |
+| **`dream`** | recall | Hybrid search across ALL layers (FTS5 + binary embeddings + wiki + graph), returns a token-budgeted digest |
+| **`forget`** | let go | Context-aware deletion with Shadow Bin archival (exact / fuzzy / recent) |
+| **`evolve`** | grow | Records personality/rules evolution for the agent |
+| **project** | continue | Per-project identity, decision log, artifact map, code index |
 
-## Database Schema (21 tables)
+Quick demo — Python MCP client:
 
-Single `memory.db` file — no external database required.
+```python
+# think — routed to the right store automatically
+await session.call_tool("think", {"text": "User prefers dark mode", "layer": "user"})
 
-| Table | Module | Purpose |
-|-------|--------|---------|
-| `core_memory` | core/memory.py | L4 key-value facts |
-| `sessions` | core/session.py | L2 session history |
-| `episodes` | core/episodic.py | L3 episodic memories |
-| `staging_memories` | shared/dream_buffer.py | Temporary staging |
-| `archived_memories` | shared/archived_memories.py | Archived memories |
-| `audit_log` | features/audit_trail.py | Audit trail |
-| `rate_limits" | features/rate_limiting.py | Rate limiting |
-| `embedding_cache` | shared/embeddings.py | Cached embeddings |
-| `rag_pages` | rag/engine.py | RAG document pages |
-| `rag_chunks` | rag/engine.py | RAG document chunks |
-| `rag_relations` | rag/engine.py | RAG relations |
-| `epi_nodes` | graph/epistemic.py | Epistemic graph nodes |
-| `epi_edges` | graph/epistemic.py | Epistemic graph edges |
-| `temporal_events` | graph/temporal.py | Temporal events |
-| `temporal_links` | graph/temporal.py | Temporal links |
-| `user_wiki` | wiki/models.py | User wiki entries |
-| `agent_wiki` | wiki/models.py | Agent wiki entries |
-| `wiki_index` | wiki/index.py | Wiki FTS5 index |
-| `memory_conflicts` | rag/conflict.py | Memory conflicts |
-| `migration_log` | shared/migrations.py | Migration history |
+# dream — finds it across every store, a week later
+res = await session.call_tool("dream", {"query": "dark mode preference"})
+print(res["summary"])
+```
+
+~30 additional fine-grained operations (typed CRUD per store, sessions, ops/admin) stay available behind `ARIEL_EXPOSE=all`.
 
 ---
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **35 MCP Tools** | Universal Primitives (5), Layer CRUD (14), Wiki (4), Ops & Maintenance (12) |
-| **Two-Layer Memory** | L1 ReflexBuffer → L2 SessionStore → L3 EpisodicMemory → L4 CoreMemory |
-| **Envelope Encryption** | libsodium secretbox (AES-256-GCM) for API keys, tokens, saga state |
-| **Unified Search API** | Single `search()` method with 4 strategies: `fts`, `mib`, `hybrid`, `auto` |
-| **MultiSourceRAG** | Unified search across RAG + Wiki with deduplication and reranking |
-| **ITS Scoring** | Novelty component using document frequency as prior for better ranking |
-| **Supervised Thresholds** | Per-dimension MIB thresholds trained on labeled data (+10-15% recall) |
-| **Knowledge Graph** | Epistemic graph (facts, decisions) + Temporal graph (timeline) |
-| **Wiki System** | 14 types (7 user + 7 agent), .md files as source of truth, FTS5 index |
-| **24 Hooks** | 12 user hooks + 12 agent hooks, integrated into tool pipeline |
-| **Saga Pattern** | Multi-step operations with compensation, timeout, watchdog |
-| **Dashboard** | HTML dashboard with stats, facts, episodes, audit log |
-| **Auth** | API keys + Bearer tokens, encrypted at rest |
-| **Rate Limiting** | Per-user limits on write operations (100 req/min default) |
-| **Backup** | Auto-backups with jitter, restore, cleanup |
-| **Metrics** | Prometheus-compatible metrics endpoint |
-| **Read-Only Replica** | SQLite read-only replica for queries |
-| **Embeddings** | Multilingual (100+ languages including Russian) |
+| Category | What's inside |
+|----------|--------------|
+| 🧠 **Memory** | L1 Reflex → L2 Sessions → L3 Episodic → L4 Core, importance scoring, typed memory kinds with TTL policies, layer isolation |
+| 🔍 **Search** | FTS5 + MIB binary embeddings + hybrid RRF ranking, multi-source merge (RAG + Wiki + Episodic + Core + Graph), dream digest |
+| 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal |
+| 📁 **Projects** | Decision log (what/why/outcome), artifact map, graphify code index — survives between sessions |
+| 🔐 **Security** | Envelope encryption (libsodium secretbox), master key chain, rate limiting |
+| 🛠️ **Ops** | Auto-backup cron, saga rollback pattern, Prometheus metrics, read-only replica, hourly self-maintenance (decay + consolidation + auto-VACUUM) |
+| 🌐 **Wiki** | FTS5-indexed markdown files — edit in Obsidian/VS Code, search from MCP |
 
 ---
 
 ## Architecture
 
-### Memory Hierarchy
+```mermaid
+graph TD
+    A[LLM Agent] -->|MCP Protocol| B[mcp_server]
+    B --> C{Importance Scoring}
+    C --> D[L1: ReflexBuffer]
+    D --> E[L2: SessionStore]
+    E --> F{EmotionTrigger?}
+    F -->|high emotion| G[L3: EpisodicMemory]
+    F -->|normal| H[L4: CoreMemory]
 
-```
-Message → L1 (ReflexBuffer, ring buffer, 50 items)
-         → ImportanceGate (noise filter, threshold 0.3)
-         → L2 (SessionStore, SQLite, 100 sessions)
-         → EmotionTrigger (emotional analysis)
-         → L3 (EpisodicMemory, SQLite, 1000 episodes)
-         → L4 (CoreMemory, key-value, 5000 facts)
-```
+    B --> I[RAG Engine]
+    I --> J[FTS5 Search]
+    I --> K[MIB Binary Search]
+    I --> L[Hybrid RRF Ranking]
 
-### Secret Resolution Order
+    B --> M[Wiki System]
+    M --> N[.md Files]
+    M --> O[SQLite Index]
 
-```
-1. OS keychain (keyring library) — recommended for production
-2. .env file (MCP_MASTER_KEY=...)
-3. config.yaml (crypto.master_key_hex)
-4. Environment variable (MCP_MASTER_KEY)
-```
+    B --> P[Knowledge Graphs]
+    P --> Q[Epistemic Graph]
+    P --> R[Temporal Graph]
 
-### Search Strategies
+    B --> S[Project Store]
+    S --> T[Decisions / Artifacts / Code Index]
 
-| Strategy | Description | When to Use |
-|----------|-------------|-------------|
-| `fts` | Full-text search via FTS5 with LIKE fallback | Short queries (<3 words), keyword-heavy |
-| `mib` | Binary embedding similarity (Hamming distance) | Semantic similarity, concept-based |
-| `hybrid` | Combines FTS5 + MIB with Scorer ranking | General-purpose, best recall |
-| `auto` | Automatically selects `fts` for short queries, `hybrid` for longer | Default for most use cases |
-
----
-
-## Documentation
-
-Full documentation with API reference, architecture diagrams, and guides:
-
-**[Read the Docs →](https://cipher208.github.io/mcp-ariel-memory/)**
-
-| Topic | Link |
-|-------|------|
-| Architecture | [Overview](https://cipher208.github.io/mcp-ariel-memory/architecture/overview/) |
-| MCP Tools | [Reference](https://cipher208.github.io/mcp-ariel-memory/tools/reference/) |
-| Configuration | [Guide](https://cipher208.github.io/mcp-ariel-memory/getting-started/configuration/) |
-| API Reference | [Secrets](https://cipher208.github.io/mcp-ariel-memory/api/secrets/), [Importance](https://cipher208.github.io/mcp-ariel-memory/api/importance/) |
-
----
-
-## Testing
-
-```bash
-# Run all tests (250 passed, 39 property-based)
-pytest tests/ -v
-
-# Run with parallel execution
-pytest tests/ -v -n auto
-
-# Run only integration tests
-pytest tests/test_integration.py -v
-
-# Run with coverage
-pytest tests/ --cov=. --cov-report=term-missing
-
-# Run performance benchmark
-python -m tests.benchmark_perf
-```
-
-### Benchmark
-
-| Operation | Speed | Notes |
-|-----------|-------|-------|
-| `memory_remember` (layer op) | 1533 ops/s | SQLite + encryption |
-| `memory_recall` | 6739 q/s | FTS5 search |
-| `encrypt+decrypt` | 402 ops/s | argon2id KDF |
-| `fts_search` | 1817 ops/s | FTS5 full-text search |
-| `mib_search` | 215 ops/s | Binary embedding search (batched) |
-| `hybrid_search` | 178 ops/s | FTS5 + MIB combined |
-| `epi_tags_join` | 1850 ops/s | Tag lookup via epi_tags table |
-| `rag_chunks_join` | 3537 ops/s | rag_chunks + rag_pages JOIN |
-
----
-
-## Configuration
-
-```yaml
-# config.yaml (optional, mounted as volume)
-layers: { user: { enabled: true }, agent: { enabled: true } }
-limits: { l1_buffer_size: 50, l4_core_limit: 5000 }
-hooks: { user: { message_received: true }, agent: { error_occurred: true } }
-forgetting: { decay_rate: 0.01, archive_threshold_days: 90 }
-rag: { fts_enabled: true, vec_enabled: true }
-embeddings: { model: "BAAI/bge-small-en-v1.5" }
-wiki:
-  user: { diary: true, external_dirs: ["/path/to/notes"] }
-  agent: { decision_log: true, external_dirs: ["/path/to/lore"] }
-auth: { api_keys_enabled: true, bearer_token_enabled: true }
-backup: { auto_backup: true, backup_interval_hours: 24 }
-
-# Security: master key (add config.yaml to .gitignore!)
-# crypto:
-#   master_key_hex: "your-32-byte-hex-key"
-```
-
-### Secrets Management
-
-On first run without a master key, the server **auto-generates** a key and saves it to `.env` for development convenience.
-
-```bash
-# Check if .env was created
-cat .env
-
-# For production, set explicitly:
-export MCP_MASTER_KEY="your-32-byte-hex-key"
-
-# Or use OS keychain (recommended)
-pip install keyring
-python -c "from features.secrets import install_master_key_to_keychain; install_master_key_to_keychain('your-key')"
+    U[Hourly Sweep] -->|consolidate| G
+    U -->|promote| H
+    U -->|auto-VACUUM| V[(SQLite)]
 ```
 
 ---
 
-## Development
+## Comparison
 
-```bash
-# Install dev dependencies
-pip install -e ".[dev,binary]"
-
-# Run linter
-ruff check .
-
-# Format code
-ruff format .
-
-# Type check
-mypy --config-file pyproject.toml features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/
-
-# Run tests
-pytest tests/ -v --timeout=30
-```
+| | a-memory | mem0 | memgpt | chroma |
+|---|---|---|---|---|
+| **MCP native** | ✅ | ❌ | ❌ | ❌ |
+| **4-layer hierarchy** | ✅ Layer-isolated | ❌ | ❌ | ❌ |
+| **Local-only (no cloud)** | ✅ **SQLite — 0 infra** | ❌ needs API | ❌ needs API | ✅ local |
+| **Own semantic search (no API)** | ✅ MIB binary + FTS5 hybrid | ❌ | ❌ | vector only |
+| **Knowledge graph** | ✅ Typed nodes + edges | ❌ | ❌ | ❌ |
+| **Envelope encryption** | ✅ libsodium | ❌ | ❌ | ❌ |
+| **Lifecycle hooks** | ✅ per-layer, config-gated | limited | limited | none |
+| **Backup / restore** | ✅ Auto-cron + saga | ❌ | ❌ | ❌ |
 
 ---
 
-## Community
+## Roadmap
 
-- [Contributing Guide](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Discussions](https://github.com/Cipher208/mcp-ariel-memory/discussions)
-- [Changelog](https://github.com/Cipher208/mcp-ariel-memory/releases)
+- [x] 4-layer memory hierarchy with layer isolation
+- [x] Hybrid search (FTS5 + MIB binary embeddings)
+- [x] Knowledge graphs (epistemic + temporal)
+- [x] Hourly consolidation sweep + DB self-maintenance
+- [x] mcp 2.x native SDK
+- [ ] **Repo rename to `Cipher208/a-memory` + PyPI package** (`pip install a-memory`)
+- [ ] **Screenshot / asciinema demo** in README
+- [ ] **LLM-assisted consolidation** on top of the deterministic sweep
 
----
+## Contributing
+
+PRs welcome! See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT © Cipher208
 
 ---
 
-![Star History Chart](https://api.star-history.com/svg?repos=Cipher208/mcp-ariel-memory&type=Date)
+⭐ **If this project helps you, star it on GitHub.**
+
+[![Star History](https://api.star-history.com/svg?repos=Cipher208/mcp-ariel-memory&type=Timeline)](https://star-history.com/#Cipher208/mcp-ariel-memory&Timeline)

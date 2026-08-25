@@ -1,4 +1,6 @@
-# mcp-ariel-memory
+# a-memory
+
+> Product name of the `mcp-ariel-memory` server — your AI agents forget; a-memory makes them remember.
 
 **Universal Two-Layer Memory MCP Server for AI agents**
 
