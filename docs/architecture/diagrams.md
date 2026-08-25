@@ -4,16 +4,16 @@
 
 ```mermaid
 graph TB
-    Client[MCP Client<br/>LLM Agent] -->|stdio/HTTP| Server[mcp_server<br/>FastMCP]
+    Client[MCP Client<br/>LLM Agent] -->|stdio/HTTP| Server[mcp_server<br/>MCPServer mcp 2.x]
 
     subgraph Server
-        Tools[Tools Layer<br/>19 tools] --> Hooks[Hooks Pipeline<br/>24 hooks]
+        Tools[Tools Layer<br/>35 tools / 5 primitives exposed] --> Hooks[Hooks Pipeline<br/>19 hooks]
         Hooks --> Memory[Memory Layer]
     end
 
     subgraph Memory Layer
-        L1[L1: ReflexBuffer<br/>ring 50] --> L2[L2: EpisodicMemory<br/>sessions]
-        L2 --> L3[L3: SessionStore<br/>entries]
+        L1[L1: ReflexBuffer<br/>ring 50] --> L2[L2: SessionStore<br/>sessions]
+        L2 --> L3[L3: EpisodicMemory<br/>episodes]
         L3 --> L4[L4: CoreMemory<br/>key-value 5000]
     end
 
@@ -27,25 +27,21 @@ graph TB
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant L1 as L1 ReflexBuffer
-    participant L2 as L2 EpisodicMemory
-    participant L3 as L3 SessionStore
+    participant Agent
+    participant T as think / dream
+    participant ST as DreamBuffer staging
+    participant SW as Hourly Sweep
+    participant L3 as L3 EpisodicMemory
     participant L4 as L4 CoreMemory
 
-    User->>L1: remember(content)
-    Note over L1: Ring buffer (max 50)
-
-    L1->>L1: Buffer full?
-    alt Buffer full
-        L1->>L2: Create session summary
-        L2->>L3: Store entry
-    end
-
-    L3->>L3: Important entry?
-    alt High importance
-        L3->>L4: Promote to core (Typed Memory)
-    end
+    Agent->>T: text / query
+    T->>L3: episodes (importance-routed)
+    T->>ST: dream() digests staged
+    Note over SW: runs hourly per layer
+    SW->>ST: drain staging → consolidate_staging per user
+    SW->>L3: consolidation sweep (dedup by layer)
+    SW->>L4: promote recurring episodes to core facts
+    Note over SW: staging leftovers >24h dropped
 ```
 
 ## RAG Search Pipeline
@@ -78,8 +74,8 @@ graph LR
     Tools --> Encrypt[Envelope Encryption<br/>libsodium secretbox]
 
     subgraph Key Resolution
-        KR1[OS Keychain] --> KR2[config.yaml]
-        KR2 --> KR3[.env file]
+        KR1[OS Keychain] --> KR2[.env file]
+        KR2 --> KR3[config.yaml]
         KR3 --> KR4[env var]
         KR4 --> KR5[auto-generate]
     end

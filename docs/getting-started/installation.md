@@ -1,52 +1,47 @@
 # Installation
 
-## npm (recommended)
+## pip (recommended)
 
 ```bash
-npx mcp-ariel-memory --transport stdio
-```
-
-Requires Python 3.10+ on the system. The npm wrapper automatically installs the Python package.
-
-## pip
-
-```bash
-pip install git+https://github.com/Cipher208/a-memory.git
-python -m mcp_server --transport stdio
-```
-
-## Docker
-
-```bash
-docker build -t ariel-memory .
-docker run -p 8000:8000 ariel-memory
+pip install a-memory
+a-memory          # MCP server on stdio — connect from any MCP client
 ```
 
 ## From source
 
 ```bash
 git clone https://github.com/Cipher208/a-memory.git
-cd mcp-ariel-memory
-pip install -e ".[all]"
-python -m mcp_server --transport stdio
+cd a-memory
+uv sync
+uv run ariel-memory
+```
+
+## Docker
+
+```bash
+docker build -t a-memory .
+docker run -p 8000:8000 a-memory
 ```
 
 ## Dependencies
 
-### Core
+Requires Python 3.10+. Core dependencies install automatically:
+`mcp[cli]>=2,<3`, `pydantic>=2.0`, `pyyaml>=6.0`, `pynacl>=1.5.0`,
+`aiosqlite>=0.22.1`, `numpy>=2.2.6`, `prometheus-client`, `alembic`,
+`starlette`, `uvicorn`, `python-frontmatter`.
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| mcp[cli] | >=1.27,<2 | MCP Python SDK |
-| pydantic | >=2.0 | Data validation |
-| pynacl | >=1.5.0 | Envelope encryption |
-| pyyaml | >=6.0 | Config parsing |
+### Optional extras
 
-### Optional
+| Extra | Installs | Purpose |
+|-------|----------|---------|
+| `binary` | numpy | Binary embeddings (MIB search) |
+| `vec` | sqlite-vec | Vector search backend |
+| `ann` | hnswlib | Approximate nearest neighbors |
+| `win` | pinned aiosqlite | Windows compatibility |
+| `dev` | pytest, ruff, mypy, ... | Development |
+| `docs` | mkdocs-material | Documentation build |
+| `all` | everything above | Full setup |
 
-| Package | Extra | Purpose |
-|---------|-------|---------|
-| aiosqlite | win | Async SQLite (auto-installed on Linux/macOS) |
-| numpy | binary | Binary embeddings (MIB search) |
-| sqlite-vec | vec | Vector search |
-| hnswlib | ann | Approximate nearest neighbors |
+```bash
+pip install "a-memory[all]"
+```

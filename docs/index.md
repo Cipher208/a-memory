@@ -37,24 +37,26 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 ## Quick Start
 
-=== "npm (recommended)"
+=== "pip (recommended)"
 
     ```bash
-    npx mcp-ariel-memory --transport stdio
+    pip install a-memory
+    a-memory --transport stdio
     ```
 
-=== "pip"
+=== "From source"
 
     ```bash
-    pip install git+https://github.com/Cipher208/a-memory.git
-    python -m mcp_server --transport stdio
+    git clone https://github.com/Cipher208/a-memory.git
+    cd a-memory && uv sync
+    uv run ariel-memory
     ```
 
 === "Docker"
 
     ```bash
-    docker build -t ariel-memory .
-    docker run -p 8000:8000 ariel-memory
+    docker build -t a-memory .
+    docker run -p 8000:8000 a-memory
     ```
 
 ### Claude Desktop
@@ -62,9 +64,8 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 ```json
 {
   "mcpServers": {
-    "ariel-memory": {
-      "command": "npx",
-      "args": ["mcp-ariel-memory", "--transport", "stdio"]
+    "a-memory": {
+      "command": "a-memory"
     }
   }
 }
@@ -74,10 +75,10 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 | Section | Description |
 |---------|-------------|
-| [Architecture](architecture/overview.md) | Two-layer model, L1-L4, consolidation, 22 DB tables |
+| [Architecture](architecture/overview.md) | Layered model, L1-L4, consolidation, 23 DB tables |
 | [MCP Tools](tools/reference.md) | Tool reference (layer ops; agents normally see only the 5 primitives) |
 | [RAG & Search](rag/engine.md) | Unified search, BM25 conflict similarity, type-aware boost |
-| [Hooks](hooks/system.md) | 24 hooks (12 user + 12 agent), type-aware gating |
+| [Hooks](hooks/system.md) | 19 lifecycle hooks (12 user + 13 agent slots), importance gating |
 | [Operations](operations/deployment.md) | Transports, health, auth, configuration |
 | [API Reference](api/secrets.md) | Auto-generated from docstrings |
 

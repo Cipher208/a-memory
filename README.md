@@ -46,10 +46,8 @@ Three problems a-memory solves:
 ## Get started
 
 ```bash
-git clone https://github.com/Cipher208/a-memory.git
-cd a-memory
-uv sync
-uv run ariel-memory          # MCP server on stdio — connect from any MCP client
+pip install a-memory
+a-memory          # MCP server on stdio — connect from any MCP client
 ```
 
 Point your MCP client at it:
@@ -58,8 +56,7 @@ Point your MCP client at it:
 {
   "mcpServers": {
     "a-memory": {
-      "command": "/path/to/a-memory/.venv/bin/python",
-      "args": ["mcp_server/server.py", "--transport", "stdio"]
+      "command": "a-memory"
     }
   }
 }
@@ -68,10 +65,17 @@ Point your MCP client at it:
 HTTP transport with dashboard:
 
 ```bash
-uv run ariel-memory --transport http --port 8000 --dashboard
+a-memory --transport http --port 8000 --dashboard
 ```
 
-> PyPI package (`pip install a-memory`) ships with the repo rename. See [Roadmap](#roadmap).
+Or run from source:
+
+```bash
+git clone https://github.com/Cipher208/a-memory.git
+cd a-memory
+uv sync
+uv run ariel-memory
+```
 
 ---
 
@@ -173,7 +177,7 @@ graph TD
 - [x] Knowledge graphs (epistemic + temporal)
 - [x] Hourly consolidation sweep + DB self-maintenance
 - [x] mcp 2.x native SDK
-- [ ] **Repo rename to `Cipher208/a-memory` + PyPI package** (`pip install a-memory`)
+- [x] Repo renamed to `Cipher208/a-memory`; PyPI package live (`pip install a-memory`)
 - [ ] **Screenshot / asciinema demo** in README
 - [ ] **LLM-assisted consolidation** on top of the deterministic sweep
 

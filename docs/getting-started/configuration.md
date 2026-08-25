@@ -5,28 +5,48 @@
 Location: `config.yaml` (project root or `~/.mcp-ariel-memory/config.yaml`)
 
 ```yaml
-# Memory settings
-memory:
-  max_l1_size: 50          # ReflexBuffer ring buffer size
-  max_l2_sessions: 100     # EpisodicMemory max sessions
-  max_l3_entries: 500      # SessionStore max entries
-  max_l4_facts: 5000       # CoreMemory max facts
+# Layer limits
+limits:
+  l1_buffer_size: 50       # ReflexBuffer ring buffer
+  l2_session_limit: 100    # SessionStore sessions
+  l3_episodic_limit: 1000  # EpisodicMemory episodes
+  l4_core_limit: 5000      # CoreMemory facts
 
 # RAG settings
 rag:
-  chunk_size: 512
-  chunk_overlap: 50
-  search_strategy: auto    # fts | mib | hybrid | auto
+  chunk_size: 500
+  chunk_overlap: 100
+  search_limit: 10         # default when callers pass limit=None
 
-# Crypto
-crypto:
-  master_key_hex: ""       # Override keychain (dev only)
+# Binary embeddings (MIB)
+binary:
+  mode: naive
+  dim: 384
 
-# Hooks
+# DB self-maintenance thresholds (checked by the hourly sweep)
+storage:
+  db_warn_mb: 50
+  db_alert_mb: 200
+  vacuum_min_mb: 10
+  vacuum_freelist_ratio: 0.25
+
+# Dashboard / metrics endpoints
+dashboard:
+  enabled: false
+  port: 8000
+
+# Hooks — single source of truth; a missing hook key means enabled.
+# Toggles only: the importance threshold itself is adaptive (EMA), not config.
 hooks:
-  user_importance_gate: 0.3
-  agent_importance_gate: 0.3
+  user:
+    importance_gate: true
+    consolidation: true
+  agent:
+    personality_shift: true
+    error_occurred: true
 ```
+
+The repo-root `config.yaml` is the shared default; per-agent copies live outside the repo and are selected with `MCP_CONFIG_PATH`. On startup a-memory warns when such a copy is missing keys that exist in the newer default. See `docs/CONTROL_MAP.md` for the full key-to-subsystem map.
 
 ## Environment Variables
 
@@ -34,8 +54,10 @@ hooks:
 |----------|---------|-------------|
 | `MCP_MASTER_KEY` | auto-generated | Master key for envelope encryption |
 | `MCP_MEMORY_DATA_DIR` | `~/.mcp-ariel-memory` | Data directory for SQLite databases |
+| `MCP_CONFIG_PATH` | repo-root `config.yaml` | Per-agent config file path |
+| `ARIEL_EXPOSE` | `primitives` | `all` restores the full 35-tool surface |
 | `MCP_AUTH_TOKEN` | auto-generated | Bearer token for HTTP transport |
-| `MCP_SERVER_PORT` | 8000 | HTTP server port |
+| `MCP_AUTH_DISABLED` | unset | Set to `1` to disable auth (`--no-auth` does this) |
 | `BACKUP_CRON_DISABLED` | false | Disable backup cron daemon |
 
 ## Key Resolution Order
@@ -43,10 +65,10 @@ hooks:
 Master key is resolved in this order:
 
 1. **OS keychain** (keyring library) — recommended for production
-2. **config.yaml** (`crypto.master_key_hex`)
-3. **.env file** (`MCP_MASTER_KEY=...`) — local development only
-4. **Environment variable** (`MCP_MASTER_KEY`)
-5. **Auto-generate** — creates key and saves to `.env`
+2. **.env file** in the data dir (`MCP_MASTER_KEY=...`)
+3. **`crypto.master_key_hex` in config.yaml**
+4. **Environment variable** (`MCP_MASTER_KEY`, argon2id KDF)
+5. **Auto-generate** — creates key and saves it
 
 ## Transports
 

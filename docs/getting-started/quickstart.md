@@ -7,9 +7,8 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "ariel-memory": {
-      "command": "npx",
-      "args": ["mcp-ariel-memory", "--transport", "stdio"]
+    "a-memory": {
+      "command": "a-memory"
     }
   }
 }
@@ -37,6 +36,6 @@ Then configure your MCP client to connect to `http://localhost:8000/mcp`.
 Once connected, try:
 
 ```
-memory_remember: {"layer": "user", "content": "I prefer dark mode", "kind": "preference"}
-memory_recall: {"layer": "user", "query": "display preferences"}
+think: {"text": "User prefers dark mode and concise answers"}
+dream: {"query": "display preferences"}
 ```
