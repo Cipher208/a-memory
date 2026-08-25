@@ -151,18 +151,22 @@ class ForgettingSystem:
         try:
             conn = await self._cm.get(DB_NAME)
             # Same key in DIFFERENT layers is not a duplicate — dedupe per layer.
-            cursor = await conn.execute("SELECT layer, user_id, key, COUNT(*) as cnt FROM core_memory GROUP BY layer, user_id, key HAVING cnt > 1")
-            duplicates = await cursor.fetchall()
-            removed = 0
-            for dup in duplicates:
-                await conn.execute(
-                    """DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=? AND entry_id NOT IN
-                       (SELECT entry_id FROM core_memory WHERE layer=? AND user_id=? AND key=? ORDER BY updated_at DESC LIMIT 1)""",
-                    (dup["layer"], dup["user_id"], dup["key"], dup["layer"], dup["user_id"], dup["key"]),
-                )
-                changes_cursor = await conn.execute("SELECT changes()")
-                changes_row = await changes_cursor.fetchone()
-                removed += int(changes_row[0]) if changes_row and changes_row[0] is not None else 0
+            # Single set-based DELETE: keep the newest row per (layer, user_id, key),
+            # remove the rest in one statement instead of per-key round trips.
+            cursor = await conn.execute(
+                """DELETE FROM core_memory WHERE entry_id IN (
+                       SELECT entry_id FROM (
+                           SELECT entry_id,
+                                  ROW_NUMBER() OVER (
+                                      PARTITION BY layer, user_id, key
+                                      ORDER BY updated_at DESC, entry_id DESC
+                                  ) AS rn
+                           FROM core_memory
+                       )
+                       WHERE rn > 1
+                   )""",
+            )
+            removed = int(cursor.rowcount or 0)
             await conn.commit()
             return removed
         except Exception:

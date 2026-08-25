@@ -94,6 +94,23 @@ class ImportanceScheduler:
         return stats
 
     async def _rescore_user(self, user_id: str, conn: Any, stats: dict[str, int]) -> None:
+        # Retrieval counts batched once per user instead of one COUNT query
+        # per row (the audit_log table is scanned for every fact otherwise).
+        rc_map: dict[int, int] = {
+            int(r["target_id"]): int(r["c"])
+            for r in await (
+                await conn.execute(
+                    """SELECT target_id, COUNT(*) c FROM audit_log
+                       WHERE action='recall_useful' AND layer='core_memory'
+                         AND target_id IN (
+                             SELECT entry_id FROM core_memory
+                             WHERE user_id=? AND updated_at > ?
+                         )
+                       GROUP BY target_id""",
+                    (user_id, time.time() - self.cfg.only_recent_days * 86400),
+                )
+            ).fetchall()
+        }
         rows = await (
             await conn.execute(
                 """SELECT entry_id, "key", value, importance, memory_kind
@@ -104,7 +121,7 @@ class ImportanceScheduler:
         ).fetchall()
 
         for r in rows:
-            rc = await self._lookup_retrieval_count(conn, "core_memory", int(r["entry_id"]))
+            rc = rc_map.get(int(r["entry_id"]), 0)
             signals = self.scorer.score(
                 text=r["value"] or "",
                 kind=r["memory_kind"] or "fact",
