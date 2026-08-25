@@ -53,10 +53,9 @@ async def test_think_records_temporal_event(tmp_path):
     from core import MemoryManager
     from wiki import WikiManager
 
-    cm = AsyncConnectionManager(base_dir=str(tmp_path)) if False else None
-    from shared.connection import AsyncConnectionManager as _ACM
+    from shared.connection import AsyncConnectionManager
 
-    cm = _ACM(base_dir=str(tmp_path))
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
     await TemporalGraph(cm=cm).ensure()
 
     class App:
