@@ -27,16 +27,15 @@ def test_complex_question_trigger(emotion_trigger):
     assert score == 0.4
 
 
-def test_exclamation_trigger(emotion_trigger):
-    message = "Wow!! This is great!!"
-    # "great" might trigger joy (0.4 or phrase score)
-    # If joy > 0.3, it might return joy.
-    # Let's use a text that doesn't trigger emotions but has exclamations.
-    message = "!! !!"
-    should_save, trigger, score = emotion_trigger.should_save(message)
+def test_exclamation_amplifier_only(emotion_trigger):
+    # Bare punctuation must not create an episode ("Ok!!" noise regression)
+    should_save, trigger, _ = emotion_trigger.should_save("!! !!")
+    assert should_save is False
+
+    # But exclamations still amplify a real emotional match
+    should_save, trigger, score = emotion_trigger.should_save("I love this!!")
     assert should_save is True
-    assert trigger == "exclamation"
-    assert score == 0.3
+    assert trigger != "exclamation"  # the engine's match wins; "!!" only amplifies
 
 
 def test_emotional_state_trigger(emotion_trigger):

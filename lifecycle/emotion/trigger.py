@@ -37,7 +37,9 @@ class EmotionTrigger:
         if message.count("?") >= 3:
             candidates.append(("complex_question", 0.4))
 
-        if message.count("!") >= 2:
+        # Amplifier, not a standalone trigger: "Ok!!" alone must not create
+        # an episode — exclamation only raises an existing candidate's score.
+        if candidates and message.count("!") >= 2:
             candidates.append(("exclamation", 0.3))
 
         # 3. Contextual emotional state

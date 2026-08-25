@@ -134,10 +134,11 @@ async def think(
         actions.append({"type": "Graph_node_add", "node_type": "relation"})
 
     # 5. Hooks
-    hook_tasks = [
-        _fire_hook("message_received", resolved_layer, {"text": text, "user_id": user_id}, mem=mem),
-        _fire_hook("emotion_trigger", resolved_layer, {"text": text, "user_id": user_id, "importance": importance}, mem=mem),
-    ]
+    hook_tasks = [_fire_hook("message_received", resolved_layer, {"text": text, "user_id": user_id}, mem=mem)]
+    # User-emotion analysis only makes sense on the user layer; agent
+    # self-reflection runs through its own graph hooks instead.
+    if resolved_layer == "user":
+        hook_tasks.append(_fire_hook("emotion_trigger", resolved_layer, {"text": text, "user_id": user_id, "importance": importance}, mem=mem))
 
     import inspect
 
