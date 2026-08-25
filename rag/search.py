@@ -1,7 +1,6 @@
 """RAG search strategies — FTS5, binary, hybrid, RRF."""
 
 import logging
-from contextlib import suppress
 from typing import Any
 from collections.abc import Callable
 
@@ -142,9 +141,11 @@ async def search_rrf(
 
     bin_ranks = {}
     if binary_for_fn:
-        with suppress(Exception):
+        try:
             bin_results = await search_binary(cm, query, user_id, limit * 3, binary_for_fn, binary_dim, layer=layer)
             bin_ranks = {r["id"]: rank for rank, r in enumerate(bin_results)}
+        except Exception as e:
+            logger.warning("binary branch failed during RRF merge: %s", e)
 
     merged = _calculate_rrf_scores(fts_ranks, bin_ranks, k)
     sorted_ids = sorted(merged.keys(), key=lambda x: -merged[x])[:limit]

@@ -14,6 +14,7 @@ still apply, but the copy is worth refreshing.
 
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Self
 
@@ -37,11 +38,13 @@ def _missing_keys(loaded: dict[str, Any], reference: dict[str, Any], prefix: str
 class Config:
     _instance: Self | None = None
     _data: dict[str, Any] = {}
+    _lock = threading.Lock()
 
     def __new__(cls) -> Self:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._load()
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._load()
         return cls._instance
 
     @staticmethod

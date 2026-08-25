@@ -15,6 +15,7 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.memory_types import MemoryKind, default_importance, get_policy, kind_for_text, validate_kind
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +91,6 @@ class CoreMemory:
         self, value: str, kind_str: str | None, imp: float | None, exp: float | None, now: float
     ) -> tuple[str, float, float | None]:
         from config import config
-        from shared.memory_types import (
-            MemoryKind,
-            default_importance,
-            get_policy,
-            kind_for_text,
-            validate_kind,
-        )
 
         if kind_str is None or config.get("typed_memory", "reclassify_on_save", default=False):
             kind_str = kind_for_text(value).value

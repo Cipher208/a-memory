@@ -33,6 +33,7 @@ from .base import (
     _estimate_tokens,
     _truncate_to_budget,
     _fire_hook,
+    _invalidate_cache,
     DEFAULT_TOKEN_BUDGET,
 )
 
@@ -267,6 +268,8 @@ async def memory_data(
         return DataResult(path=path).dict()
     if action == "import":
         result = await app.import_export.import_user(file_path, target_user_id or user_id)
+        for layer in ("user", "agent"):
+            _invalidate_cache(layer, target_user_id or user_id)
         return DataResult(**result).dict()
     return DataResult(exports=app.import_export.list_exports()).dict()
 
@@ -314,6 +317,8 @@ async def memory_cleanup(
         forgetting_system.run_cleanup(user_id),
     )
 
+    for layer in ("user", "agent"):
+        _invalidate_cache(layer, user_id)
     return CleanupResult(
         dedup_core=results[0],
         compress_episodes=results[1],
@@ -345,6 +350,8 @@ async def memory_lucidity_purge(
         _purge_staging(user_id),
     )
 
+    for layer in ("user", "agent"):
+        _invalidate_cache(layer, user_id)
     return PurgeResult(
         core_memory=results[0],
         episodes=results[1],
