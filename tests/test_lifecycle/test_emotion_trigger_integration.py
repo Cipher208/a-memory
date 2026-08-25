@@ -33,7 +33,7 @@ def test_exclamation_amplifier_only(emotion_trigger):
     assert should_save is False
 
     # But exclamations still amplify a real emotional match
-    should_save, trigger, score = emotion_trigger.should_save("I love this!!")
+    should_save, trigger, _ = emotion_trigger.should_save("I love this!!")
     assert should_save is True
     assert trigger != "exclamation"  # the engine's match wins; "!!" only amplifies
 
