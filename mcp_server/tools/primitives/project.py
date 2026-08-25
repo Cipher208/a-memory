@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import time
@@ -148,6 +149,16 @@ async def _action_decision(
     if not decision:
         return "error", {}, "decision text required", None
     await pctx.pm.add_decision(name, decision=decision, rationale=details, outcome=outcome)
+    if pctx.app.temporal:
+        with contextlib.suppress(Exception):
+            await pctx.app.temporal.add_event(
+                pctx.user_id,
+                "project_decision",
+                f"{name}: {decision}"[:200],
+                importance=0.8,
+                metadata={"outcome": outcome[:100]},
+                layer=pctx.layer,
+            )
     return "decided", {}, None, None
 
 

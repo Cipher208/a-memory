@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -32,6 +33,17 @@ async def evolve(
     # Save to Agent's CoreMemory (L4)
     mem = app.mm.agent_memory(user_id)
     await mem.remember("agent_evolution", instruction, importance=1.0)
+
+    # Timeline: personality evolution is a first-class event
+    if app.temporal:
+        with contextlib.suppress(Exception):
+            await app.temporal.add_event(
+                user_id,
+                "personality_shift",
+                instruction[:200],
+                importance=1.0,
+                layer="agent",
+            )
 
     # Personality shift hook
     hook_result = await _fire_hook("personality_shift", "agent", {"instruction": instruction, "user_id": user_id}, mem=mem)

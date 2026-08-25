@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -115,6 +116,18 @@ async def think(
     # self-reflection runs through its own graph hooks instead.
     if resolved_layer == "user":
         hook_tasks.append(_fire_hook("emotion_trigger", resolved_layer, {"text": text, "user_id": user_id, "importance": importance}, mem=mem))
+
+    # Timeline: significant thoughts become temporal events (never breaks the primitive)
+    if app.temporal and actions:
+        with contextlib.suppress(Exception):
+            await app.temporal.add_event(
+                user_id,
+                "thought",
+                text[:200],
+                importance=float(importance),
+                metadata={"resolved_layer": resolved_layer, "actions": len(actions)},
+                layer=resolved_layer,
+            )
 
     import inspect
 

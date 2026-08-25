@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, Literal
 
@@ -47,7 +48,15 @@ async def dream(
     results = await multi_rag.search(query, user_id=user_id, limit=limit, intent=intent)
 
     # 2. Context Construction
-    summary_parts = []
+    summary_parts: list[str] = []
+    if intent == "recent" and app.temporal:
+        # Recent intent surfaces the temporal timeline alongside search hits
+        with contextlib.suppress(Exception):
+            events = await app.temporal.get_recent(user_id, layer=layer, limit=5)
+            if events:
+                timeline = "\n".join(f"- [{e.event_type}] {e.content[:120]}" for e in events)
+                summary_parts.append(f"### Timeline (recent activity)\n{timeline}")
+
     for r in results:
         title = r.get("title", "Untitled")
         content = r.get("content", "")
