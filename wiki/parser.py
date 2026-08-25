@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import logging
 import time
 from typing import Any, TYPE_CHECKING
 
@@ -9,6 +11,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+logger = logging.getLogger(__name__)
+
+
 class WikiParser:
     @staticmethod
     def parse(text: str, file_path: Path | None = None) -> WikiEntry:
@@ -16,7 +21,10 @@ class WikiParser:
             post = frontmatter.loads(text)
             metadata = post.metadata
             content = post.content.strip()
-        except Exception:
+        except Exception as exc:
+            # A malformed file must not silently fabricate default metadata
+            # that a later save() persists over the real values.
+            logger.warning("frontmatter parse failed for %s: %s", file_path, exc)
             metadata = {}
             content = text.strip()
 

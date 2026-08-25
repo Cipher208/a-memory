@@ -217,7 +217,7 @@ class RetrievalRouter:
             return RouterResult(strategy, results, confidence)
         return None
 
-    async def _route_wiki(self, query: str, strategy: Strategy, confidence: float) -> RouterResult:
+    async def _route_wiki(self, query: str, strategy: Strategy, confidence: float) -> RouterResult | None:
         results = await self._rag.search(query, self.user_id, strategy="hybrid", limit=3)
         if results:
             page_id = results[0]["id"]
@@ -231,7 +231,9 @@ class RetrievalRouter:
                     }
                 )
             return RouterResult(strategy, results, confidence)
-        return RouterResult(strategy, [], 0.0)
+        # Empty wiki hits must fall through to later strategies; returning an
+        # empty WIKI result here dead-ended every pre-ingest query.
+        return None
 
     async def _route_entities(self, entities: set[str], strategy: Strategy, confidence: float) -> RouterResult | None:
         from graph.epistemic import EpistemicGraph

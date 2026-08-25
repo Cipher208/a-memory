@@ -25,7 +25,11 @@ class EmotionEngine:
             phrase_patterns.append(f"(?P<p{i}>{pattern})")
         self.phrase_regex = self._build_regex(phrase_patterns, flags=re.IGNORECASE)
         self.marker_regex = self._build_regex(
-            [f"(?P<m_{cat.replace(' ', '_')}>{'|'.join(re.escape(w) for w in words)})" for cat, words in self.config.markers.items() if words],
+            [
+                rf"(?P<m_{cat.replace(' ', '_')}>\b(?:{'|'.join(re.escape(w) for w in words)})\b)"
+                for cat, words in self.config.markers.items()
+                if words
+            ],
             flags=re.IGNORECASE,
         )
         self.emoji_regex = self._build_regex(
