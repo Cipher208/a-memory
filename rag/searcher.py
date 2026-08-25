@@ -48,7 +48,7 @@ class RAGSearcher:
 
     async def _search_fts5(self, query: str, user_id: str, limit: int) -> list[SearchResult]:
         fts_ready = await self._check_fts()
-        raw_results = await search_fts5(self._cm, query, user_id, limit, fts_ready)
+        raw_results = await search_fts5(self._cm, query, user_id, limit, fts_ready, layer=self.layer)
         return [
             SearchResult(
                 page_id=r["id"],
@@ -66,7 +66,7 @@ class RAGSearcher:
         def default_bin_for(emb: list[float]) -> bytes:
             return embed_to_binary(emb, threshold=0.0, dim=len(emb))
 
-        raw_results = await search_binary(self._cm, query, user_id, limit, default_bin_for, self.binary_dim)
+        raw_results = await search_binary(self._cm, query, user_id, limit, default_bin_for, self.binary_dim, layer=self.layer)
         return [
             SearchResult(
                 page_id=r["page_id"],
@@ -81,7 +81,7 @@ class RAGSearcher:
     async def _search_hybrid(self, query: str, user_id: str, limit: int) -> list[SearchResult]:
         if self.scorer is None:
             fts_ready = await self._check_fts()
-            raw_results = await search_rrf(self._cm, query, user_id, limit, fts_available=fts_ready, binary_dim=self.binary_dim)
+            raw_results = await search_rrf(self._cm, query, user_id, limit, fts_available=fts_ready, binary_dim=self.binary_dim, layer=self.layer)
             return [
                 SearchResult(
                     page_id=r["id"],

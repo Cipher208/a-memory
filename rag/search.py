@@ -18,17 +18,17 @@ except ImportError:
     _HAS_BINARY = False
 
 
-async def search_fts5(cm: AsyncConnectionManager, query: str, user_id: str, limit: int, fts_available: bool) -> list[dict[str, Any]]:
-    """FTS5 search with LIKE fallback."""
+async def search_fts5(cm: AsyncConnectionManager, query: str, user_id: str, limit: int, fts_available: bool, layer: str = "user") -> list[dict[str, Any]]:
+    """FTS5 search with LIKE fallback. Layer-scoped: never returns other layers' pages."""
     conn = await cm.get(DB_NAME)
     if fts_available:
-        with suppress(Exception):
+        try:
             cur = await conn.execute(
                 """SELECT wp.id, wp.title, wp.content, wp.wiki_type, fts.rank
                    FROM rag_fts fts JOIN rag_pages wp ON fts.rowid = wp.id
-                   WHERE rag_fts MATCH ? AND wp.user_id = ?
+                   WHERE rag_fts MATCH ? AND wp.user_id = ? AND wp.layer = ?
                    ORDER BY fts.rank DESC LIMIT ?""",
-                (query, user_id, limit),
+                (query, user_id, layer, limit),
             )
             rows = await cur.fetchall()
             return [
@@ -42,11 +42,14 @@ async def search_fts5(cm: AsyncConnectionManager, query: str, user_id: str, limi
                 }
                 for r in rows
             ]
+        except Exception as e:
+            # FTS5 syntax errors (special chars in query) degrade to LIKE — say so.
+            logger.warning("FTS5 query failed (%s) — falling back to LIKE", e)
 
     escaped_query = query.replace("%", "\\%").replace("_", "\\_")
     cur = await conn.execute(
-        "SELECT id, title, content, wiki_type FROM rag_pages WHERE user_id=? AND (title LIKE ? OR content LIKE ?) LIMIT ?",
-        (user_id, f"%{escaped_query}%", f"%{escaped_query}%", limit),
+        "SELECT id, title, content, wiki_type FROM rag_pages WHERE user_id=? AND layer=? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT ?",
+        (user_id, layer, f"%{escaped_query}%", f"%{escaped_query}%", limit),
     )
     rows = await cur.fetchall()
     return [
@@ -70,8 +73,9 @@ async def search_binary(
     limit: int,
     binary_for_fn: Callable[[list[float]], bytes],
     binary_dim: int,
+    layer: str = "user",
 ) -> list[dict[str, Any]]:
-    """Exhaustive linear scan over binary embeddings."""
+    """Exhaustive linear scan over binary embeddings. Layer-scoped."""
     if not _HAS_BINARY:
         return []
 
@@ -90,9 +94,10 @@ async def search_binary(
         FROM rag_chunks c
         JOIN rag_pages p ON p.id = c.page_id
         WHERE p.user_id = ?
+          AND p.layer = ?
           AND c.bin_embedding IS NOT NULL
         """,
-        (user_id,),
+        (user_id, layer),
     )
 
     scored = []
@@ -127,15 +132,16 @@ async def search_rrf(
     binary_for_fn: Callable[[list[float]], bytes] | None = None,
     binary_dim: int = 384,
     fts_available: bool = True,
+    layer: str = "user",
 ) -> list[dict[str, Any]]:
     """Reciprocal Rank Fusion — merge FTS5 and binary results."""
-    fts_results = await search_fts5(cm, query, user_id, limit=limit * 3, fts_available=fts_available)
+    fts_results = await search_fts5(cm, query, user_id, limit=limit * 3, fts_available=fts_available, layer=layer)
     fts_ranks = {doc["id"]: rank for rank, doc in enumerate(fts_results)}
 
     bin_ranks = {}
     if binary_for_fn:
         with suppress(Exception):
-            bin_results = await search_binary(cm, query, user_id, limit * 3, binary_for_fn, binary_dim)
+            bin_results = await search_binary(cm, query, user_id, limit * 3, binary_for_fn, binary_dim, layer=layer)
             bin_ranks = {r["id"]: rank for rank, r in enumerate(bin_results)}
 
     merged = _calculate_rrf_scores(fts_ranks, bin_ranks, k)

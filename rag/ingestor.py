@@ -25,8 +25,12 @@ class RAGIngestor:
 
         conn = await self.cm.get(DB_NAME)
 
-        # Check if page exists
-        cursor = await conn.execute("SELECT id FROM rag_pages WHERE sha256_hash = ? AND user_id = ?", (content_hash, user_id))
+        # Check if page exists — scoped to this layer so the same content
+        # can legitimately exist in user and agent layers
+        cursor = await conn.execute(
+            "SELECT id FROM rag_pages WHERE sha256_hash = ? AND user_id = ? AND layer = ?",
+            (content_hash, user_id, self.layer),
+        )
         row = await cursor.fetchone()
         if row:
             return int(row[0]) if row[0] is not None else None

@@ -205,6 +205,7 @@ def _invalidate_cache(layer: str, user_id: str) -> None:
 # Recall cache
 _recall_cache: dict[str, tuple[float, list[Any]]] = {}
 _RECALL_CACHE_TTL = 10  # seconds
+_RECALL_CACHE_MAX = 512
 
 
 def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list[Any] | None:
@@ -220,4 +221,12 @@ def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list[
 def _set_recall_cache(query: str, user_id: str, layer: str, limit: int, results: list[Any]) -> None:
     # SHA-256 for cache key, MD5 is flagged as weak by security scanners
     key = hashlib.sha256(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
-    _recall_cache[key] = (time.time(), results)
+    now = time.time()
+    # Bound memory: distinct queries would otherwise grow the dict forever.
+    if len(_recall_cache) >= _RECALL_CACHE_MAX:
+        expired = [k for k, (ts, _) in _recall_cache.items() if now - ts >= _RECALL_CACHE_TTL]
+        for k in expired:
+            del _recall_cache[k]
+        while len(_recall_cache) >= _RECALL_CACHE_MAX:
+            _recall_cache.pop(next(iter(_recall_cache)))
+    _recall_cache[key] = (now, results)

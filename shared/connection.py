@@ -164,7 +164,8 @@ class AsyncConnectionManager:
                 return conn
             except Exception:
                 logger.warning(f"connection {db_name} stale, reopening")
-                del self._conns[db_name]
+                # pop, not del: a concurrent getter may have already replaced it
+                self._conns.pop(db_name, None)
 
         db_path = str(self.base_dir / db_name)
 
