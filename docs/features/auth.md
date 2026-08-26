@@ -22,7 +22,7 @@ valid = auth.verify(f"Bearer {token}")  # True
 
 ## Key Features
 
-- API keys and bearer tokens encrypted at rest (libsodium secretbox)
+- API keys and bearer tokens encrypted at rest (NaCl `SecretBox`, XSalsa20-Poly1305)
 - Key rotation support
 - Rate limiting per key
 - Audit trail for all auth operations

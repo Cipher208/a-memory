@@ -71,7 +71,7 @@ graph LR
     Auth --> RateLimit[Rate Limiter<br/>100 req/min]
     RateLimit --> Tools[Tools Layer]
 
-    Tools --> Encrypt[Envelope Encryption<br/>libsodium secretbox]
+    Tools --> Encrypt[Envelope Encryption<br/>NaCl SecretBox<br/>XSalsa20-Poly1305]
 
     subgraph Key Resolution
         KR1[OS Keychain] --> KR2[.env file]

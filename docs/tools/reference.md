@@ -2,13 +2,13 @@
 
 Product name: **a-memory** · package: `mcp-ariel-memory` · v1.8.0
 
-a-memory exposes two tool surfaces:
+a-memory exposes three tool surfaces:
 
 | Surface | Tools | How |
 |---------|-------|-----|
 | **Primitives** (default) | 5 | What every MCP client sees out of the box |
-| **Primitives + wiki** | 9 | `ARIEL_EXPOSE=primitives,wiki` — adds wiki_add/search/list/delete for agents that manage wiki pages directly |
-| **Full surface** | 35 | `ARIEL_EXPOSE=all` restores legacy granular tools |
+| **Primitives + wiki** | 9 | `ARIEL_EXPOSE=primitives,wiki` — adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete` for agents that manage wiki pages directly |
+| **Full surface** | 34 | `ARIEL_EXPOSE=all` restores legacy granular tools |
 
 `think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
 wiki save with an explicit page name instead of the automatic Thought_<ts>
@@ -48,6 +48,8 @@ Universal write primitive: routes a thought to the correct storage based on cont
 
 Returns `ThinkResult`: `routing` (importance, length, emotional_weight, resolved_layer) and the list of `actions` taken.
 
+> Side effects: fires `message_received` hook (and `emotion_trigger` on the user layer); significant thoughts also become `thought` events on the temporal timeline.
+
 ### `dream`
 
 Universal read primitive: hybrid search across **all** layers (L3 episodes, L4 facts, Wiki, Graph) with context construction and token budgeting.
@@ -67,6 +69,8 @@ Universal read primitive: hybrid search across **all** layers (L3 episodes, L4 f
 | `intent` | `recent\|core\|balanced` | `"balanced"` | Weight bias of the ranking |
 
 Returns `DreamResult`: `summary` (markdown sections per hit, truncated to the token budget), `truncated`, `result_count`.
+
+> When `intent="recent"`, the temporal timeline is prepended to the summary (latest 5 events for the user/agent).
 
 ### `forget`
 
@@ -95,7 +99,9 @@ Updates agent personality: stores the instruction in agent CoreMemory (importanc
 { "instruction": "Be more assertive about security issues in code review." }
 ```
 
-Returns `EvolveResult`: `status`, `summary` (from the hook pipeline).
+> Always writes to the **agent** layer by design — agent identity lives separately from user facts, and `evolve` is the primitive for shaping the former. There is no `layer` parameter; use `think` if you need to record something about the user.
+
+Returns `EvolveResult`: `status`, `summary` (from the hook pipeline). A `personality_shift` event is also recorded on the temporal timeline.
 
 ### `project`
 
@@ -110,12 +116,12 @@ Manages project-specific context. Projects are **global** (keyed by name, no use
 | Action | Purpose |
 |--------|---------|
 | `init` | Create project: Wiki `project_spec` page + identity row in projects.db |
-| `update` | Update context page, refresh the code map (via optional `graphify` integration) |
+| `update` | Update context page, refresh the code map (runs `graphify` if installed and a `path` is set) |
 | `mapping` | Register an artifact: `details` = file path, plus role/status |
-| `decision` | Record a decision with rationale (`details`) and `outcome` |
+| `decision` | Record a decision with rationale (`details`) and `outcome`; logs a `project_decision` event on the temporal timeline |
 | `recall` | Full report: status, decisions history, artifacts, code-symbol count |
 | `audit` | Dream-style gap analysis: targeted searches per dimension (Architecture / Security / Testing), L4 conflict scan, projects.db completeness verdicts |
-| `archive` | Move the Wiki spec page to the archive |
+| `archive` | Archive the spec page contents to the Shadow Bin and remove the wiki file |
 
 Returns `ProjectResult` (+ `wiki_ref`, `code_map`, decisions/artifacts arrays depending on action).
 
@@ -161,7 +167,7 @@ Legacy granular operations behind the primitives. Grouped by domain.
 
 ### Wiki
 
-Wiki types: 7 user + 7 agent (incl. `project_spec` for user layer).
+Wiki types: 8 user (`diary`, `relationships`, `desires`, `aspirations`, `work_notes`, `preferences`, `retrospective` + `project_spec`) and 7 agent (`decision_log`, `error_analysis`, `personality_evolution`, `emotional_context`, `wiki_agent`, `learning_journal`, `principle_log`).
 
 | Tool | Description |
 |------|-------------|
@@ -191,14 +197,15 @@ Wiki types: 7 user + 7 agent (incl. `project_spec` for user layer).
 ## Surface selection
 
 ```bash
-# default — primitives only
-uvx a-memory
+# default — primitives only (no ARIEL_EXPOSE)
+a-memory                         # stdio transport
+a-memory --transport http --port 8000 --dashboard
 
 # primitives + wiki tools
-ARIEL_EXPOSE=primitives,wiki uvx a-memory
+ARIEL_EXPOSE=primitives,wiki a-memory
 
 # full legacy surface
-ARIEL_EXPOSE=all uvx a-memory
+ARIEL_EXPOSE=all a-memory
 ```
 
 The gate lives in `mcp_server/server.py` (`PRIMITIVE_TOOLS`); hidden tools remain reachable through the primitives themselves and the dashboard HTTP surface.

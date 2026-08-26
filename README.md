@@ -101,7 +101,7 @@ res = await session.call_tool("dream", {"query": "dark mode preference"})
 print(res["summary"])
 ```
 
-35 fine-grained operations exist in total (typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, and everything via `ARIEL_EXPOSE=all`.
+34 fine-grained operations exist in total (5 primitives + 4 wiki + 25 typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, and everything via `ARIEL_EXPOSE=all`.
 
 ---
 
@@ -113,7 +113,7 @@ print(res["summary"])
 | 🔍 **Search** | FTS5 + MIB binary embeddings + hybrid RRF ranking, multi-source merge (RAG + Wiki + Episodic + Core + Graph), dream digest |
 | 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal |
 | 📁 **Projects** | Decision log (what/why/outcome), artifact map, graphify code index — survives between sessions |
-| 🔐 **Security** | Envelope encryption (libsodium secretbox), master key chain, rate limiting |
+| 🔐 **Security** | Envelope encryption (NaCl `SecretBox` = XSalsa20-Poly1305), master key chain, rate limiting |
 | 🛠️ **Ops** | Auto-backup cron, saga rollback pattern, Prometheus metrics, read-only replica, hourly self-maintenance (decay + consolidation + auto-VACUUM) |
 | 🌐 **Wiki** | FTS5-indexed markdown files — edit in Obsidian/VS Code, search from MCP |
 
@@ -156,16 +156,19 @@ graph TD
 
 ## Comparison
 
-| | a-memory | mem0 | memgpt | chroma |
+| | a-memory | mem0 | letta (memgpt) | chroma |
 |---|---|---|---|---|
-| **MCP native** | ✅ | ❌ | ❌ | ❌ |
-| **4-layer hierarchy** | ✅ Layer-isolated | ❌ | ❌ | ❌ |
-| **Local-only (no cloud)** | ✅ **SQLite — 0 infra** | ❌ needs API | ❌ needs API | ✅ local |
-| **Own semantic search (no API)** | ✅ MIB binary + FTS5 hybrid | ❌ | ❌ | vector only |
-| **Knowledge graph** | ✅ Typed nodes + edges | ❌ | ❌ | ❌ |
-| **Envelope encryption** | ✅ libsodium | ❌ | ❌ | ❌ |
-| **Lifecycle hooks** | ✅ per-layer, config-gated | limited | limited | none |
-| **Backup / restore** | ✅ Auto-cron + saga | ❌ | ❌ | ❌ |
+| **MCP native** | ✅ 5 primitives | ❌ no MCP server | ❌ | ❌ |
+| **Layer isolation** | ✅ User vs Agent namespaces | ❌ | ❌ | ❌ |
+| **Local-only (no cloud)** | ✅ **SQLite — 0 infra** | ⚠️ API or self-host Docker | ❌ needs LLM API | ✅ local OSS + Cloud option |
+| **Own semantic search (no API)** | ✅ FTS5 + MIB binary hybrid | ⚠️ BM25+entity (LLM-dependent) | ❌ LLM-only | ⚠️ hybrid on Cloud only |
+| **Knowledge graph** | ✅ Typed nodes + edges + temporal timeline | ⚠️ entities only | ❌ | ❌ |
+| **Envelope encryption** | ✅ NaCl SecretBox at rest | ❌ | ❌ | ❌ |
+| **Lifecycle hooks** | ✅ 19 names, per-layer, config-gated | limited | limited | none |
+| **Self-maintenance** | ✅ Hourly consolidation + auto-VACUUM | ❌ | ❌ | ❌ |
+| **Backup / restore** | ✅ Auto-cron + saga rollback | ❌ | ❌ | ❌ |
+
+Notes (Sep 2026): mem0 now ships a self-hosted Docker image and a managed cloud with hybrid BM25+entity search; chroma is 29k★ and added hybrid+FTS5 to its Cloud tier (OSS server remains vector-only). What still differentiates a-memory: zero-infra SQLite (no Docker), NaCl encryption at rest, layer isolation, hourly self-maintenance, and the temporal graph timeline.
 
 ---
 

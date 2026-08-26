@@ -18,7 +18,7 @@ The privacy filter automatically strips sensitive data (API keys, secrets, token
 
 ## Usage
 
-The privacy filter is automatically applied in memory_remember.
+The privacy filter is automatically applied in `think` and `memory_remember` before persistence.
 
 from mcp_server.utils.privacy import strip_secrets, has_secrets
 

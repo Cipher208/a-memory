@@ -8,12 +8,12 @@ Lifecycle hooks intercept memory operations at every stage. Config defines **12 
 
 | Hook | Layer(s) | Fires on |
 |------|----------|----------|
-| `message_received` | both | content stored via `think` / `memory_remember`, session start |
+| `message_received` | user | content stored via `think` / `memory_remember`, session start |
 | `message_sent` | user | outbound message events |
-| `state_delta` | both | episode save, session end |
+| `state_delta` | user | episode save, session end |
 | `consolidation` | both | episode save, session end, hourly sweep |
-| `emotion_trigger` | both | emotional content detected in `think` / saves |
-| `importance_gate` | user | before `memory_remember` commits — can skip low-importance saves |
+| `emotion_trigger` | user | emotional content detected in `think` / saves |
+| `importance_gate` | both | before `think` / `memory_remember` commits — can skip low-importance saves |
 | `auto_context` | both | after `dream` / `recall` / context injection |
 | `dream_buffer` | both | `dream` digest and context injection staged into the DreamBuffer |
 | `retrieval_router` | both | before search operations |

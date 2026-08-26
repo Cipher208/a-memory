@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from mcp.server.mcpserver import Context
+from mcp.server.mcpserver import Context  # noqa: TC002 — runtime: MCPServer evaluates this annotation at registration
 
 from mcp_server.models import ProjectResult
 from mcp_server.registry import _get_ctx
@@ -18,10 +18,7 @@ from shared.metrics import metrics
 
 from mcp_server.tools.base import _validate_layer, _get_memory, _get_wiki, _get_rag
 
-# Runtime imports: MCPServer evaluates tool annotations at registration;
-# hiding Context/AppContext under TYPE_CHECKING breaks tools/list (fix 419d577).
-from mcp.server.mcpserver import Context  # noqa: TC002
-from mcp_server.context import AppContext  # noqa: TC001
+from mcp_server.context import AppContext  # noqa: TC001 — runtime: MCPServer evaluates this annotation at registration
 
 logger = logging.getLogger(__name__)
 

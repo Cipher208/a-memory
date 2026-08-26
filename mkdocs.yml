@@ -86,6 +86,8 @@ nav:
     - Backup: features/backup.md
     - Rate Limiting: features/rate-limiting.md
     - Compression: features/compression.md
+    - Dedup: features/dedup.md
+    - Privacy Filter: features/privacy.md
   - Wiki:
     - Overview: wiki/overview.md
     - FileWiki: wiki/file-wiki.md

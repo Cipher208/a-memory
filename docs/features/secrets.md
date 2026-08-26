@@ -2,7 +2,7 @@
 
 ## Envelope Encryption
 
-All sensitive data (API keys, tokens, saga state) encrypted at rest using libsodium secretbox.
+All sensitive data (API keys, tokens, saga state) encrypted at rest using NaCl `SecretBox` (XSalsa20-Poly1305 via PyNaCl) — a 24-byte random nonce prepended to the ciphertext, 32-byte master key, 16-byte MAC.
 
 ```python
 from features.secrets import encrypt_json, decrypt_json
@@ -39,7 +39,7 @@ except Exception:
 legacy = json.loads(blob.decode("utf-8"))
 ```
 
-This eliminates flaky tests caused by libsodium nonce first byte coincidentally being `{` or `[` (~0.78% probability).
+This eliminates flaky tests caused by the SecretBox nonce's first byte coincidentally being `{` or `[` (~0.78% probability).
 
 ## File Format
 

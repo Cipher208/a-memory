@@ -12,7 +12,7 @@ Prevents duplicate observations from being stored when the same tool call is mad
 
 ## Usage
 
-Dedup is automatic in memory_remember when session_id is provided.
+Dedup is automatic in `think` / `memory_remember` when a session_id is provided (sha256 of `session_id:tool_name:input[:500]`, 5-minute TTL, 10k cache, 60s cleanup sweep).
 
 ## Configuration
 

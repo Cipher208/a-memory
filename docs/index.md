@@ -2,7 +2,7 @@
 
 > Product name of the `mcp-ariel-memory` server — your AI agents forget; a-memory makes them remember.
 
-**Universal Two-Layer Memory MCP Server for AI agents**
+**4-tier Memory MCP Server for AI agents — layer-isolated, plain SQLite, zero cloud**
 
 [![CI](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/badge/tests-372 passed-brightgreen)](https://github.com/Cipher208/a-memory/actions)
@@ -12,23 +12,27 @@
 
 ## What is it?
 
-mcp-ariel-memory is a production-ready MCP server providing persistent, searchable memory for AI agents. It implements a two-layer architecture:
+mcp-ariel-memory is a production-ready MCP server providing persistent, searchable memory for AI agents. It implements a four-layer architecture on a layer-isolated `(layer, user_id, key)` namespace, so user facts and agent identity can never overwrite each other:
 
-- **Layer 1 (User)** — facts about users: preferences, conversation history, emotional context
-- **Layer 2 (Agent)** — agent identity: decisions, errors, personality evolution
+- **L1 ReflexBuffer** — short-lived working memory for the current turn
+- **L2 SessionStore** — session-scoped state (consolidates into L3/L4 on close)
+- **L3 EpisodicMemory** — time-stamped events with emotional weight and tags
+- **L4 CoreMemory** — long-lived facts, gated by importance scoring
+
+User facts live in the `user` namespace, agent identity in the `agent` namespace; both share the same schema but separate keys.
 
 ## Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds wiki_add/search/list/delete, `all` exposes the full 35-tool surface |
-| **4-layer memory** | L1 ReflexBuffer → L2 Episodic → L3 Session → L4 Core |
+| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`, `all` exposes the full 34-tool surface |
+| **4-tier memory** | L1 ReflexBuffer → L2 SessionStore → L3 EpisodicMemory → L4 CoreMemory, layer-isolated `(layer, user_id, key)` namespaces |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
-| **RAG search** | FTS5 + binary embeddings + hybrid scoring |
-| **Knowledge graphs** | Epistemic (facts/decisions) + Temporal (timeline) |
-| **Wiki system** | .md files as source of truth, 14 content types |
+| **RAG search** | FTS5 + binary embeddings + hybrid RRF ranking, multi-source merge |
+| **Knowledge graphs** | Epistemic (facts/decisions, typed nodes + edges) + Temporal (timeline events) |
+| **Wiki system** | .md files as source of truth, 15 content types (7 user + 1 `project_spec` + 7 agent) |
 | **Saga pattern** | Multi-step ops with retry, idempotency, compensation |
-| **Envelope encryption** | libsodium secretbox, keychain-first key resolution |
+| **Envelope encryption** | NaCl `SecretBox` (XSalsa20-Poly1305) via PyNaCl, keychain-first key resolution |
 | **Platform-aware async** | aiosqlite on Linux/macOS, asyncio.to_thread on Windows |
 | **SHA-256 dedup** | Prevents duplicate observations within 5-minute window |
 | **Circuit breaker** | Prevents cascading LLM/embedding failures |
@@ -78,7 +82,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 | [Architecture](architecture/overview.md) | Layered model, L1-L4, consolidation, 23 DB tables |
 | [MCP Tools](tools/reference.md) | Tool reference (layer ops; agents normally see only the 5 primitives) |
 | [RAG & Search](rag/engine.md) | Unified search, BM25 conflict similarity, type-aware boost |
-| [Hooks](hooks/system.md) | 19 lifecycle hooks (12 user + 13 agent slots), importance gating |
+| [Hooks](hooks/system.md) | 19 unique hook names (12 user + 13 agent config slots), importance gating |
 | [Operations](operations/deployment.md) | Transports, health, auth, configuration |
 | [API Reference](api/secrets.md) | Auto-generated from docstrings |
 
@@ -86,6 +90,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 - **Version:** 1.8.0
 - **Tests:** 400+ passed (including 25 property-based Hypothesis tests)
-- **DB tables:** 23
+- **DB tables:** 23 (alembic head `init_v8`)
+- **Tool surface:** 5 primitives by default · 9 with `primitives,wiki` · 34 with `all`
 - **Python:** 3.10–3.13
 - **Platform:** Windows, Linux, macOS, Docker
