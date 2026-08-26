@@ -10,7 +10,6 @@ import pytest
 from mcp_server.tools.wiki_summarize import (
     PERSPECTIVE_TO_TYPE,
     _validate_perspective,
-    wiki_summarize,
 )
 
 
