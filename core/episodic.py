@@ -72,6 +72,7 @@ class EpisodicMemory:
     async def search(self, user_id: str, query: str, limit: int = 10, use_tag_match: bool = False) -> list[Episode]:
         """Unified search across summary and tags."""
         conn = await self._cm.get(DB_NAME)
+        params: tuple[Any, ...]
         if use_tag_match:
             sql = "SELECT * FROM episodes WHERE layer=? AND user_id=? AND tags LIKE ? ORDER BY created_at DESC LIMIT ?"
             params = (self.layer, user_id, f'%"{query}"%', limit)

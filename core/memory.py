@@ -191,7 +191,7 @@ class CoreMemory:
             like_params.extend([f"%{t}%", f"%{t}%"])
         # Overfetch so Python-side ranking can prefer more-matching rows
         sql = f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND ({like_conds}) ORDER BY importance DESC LIMIT ?"
-        cursor = await conn.execute(sql, [layer, user_id, *like_params, max(limit * 10, 50)])
+        cursor = await conn.execute(sql, tuple([layer, user_id, *like_params, max(limit * 10, 50)]))
         rows = await cursor.fetchall()
 
         q_tokens = {t.lower() for t in tokens}
