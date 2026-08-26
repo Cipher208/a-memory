@@ -82,7 +82,8 @@ async def search_binary(
 
     from shared.embeddings import embed_text
 
-    q_emb = await embed_text(query)
+    # e5 instruction prefix — matches the passage: vectors produced at ingest
+    q_emb = await embed_text(query, prefix="query: ")
     q_bin = binary_for_fn(q_emb)
     if q_bin is None:
         return []

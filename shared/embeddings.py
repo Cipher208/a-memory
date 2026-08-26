@@ -63,6 +63,7 @@ class EmbeddingCache:
         self._cm = cm or connection_manager
         self.model_name = model_name or DEFAULT_MODEL
         self._dimension = 384
+        self._ready = False
 
     def _cache_model_tag(self, model: Any) -> str:
         """Cache rows are keyed by the BACKEND that produced them.
@@ -72,6 +73,13 @@ class EmbeddingCache:
         stale hash garbage as genuine model embeddings.
         """
         return self.model_name if model is not None else f"hash-fallback/{self.model_name}"
+
+    async def ensure(self) -> None:
+        """Lazy one-time schema setup so any consumer works without prior init."""
+        if self._ready:
+            return
+        await self._init_db()
+        self._ready = True
 
     async def _init_db(self) -> None:
         await self._cm.execute_script(
@@ -95,6 +103,7 @@ class EmbeddingCache:
         return hashlib.sha256(self._normalize_text(text).encode("utf-8")).hexdigest()
 
     async def _get_cached(self, text: str, cache_tag: str) -> list[float] | None:
+        await self.ensure()
         text_hash = self._hash_text(text)
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
@@ -111,6 +120,7 @@ class EmbeddingCache:
         return None
 
     async def _cache(self, text: str, embedding: list[float], cache_tag: str) -> None:
+        await self.ensure()
         text_hash = self._hash_text(text)
         blob = struct.pack(f"{len(embedding)}f", *embedding)
         conn = await self._cm.get(DB_NAME)
@@ -165,21 +175,30 @@ class EmbeddingCache:
                 await self._cache(text, emb, cache_tag)
         return computed
 
-    async def embed_single(self, text: str) -> list[float]:
-        return (await self.embed([text]))[0]
+    async def embed_single(self, text: str, *, prefix: str = "") -> list[float]:
+        return (await self.embed([prefix + text]))[0]
+
+    async def embed_with_prefix(self, texts: list[str], *, prefix: str = "") -> list[list[float]]:
+        return await self.embed([prefix + t for t in texts])
 
     async def count(self) -> int:
+        await self.ensure()
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM embedding_cache")).fetchone()
         return int(row[0]) if row else 0
 
 
-async def embed_text(text: str) -> list[float]:
-    return await EmbeddingCache().embed_single(text)
+async def embed_text(text: str, *, prefix: str = "") -> list[float]:
+    """Prefix is prepended BEFORE hashing so each role gets its own cache row.
+
+    e5 models are trained with instruction prefixes ("query: " for searches,
+    "passage: " for indexed content) — matching them improves retrieval.
+    """
+    return await EmbeddingCache().embed_single(prefix + text)
 
 
-async def embed_texts(texts: list[str]) -> list[list[float]]:
-    return await EmbeddingCache().embed(texts)
+async def embed_texts(texts: list[str], *, prefix: str = "") -> list[list[float]]:
+    return await EmbeddingCache().embed([prefix + t for t in texts])
 
 
 def similarity(a: list[float], b: list[float]) -> float:

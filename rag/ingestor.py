@@ -62,7 +62,8 @@ class RAGIngestor:
         # It's a context manager for the connection itself.
 
         # Parallelism: Embed all chunks at once
-        embeddings = await embed_texts(chunks_text)
+        # e5 instruction prefix — pairs with the query: vectors used at search time
+        embeddings = await embed_texts(chunks_text, prefix="passage: ")
 
         # Binarize embeddings
         bin_embeddings = binary_batch(embeddings, thresholds=self.thresholds_cache, dim=self.binary_dim)

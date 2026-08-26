@@ -155,13 +155,19 @@ class TemporalGraph:
         rows = await cur.fetchall()
         return [self._row_to_event(r) for r in rows]
 
-    async def get_causal_chain(self, event_id: int, direction: str = "forward", limit: int = 10) -> list[dict[str, Any]]:
+    async def get_causal_chain(self, event_id: int, direction: str = "forward", limit: int = 10, user_id: str | None = None) -> list[dict[str, Any]]:
+        """Traverse links from/to one event.
+
+        Pass user_id to keep traversal inside that user's timeline.
+        """
         conn = await self._cm.get(DB_NAME)
+        user_filter = " AND te.user_id=?" if user_id else ""
         if direction == "forward":
-            sql = "SELECT tl.to_event, te.event_type, te.content, te.timestamp FROM temporal_links tl JOIN temporal_events te ON tl.to_event = te.event_id WHERE tl.from_event = ? LIMIT ?"
+            sql = f"SELECT tl.to_event, te.event_type, te.content, te.timestamp FROM temporal_links tl JOIN temporal_events te ON tl.to_event = te.event_id WHERE tl.from_event = ?{user_filter} LIMIT ?"
         else:
-            sql = "SELECT tl.from_event, te.event_type, te.content, te.timestamp FROM temporal_links tl JOIN temporal_events te ON tl.from_event = te.event_id WHERE tl.to_event = ? LIMIT ?"
-        cur = await conn.execute(sql, (event_id, limit))
+            sql = f"SELECT tl.from_event, te.event_type, te.content, te.timestamp FROM temporal_links tl JOIN temporal_events te ON tl.from_event = te.event_id WHERE tl.to_event = ?{user_filter} LIMIT ?"
+        params: tuple[Any, ...] = (event_id, limit) if not user_id else (event_id, user_id, limit)
+        cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
         return [{"event_id": r[0], "type": r[1], "content": r[2], "timestamp": r[3]} for r in rows]
 
