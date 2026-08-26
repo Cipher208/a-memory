@@ -190,10 +190,7 @@ class CoreMemory:
         for t in tokens:
             like_params.extend([f"%{t}%", f"%{t}%"])
         # Overfetch so Python-side ranking can prefer more-matching rows
-        sql = (
-            f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND ({like_conds}) "
-            f"ORDER BY importance DESC LIMIT ?"
-        )
+        sql = f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND ({like_conds}) ORDER BY importance DESC LIMIT ?"
         cursor = await conn.execute(sql, [layer, user_id, *like_params, max(limit * 10, 50)])
         rows = await cursor.fetchall()
 
@@ -205,10 +202,7 @@ class CoreMemory:
             scored.append((matched, float(r["importance"]), r))
         scored.sort(key=lambda x: (-x[0], -x[1]))
 
-        return [
-            {"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])}
-            for _, _, r in scored[:limit]
-        ]
+        return [{"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])} for _, _, r in scored[:limit]]
 
     async def count(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
