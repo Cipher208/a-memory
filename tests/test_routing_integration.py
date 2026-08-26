@@ -27,7 +27,7 @@ async def app(tmp_path):
     from wiki import WikiManager
 
     class App:
-        pass
+        temporal = None  # temporal recording disabled in fixtures
 
     app = App()
     app.mm = MM(cm=cm)
