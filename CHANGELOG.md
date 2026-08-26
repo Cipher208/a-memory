@@ -3,6 +3,11 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **`wiki_summarize` tool** — 6 analytical perspectives (practical / epistemic / psychological / social / temporal / metacognitive) filter the wiki through a curated mapping to existing `wiki_type`. Auto-included under `ARIEL_EXPOSE=primitives,wiki` via the `wiki_` prefix-match. Token-budgeted digest (≤ 2000 tokens). No DB migrations, no config changes, no `mcp_server/server.py` changes — pure additive tool. See `docs/tools/reference.md` for the perspective → wiki_type mapping table.
+
 ## [1.8.0] - 2026-08-26
 
 ### Added

@@ -8,7 +8,7 @@ a-memory exposes three tool surfaces:
 |---------|-------|-----|
 | **Primitives** (default) | 5 | What every MCP client sees out of the box |
 | **Primitives + wiki** | 9 | `ARIEL_EXPOSE=primitives,wiki` — adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete` for agents that manage wiki pages directly |
-| **Full surface** | 34 | `ARIEL_EXPOSE=all` restores legacy granular tools |
+| **Full surface** | 35 | `ARIEL_EXPOSE=all` restores legacy granular tools |
 
 `think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
 wiki save with an explicit page name instead of the automatic Thought_<ts>
@@ -175,6 +175,39 @@ Wiki types: 8 user (`diary`, `relationships`, `desires`, `aspirations`, `work_no
 | `wiki_search` | Search pages. |
 | `wiki_list` | List pages, optionally filtered by type. |
 | `wiki_delete` | Delete a page by title. |
+| `wiki_summarize` | Return a token-budgeted digest of wiki pages from one of 6 analytical perspectives (practical / epistemic / psychological / social / temporal / metacognitive). See below. |
+
+#### `wiki_summarize` — 6-perspective digest
+
+Each perspective maps to an existing `(layer, wiki_type)` pair — this is **perspective filtering, not new types**. Use it to slice the wiki through one analytical lens without writing a custom search.
+
+```json
+{ "perspective": "psychological", "query": "frustration with caching" }
+```
+
+**Parameters**
+
+| Param | Type | Default | Notes |
+|-------|------|---------|-------|
+| `perspective` | `practical\|epistemic\|psychological\|social\|temporal\|metacognitive` | required | One of 6 curated perspectives |
+| `layer` | `user\|agent` | `agent` | Overridden by the perspective's canonical layer; passed through to the wiki binding |
+| `query` | string | `""` | Empty = list all pages of the perspective's type; non-empty = FTS5 search filtered by type |
+| `limit` | int | `10` | Cap on page count before token truncation |
+
+**Perspective → wiki_type mapping**
+
+| Perspective | Layer | wiki_type |
+|---|---|---|
+| `practical` | agent | `decision_log` |
+| `epistemic` | agent | `learning_journal` |
+| `psychological` | agent | `emotional_context` |
+| `social` | user | `relationships` |
+| `temporal` | user | `retrospective` |
+| `metacognitive` | agent | `principle_log` |
+
+Returns a dict with `perspective`, `layer`, `wiki_type`, `pages` (list of `{title, type, tags}`), `count`, `truncated`, and `digest` (markdown summary, ≤ 2000 tokens).
+
+> Auto-gated under `ARIEL_EXPOSE=primitives,wiki` via the `wiki_` prefix — no separate config. 9 of 15 wiki types are not mapped to any perspective; use `wiki_search` for those.
 
 ### Operations & maintenance
 
