@@ -101,7 +101,7 @@ async def test_full_memory_lifecycle(e2e):
     assert len(pages) >= 1
 
     # ── 4. dream finds the saved content across sources ──
-    res = await dream(query="dark mode", intent="balanced", layer="user", user_id=uid, ctx=ctx)
+    res = await dream(query="dark mode preferences", intent="balanced", layer="user", user_id=uid, ctx=ctx)
     assert res["result_count"] >= 1
     assert "dark mode" in res["summary"].lower()
 

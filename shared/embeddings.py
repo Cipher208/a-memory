@@ -6,6 +6,7 @@ Embeddings — async SQLite cache with multilingual model
 
 import asyncio
 import hashlib
+import os
 import re
 import struct
 from typing import Any
@@ -30,6 +31,10 @@ _fallback_warned = False
 
 def _get_model(model_name: str | None = None) -> Any:
     global _model, _model_name, _fallback_warned
+    # Deliberate hash mode: tests and resource-constrained installs set this
+    # to keep embeddings deterministic and avoid loading the model.
+    if os.environ.get("ARIEL_HASH_EMBEDDINGS"):
+        return None
     target = model_name or DEFAULT_MODEL
     if _model is None or _model_name != target:
         try:

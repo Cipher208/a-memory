@@ -7,6 +7,9 @@ from pathlib import Path
 
 # Disable backup_cron before any imports to prevent daemon threads
 os.environ["BACKUP_CRON_DISABLED"] = "1"
+# Deterministic + fast: never load sentence-transformers in tests even when
+# the optional extra is installed locally.
+os.environ["ARIEL_HASH_EMBEDDINGS"] = "1"
 
 import pytest
 

@@ -76,8 +76,13 @@ class EpisodicMemory:
             sql = "SELECT * FROM episodes WHERE layer=? AND user_id=? AND tags LIKE ? ORDER BY created_at DESC LIMIT ?"
             params = (self.layer, user_id, f'%"{query}"%', limit)
         else:
-            sql = "SELECT * FROM episodes WHERE layer=? AND user_id=? AND summary LIKE ? ORDER BY created_at DESC LIMIT ?"
-            params = (self.layer, user_id, f"%{query}%", limit)
+            # Tokenized summary match: any word hits, newest-first ordering kept.
+            tokens = [w for w in query.split() if w]
+            if not tokens:
+                return []
+            like_conds = " OR ".join(["summary LIKE ?" for _ in tokens])
+            sql = f"SELECT * FROM episodes WHERE layer=? AND user_id=? AND ({like_conds}) ORDER BY created_at DESC LIMIT ?"
+            params = (self.layer, user_id, *[f"%{w}%" for w in tokens], limit)
 
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()

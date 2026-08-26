@@ -173,14 +173,39 @@ class CoreMemory:
         return int(cursor.rowcount)
 
     async def search(self, user_id: str, query: str, limit: int = 10, layer: str | None = None) -> list[dict[str, Any]]:
+        """Tokenized recall: multi-word queries match facts containing ANY word,
+        ranked by how many words matched, then importance. A single-word query
+        behaves exactly like the old whole-phrase LIKE."""
         layer = layer or self.layer
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT * FROM core_memory WHERE layer=? AND user_id=? AND (key LIKE ? OR value LIKE ?) ORDER BY importance DESC LIMIT ?",
-            (layer, user_id, f"%{query}%", f"%{query}%", limit),
+        tokens = [t for t in query.split() if t]
+        if not tokens:
+            return []
+
+        like_conds = " OR ".join(["(key LIKE ? OR value LIKE ?)" for _ in tokens])
+        like_params: list[Any] = []
+        for t in tokens:
+            like_params.extend([f"%{t}%", f"%{t}%"])
+        # Overfetch so Python-side ranking can prefer more-matching rows
+        sql = (
+            f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND ({like_conds}) "
+            f"ORDER BY importance DESC LIMIT ?"
         )
+        cursor = await conn.execute(sql, [layer, user_id, *like_params, max(limit * 10, 50)])
         rows = await cursor.fetchall()
-        return [{"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])} for r in rows]
+
+        q_tokens = {t.lower() for t in tokens}
+        scored: list[tuple[int, float, Any]] = []
+        for r in rows:
+            hay = f"{r['key']}\n{r['value']}".lower()
+            matched = sum(1 for tok in q_tokens if tok in hay)
+            scored.append((matched, float(r["importance"]), r))
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+
+        return [
+            {"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])}
+            for _, _, r in scored[:limit]
+        ]
 
     async def count(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)

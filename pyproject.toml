@@ -67,8 +67,11 @@ vec = [
 ann = [
     "hnswlib>=0.7",
 ]
+embeddings = [
+    "sentence-transformers>=3.0",
+]
 all = [
-    "a-memory[dev,win,binary,vec,ann]",
+    "a-memory[dev,win,binary,vec,ann,embeddings]",
 ]
 
 [project.scripts]
@@ -194,3 +197,11 @@ ignore_missing_imports = true
 
 [tool.coverage.run]
 omit = ["demo.py", "__main__.py"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
