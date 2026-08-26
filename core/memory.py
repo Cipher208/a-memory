@@ -173,9 +173,12 @@ class CoreMemory:
         return int(cursor.rowcount)
 
     async def search(self, user_id: str, query: str, limit: int = 10, layer: str | None = None) -> list[dict[str, Any]]:
-        """Tokenized recall: multi-word queries match facts containing ANY word,
-        ranked by how many words matched, then importance. A single-word query
-        behaves exactly like the old whole-phrase LIKE."""
+        """Tokenized recall across key and value.
+
+        Multi-word queries match facts containing ANY word, ranked by
+        matched-word count then importance. Single-word queries behave
+        exactly like the old whole-phrase LIKE.
+        """
         layer = layer or self.layer
         conn = await self._cm.get(DB_NAME)
         tokens = [t for t in query.split() if t]
