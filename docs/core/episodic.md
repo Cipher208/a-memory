@@ -1,6 +1,6 @@
 # Episodic Memory
 
-L2 memory for session-level summaries.
+L3 memory for important moments with emotional weight and tags.
 
 ## Usage
 
@@ -9,12 +9,12 @@ from core.episodic import EpisodicMemory
 
 ep = EpisodicMemory()
 
-# Create session
-await ep.create_session(user_id="u1", summary="Discussed architecture decisions")
+# Save an episode
+await ep.save(user_id="u1", summary="Chose PostgreSQL over MySQL", emotional_weight=0.6, tags=["decision"])
 
-# Get sessions
-sessions = await ep.get_sessions(user_id="u1", limit=10)
+# List episodes
+episodes = await ep.get_episodes(user_id="u1", limit=10)
 
-# Get latest
-latest = await ep.get_latest(user_id="u1")
+# Search by tag
+tagged = await ep.search_by_tag(user_id="u1", tag="decision")
 ```

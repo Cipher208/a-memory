@@ -10,10 +10,10 @@ from core.memory import CoreMemory
 cm = CoreMemory()
 
 # Store
-await cm.store(user_id="u1", key="preference", value="dark mode", kind="preference")
+await cm.save(user_id="u1", key="preference", value="dark mode", memory_kind="preference")
 
 # Retrieve
-fact = await cm.retrieve(user_id="u1", key="preference")
+fact = await cm.get(user_id="u1", key="preference")
 
 # List all
 facts = await cm.get_all(user_id="u1")

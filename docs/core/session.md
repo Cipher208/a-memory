@@ -1,6 +1,6 @@
 # Session Store
 
-L3 memory for conversation entries.
+L2 memory for working sessions.
 
 ## Usage
 
@@ -9,12 +9,12 @@ from core.session import SessionStore
 
 ss = SessionStore()
 
-# Add entry
-await ss.add_entry(user_id="u1", role="user", content="What's the weather?", tokens=5)
+# Open a session
+session_id = await ss.create_session(user_id="u1")
 
-# Get entries
-entries = await ss.get_entries(user_id="u1", limit=20)
+# Close with summary
+await ss.close_session(session_id=session_id, summary="Discussed the weather")
 
-# Get recent
-recent = await ss.get_recent(user_id="u1", n=10)
+# Get recent sessions
+recent = await ss.get_recent_sessions(user_id="u1", limit=10)
 ```

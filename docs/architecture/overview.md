@@ -29,7 +29,7 @@
 └─────────────────────────────────────────────┘
 ```
 
-Agents see the five primitives (`think` / `dream` / `forget` / `evolve` / `project`) by default; `ARIEL_EXPOSE=all` restores the full 35-tool surface.
+Agents see the five primitives (`think` / `dream` / `forget` / `evolve` / `project`) by default; `ARIEL_EXPOSE=primitives,wiki` adds the four wiki tools, and `ARIEL_EXPOSE=all` restores the full 35-tool surface.
 
 ## Memory Layers
 
@@ -57,7 +57,7 @@ Single SQLite file (WAL mode) with 23 domain tables:
 - `rag_chunks`, `rag_pages`, `rag_relations` — RAG search index
 - `user_wiki` / `agent_wiki` (+ FTS5 shadows) — Wiki pages per layer
 - `epi_nodes`, `epi_edges`, `epi_tags` — epistemic knowledge graph
-- `temporal_events`, `temporal_links` — timeline graph
+- `temporal_events`, `temporal_links` — timeline graph (layer-scoped); records thought / personality-shift / project-decision events from the primitives, surfaced by `dream(intent="recent")` as a Timeline digest
 - `archived_memories` — Shadow Bin for soft-deleted content
 - `audit_log`, `importance_audit`, `memory_conflicts` — observability
 - `rate_limits`, `embedding_cache`, `saga_step_log`, `memory_kind_registry` — infrastructure

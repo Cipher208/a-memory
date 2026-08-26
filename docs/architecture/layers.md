@@ -19,28 +19,29 @@ recent = buf.get_recent(10)  # last 10 entries
 - Thread-safe (threading.Lock)
 - Concurrent add/get without crashes
 
-## L2: EpisodicMemory
+## L2: SessionStore
 
-Session-level summaries. Each session gets a compressed summary.
-
-```python
-from core.episodic import EpisodicMemory
-
-ep = EpisodicMemory()
-await ep.create_session(user_id="u1", summary="Discussed architecture")
-sessions = await ep.get_sessions(user_id="u1", limit=10)
-```
-
-## L3: SessionStore
-
-Individual conversation entries with metadata.
+Working sessions with summaries.
 
 ```python
 from core.session import SessionStore
 
 ss = SessionStore()
-await ss.add_entry(user_id="u1", role="user", content="Hello", tokens=5)
-entries = await ss.get_entries(user_id="u1", limit=20)
+session_id = await ss.create_session(user_id="u1")
+await ss.close_session(session_id=session_id, summary="Discussed architecture")
+recent = await ss.get_recent_sessions(user_id="u1", limit=10)
+```
+
+## L3: EpisodicMemory
+
+Episodes: important moments with emotional weight and tags.
+
+```python
+from core.episodic import EpisodicMemory
+
+ep = EpisodicMemory()
+await ep.save(user_id="u1", summary="Chose PostgreSQL over MySQL", emotional_weight=0.6, tags=["decision"])
+episodes = await ep.get_episodes(user_id="u1", limit=10)
 ```
 
 ## L4: CoreMemory
@@ -51,8 +52,8 @@ Long-term key-value store for important facts. Typed memory with per-type retent
 from core.memory import CoreMemory
 
 cm = CoreMemory()
-await cm.store(user_id="u1", key="preference", value="dark mode", kind="preference")
-fact = await cm.retrieve(user_id="u1", key="preference")
+await cm.save(user_id="u1", key="preference", value="dark mode", memory_kind="preference")
+fact = await cm.get(user_id="u1", key="preference")
 ```
 
 ## Typed Memory

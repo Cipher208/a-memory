@@ -21,7 +21,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 | Feature | Description |
 |---------|-------------|
-| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; full layer-tool surface behind `ARIEL_EXPOSE=all` |
+| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds wiki_add/search/list/delete, `all` exposes the full 35-tool surface |
 | **4-layer memory** | L1 ReflexBuffer → L2 Episodic → L3 Session → L4 Core |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
 | **RAG search** | FTS5 + binary embeddings + hybrid scoring |
@@ -84,7 +84,7 @@ mcp-ariel-memory is a production-ready MCP server providing persistent, searchab
 
 ## Status
 
-- **Version:** 1.5.0
+- **Version:** 1.8.0
 - **Tests:** 400+ passed (including 25 property-based Hypothesis tests)
 - **DB tables:** 23
 - **Python:** 3.10–3.13

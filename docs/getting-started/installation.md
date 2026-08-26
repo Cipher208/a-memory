@@ -35,7 +35,7 @@ Requires Python 3.10+. Core dependencies install automatically:
 | Extra | Installs | Purpose |
 |-------|----------|---------|
 | `binary` | numpy | Binary embeddings (MIB search) |
-| `embeddings` | sentence-transformers | Real multilingual embeddings (e5-small); without it a deterministic hash fallback is used |
+| `embeddings` | sentence-transformers | Real multilingual embeddings (e5-small); without it a deterministic hash fallback is used, and `ARIEL_HASH_EMBEDDINGS=1` forces that fallback explicitly |
 | `vec` | sqlite-vec | Vector search backend |
 | `ann` | hnswlib | Approximate nearest neighbors |
 | `win` | pinned aiosqlite | Windows compatibility |

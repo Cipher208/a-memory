@@ -7,7 +7,7 @@ graph TB
     Client[MCP Client<br/>LLM Agent] -->|stdio/HTTP| Server[mcp_server<br/>MCPServer mcp 2.x]
 
     subgraph Server
-        Tools[Tools Layer<br/>35 tools / 5 primitives exposed] --> Hooks[Hooks Pipeline<br/>19 hooks]
+        Tools[Tools Layer<br/>exposure tiers 5 / 9 / 35] --> Hooks[Hooks Pipeline<br/>19 hooks]
         Hooks --> Memory[Memory Layer]
     end
 

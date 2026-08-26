@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Product name: **a-memory** · package: `mcp-ariel-memory` · v1.7.0
+Product name: **a-memory** · package: `mcp-ariel-memory` · v1.8.0
 
 a-memory exposes two tool surfaces:
 
@@ -35,6 +35,8 @@ Universal write primitive: routes a thought to the correct storage based on cont
 | `text` | string | required | Thought content |
 | `layer` | `user\|agent\|auto` | `auto` | `auto` scores agent-voice vs user-fact signals and routes accordingly |
 | `user_id` | string | `"default"` | |
+| `wiki_type` | string | null | Optional; passing it (or `wiki_title`) forces a wiki save with this explicit type |
+| `wiki_title` | string | null | Optional explicit page title instead of the automatic `Thought_<ts>` naming |
 
 **Routing logic**
 
@@ -191,6 +193,9 @@ Wiki types: 7 user + 7 agent (incl. `project_spec` for user layer).
 ```bash
 # default — primitives only
 uvx a-memory
+
+# primitives + wiki tools
+ARIEL_EXPOSE=primitives,wiki uvx a-memory
 
 # full legacy surface
 ARIEL_EXPOSE=all uvx a-memory

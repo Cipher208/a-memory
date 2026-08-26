@@ -3,6 +3,37 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.8.0] - 2026-08-26
+
+### Added
+- **Temporal timeline activated end-to-end** — timeline events gained a `layer` column with automatic migration for legacy tables; `think` records thought events, `evolve` records personality shifts, `project(decision)` records project decisions; `dream(intent="recent")` prepends a Timeline digest of the 5 newest events.
+- **Tiered tool exposure** — `ARIEL_EXPOSE` now accepts comma-separated tiers: `primitives,wiki` adds `wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete` alongside the 5 primitives; `all` unchanged.
+- **Explicit wiki saves from `think`** — optional `wiki_type` / `wiki_title` params force a wiki save under an explicit page name/type instead of automatic `Thought_<ts>` routing.
+- **Tokenized multi-word recall** — CoreMemory.search and EpisodicMemory.search match on any query word, results ranked by matched-word count then importance (single-word behavior unchanged).
+- **Optional `embeddings` extra** — sentence-transformers with torch pinned to the CPU wheel index; `ARIEL_HASH_EMBEDDINGS=1` forces the deterministic hash backend; embedding cache rows are keyed by the producing backend so hash vectors can never be served as model embeddings.
+- **Export/import payload v1.1** — sessions round-trip, layer preservation, newest-wins conflict guard, single-transaction imports with rollback, user_id validation on export filenames, `list_exports` filterable by user_id.
+- **End-to-end pipeline test suite** — runs against real stores: placement, dream recall, consolidation sweep, forget + Shadow Bin, evolve→temporal, project cycle, and a layer-isolation pin.
+
+### Changed
+- Default tool surface unchanged (5 primitives); `docs/tools/reference.md` documents all three exposure tiers.
+- e5 embedding calls now use `query:` / `passage:` prefixes at the search and ingest call sites.
+- `get_causal_chain` accepts optional user_id scoping.
+
+### Fixed
+- **compression.deduplicate_core partitioned BY layer** — previously memory_cleanup could delete a legitimate cross-layer row (user fact vs agent fact sharing a key) on every run.
+- **compress_episodes scoped per layer** — agent identity episodes are no longer swept by user maintenance, and doomed episodes are archived to the Shadow Bin before deletion.
+- **wiki/index consistency** — frontmatter wiki_type edits no longer desync external-content FTS5; file_path lookups are layer-scoped; unique index migrated to `(layer, file_path)`; mutations serialized under a lock with rollback-on-error.
+- **WikiManager directory isolation** — resolves its directory from `MCP_MEMORY_DATA_DIR`; instances no longer share one wiki folder.
+- **import_export safety** — INSERT OR REPLACE clobbering newer live data replaced by the newest-wins guard; half-applied imports rolled back.
+- **Hooks fully async per contract** — removed the ThreadPool bridge; fixed emotion_trigger dropping episodes via asyncio.run inside a running loop.
+- **Consistent backups** — SQLite online-backup snapshots replace copying live WAL files; backup_cron schedules coroutines onto the server event loop.
+- **secrets** — `.env` canonicalized to the instance data dir (legacy repo-root `.env` still read).
+- ReflexBuffer persistence debounced (30 s / 10 adds) instead of fsync per message.
+- Dashboard stats use COUNT queries; context/recall caches invalidated by cleanup/purge/import; recall cache bounded (512); config singleton thread-safe; stale connection reopen no longer races.
+- RAG: every search branch and the sha256 dedup are layer-scoped; FTS5 failures log a warning with the SQLite version.
+- forgetting.compress_duplicates rewritten as one window-function DELETE; importance_scheduler batches retrieval counts per user.
+- Flaky saga compensation test made self-sufficient (explicit schema init).
+
 ## [1.7.0] - 2026-08-24
 
 ### Added

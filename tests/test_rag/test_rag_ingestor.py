@@ -55,7 +55,7 @@ async def test_ingest_basic(cm):
 async def test_ingest_parallel_embeddings(cm):
     with patch("rag.ingestor.embed_texts", new_callable=AsyncMock) as mock_embed:
         # Mock embeddings to return some dummy vectors
-        mock_embed.side_effect = lambda texts: [[0.1] * 384 for _ in texts]
+        mock_embed.side_effect = lambda texts, **kwargs: [[0.1] * 384 for _ in texts]
 
         ingestor = RAGIngestor(cm)
         content = "Chunk 1\n\nChunk 2\n\nChunk 3"  # 3 paragraphs -> 3 chunks likely

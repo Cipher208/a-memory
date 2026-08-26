@@ -11,6 +11,8 @@ Unified search across memory layers.
 | `hybrid` | FTS5 + MIB with scoring | General purpose |
 | `auto` | Adaptive (fts for short, hybrid for long) | Default |
 
+Search is scoped per `(layer, user_id)`. Queries are tokenized: multi-word queries match ANY word, and core results are ranked by matched-word count, then importance.
+
 ## Usage
 
 ```python

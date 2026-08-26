@@ -12,9 +12,8 @@
 [![Docs](https://img.shields.io/badge/docs-MkDocs%20Material-blue)](https://cipher208.github.io/a-memory/)
 [![Release](https://img.shields.io/github/v/release/Cipher208/a-memory)](https://github.com/Cipher208/a-memory/releases)
 
-> **Naming note:** the product name is **a-memory**; this repository is still
-> `Cipher208/a-memory` (renaming is pending — all links above use the
-> current name).
+> Also available on PyPI: [`pip install a-memory`](https://pypi.org/project/a-memory/) —
+> optional extras: `a-memory[embeddings]` for real multilingual embeddings.
 
 ---
 
@@ -102,7 +101,7 @@ res = await session.call_tool("dream", {"query": "dark mode preference"})
 print(res["summary"])
 ```
 
-~30 additional fine-grained operations (typed CRUD per store, sessions, ops/admin) stay available behind `ARIEL_EXPOSE=all`.
+35 fine-grained operations exist in total (typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, and everything via `ARIEL_EXPOSE=all`.
 
 ---
 
@@ -178,6 +177,7 @@ graph TD
 - [x] Hourly consolidation sweep + DB self-maintenance
 - [x] mcp 2.x native SDK
 - [x] Repo renamed to `Cipher208/a-memory`; PyPI package live (`pip install a-memory`)
+- [x] **Temporal timeline wired end to end (think/evolve/project events + dream recent digest)**
 - [ ] **Screenshot / asciinema demo** in README
 - [ ] **LLM-assisted consolidation** on top of the deterministic sweep
 
