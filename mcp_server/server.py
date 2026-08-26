@@ -1,6 +1,7 @@
 """MCP Server — MCPServer setup, AppContext, lifespan, main()."""
 
 import os
+from collections.abc import Callable
 import sys
 import logging
 from pathlib import Path
@@ -28,6 +29,26 @@ STDIO_TRANSPORT: Literal["stdio"] = "stdio"
 PRIMITIVE_TOOLS = frozenset({"think", "dream", "forget", "evolve", "project"})
 
 
+EXTRA_TIERS: dict[str, Callable[[set[str], set[str]], set[str]]] = {
+    # tier name -> matcher(tool_name, all_names) returning extra tools to expose
+    "wiki": lambda name, names: {n for n in names if n.startswith("wiki_")},
+}
+
+
+def resolve_exposure(expose: str, all_names: set[str]) -> set[str]:
+    """Resolve an ARIEL_EXPOSE value to the exposed tool-name set.
+
+    Formats: 'primitives' (default), 'all', or comma-separated tiers
+    e.g. 'primitives,wiki'. Unknown tiers are ignored.
+    """
+    allowed = set(PRIMITIVE_TOOLS) & all_names
+    for tier in (t.strip() for t in expose.split(",") if t.strip()):
+        matcher = EXTRA_TIERS.get(tier)
+        if matcher:
+            allowed |= matcher(tier, all_names)
+    return allowed
+
+
 def _register_all_tools() -> None:
     import mcp_server.tools_layer  # noqa: F401 — populates the tool registry
     from mcp_server.registry import get_all_tools
@@ -35,7 +56,8 @@ def _register_all_tools() -> None:
     expose = os.environ.get("ARIEL_EXPOSE", "primitives").strip().lower()
     tools = get_all_tools()
     if expose != "all":
-        hidden = sorted(set(tools) - PRIMITIVE_TOOLS)
+        allowed = resolve_exposure(expose, set(tools))
+        hidden = sorted(set(tools) - allowed)
         for name in hidden:
             del tools[name]
 

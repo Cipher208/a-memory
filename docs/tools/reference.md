@@ -7,7 +7,12 @@ a-memory exposes two tool surfaces:
 | Surface | Tools | How |
 |---------|-------|-----|
 | **Primitives** (default) | 5 | What every MCP client sees out of the box |
-| **Full surface** | 35 | Set `ARIEL_EXPOSE=all` to restore legacy granular tools |
+| **Primitives + wiki** | 9 | `ARIEL_EXPOSE=primitives,wiki` — adds wiki_add/search/list/delete for agents that manage wiki pages directly |
+| **Full surface** | 35 | `ARIEL_EXPOSE=all` restores legacy granular tools |
+
+`think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
+wiki save with an explicit page name instead of the automatic Thought_<ts>
+routing, so large notes and curated pages are reachable without extra tools.
 
 All tools accept a `layer` parameter (`user` or `agent`). Layers are fully isolated: separate `(layer, user_id, key)` namespaces in L3/L4, separate wiki spaces and graphs. Agent-layer writes never overwrite user facts.
 

@@ -35,6 +35,8 @@ async def think(
     text: str,
     layer: Literal["user", "agent", "auto"] = "auto",
     user_id: str = "default",
+    wiki_type: str | None = None,
+    wiki_title: str | None = None,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Universal Primitive: routing thoughts to correct memory layers based on importance and content."""
@@ -68,16 +70,20 @@ async def think(
 
     tasks = []
 
-    # Large input (> 2000 chars) -> save to Wiki thoughts
-    if len(text) > 2000:
-        thought_title = f"Thought_{int(time.time())}"
-        wiki_path = await wiki.add(wiki_type="decision_log" if resolved_layer == "agent" else "diary", title=thought_title, content=text)
+    forced_wiki = bool(wiki_type or wiki_title)
+    large_text = len(text) > 2000
+
+    if forced_wiki or large_text:
+        w_type = wiki_type or ("decision_log" if resolved_layer == "agent" else "diary")
+        title = wiki_title or f"Thought_{int(time.time())}"
+        wiki_path = await wiki.add(wiki_type=w_type, title=title, content=text)
 
         summary = text[:200] + "..."
         text_to_save = f"Summary: {summary} | Path: {wiki_path}"
-        actions.append({"type": "Wiki_thought_save", "path": wiki_path})
+        action_type = "Wiki_save" if forced_wiki else "Wiki_thought_save"
+        actions.append({"type": action_type, "path": wiki_path})
 
-        # Also save summary/link to memory
+        # Also save summary/link to memory so dream() can find the page
         if importance > 0.7:
             tasks.append(mem.remember("thought_link", text_to_save, importance))
             actions.append({"type": "L4_remember_link", "importance": str(importance)})
