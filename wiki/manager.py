@@ -49,8 +49,16 @@ LAYER_TYPES = {
 class WikiManager:
     """Unified wiki orchestrator: coordinates WikiParser (I/O) and WikiIndex (DB)."""
 
-    def __init__(self, layer: str = "user", base_dir: str | None = None, cm: AsyncConnectionManager | None = None):
+    def __init__(
+        self,
+        layer: str = "user",
+        base_dir: str | None = None,
+        cm: AsyncConnectionManager | None = None,
+        *,
+        auto_fix: bool = False,
+    ):
         self.layer = layer
+        self._auto_fix = auto_fix
         # Same data dir the connection manager uses — wiki files must live
         # inside the instance's own MCP_MEMORY_DATA_DIR, not a shared folder.
         self.base_dir = Path(base_dir or str(Path(_DEFAULT_DIR) / "wiki" / layer))
@@ -98,6 +106,25 @@ class WikiManager:
 
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         await self.index.save(entry, content_hash)
+
+        # Schema lint (warning-only by default; opt-in auto_fix on the manager)
+        try:
+            from .lint import lint_entry, lint_missing_index, _write_index_stub
+            enabled = self._get_enabled_types()
+            findings = lint_entry(
+                entry,
+                all_titles=set(),  # no full index here; wikilinks skipped
+                enabled_types=enabled,
+            )
+            for f in findings:
+                logger.warning("wiki lint [%s] %s: %s", wiki_type, f.code, f.message)
+            if self._auto_fix:
+                type_dir = self._type_dir(wiki_type)
+                if lint_missing_index(type_dir) is not None:
+                    _write_index_stub(type_dir, wiki_type, set())
+        except Exception as exc:
+            logger.warning("wiki lint failed for %s: %s", file_path, exc)
+
         return str(file_path)
 
     async def update(
@@ -287,6 +314,24 @@ class WikiManager:
             parsed_entry.file_path = str(dest)
             parsed_entry.wiki_type = wiki_type
             await self.index.save(parsed_entry, content_hash)
+
+            # Schema lint (same pattern as add())
+            try:
+                from .lint import lint_entry, lint_missing_index, _write_index_stub
+                findings = lint_entry(
+                    parsed_entry,
+                    all_titles=set(),
+                    enabled_types=enabled_types,
+                )
+                for fnd in findings:
+                    logger.warning("wiki lint [%s] %s: %s", wiki_type, fnd.code, fnd.message)
+                if self._auto_fix:
+                    type_dir = self._type_dir(wiki_type)
+                    if lint_missing_index(type_dir) is not None:
+                        _write_index_stub(type_dir, wiki_type, set())
+            except Exception as exc:
+                logger.warning("wiki lint failed for %s: %s", f, exc)
+
             return "imported"
         except Exception:
             logger.exception(f"Error syncing {f}")
