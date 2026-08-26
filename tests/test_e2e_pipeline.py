@@ -5,7 +5,6 @@ directory, mimicking what an agent session does across its lifetime.
 """
 
 import asyncio
-import contextlib
 
 import pytest
 
@@ -17,7 +16,6 @@ def e2e(tmp_path):
     from graph.temporal import TemporalGraph
     from hooks import UserHooks
     from lifecycle.emotion import EmotionEngine, EmotionTrigger, load_emotion_config
-    from mcp_server.tools import base as tools_base
     from rag.engine import RAGEngine
     from rag.multi_source import MultiSourceRAG
     from shared.cache import MemoryCache
