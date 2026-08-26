@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable  # noqa: TC003 — runtime dataclass field types
 from dataclasses import dataclass
@@ -206,15 +207,17 @@ def _invalidate_cache(layer: str, user_id: str) -> None:
 _recall_cache: dict[str, tuple[float, list[Any]]] = {}
 _RECALL_CACHE_TTL = 10  # seconds
 _RECALL_CACHE_MAX = 512
+_recall_cache_lock = threading.Lock()
 
 
 def _get_recall_cache(query: str, user_id: str, layer: str, limit: int) -> list[Any] | None:
     # SHA-256 for cache key, MD5 is flagged as weak by security scanners
     key = hashlib.sha256(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
-    if key in _recall_cache:
-        ts, results = _recall_cache[key]
-        if time.time() - ts < _RECALL_CACHE_TTL:
-            return results
+    with _recall_cache_lock:
+        if key in _recall_cache:
+            ts, results = _recall_cache[key]
+            if time.time() - ts < _RECALL_CACHE_TTL:
+                return results
     return None
 
 
@@ -222,11 +225,12 @@ def _set_recall_cache(query: str, user_id: str, layer: str, limit: int, results:
     # SHA-256 for cache key, MD5 is flagged as weak by security scanners
     key = hashlib.sha256(f"{layer}:{user_id}:{query}:{limit}".encode()).hexdigest()
     now = time.time()
-    # Bound memory: distinct queries would otherwise grow the dict forever.
-    if len(_recall_cache) >= _RECALL_CACHE_MAX:
-        expired = [k for k, (ts, _) in _recall_cache.items() if now - ts >= _RECALL_CACHE_TTL]
-        for k in expired:
-            del _recall_cache[k]
-        while len(_recall_cache) >= _RECALL_CACHE_MAX:
-            _recall_cache.pop(next(iter(_recall_cache)))
-    _recall_cache[key] = (now, results)
+    with _recall_cache_lock:
+        # Bound memory: distinct queries would otherwise grow the dict forever.
+        if len(_recall_cache) >= _RECALL_CACHE_MAX:
+            expired = [k for k, (ts, _) in _recall_cache.items() if now - ts >= _RECALL_CACHE_TTL]
+            for k in expired:
+                del _recall_cache[k]
+            while len(_recall_cache) >= _RECALL_CACHE_MAX:
+                _recall_cache.pop(next(iter(_recall_cache)))
+        _recall_cache[key] = (now, results)
