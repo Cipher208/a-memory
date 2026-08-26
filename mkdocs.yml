@@ -62,6 +62,8 @@ nav:
     - Installation: getting-started/installation.md
     - Configuration: getting-started/configuration.md
     - Quick Start: getting-started/quickstart.md
+    - Config Key Map: CONTROL_MAP.md
+    - Config Key Map: CONTROL_MAP.md
   - Architecture:
     - Overview: architecture/overview.md
     - Memory Layers: architecture/layers.md
@@ -88,6 +90,10 @@ nav:
     - Compression: features/compression.md
     - Dedup: features/dedup.md
     - Privacy Filter: features/privacy.md
+    - Circuit Breaker: features/circuit-breaker.md
+    - Token Budget: features/token-budget.md
+  - Research:
+    - Ideas Backlog: research/RESEARCH-ideas.md
   - Wiki:
     - Overview: wiki/overview.md
     - FileWiki: wiki/file-wiki.md
