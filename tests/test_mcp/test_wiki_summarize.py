@@ -3,6 +3,7 @@
 Mirrors the pattern in tests/test_mcp/test_primitives.py and
 tests/test_wiki/test_manager.py: real stores, no mocks, in-process DB.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -15,6 +16,7 @@ from mcp_server.tools.wiki_summarize import (
 
 # ── Pure-function tests (no DB) ──────────────────────────────────────
 
+
 def test_perspective_to_type_has_exactly_six_entries():
     assert len(PERSPECTIVE_TO_TYPE) == 6
 
@@ -22,11 +24,11 @@ def test_perspective_to_type_has_exactly_six_entries():
 @pytest.mark.parametrize(
     "perspective,expected_layer,expected_type",
     [
-        ("practical",     "agent", "decision_log"),
-        ("epistemic",     "agent", "learning_journal"),
+        ("practical", "agent", "decision_log"),
+        ("epistemic", "agent", "learning_journal"),
         ("psychological", "agent", "emotional_context"),
-        ("social",        "user",  "relationships"),
-        ("temporal",      "user",  "retrospective"),
+        ("social", "user", "relationships"),
+        ("temporal", "user", "retrospective"),
         ("metacognitive", "agent", "principle_log"),
     ],
 )

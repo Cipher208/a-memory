@@ -57,6 +57,7 @@ Tag vocabulary = 7 hardcoded tags (`decision`, `learning`, `todo`, `principle`, 
 
 ```python
 from wiki import WikiManager
+
 wm = WikiManager(layer="user", auto_fix=True)
 await wm.add("diary", "First Page", "hello", [])
 # → also creates user/diary/INDEX.md stub listing all pages in the dir
@@ -68,6 +69,7 @@ To run a full layer scan outside the manager (e.g. CI):
 
 ```python
 from wiki import lint_wiki_layer
+
 report = lint_wiki_layer("user", Path("~/.mcp-ariel-memory/wiki/user"), enabled_types)
 print(report.findings)
 ```

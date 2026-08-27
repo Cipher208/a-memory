@@ -1,4 +1,5 @@
 """Tests for memory_context_inject's inline consolidation step (dream cycle inject)."""
+
 from __future__ import annotations
 
 import time

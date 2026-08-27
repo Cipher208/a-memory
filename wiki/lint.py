@@ -4,6 +4,7 @@ Pure module; consumed by `WikiManager.add()` and `sync_external()` as a
 side-effect. Default behavior is warning-only; opt-in `auto_fix=True`
 on the manager only creates missing INDEX.md stubs.
 """
+
 from __future__ import annotations
 
 import logging
@@ -22,10 +23,17 @@ logger = logging.getLogger(__name__)
 
 # 8 baseline tags. Plus enabled wiki_type names (layer-aware).
 # Tag is "known" if it is in this set OR equals an enabled wiki_type.
-WIKI_LINT_TAG_BASELINE: frozenset[str] = frozenset({
-    "decision", "learning", "todo", "principle",
-    "context", "spec", "draft",
-})
+WIKI_LINT_TAG_BASELINE: frozenset[str] = frozenset(
+    {
+        "decision",
+        "learning",
+        "todo",
+        "principle",
+        "context",
+        "spec",
+        "draft",
+    }
+)
 
 
 def wiki_lint_tag_vocabulary(enabled_types: list[str]) -> frozenset[str]:
@@ -35,13 +43,14 @@ def wiki_lint_tag_vocabulary(enabled_types: list[str]) -> frozenset[str]:
 
 # ── Findings ─────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class Finding:
-    code: str                    # e.g. "missing_title", "broken_wikilink"
-    message: str                 # human-readable
-    location: str                # "title", "wikilink:[[X]]", etc.
-    fixable: bool = False        # can auto_fix handle this?
-    severity: str = "warning"     # "warning" | "error"
+    code: str  # e.g. "missing_title", "broken_wikilink"
+    message: str  # human-readable
+    location: str  # "title", "wikilink:[[X]]", etc.
+    fixable: bool = False  # can auto_fix handle this?
+    severity: str = "warning"  # "warning" | "error"
 
 
 @dataclass
@@ -68,6 +77,7 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]|\n]+)(?:\|[^\]\n]+)?\]\]")
 
 # ── Per-entry check ──────────────────────────────────────────────────
 
+
 def lint_entry(
     entry: WikiEntry,
     *,
@@ -88,60 +98,71 @@ def lint_entry(
 
     # 2. required fields: title or wiki_type fell back to default
     if entry.title == "Untitled":
-        findings.append(Finding(
-            code="missing_title",
-            message="title fell back to 'Untitled' (no frontmatter title, no filename stem)",
-            location="title",
-            fixable=False,
-        ))
+        findings.append(
+            Finding(
+                code="missing_title",
+                message="title fell back to 'Untitled' (no frontmatter title, no filename stem)",
+                location="title",
+                fixable=False,
+            )
+        )
     if entry.wiki_type == "note" and not getattr(entry, "_explicit_type", False) and not entry.content.strip():
         # If parser got "note" via default, flag it. We can't distinguish
         # from an explicit "note" wiki_type here without a marker; for
         # now, only flag if entry's tags or content is also empty.
-        findings.append(Finding(
-            code="missing_wiki_type",
-            message="wiki_type fell back to 'note' default and content is empty",
-            location="wiki_type",
-            fixable=False,
-        ))
+        findings.append(
+            Finding(
+                code="missing_wiki_type",
+                message="wiki_type fell back to 'note' default and content is empty",
+                location="wiki_type",
+                fixable=False,
+            )
+        )
 
     # 3. broken wikilinks
     if entry.content and "[[" in entry.content:
         for m in _WIKILINK_RE.finditer(entry.content):
             target = m.group(1).strip()
             if target and titles and target not in titles:
-                findings.append(Finding(
-                    code="broken_wikilink",
-                    message=f"[[{target}]] has no matching wiki page",
-                    location=f"wikilink:[[{target}]]",
-                    fixable=False,
-                ))
+                findings.append(
+                    Finding(
+                        code="broken_wikilink",
+                        message=f"[[{target}]] has no matching wiki page",
+                        location=f"wikilink:[[{target}]]",
+                        fixable=False,
+                    )
+                )
 
     # 4. page length cap (50k chars = ~12k tokens)
     if len(entry.content) > 50_000:
-        findings.append(Finding(
-            code="page_too_long",
-            message=f"content is {len(entry.content)} chars (>50000 cap)",
-            location="content",
-            fixable=False,
-        ))
+        findings.append(
+            Finding(
+                code="page_too_long",
+                message=f"content is {len(entry.content)} chars (>50000 cap)",
+                location="content",
+                fixable=False,
+            )
+        )
 
     # 6. unknown tags
     if entry.tags:
         vocab = wiki_lint_tag_vocabulary(types)
         for tag in entry.tags:
             if tag not in vocab:
-                findings.append(Finding(
-                    code="unknown_tag",
-                    message=f"tag '{tag}' not in vocabulary (baseline + enabled types)",
-                    location=f"tag:{tag}",
-                    fixable=False,
-                ))
+                findings.append(
+                    Finding(
+                        code="unknown_tag",
+                        message=f"tag '{tag}' not in vocabulary (baseline + enabled types)",
+                        location=f"tag:{tag}",
+                        fixable=False,
+                    )
+                )
 
     return findings
 
 
 # ── Missing-index check (whole layer) ──────────────────────────────
+
 
 def lint_missing_index(wiki_type_dir: Path) -> Finding | None:
     """Return a Finding if `wiki_type_dir` has no INDEX.md.
@@ -160,6 +181,7 @@ def lint_missing_index(wiki_type_dir: Path) -> Finding | None:
 
 
 # ── Layer scan ───────────────────────────────────────────────────────
+
 
 def lint_wiki_layer(
     layer: str,
@@ -205,6 +227,7 @@ def lint_wiki_layer(
                 _write_index_stub(type_dir, wiki_type, all_titles)
         # Per-entry
         from .parser import WikiParser  # local import to avoid cycle
+
         for md_file in type_dir.glob("*.md"):
             if md_file.name == "INDEX.md":
                 continue
@@ -215,7 +238,9 @@ def lint_wiki_layer(
                 logger.warning("wiki lint: failed to parse %s: %s", md_file, exc)
                 continue
             entry_findings = lint_entry(
-                entry, all_titles=all_titles, enabled_types=enabled_types,
+                entry,
+                all_titles=all_titles,
+                enabled_types=enabled_types,
             )
             report.findings.extend(entry_findings)
 

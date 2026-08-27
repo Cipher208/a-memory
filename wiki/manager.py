@@ -110,6 +110,7 @@ class WikiManager:
         # Schema lint (warning-only by default; opt-in auto_fix on the manager)
         try:
             from .lint import lint_entry, lint_missing_index, _write_index_stub
+
             enabled = self._get_enabled_types()
             findings = lint_entry(
                 entry,
@@ -318,6 +319,7 @@ class WikiManager:
             # Schema lint (same pattern as add())
             try:
                 from .lint import lint_entry, lint_missing_index, _write_index_stub
+
                 findings = lint_entry(
                     parsed_entry,
                     all_titles=set(),

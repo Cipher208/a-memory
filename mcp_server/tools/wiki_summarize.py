@@ -4,6 +4,7 @@ Maps one of 6 analytical perspectives to a single existing wiki_type and
 returns a token-budgeted digest of matching pages. Lives under the `wiki_`
 prefix so ARIEL_EXPOSE=primitives,wiki auto-includes it (mcp_server/server.py:32-35).
 """
+
 from __future__ import annotations
 
 import logging
@@ -27,25 +28,27 @@ logger = logging.getLogger(__name__)
 # full coverage of all 15 wiki types. Uncovered types stay reachable
 # through `wiki_search`.
 PERSPECTIVE_TO_TYPE: dict[str, tuple[Literal["user", "agent"], str]] = {
-    "practical":     ("agent", "decision_log"),       # what was decided / what to do
-    "epistemic":     ("agent", "learning_journal"),   # facts, lessons, what was learned
+    "practical": ("agent", "decision_log"),  # what was decided / what to do
+    "epistemic": ("agent", "learning_journal"),  # facts, lessons, what was learned
     "psychological": ("agent", "emotional_context"),  # emotions, mood, reflection
-    "social":        ("user",  "relationships"),      # people, contacts, social context
-    "temporal":      ("user",  "retrospective"),      # past, changes, history
-    "metacognitive": ("agent", "principle_log"),      # rules, self-model
+    "social": ("user", "relationships"),  # people, contacts, social context
+    "temporal": ("user", "retrospective"),  # past, changes, history
+    "metacognitive": ("agent", "principle_log"),  # rules, self-model
 }
 
 Perspective = Literal[
-    "practical", "epistemic", "psychological", "social", "temporal", "metacognitive",
+    "practical",
+    "epistemic",
+    "psychological",
+    "social",
+    "temporal",
+    "metacognitive",
 ]
 
 
 def _validate_perspective(perspective: str) -> str:
     if perspective not in PERSPECTIVE_TO_TYPE:
-        raise ValueError(
-            f"Unknown perspective: {perspective!r}. "
-            f"Must be one of {tuple(PERSPECTIVE_TO_TYPE)}"
-        )
+        raise ValueError(f"Unknown perspective: {perspective!r}. Must be one of {tuple(PERSPECTIVE_TO_TYPE)}")
     return perspective
 
 
@@ -74,10 +77,7 @@ async def wiki_summarize(
         raw = [r for r in raw if r.get("wiki_type") == wiki_type]
     else:
         entries = await wiki.list_by_type(wiki_type, limit)
-        raw = [
-            {"title": e.title, "wiki_type": e.wiki_type, "tags": e.tags, "content": e.content[:500]}
-            for e in entries
-        ]
+        raw = [{"title": e.title, "wiki_type": e.wiki_type, "tags": e.tags, "content": e.content[:500]} for e in entries]
 
     # Build a token-budgeted digest
     parts: list[str] = []

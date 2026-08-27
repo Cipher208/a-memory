@@ -3,6 +3,7 @@
 Mirrors tests/test_wiki/test_manager.py pattern: real filesystem,
 real WikiManager, no mocks.
 """
+
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 — runtime: callers pass Path instances (tmp_path fixtures)
@@ -22,6 +23,7 @@ from wiki.models import WikiEntry
 
 # ── Vocabulary ──────────────────────────────────────────────
 
+
 def test_baseline_has_seven_tags():
     assert len(WIKI_LINT_TAG_BASELINE) == 7
 
@@ -35,6 +37,7 @@ def test_vocabulary_includes_baseline_and_enabled_types():
 
 
 # ── Per-entry checks ────────────────────────────────────────
+
 
 def _entry(title: str = "T", wiki_type: str = "diary", content: str = "x", tags: list[str] | None = None) -> WikiEntry:
     return WikiEntry(
@@ -109,6 +112,7 @@ def test_lint_never_raises_on_garbage():
 
 # ── missing_index ───────────────────────────────────────────
 
+
 def test_lint_missing_index(tmp_path: Path):
     type_dir = tmp_path / "diary"
     type_dir.mkdir()
@@ -126,6 +130,7 @@ def test_lint_missing_index_skipped_when_present(tmp_path: Path):
 
 
 # ── auto_fix_type_dirs ─────────────────────────────────────
+
 
 def test_auto_fix_creates_index_stubs(tmp_path: Path):
     # 3 type dirs, none with INDEX.md
@@ -147,6 +152,7 @@ def test_auto_fix_idempotent(tmp_path: Path):
 
 # ── LintReport helpers ─────────────────────────────────────
 
+
 def test_finding_severity_default():
     f = Finding(code="x", message="m", location="l")
     assert f.severity == "warning"
@@ -154,16 +160,19 @@ def test_finding_severity_default():
 
 
 def test_lint_report_by_code():
-    r = LintReport(findings=[
-        Finding(code="a", message="m1", location="l"),
-        Finding(code="b", message="m2", location="l"),
-        Finding(code="a", message="m3", location="l"),
-    ])
+    r = LintReport(
+        findings=[
+            Finding(code="a", message="m1", location="l"),
+            Finding(code="b", message="m2", location="l"),
+            Finding(code="a", message="m3", location="l"),
+        ]
+    )
     assert len(r.by_code("a")) == 2
     assert r.fixable_count == 0
 
 
 # ── WikiManager integration ─────────────────────────────────
+
 
 def test_manager_default_auto_fix_is_false():
     wm = WikiManager(layer="user")
