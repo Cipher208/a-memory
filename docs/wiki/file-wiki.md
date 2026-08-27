@@ -37,3 +37,37 @@ fw.reindex_all()
 ├── api-reference.md
 └── ...
 ```
+
+## Schema lint
+
+Every `add()` and `sync_external()` import runs a 6-check lint pass. Findings are logged as warnings; they never block the save.
+
+| Check | Code | Default behavior |
+|---|---|---|
+| Frontmatter present | `frontmatter_malformed` | warning |
+| Required fields (`title`, `wiki_type`) | `missing_title`, `missing_wiki_type` | warning |
+| Broken `[[wikilinks]]` | `broken_wikilink` | warning |
+| Page length > 50,000 chars | `page_too_long` | warning |
+| Missing `INDEX.md` in type dir | `missing_index` | warning |
+| Tags outside vocabulary | `unknown_tag` | warning |
+
+Tag vocabulary = 7 hardcoded tags (`decision`, `learning`, `todo`, `principle`, `context`, `spec`, `draft`) plus the names of all currently-enabled wiki types for the layer.
+
+**Opt-in auto-fix.** Only `missing_index` is fixable. Create the manager with `auto_fix=True`:
+
+```python
+from wiki import WikiManager
+wm = WikiManager(layer="user", auto_fix=True)
+await wm.add("diary", "First Page", "hello", [])
+# → also creates user/diary/INDEX.md stub listing all pages in the dir
+```
+
+The `INDEX.md` stub is idempotent — second `add()` does nothing. Other 5 checks require human judgment and stay warning-only.
+
+To run a full layer scan outside the manager (e.g. CI):
+
+```python
+from wiki import lint_wiki_layer
+report = lint_wiki_layer("user", Path("~/.mcp-ariel-memory/wiki/user"), enabled_types)
+print(report.findings)
+```

@@ -7,6 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - **`wiki_summarize` tool** — 6 analytical perspectives (practical / epistemic / psychological / social / temporal / metacognitive) filter the wiki through a curated mapping to existing `wiki_type`. Auto-included under `ARIEL_EXPOSE=primitives,wiki` via the `wiki_` prefix-match. Token-budgeted digest (≤ 2000 tokens). No DB migrations, no config changes, no `mcp_server/server.py` changes — pure additive tool. See `docs/tools/reference.md` for the perspective → wiki_type mapping table.
+- **Wiki schema lint** — 6 schema checks (frontmatter, required fields, broken wikilinks, page length, missing INDEX.md, unknown tags) fire on every `add()` and `sync_external()` as warning logs. Only `missing_index` is auto-fixable; pass `WikiManager(auto_fix=True)` to enable. No new MCP tool, no config schema change, no DB migration. Tag vocabulary = 7 hardcoded tags + enabled wiki_type names. See `wiki/lint.py` and `docs/wiki/file-wiki.md` for details.
 
 ## [1.8.0] - 2026-08-26
 
