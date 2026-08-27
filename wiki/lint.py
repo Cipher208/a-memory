@@ -9,11 +9,11 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path  # noqa: TC003 — runtime: callers pass Path instances (lint_wiki_layer, lint_missing_index)
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .parser import WikiEntry
+    from .models import WikiEntry
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]|\n]+)(?:\|[^\]\n]+)?\]\]")
 # ── Per-entry check ──────────────────────────────────────────────────
 
 def lint_entry(
-    entry: "WikiEntry",
+    entry: WikiEntry,
     *,
     all_titles: set[str] | None = None,
     enabled_types: list[str] | None = None,
@@ -94,17 +94,16 @@ def lint_entry(
             location="title",
             fixable=False,
         ))
-    if entry.wiki_type == "note" and not getattr(entry, "_explicit_type", False):
+    if entry.wiki_type == "note" and not getattr(entry, "_explicit_type", False) and not entry.content.strip():
         # If parser got "note" via default, flag it. We can't distinguish
         # from an explicit "note" wiki_type here without a marker; for
         # now, only flag if entry's tags or content is also empty.
-        if not entry.content.strip():
-            findings.append(Finding(
-                code="missing_wiki_type",
-                message="wiki_type fell back to 'note' default and content is empty",
-                location="wiki_type",
-                fixable=False,
-            ))
+        findings.append(Finding(
+            code="missing_wiki_type",
+            message="wiki_type fell back to 'note' default and content is empty",
+            location="wiki_type",
+            fixable=False,
+        ))
 
     # 3. broken wikilinks
     if entry.content and "[[" in entry.content:
@@ -145,8 +144,10 @@ def lint_entry(
 # ── Missing-index check (whole layer) ──────────────────────────────
 
 def lint_missing_index(wiki_type_dir: Path) -> Finding | None:
-    """Return a Finding if `wiki_type_dir` has no INDEX.md. Single check
-    scoped to one type directory (called per type, not per entry)."""
+    """Return a Finding if `wiki_type_dir` has no INDEX.md.
+
+    Single check scoped to one type directory (called per type, not per entry).
+    """
     index_path = wiki_type_dir / "INDEX.md"
     if not index_path.exists():
         return Finding(
@@ -185,11 +186,11 @@ def lint_wiki_layer(
                 if f:
                     report.findings.append(f)
             continue
-        for f in type_dir.glob("*.md"):
-            if f.name == "INDEX.md":
+        for md_file in type_dir.glob("*.md"):
+            if md_file.name == "INDEX.md":
                 continue
             # Use filename stem as title proxy (matches parser fallback)
-            all_titles.add(f.stem)
+            all_titles.add(md_file.stem)
 
     # Second pass: lint every .md
     for wiki_type in enabled_types:
@@ -228,12 +229,14 @@ _AUTO_FIXABLE_CODES = frozenset({"missing_index"})
 
 
 def auto_fix_entry(
-    entry: "WikiEntry",
+    entry: WikiEntry,
     findings: list[Finding],
-) -> tuple["WikiEntry", list[str]]:
-    """Apply safe auto-fixes. Currently only creates missing INDEX.md
-    (which is per-type-dir, not per-entry, so this is a no-op for entries).
-    Kept as an extension point for future per-entry fixes.
+) -> tuple[WikiEntry, list[str]]:
+    """Apply safe auto-fixes.
+
+    Currently only creates missing INDEX.md (which is per-type-dir, not
+    per-entry, so this is a no-op for entries). Kept as an extension
+    point for future per-entry fixes.
 
     Returns (possibly-mutated entry, list of fix descriptions).
     """
@@ -263,8 +266,10 @@ def _write_index_stub(type_dir: Path, wiki_type: str, titles: set[str]) -> None:
 
 
 def auto_fix_type_dirs(base_dir: Path, enabled_types: list[str]) -> list[str]:
-    """Create INDEX.md stubs in all type dirs that lack one. Returns
-    list of created paths as strings."""
+    """Create INDEX.md stubs in all type dirs that lack one.
+
+    Returns list of created paths as strings.
+    """
     created: list[str] = []
     for wiki_type in enabled_types:
         type_dir = base_dir / wiki_type

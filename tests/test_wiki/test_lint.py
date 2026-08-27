@@ -5,10 +5,7 @@ real WikiManager, no mocks.
 """
 from __future__ import annotations
 
-import logging
-from pathlib import Path
-
-import pytest
+from pathlib import Path  # noqa: TC003 — runtime: callers pass Path instances (tmp_path fixtures)
 
 from wiki.lint import (
     Finding,
@@ -17,11 +14,10 @@ from wiki.lint import (
     auto_fix_type_dirs,
     lint_entry,
     lint_missing_index,
-    lint_wiki_layer,
     wiki_lint_tag_vocabulary,
 )
 from wiki.manager import WikiManager
-from wiki.parser import WikiParser
+from wiki.models import WikiEntry
 
 
 # ── Vocabulary ──────────────────────────────────────────────
@@ -40,8 +36,7 @@ def test_vocabulary_includes_baseline_and_enabled_types():
 
 # ── Per-entry checks ────────────────────────────────────────
 
-def _entry(title: str = "T", wiki_type: str = "diary", content: str = "x", tags: list[str] | None = None) -> "WikiEntry":
-    from wiki.models import WikiEntry
+def _entry(title: str = "T", wiki_type: str = "diary", content: str = "x", tags: list[str] | None = None) -> WikiEntry:
     return WikiEntry(
         entry_id=None,
         wiki_type=wiki_type,

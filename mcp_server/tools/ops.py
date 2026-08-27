@@ -1,8 +1,11 @@
 from __future__ import annotations
 import asyncio
+import logging
 import time
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Runtime import: MCPServer evaluates tool annotations at registration;
 # hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
