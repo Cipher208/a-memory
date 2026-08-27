@@ -207,7 +207,7 @@ async def memory_context_inject(
     context_md_path: str | None = None
     try:
         # _validate_layer already narrowed layer at runtime; cast for mypy.
-        layer_lit = cast(Literal["user", "agent"], layer)
+        layer_lit = cast("Literal['user', 'agent']", layer)
         body = await _build_context_md(
             layer=layer_lit,
             user_id=user_id,
