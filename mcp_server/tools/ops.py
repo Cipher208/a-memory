@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,13 @@ async def memory_context(
     l3_episodes = await mem.l3.get_episodes(user_id, 3)
     episodes_text = "; ".join([f"{e.summary[:50]}" for e in l3_episodes])
 
+    # Extra read for the CONTEXT.md snapshot (5 vs 3 — snapshot wants more)
+    try:
+        l3_for_snapshot = await mem.l3.get_episodes(user_id, 5)
+    except Exception as exc:
+        logger.warning("memory_context_inject: extra l3 read failed: %s", exc)
+        l3_for_snapshot = l3_episodes
+
     l1_recent = mem.l1.get_recent(5)
     recent_text = "; ".join([f"{r.role}: {r.content[:50]}" for r in l1_recent])
 
@@ -163,6 +171,13 @@ async def memory_context_inject(
     l3_episodes = await mem.l3.get_episodes(user_id, 3)
     episodes_text = "; ".join([f"{e.summary[:50]}" for e in l3_episodes])
 
+    # Extra read for the CONTEXT.md snapshot (5 vs 3 — snapshot wants more)
+    try:
+        l3_for_snapshot = await mem.l3.get_episodes(user_id, 5)
+    except Exception as exc:
+        logger.warning("memory_context_inject: extra l3 read failed: %s", exc)
+        l3_for_snapshot = l3_episodes
+
     l1_recent = mem.l1.get_recent(5)
     recent_text = "; ".join([f"{r.role}: {r.content[:50]}" for r in l1_recent])
 
@@ -184,6 +199,24 @@ async def memory_context_inject(
     context_text = "\n".join(context_parts)
     context_text, was_truncated = _truncate_to_budget(context_text, DEFAULT_TOKEN_BUDGET)
 
+    # CONTEXT.md persistence: 3-section snapshot written per-agent to
+    # <MCP_MEMORY_DATA_DIR>/<layer>/CONTEXT.md. Failures are non-fatal.
+    context_md_path: str | None = None
+    try:
+        body = await _build_context_md(
+            layer=layer, user_id=user_id, context_text=context_text,
+            consolidated=consolidated, last_consolidation_ts=last_consolidation_ts,
+            l4_count=len(l4_facts), l3_count=len(l3_episodes),
+            l1_count=len(l1_recent), wiki_count=len(wiki_entries),
+            episodes=l3_for_snapshot,
+        )
+        path = _context_md_path(layer)
+        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(path.write_text, body, encoding="utf-8")
+        context_md_path = str(path)
+    except Exception as exc:
+        logger.warning("memory_context_inject: CONTEXT.md write failed: %s", exc)
+
     result = {
         "context": context_text,
         "l4_facts_count": len(l4_facts),
@@ -195,6 +228,8 @@ async def memory_context_inject(
         "token_budget": DEFAULT_TOKEN_BUDGET,
         "consolidated_episodes": consolidated,
         "last_consolidation_ts": last_consolidation_ts,
+        "context_md_path": context_md_path,
+        "perspectives_count": 6,  # 6 perspectives always written
     }
     _set_cached(cache_key, result)
     await _fire_hook("dream_buffer", layer, {"text": context_text, "user_id": user_id})
@@ -431,3 +466,94 @@ async def memory_search(
         include_wiki=include_wiki,
     )
     return SearchResult(results=results, count=len(results), method=strategy).dict()
+
+
+# ── CONTEXT.md persistence (research backlog 3.13) ──────────────
+
+def _context_md_path(layer: str) -> Path:
+    """Resolve <MCP_MEMORY_DATA_DIR>/<layer>/CONTEXT.md.
+
+    Per-agent isolation: each agent has its own MCP_MEMORY_DATA_DIR
+    (hermes/mimocode/cowagent configs set it differently), so the file
+    is naturally per-agent and never collides.
+    """
+    raw = os.environ.get("MCP_MEMORY_DATA_DIR", "~/.mcp-ariel-memory")
+    data_dir = Path(raw).expanduser()
+    return data_dir / layer / "CONTEXT.md"
+
+
+async def _build_context_md(
+    *,
+    layer: str,
+    user_id: str,
+    context_text: str,
+    consolidated: int,
+    last_consolidation_ts: float,
+    l4_count: int,
+    l3_count: int,
+    l1_count: int,
+    wiki_count: int,
+    episodes: list,  # WikiEntry-like (have .summary, .emotional_weight)
+) -> str:
+    """Compose the CONTEXT.md content: frontmatter + 3 sections.
+
+    Returns the full file content as a string. Caller writes to disk.
+    """
+    from mcp_server.tools.wiki_summarize import wiki_summarize
+
+    perspective_names = [
+        "practical", "epistemic", "psychological",
+        "social", "temporal", "metacognitive",
+    ]
+    perspective_blocks: list[str] = []
+    for p in perspective_names:
+        try:
+            res = await wiki_summarize(perspective=p, layer=layer, limit=3)
+            digest = res.get("digest", "")
+            digest, _ = _truncate_to_budget(digest, 200)
+            title = p.capitalize()
+            wt = res.get("wiki_type", "?")
+            block = f"### {title} ({wt})\n\n{digest}\n"
+        except Exception as exc:
+            logger.warning("CONTEXT.md: wiki_summarize %s failed: %s", p, exc)
+            block = f"### {p.capitalize()}\n\n_(unavailable)_\n"
+        perspective_blocks.append(block)
+
+    episode_lines: list[str] = []
+    for e in episodes[:5]:
+        weight = float(getattr(e, "emotional_weight", 0.0))
+        summary = (getattr(e, "summary", "") or "")[:120]
+        episode_lines.append(f"- [weight={weight:.1f}] {summary}")
+    if not episode_lines:
+        episode_lines.append("_(no recent episodes)_")
+
+    fm_lines = [
+        "---",
+        f"generated_at: {time.time()}",
+        f"layer: {layer}",
+        f"user_id: {user_id}",
+        f"token_budget: {DEFAULT_TOKEN_BUDGET}",
+        f"consolidated_episodes: {consolidated}",
+        f"last_consolidation_ts: {last_consolidation_ts}",
+        "sources:",
+        f"  l4: {l4_count}",
+        f"  l3: {l3_count}",
+        f"  l1: {l1_count}",
+        f"  wiki: {wiki_count}",
+        "schema_version: 1",
+        "---",
+    ]
+
+    body = (
+        "\n".join(fm_lines)
+        + "\n\n"
+        + f"# Context Snapshot — {layer} layer\n\n"
+        + "## Context\n\n"
+        + context_text
+        + "\n\n## Perspectives\n\n"
+        + "\n".join(perspective_blocks)
+        + "\n## Recent Episodes\n\n"
+        + "\n".join(episode_lines)
+        + "\n\n---\n*Auto-generated by a-memory memory_context_inject.*\n"
+    )
+    return body
