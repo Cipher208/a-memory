@@ -88,9 +88,11 @@ async def test_context_inject_does_not_break_on_consolidation_failure(mock_app, 
     fake_engine = MagicMock()
     fake_engine.consolidate_episodes = AsyncMock(side_effect=RuntimeError("db down"))
 
-    with patch("lifecycle.consolidation.ConsolidationEngine", return_value=fake_engine):
-        with caplog.at_level("WARNING", logger="mcp_server.tools.ops"):
-            result = await memory_context_inject(layer="user", user_id="default")
+    with (
+        patch("lifecycle.consolidation.ConsolidationEngine", return_value=fake_engine),
+        caplog.at_level("WARNING", logger="mcp_server.tools.ops"),
+    ):
+        result = await memory_context_inject(layer="user", user_id="default")
 
     # Fallback: consolidated=0, but result is still a valid dict
     assert "context" in result
