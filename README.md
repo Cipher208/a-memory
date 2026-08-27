@@ -101,7 +101,7 @@ res = await session.call_tool("dream", {"query": "dark mode preference"})
 print(res["summary"])
 ```
 
-34 fine-grained operations exist in total (5 primitives + 4 wiki + 25 typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, and everything via `ARIEL_EXPOSE=all`.
+35 fine-grained operations exist in total (5 primitives + 5 wiki + 25 typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete` / `wiki_summarize`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, and everything via `ARIEL_EXPOSE=all`.
 
 ---
 
@@ -115,7 +115,7 @@ print(res["summary"])
 | 📁 **Projects** | Decision log (what/why/outcome), artifact map, graphify code index — survives between sessions |
 | 🔐 **Security** | Envelope encryption (NaCl `SecretBox` = XSalsa20-Poly1305), master key chain, rate limiting |
 | 🛠️ **Ops** | Auto-backup cron, saga rollback pattern, Prometheus metrics, read-only replica, hourly self-maintenance (decay + consolidation + auto-VACUUM) |
-| 🌐 **Wiki** | FTS5-indexed markdown files — edit in Obsidian/VS Code, search from MCP |
+| 🌐 **Wiki** | FTS5-indexed markdown files — edit in Obsidian/VS Code, search from MCP, 6 analytical perspectives (`wiki_summarize`), schema lint on save, external-dir sync |
 
 ---
 
@@ -181,6 +181,7 @@ Notes (Sep 2026): mem0 now ships a self-hosted Docker image and a managed cloud 
 - [x] mcp 2.x native SDK
 - [x] Repo renamed to `Cipher208/a-memory`; PyPI package live (`pip install a-memory`)
 - [x] **Temporal timeline wired end to end (think/evolve/project events + dream recent digest)**
+- [x] **Dream-cycle inject + auto-generated CONTEXT.md snapshot** (curated context + 6 wiki perspectives + recent episodes, per-layer, per-agent)
 - [ ] **Screenshot / asciinema demo** in README
 - [ ] **LLM-assisted consolidation** on top of the deterministic sweep
 

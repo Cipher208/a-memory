@@ -5,7 +5,7 @@
 **4-tier Memory MCP Server for AI agents — layer-isolated, plain SQLite, zero cloud**
 
 [![CI](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-372 passed-brightgreen)](https://github.com/Cipher208/a-memory/actions)
+[![Tests](https://img.shields.io/badge/tests-600 passed-brightgreen)](https://github.com/Cipher208/a-memory/actions)
 [![Python](https://img.shields.io/badge/python-3.10--3.13-blue)](https://www.python.org/)
 
 ---
@@ -25,12 +25,13 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 
 | Feature | Description |
 |---------|-------------|
-| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`, `all` exposes the full 34-tool surface |
+| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`/`wiki_summarize`, `all` exposes the full 35-tool surface |
 | **4-tier memory** | L1 ReflexBuffer → L2 SessionStore → L3 EpisodicMemory → L4 CoreMemory, layer-isolated `(layer, user_id, key)` namespaces |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
 | **RAG search** | FTS5 + binary embeddings + hybrid RRF ranking, multi-source merge |
 | **Knowledge graphs** | Epistemic (facts/decisions, typed nodes + edges) + Temporal (timeline events) |
-| **Wiki system** | .md files as source of truth, 15 content types (7 user + 1 `project_spec` + 7 agent) |
+| **Wiki system** | .md files as source of truth, 15 content types (7 user + 1 `project_spec` + 7 agent), 6 analytical perspectives (`wiki_summarize`), schema lint on save/sync |
+| **Context snapshot** | `memory_context_inject` auto-writes a per-layer `CONTEXT.md` (curated context + 6 wiki perspectives + recent episodes) for cross-session agent access |
 | **Saga pattern** | Multi-step ops with retry, idempotency, compensation |
 | **Envelope encryption** | NaCl `SecretBox` (XSalsa20-Poly1305) via PyNaCl, keychain-first key resolution |
 | **Platform-aware async** | aiosqlite on Linux/macOS, asyncio.to_thread on Windows |
@@ -89,8 +90,8 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 ## Status
 
 - **Version:** 1.8.0
-- **Tests:** 400+ passed (including 25 property-based Hypothesis tests)
+- **Tests:** 600+ passed (including 25 property-based Hypothesis tests)
 - **DB tables:** 23 (alembic head `init_v8`)
-- **Tool surface:** 5 primitives by default · 9 with `primitives,wiki` · 34 with `all`
+- **Tool surface:** 5 primitives by default · 10 with `primitives,wiki` · 35 with `all`
 - **Python:** 3.10–3.13
 - **Platform:** Windows, Linux, macOS, Docker
