@@ -48,6 +48,42 @@ hooks:
 
 The repo-root `config.yaml` is the shared default; per-agent copies live outside the repo and are selected with `MCP_CONFIG_PATH`. On startup a-memory warns when such a copy is missing keys that exist in the newer default. See `docs/CONTROL_MAP.md` for the full key-to-subsystem map.
 
+## External wiki directories
+
+Wiki pages can be auto-imported from any directory of `.md` files on disk. Each layer (`user` / `agent`) accepts its own list of external roots. The server re-scans them on a timer (default: every 30 minutes) and indexes new or changed files into FTS5. Type is auto-detected from the file path or content.
+
+```yaml
+wiki:
+  user:
+    external_dirs:
+      - "~/Documents/notes"
+      - "~/work/drafts"
+    diary: true
+    relationships: true
+    # ... other wiki types as needed
+  agent:
+    external_dirs: []
+    decision_log: true
+    # ...
+
+backup:
+  wiki_sync_interval_minutes: 30   # how often to re-scan external_dirs
+```
+
+**Behavior**
+
+- On `sync_external` tick, every `**/*.md` under each path is checked (sha256 of content).
+- New files → imported; changed files (content differs) → re-imported; identical files → skipped.
+- A file's `wiki_type` is guessed from the path (`diary/2026-09.md` → `diary`) or the content's first 200 chars (fallback: `diary` for user, `wiki_agent` for agent).
+- Files are copied into the layer's wiki folder under the resolved type, e.g. `~/.mcp-ariel-memory/wiki/user/diary/2026-09.md`. The original file is left untouched.
+- The external root is **read-only** from a-memory's perspective — edits there are picked up on the next sync, not synchronously.
+
+**Cadence** is controlled by `backup.wiki_sync_interval_minutes`. To force an immediate rescan, restart the server (sync runs at startup AND on the timer). There is no on-demand `wiki_sync` tool or filesystem watcher in v1.8.0 — for live sync, drop the cadence to a low value (e.g. `1`).
+
+**Path format**: tilde (`~`) is expanded; relative paths are resolved against the data dir (`MCP_MEMORY_DATA_DIR`). Symlinks are followed. The directory must be readable by the a-memory process; missing directories are silently skipped (with a debug log).
+
+**Limitations**: v1.8.0 has no inotify / file-watcher hook. Cadence-only.
+
 ## Environment Variables
 
 | Variable | Default | Description |
