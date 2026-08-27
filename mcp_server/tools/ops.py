@@ -132,6 +132,23 @@ async def memory_context_inject(
         return {**cached, "cached": True}
 
     app = _get_ctx(ctx)
+
+    # Inline consolidation step (the "inject" stage of the dream cycle pipeline):
+    # drain high-weight L3 episodes into L4 right before we read L4, so the
+    # context the agent sees is freshly curated. Failures are non-fatal.
+    consolidated = 0
+    last_consolidation_ts = time.time()
+    try:
+        from config import config as _cfg
+        from lifecycle.consolidation import ConsolidationEngine
+        min_weight = float(_cfg.get_forgetting("consolidate_weight_threshold") or 0.7)
+        consolidated = await ConsolidationEngine(layer=layer).consolidate_episodes(
+            user_id=user_id, min_weight=min_weight,
+        )
+        _invalidate_cache(layer, user_id)
+    except Exception as exc:
+        logger.warning("memory_context_inject: consolidation failed: %s", exc)
+
     mem = _get_memory(app, layer, user_id)
     wiki = _get_wiki(app, layer)
 
@@ -173,6 +190,8 @@ async def memory_context_inject(
         "estimated_tokens": _estimate_tokens(context_text),
         "was_truncated": was_truncated,
         "token_budget": DEFAULT_TOKEN_BUDGET,
+        "consolidated_episodes": consolidated,
+        "last_consolidation_ts": last_consolidation_ts,
     }
     _set_cached(cache_key, result)
     await _fire_hook("dream_buffer", layer, {"text": context_text, "user_id": user_id})
