@@ -101,7 +101,7 @@ res = await session.call_tool("dream", {"query": "dark mode preference"})
 print(res["summary"])
 ```
 
-35 fine-grained operations exist in total (5 primitives + 5 wiki + 25 typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete` / `wiki_summarize`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, and everything via `ARIEL_EXPOSE=all`.
+36 fine-grained operations exist in total (5 primitives + 5 wiki + 1 daily_brief + 25 typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete` / `wiki_summarize`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, `daily_brief` via `ARIEL_EXPOSE=primitives,wiki,brief`, and everything via `ARIEL_EXPOSE=all`.
 
 ---
 

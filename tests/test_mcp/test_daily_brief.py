@@ -1,4 +1,5 @@
 """Tests for the daily_brief tool (3-section status report)."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -9,7 +10,6 @@ import features.recall_telemetry as rt
 from mcp_server.registry import get_all_tools
 from mcp_server.server import resolve_exposure
 from mcp_server.tools.brief import daily_brief
-from core import MemoryManager
 from core.session import SessionStore
 from core.memory import CoreMemory
 from graph.temporal import TemporalGraph

@@ -8,7 +8,8 @@ a-memory exposes three tool surfaces:
 |---------|-------|-----|
 | **Primitives** (default) | 5 | What every MCP client sees out of the box |
 | **Primitives + wiki** | 9 | `ARIEL_EXPOSE=primitives,wiki` — adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete` for agents that manage wiki pages directly |
-| **Full surface** | 35 | `ARIEL_EXPOSE=all` restores legacy granular tools |
+| **+ brief** | 10 | `ARIEL_EXPOSE=primitives,wiki,brief` — adds `daily_brief` (one-call status report) |
+| **Full surface** | 36 | `ARIEL_EXPOSE=all` restores legacy granular tools |
 
 `think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
 wiki save with an explicit page name instead of the automatic Thought_<ts>
@@ -214,6 +215,7 @@ Returns a dict with `perspective`, `layer`, `wiki_type`, `pages` (list of `{titl
 | Tool | Description |
 |------|-------------|
 | `memory_stats` | Per-level counts: L1 buffer, L2 sessions, L3 episodes, L4 facts, wiki pages, graph nodes. Also `recall_count` (total `dream` calls) and `avg_session_quality` (0-100). |
+| `daily_brief` | One-call daily brief: pending work (L4 todo), recent activity (temporal + recall count), suggested action (todo follow-ups + open sessions). Non-fatal per section; deterministic, no LLM. Exposed via `ARIEL_EXPOSE=primitives,brief` or `all`. |
 | `memory_context` | Compressed context summary for prompt injection (top-10 facts, recent turns, wiki, episodes). |
 | `memory_context_inject` | Same, plus explicit `estimated_tokens`/`was_truncated` against the token budget. Runs an inline L3→L4 consolidation step before reading L4 (returns `consolidated_episodes` and `last_consolidation_ts`). Also writes a 3-section `CONTEXT.md` snapshot to `<MCP_MEMORY_DATA_DIR>/<layer>/CONTEXT.md` (returns `context_md_path` and `perspectives_count`); write failures are non-fatal. |
 | `memory_search` | Hybrid search over RAG + Wiki with `strategy` and `sources` selection. |
@@ -236,6 +238,9 @@ a-memory --transport http --port 8000 --dashboard
 
 # primitives + wiki tools
 ARIEL_EXPOSE=primitives,wiki a-memory
+
+# primitives + wiki + daily brief
+ARIEL_EXPOSE=primitives,wiki,brief a-memory
 
 # full legacy surface
 ARIEL_EXPOSE=all a-memory

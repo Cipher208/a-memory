@@ -3,6 +3,7 @@
 Deterministic assembly from existing stores; no LLM call, no new schema.
 Each section is independent and non-fatal: a failure renders '_(unavailable)_'.
 """
+
 from __future__ import annotations
 
 import logging
@@ -37,10 +38,12 @@ async def daily_brief(
     pending: list[str] = []
     try:
         conn = await app.mm._cm.get(DB_NAME)
-        rows = await (await conn.execute(
-            "SELECT key, value FROM core_memory WHERE layer=? AND user_id=? AND memory_kind='todo' ORDER BY importance DESC LIMIT 20",
-            (layer, user_id),
-        )).fetchall()
+        rows = await (
+            await conn.execute(
+                "SELECT key, value FROM core_memory WHERE layer=? AND user_id=? AND memory_kind='todo' ORDER BY importance DESC LIMIT 20",
+                (layer, user_id),
+            )
+        ).fetchall()
         pending = [f"- [{r[0]}] {str(r[1])[:120]}" for r in rows]
     except Exception as exc:
         logger.warning("daily_brief: pending section failed: %s", exc)
@@ -54,6 +57,7 @@ async def daily_brief(
             tv = (e.metadata or {}).get("training_value", "?")
             recent.append(f"- [{e.event_type}] {e.content[:120]} (tv={tv})")
         from features.recall_telemetry import count_recalls
+
         n_recall = await count_recalls(app.mm._cm, user_id, started_at=since, ended_at=now)
         recent.append(f"- recall calls (last {days}d): {n_recall}")
     except Exception as exc:
@@ -67,10 +71,12 @@ async def daily_brief(
             if not r.startswith("_(unavailable)_"):
                 suggested.append(f"- follow up on: {r[3:]}")
         conn = await app.mm._cm.get(DB_NAME)
-        rows = await (await conn.execute(
-            "SELECT session_id, summary FROM sessions WHERE user_id=? AND ended_at IS NULL LIMIT 5",
-            (user_id,),
-        )).fetchall()
+        rows = await (
+            await conn.execute(
+                "SELECT session_id, summary FROM sessions WHERE user_id=? AND ended_at IS NULL LIMIT 5",
+                (user_id,),
+            )
+        ).fetchall()
         for r in rows:
             label = r[1] or r[0]
             suggested.append(f"- resume session: {str(label)[:120]}")
