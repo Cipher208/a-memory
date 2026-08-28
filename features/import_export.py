@@ -105,8 +105,21 @@ class ImportExport:
         try:
             # Newest-wins conflict guard: a stale backup must never clobber
             # newer live values. Layer travels with the row.
-            for item in data.get("core_memory", []):
-                await conn.execute(
+            core_rows = [
+                (
+                    item.get("layer", "user"),
+                    user_id,
+                    item["key"],
+                    item["value"],
+                    item["importance"],
+                    item.get("memory_kind"),
+                    item["created_at"],
+                    item.get("updated_at") or time.time(),
+                )
+                for item in data.get("core_memory", [])
+            ]
+            if core_rows:
+                await conn.executemany(
                     """INSERT INTO core_memory (layer, user_id, key, value, importance, memory_kind, created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                        ON CONFLICT(layer, user_id, key) DO UPDATE SET
@@ -115,42 +128,48 @@ class ImportExport:
                            memory_kind=excluded.memory_kind,
                            updated_at=excluded.updated_at
                        WHERE excluded.updated_at > core_memory.updated_at""",
-                    (
-                        item.get("layer", "user"),
-                        user_id,
-                        item["key"],
-                        item["value"],
-                        item["importance"],
-                        item.get("memory_kind"),
-                        item["created_at"],
-                        item.get("updated_at") or time.time(),
-                    ),
+                    core_rows,
                 )
-                imported["core_memory"] += 1
+            imported["core_memory"] = len(core_rows)
 
-            for item in data.get("episodes", []):
-                await conn.execute(
+            episode_rows = [
+                (
+                    item.get("layer", "user"),
+                    user_id,
+                    item["summary"],
+                    item["emotional_weight"],
+                    item["tags"],
+                    item["created_at"],
+                )
+                for item in data.get("episodes", [])
+            ]
+            if episode_rows:
+                await conn.executemany(
                     "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (item.get("layer", "user"), user_id, item["summary"], item["emotional_weight"], item["tags"], item["created_at"]),
+                    episode_rows,
                 )
-                imported["episodes"] += 1
+            imported["episodes"] = len(episode_rows)
 
-            for item in data.get("sessions", []):
-                await conn.execute(
+            session_rows = [
+                (
+                    item["session_id"],
+                    user_id,
+                    item.get("summary"),
+                    item.get("state_deltas"),
+                    item.get("topics"),
+                    item.get("message_count", 0),
+                    item.get("started_at"),
+                    item.get("ended_at"),
+                )
+                for item in data.get("sessions", [])
+            ]
+            if session_rows:
+                await conn.executemany(
                     """INSERT OR IGNORE INTO sessions (session_id, user_id, summary, state_deltas, topics, message_count, started_at, ended_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        item["session_id"],
-                        user_id,
-                        item.get("summary"),
-                        item.get("state_deltas"),
-                        item.get("topics"),
-                        item.get("message_count", 0),
-                        item.get("started_at"),
-                        item.get("ended_at"),
-                    ),
+                    session_rows,
                 )
-                imported["sessions"] += 1
+            imported["sessions"] = len(session_rows)
 
             await conn.commit()
         except Exception:
