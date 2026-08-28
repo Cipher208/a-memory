@@ -4,6 +4,7 @@ Classifies a think() text into high / medium / low training value by
 scanning for decision markers (DECISION_RE) and outcome markers (OUTCOME_RE).
 Pure function; no DB, no IO. Value rides the temporal "thought" event metadata.
 """
+
 from __future__ import annotations
 
 import re

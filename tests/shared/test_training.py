@@ -1,4 +1,5 @@
 """Tests for shared.importance.training (training_value classifier)."""
+
 from __future__ import annotations
 
 from shared.importance.training import classify_training_value

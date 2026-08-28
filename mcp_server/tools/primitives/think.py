@@ -23,6 +23,8 @@ from mcp_server.tools.base import (
 )
 from mcp_server.tools.primitives.routing import _auto_route
 
+from shared.importance.training import classify_training_value
+
 from mcp_server.context import AppContext  # noqa: TC001 — runtime: MCPServer evaluates this annotation at registration
 
 logger = logging.getLogger(__name__)
@@ -128,7 +130,7 @@ async def think(
                 "thought",
                 text[:200],
                 importance=float(importance),
-                metadata={"resolved_layer": resolved_layer, "actions": len(actions)},
+                metadata={"resolved_layer": resolved_layer, "actions": len(actions), "training_value": classify_training_value(text)},
                 layer=resolved_layer,
             )
 

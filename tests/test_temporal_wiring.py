@@ -92,7 +92,10 @@ async def test_think_records_temporal_event(tmp_path):
     assert res["status"] == "ok"
 
     events = await app.temporal.get_recent("tu", layer="agent")
-    assert any(e.event_type == "thought" for e in events)
+    thought_events = [e for e in events if e.event_type == "thought"]
+    assert thought_events, "expected at least one thought event"
+    # "I decided to use sqlite WAL for storage" has 'decided' -> medium
+    assert thought_events[0].metadata.get("training_value") == "medium"
 
 
 @pytest.mark.asyncio

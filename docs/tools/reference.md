@@ -22,7 +22,7 @@ All tools accept a `layer` parameter (`user` or `agent`). Layers are fully isola
 
 ### `think`
 
-Universal write primitive: routes a thought to the correct storage based on content size, importance, and emotional weight. Never silently drops content.
+Universal write primitive: routes a thought to the correct storage based on content size, importance, and emotional weight. Never silently drops content. Auto-classifies each thought as high / medium / low `training_value` (decision + outcome regexes, RU+EN) into its temporal event metadata.
 
 ```json
 { "text": "We decided to use SQLite over Postgres — zero-config deployment matters more than concurrency here.", "layer": "auto" }
