@@ -32,6 +32,7 @@ PRIMITIVE_TOOLS = frozenset({"think", "dream", "forget", "evolve", "project"})
 EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
     # tier name -> matcher(tool_name, all_names) returning extra tools to expose
     "wiki": lambda name, names: {n for n in names if n.startswith("wiki_")},
+    "brief": lambda name, names: {n for n in names if n.startswith("daily_")},
 }
 
 
