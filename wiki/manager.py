@@ -130,6 +130,12 @@ class WikiManager:
         except Exception as exc:
             logger.warning("wiki lint failed for %s: %s", file_path, exc)
 
+        # Auto-link [[wikilinks]] to resolvable pages (non-fatal)
+        try:
+            await self._autolink(entry)
+        except Exception as exc:
+            logger.warning("wiki autolink failed for %s: %s", file_path, exc)
+
         return str(file_path)
 
     async def update(
@@ -165,6 +171,12 @@ class WikiManager:
         content_hash = hashlib.sha256(entry.content.encode()).hexdigest()
         await self.index.save(entry, content_hash)
 
+        # Auto-link any new [[wikilinks]] (non-fatal)
+        try:
+            await self._autolink(entry)
+        except Exception as exc:
+            logger.warning("wiki autolink failed for %s: %s", p, exc)
+
     async def get(self, file_path: str) -> WikiEntry | None:
         """Fetch entry from disk, validated by existence."""
         try:
@@ -196,6 +208,27 @@ class WikiManager:
         """List all entries in the layer."""
         rows = await self.index.list_all(limit)
         return await self._rows_to_entries(rows)
+
+    async def get_links(self, path: str) -> list[dict[str, Any]]:
+        """Return typed links involving a page path (delegates to index)."""
+        return await self.index.get_links(path)
+
+    async def _autolink(self, entry: WikiEntry) -> None:
+        """Create 'follows' links for resolvable [[wikilinks]] in entry.content.
+
+        Non-fatal: unresolvable targets are skipped; a linking error is logged.
+        """
+        if not entry.content or "[[" not in entry.content:
+            return
+        from .lint import _WIKILINK_RE
+        entries = await self.list_all(limit=500)
+        by_title = {e.title: e.file_path for e in entries}
+        by_stem = {Path(e.file_path).stem: e.file_path for e in entries}
+        for m in _WIKILINK_RE.finditer(entry.content):
+            target = m.group(1).strip()
+            target_path = by_title.get(target) or by_stem.get(target)
+            if target_path and target_path != entry.file_path:
+                await self.index.add_link(entry.file_path, target_path, "follows")
 
     async def _rows_to_entries(self, rows: list[dict[str, Any]]) -> list[WikiEntry]:
         entries = []
