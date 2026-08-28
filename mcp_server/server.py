@@ -1,5 +1,7 @@
 """MCP Server — MCPServer setup, AppContext, lifespan, main()."""
 
+import functools
+import inspect
 import os
 from collections.abc import Callable
 import sys
@@ -13,6 +15,7 @@ from mcp.server.mcpserver import MCPServer
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from mcp_server.lifespan import lifespan
+from mcp_server.tools.base import _resolve_user_id
 
 mcp = MCPServer(
     "ariel-memory",
@@ -50,6 +53,26 @@ def resolve_exposure(expose: str, all_names: set[str]) -> set[str]:
     return allowed
 
 
+def _scope_tool(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Bind the user_id kwarg to the authenticated API key when present.
+
+    functools.wraps keeps `__wrapped__`, so mcp 2.x resolves type
+    annotations (e.g. Literal[...]) in the original module via
+    inspect.signature(func, eval_str=True).
+    """
+    sig = inspect.signature(func)
+    if "user_id" not in sig.parameters:
+        return func
+
+    @functools.wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        if "user_id" in kwargs:
+            kwargs["user_id"] = _resolve_user_id(kwargs.get("ctx"), kwargs["user_id"])
+        return await func(*args, **kwargs)
+
+    return wrapper
+
+
 def _register_all_tools() -> None:
     import mcp_server.tools_layer  # noqa: F401 — populates the tool registry
     from mcp_server.registry import get_all_tools
@@ -63,7 +86,7 @@ def _register_all_tools() -> None:
             del tools[name]
 
     for name, func in tools.items():
-        mcp.tool(name=name)(func)
+        mcp.tool(name=name)(_scope_tool(func))
 
 
 _register_all_tools()

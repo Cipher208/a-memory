@@ -120,3 +120,103 @@ def test_middleware_allows_no_header(monkeypatch):
     with TestClient(_build_app()) as client:
         resp = client.get("/api/ping")
         assert resp.status_code == 200
+
+
+# ═══════════════════════════════════════════════════════════════
+# Registration wrapper — binds user_id on every tool
+# ═══════════════════════════════════════════════════════════════
+
+import inspect
+
+from mcp_server.server import _scope_tool
+
+
+async def _sample_tool(user_id: str = "default", key: str = "", ctx=None):
+    """Stand-in for a registered tool; records the user_id it actually sees."""
+    return {"user_id": user_id, "key": key}
+
+
+def test_scope_tool_no_user_id_param_unchanged():
+    async def _no_uid(x: int = 1, ctx=None):
+        return x
+
+    assert _scope_tool(_no_uid) is _no_uid
+
+
+@pytest.mark.asyncio
+async def test_scope_tool_rewrites_user_id(monkeypatch):
+    monkeypatch.setattr(
+        "features.auth.api_key_auth",
+        SimpleNamespace(verify=lambda k: {"user_id": "bound-user"} if k == "ak_1234" else None),
+    )
+    wrapped = _scope_tool(_sample_tool)
+    # signature preserved for tools/list schema generation
+    assert "user_id" in inspect.signature(wrapped).parameters
+    ctx = _ctx_with_request("Bearer ak_1234")
+    result = await wrapped(user_id="attacker", key="k", ctx=ctx)
+    assert result["user_id"] == "bound-user"
+
+
+@pytest.mark.asyncio
+async def test_scope_tool_fallback_without_key(monkeypatch):
+    wrapped = _scope_tool(_sample_tool)
+    result = await wrapped(user_id="alice", key="k", ctx=None)
+    assert result["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_scope_tool_binds_on_real_remember(monkeypatch, tmp_path):
+    """Integration: a real tool call lands under the key-bound user_id."""
+    from unittest.mock import MagicMock
+
+    from mcp_server.tools.memory import memory_remember
+    from shared.connection import AsyncConnectionManager
+    from shared.migrations import MigrationManager
+
+    monkeypatch.setattr(
+        "features.auth.api_key_auth",
+        SimpleNamespace(verify=lambda k: {"user_id": "bound-user"} if k == "ak_1234" else None),
+    )
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    mm = MigrationManager(cm=cm)
+    await mm.migrate()
+
+    from core import MemoryManager as MM
+    from features.rate_limiting import RateLimiter
+    from graph.epistemic import EpistemicGraph
+    from hooks.agent_hooks import AgentHooks
+    from hooks.user_hooks import UserHooks
+    from lifecycle.emotion import EmotionTrigger, EmotionEngine, load_emotion_config
+    from shared.cache import MemoryCache
+    from wiki import WikiManager
+
+    class App:
+        pass
+
+    app = App()
+    app.mm = MM(cm=cm)
+    app.cache = MemoryCache()
+    app.user_wiki = WikiManager(layer="user", base_dir=str(tmp_path / "wiki_u"), cm=cm)
+    app.agent_wiki = WikiManager(layer="agent", base_dir=str(tmp_path / "wiki_a"), cm=cm)
+    app.user_graph = EpistemicGraph(layer="user", cm=cm)
+    app.agent_graph = EpistemicGraph(layer="agent", cm=cm)
+    emo_cfg = load_emotion_config()
+    app.emotion_engine = EmotionEngine(config=emo_cfg)
+    app.emotion_trigger = EmotionTrigger(app.emotion_engine)
+    app.rate_limiter = RateLimiter()
+    app.user_hooks = UserHooks()
+    app.agent_hooks = AgentHooks()
+
+    ctx = MagicMock()
+    ctx.request_context = MagicMock()
+    ctx.request_context.lifespan_context = app
+    ctx.request_context.request = SimpleNamespace(headers={"Authorization": "Bearer ak_1234"})
+
+    wrapped = _scope_tool(memory_remember)
+    result = await wrapped(layer="user", user_id="attacker", key="k", value="v", importance=0.5, ctx=ctx)
+    assert result["status"] == "ok"
+    entry = await app.mm.user_memory("bound-user").l4.get("bound-user", "k")
+    assert entry is not None and entry.value == "v"
+    # the attacker's namespace is untouched
+    assert await app.mm.user_memory("attacker").l4.get("attacker", "k") is None
+    await cm.close_all()
