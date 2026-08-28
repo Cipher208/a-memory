@@ -60,6 +60,17 @@ class WikiIndex:
                 content=wiki_index,
                 content_rowid=entry_id
             );
+
+            CREATE TABLE IF NOT EXISTS wiki_links (
+                link_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                layer TEXT NOT NULL,
+                from_path TEXT NOT NULL,
+                to_path TEXT NOT NULL,
+                link_type TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(layer, from_path, to_path, link_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_wiki_links_to ON wiki_links(layer, to_path);
             """,
         )
         # Layer-scoped path uniqueness. Created separately and guarded:
@@ -233,3 +244,33 @@ class WikiIndex:
             )
         row = await cur.fetchone()
         return row[0] if row else 0
+
+    async def add_link(self, from_path: str, to_path: str, link_type: str) -> int:
+        """Create a typed link between two page paths. Idempotent (returns the link_id)."""
+        conn = await self._cm.get(DB_NAME)
+        await conn.execute(
+            "INSERT OR IGNORE INTO wiki_links (layer, from_path, to_path, link_type, created_at) VALUES (?, ?, ?, ?, ?)",
+            (self.layer, from_path, to_path, link_type, time.time()),
+        )
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT link_id FROM wiki_links WHERE layer=? AND from_path=? AND to_path=? AND link_type=?",
+            (self.layer, from_path, to_path, link_type),
+        )
+        row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
+    async def get_links(self, path: str) -> list[dict[str, Any]]:
+        """Return typed links involving `path`, both out (from) and in (to)."""
+        conn = await self._cm.get(DB_NAME)
+        out_rows = await (await conn.execute(
+            "SELECT to_path, link_type FROM wiki_links WHERE layer=? AND from_path=?",
+            (self.layer, path),
+        )).fetchall()
+        in_rows = await (await conn.execute(
+            "SELECT from_path, link_type FROM wiki_links WHERE layer=? AND to_path=?",
+            (self.layer, path),
+        )).fetchall()
+        links = [{"path": r[0], "link_type": r[1], "direction": "out"} for r in out_rows]
+        links += [{"path": r[0], "link_type": r[1], "direction": "in"} for r in in_rows]
+        return links
