@@ -84,9 +84,7 @@ def test_composite_indexes_exist(tmp_path):
 
         conn = await cm.get("memory.db")
         for name in EXPECTED:
-            cur = await conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name=?", (name,)
-            )
+            cur = await conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (name,))
             assert await cur.fetchone() is not None, f"missing index {name}"
 
     asyncio.run(t())

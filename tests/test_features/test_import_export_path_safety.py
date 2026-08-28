@@ -58,14 +58,27 @@ def test_import_user_bulk_insert(tmp_path):
                 {
                     "user_id": "u1",
                     "core_memory": [
-                        {"layer": "user", "key": "k1", "value": "v1", "importance": 0.9,
-                         "memory_kind": "fact", "created_at": 100.0, "updated_at": 100.0},
-                        {"layer": "user", "key": "k2", "value": "v2", "importance": 0.5,
-                         "memory_kind": "fact", "created_at": 101.0, "updated_at": 101.0},
+                        {
+                            "layer": "user",
+                            "key": "k1",
+                            "value": "v1",
+                            "importance": 0.9,
+                            "memory_kind": "fact",
+                            "created_at": 100.0,
+                            "updated_at": 100.0,
+                        },
+                        {
+                            "layer": "user",
+                            "key": "k2",
+                            "value": "v2",
+                            "importance": 0.5,
+                            "memory_kind": "fact",
+                            "created_at": 101.0,
+                            "updated_at": 101.0,
+                        },
                     ],
                     "episodes": [
-                        {"layer": "user", "summary": "s1", "emotional_weight": 0.7,
-                         "tags": "[]", "created_at": 102.0},
+                        {"layer": "user", "summary": "s1", "emotional_weight": 0.7, "tags": "[]", "created_at": 102.0},
                     ],
                     "sessions": [],
                 }
