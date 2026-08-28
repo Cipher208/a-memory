@@ -252,6 +252,74 @@ class WikiManager:
     async def count(self, wiki_type: str | None = None) -> int:
         return await self.index.count(wiki_type)
 
+    async def split(self, path: str, parts: list[tuple[str, str]]) -> dict[str, Any]:
+        """Split one page into several new pages from (title, content) pairs.
+
+        The source page is left unchanged; caller can delete/retire it.
+        Returns {"status","split","new_pages"} or an error dict.
+        """
+        if not parts:
+            return {"status": "error", "message": "parts must be non-empty"}
+        entry = await self.get(path)
+        if entry is None:
+            return {"status": "error", "message": f"no such page: {path}"}
+        new_pages: list[str] = []
+        for title, content in parts:
+            if not title or not content:
+                continue
+            try:
+                np = await self.add(wiki_type=entry.wiki_type, title=title, content=content)
+                new_pages.append(np)
+            except Exception as exc:
+                logger.warning("wiki split failed for %s/%s: %s", path, title, exc)
+        return {"status": "ok", "split": len(new_pages), "new_pages": new_pages}
+
+    async def merge(self, paths: list[str], dest_title: str) -> dict[str, Any]:
+        """Merge several pages into one new page (with ## source-title separators).
+
+        Source pages are not deleted. Returns {"status","merged","dest"}.
+        """
+        if len(paths) < 2:
+            return {"status": "error", "message": "merge needs >= 2 pages"}
+        entries = [await self.get(p) for p in paths]
+        if any(e is None for e in entries):
+            return {"status": "error", "message": "one or more source pages missing"}
+        first = entries[0]
+        assert first is not None
+        merged_blocks = []
+        for e in entries:
+            assert e is not None
+            merged_blocks.append(f"## {e.title}\n\n{e.content}")
+        dest = await self.add(wiki_type=first.wiki_type, title=dest_title, content="\n\n".join(merged_blocks))
+        return {"status": "ok", "merged": len(entries), "dest": dest}
+
+    async def retire(self, path: str, reason: str = "") -> dict[str, Any]:
+        """Move a page to _retired/<type>/ archive and drop it from the index.
+
+        Returns {"status","archive_path"} or {"status":"error",...}. Idempotent:
+        retiring a path whose active file is already gone returns error (not crash).
+        """
+        try:
+            p = safe_resolve(self.base_dir, path)
+        except ValueError:
+            return {"status": "error", "message": f"invalid path: {path}"}
+
+        entry = await self.get(path)
+        if entry is None:
+            return {"status": "error", "message": f"no such page: {path}"}
+
+        archive_dir = self.base_dir / "_retired" / entry.wiki_type
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        import time as _t
+        archive_path = archive_dir / f"{p.stem}_{int(_t.time())}.md"
+        header = f"> retired: {reason}\n\n" if reason else "> retired\n\n"
+        body = header + entry.content
+        await asyncio.to_thread(archive_path.write_text, body, encoding="utf-8")
+        if await asyncio.to_thread(p.exists):
+            await asyncio.to_thread(p.unlink)
+        await self.index.delete(str(p))
+        return {"status": "ok", "archive_path": str(archive_path)}
+
     def get_enabled_types(self) -> list[str]:
         return self._get_enabled_types()
 
