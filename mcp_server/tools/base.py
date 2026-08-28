@@ -234,3 +234,23 @@ def _set_recall_cache(query: str, user_id: str, layer: str, limit: int, results:
             while len(_recall_cache) >= _RECALL_CACHE_MAX:
                 _recall_cache.pop(next(iter(_recall_cache)))
         _recall_cache[key] = (now, results)
+
+
+def _resolve_user_id(ctx: Any, requested_user_id: str) -> str:
+    """Bind user_id to the authenticated API key when one is present.
+
+    A valid 'ak_' key in the Authorization header wins over the client-
+    supplied parameter; anything else falls back to the requested value.
+    """
+    if ctx is None:
+        return requested_user_id
+    req = getattr(ctx.request_context, "request", None)
+    if req is None:
+        return requested_user_id
+    header = req.headers.get("Authorization", "")
+    if not header.startswith("Bearer ak_"):
+        return requested_user_id
+    from features.auth import api_key_auth
+
+    data = api_key_auth.verify(header[7:])
+    return data["user_id"] if data else requested_user_id
