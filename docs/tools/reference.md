@@ -153,7 +153,7 @@ Legacy granular operations behind the primitives. Grouped by domain.
 | Tool | Description |
 |------|-------------|
 | `memory_session_start` | Open a session. |
-| `memory_session_end` | Close with summary; fires consolidation hooks. |
+| `memory_session_end` | Close a session. Optional `topics` / `state_deltas` feed the deterministic quality score persisted on the row (4 components: depth / decision / linked_entries / user_engagement, 0-80). Fires consolidation hooks. |
 | `memory_session_list` | Recent sessions. |
 
 ### Knowledge graph

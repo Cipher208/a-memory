@@ -8,13 +8,16 @@ Why 4 components and not 5 (icarus): a-memory's `dream` primitive does not
 write temporal events, so the `recall_usage` signal does not exist. The 5th
 component plugs in when research-backlog P1 item 2 (recall telemetry) lands.
 """
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from shared.connection import AsyncConnectionManager
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
+
 from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
