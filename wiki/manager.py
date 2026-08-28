@@ -123,6 +123,10 @@ class WikiManager:
                 type_dir = self._type_dir(wiki_type)
                 if lint_missing_index(type_dir) is not None:
                     _write_index_stub(type_dir, wiki_type, set())
+            from .secrets import scan_secrets
+
+            for fnd in scan_secrets(content):
+                logger.warning("wiki secret [%s] %s detected in %s", wiki_type, fnd.kind, file_path)
         except Exception as exc:
             logger.warning("wiki lint failed for %s: %s", file_path, exc)
 
@@ -331,6 +335,10 @@ class WikiManager:
                     type_dir = self._type_dir(wiki_type)
                     if lint_missing_index(type_dir) is not None:
                         _write_index_stub(type_dir, wiki_type, set())
+                from .secrets import scan_secrets
+
+                for sfnd in scan_secrets(content):
+                    logger.warning("wiki secret [%s] %s detected in %s", wiki_type, sfnd.kind, f)
             except Exception as exc:
                 logger.warning("wiki lint failed for %s: %s", f, exc)
 

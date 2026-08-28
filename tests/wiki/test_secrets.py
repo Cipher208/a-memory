@@ -1,4 +1,5 @@
 """Tests for wiki.secrets (secret detection scanner)."""
+
 from __future__ import annotations
 
 from wiki.secrets import scan_secrets

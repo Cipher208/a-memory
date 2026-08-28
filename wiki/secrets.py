@@ -3,6 +3,7 @@
 Warn-only: the caller (WikiManager.add / _sync_one_file) logs a WARNING per
 finding but never blocks the write. Pure function; no IO, no logging here.
 """
+
 from __future__ import annotations
 
 import re
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 
 @dataclass
 class SecretFinding:
-    kind: str     # "github_pat" | "api_key" | "pem_private_key"
+    kind: str  # "github_pat" | "api_key" | "pem_private_key"
     location: str  # "body"
 
 

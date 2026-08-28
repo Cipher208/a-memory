@@ -73,3 +73,18 @@ from wiki import lint_wiki_layer
 report = lint_wiki_layer("user", Path("~/.mcp-ariel-memory/wiki/user"), enabled_types)
 print(report.findings)
 ```
+
+## Secret detection
+
+Every `add()` and `sync_external()` import also scans content for well-known
+secret formats — GitHub PATs (`ghp_...`/`github_pat_...`), API keys
+(`sk-...`/`AIza...`/`AKIA...`), and PEM private-key headers. Matches are
+logged as WARNING (never the secret value itself, only its kind) and **never
+block the save**. The detector is conservative to avoid false positives on
+short or partial strings.
+
+```python
+from wiki.secrets import scan_secrets
+
+findings = scan_secrets(content)  # -> [SecretFinding(kind=..., location="body")]
+```

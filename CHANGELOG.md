@@ -3,6 +3,11 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Wiki secret detection** — `add()` and `sync_external()` scan content for well-known secret formats (GitHub PATs, API keys, PEM private-key headers). Matches are WARNING-logged (kind + path only, never the value) and never block the save. New pure `wiki/secrets.py::scan_secrets`. No new tool/config/DB. Closes research backlog P2 item 10.
+
 ## [1.8.1] - 2026-08-27
 
 ### Added
