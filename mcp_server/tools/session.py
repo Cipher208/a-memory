@@ -38,9 +38,11 @@ async def memory_session_end(
     user_id: str = "default",
     session_id: str = "",
     summary: str = "",
+    topics: list[str] | None = None,
+    state_deltas: dict[str, Any] | None = None,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """End a session and save summary."""
+    """End a session and save summary + optional engagement metadata for quality scoring."""
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
@@ -50,7 +52,9 @@ async def memory_session_end(
     if rate_limit:
         return rate_limit
 
-    await _get_memory(app, layer, user_id).l2.close_session(session_id, summary)
+    await _get_memory(app, layer, user_id).l2.close_session(
+        session_id, summary, state_deltas=state_deltas, topics=topics
+    )
 
     await _fire_hook("consolidation", layer, {"trigger": "session_end", "session_id": session_id, "user_id": user_id})
     await _fire_hook("state_delta", layer, {"trigger": "session_end", "session_id": session_id, "summary": summary, "user_id": user_id})

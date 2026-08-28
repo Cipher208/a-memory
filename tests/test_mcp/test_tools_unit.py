@@ -155,6 +155,7 @@ async def test_stats():
     mem.l1.size = MagicMock(return_value=0)
     mem.l2 = MagicMock()
     mem.l2.count_sessions = AsyncMock(return_value=0)
+    mem.l2.avg_quality = AsyncMock(return_value=None)
     mem.l3 = MagicMock()
     mem.l3.count = AsyncMock(return_value=0)
     mem.l4 = MagicMock()

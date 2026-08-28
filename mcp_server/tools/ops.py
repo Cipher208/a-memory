@@ -63,6 +63,7 @@ async def memory_stats(
         l4_facts=await mem.l4.count(user_id),
         wiki_pages=await wiki.count(),
         graph_nodes=await graph.count_nodes(user_id),
+        avg_session_quality=await mem.l2.avg_quality(user_id),
     ).dict()
 
 

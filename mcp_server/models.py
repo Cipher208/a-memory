@@ -58,6 +58,7 @@ class StatsResult(BaseModel):
     l4_facts: int = Field(description="L4 fact count")
     wiki_pages: int = Field(description="Wiki page count")
     graph_nodes: int = Field(description="Graph node count")
+    avg_session_quality: float | None = Field(default=None, description="Average session quality score (0-80) over scored sessions")
 
 
 class ContextResult(BaseModel):
