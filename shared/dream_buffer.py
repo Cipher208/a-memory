@@ -53,6 +53,7 @@ class DreamBuffer:
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_staging_layer_user ON staging_memories(layer, user_id);
+            CREATE INDEX IF NOT EXISTS idx_staging_layer_user_session ON staging_memories(layer, user_id, session_id, created_at);
         """,
         )
 

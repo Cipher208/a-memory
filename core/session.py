@@ -59,6 +59,7 @@ class SessionStore:
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_time ON sessions(started_at);
+            CREATE INDEX IF NOT EXISTS idx_sessions_user_time ON sessions(user_id, started_at DESC);
             """,
         )
         # PRAGMA-first migration for the 2 quality-score columns.

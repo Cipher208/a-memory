@@ -44,6 +44,7 @@ class EpisodicMemory:
             CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
             CREATE INDEX IF NOT EXISTS idx_episodes_time ON episodes(created_at);
             CREATE INDEX IF NOT EXISTS idx_episodes_layer ON episodes(layer, user_id);
+            CREATE INDEX IF NOT EXISTS idx_episodes_layer_time ON episodes(layer, user_id, created_at DESC);
         """,
         )
 

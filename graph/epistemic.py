@@ -94,6 +94,7 @@ class EpistemicGraph:
             CREATE INDEX IF NOT EXISTS idx_epi_user ON epi_nodes(user_id);
             CREATE INDEX IF NOT EXISTS idx_epi_type ON epi_nodes(node_type);
             CREATE INDEX IF NOT EXISTS idx_epi_tags ON epi_nodes(tags);
+            CREATE INDEX IF NOT EXISTS idx_epi_scope_conf ON epi_nodes(layer, user_id, node_type, confidence DESC);
             CREATE TABLE IF NOT EXISTS epi_tags (
                 node_id INTEGER NOT NULL,
                 tag TEXT NOT NULL,

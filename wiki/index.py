@@ -54,6 +54,7 @@ class WikiIndex:
             CREATE INDEX IF NOT EXISTS idx_wiki_layer ON wiki_index(layer);
             CREATE INDEX IF NOT EXISTS idx_wiki_type ON wiki_index(wiki_type);
             CREATE INDEX IF NOT EXISTS idx_wiki_updated ON wiki_index(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_wiki_layer_type_time ON wiki_index(layer, wiki_type, updated_at DESC);
 
             CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
                 title, content, wiki_type, tags,

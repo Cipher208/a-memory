@@ -23,6 +23,7 @@ class ArchivedMemories:
                 archive_reason TEXT NOT NULL,
                 archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE INDEX IF NOT EXISTS idx_archived_user ON archived_memories(user_id, archived_at DESC);
         """,
         )
 

@@ -55,6 +55,7 @@ class CoreMemory:
             CREATE INDEX IF NOT EXISTS idx_core_updated ON core_memory(updated_at);
             CREATE INDEX IF NOT EXISTS idx_core_memory_kind ON core_memory(user_id, memory_kind);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_core_layer_user_key ON core_memory(layer, user_id, key);
+            CREATE INDEX IF NOT EXISTS idx_core_importance ON core_memory(layer, user_id, importance DESC);
         """,
         )
 
