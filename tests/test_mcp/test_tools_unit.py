@@ -148,8 +148,11 @@ async def test_graph_add():
 
 
 @pytest.mark.asyncio
-async def test_stats():
+async def test_stats(monkeypatch):
     ctx, app = _make_ctx()
+    # recall_count path reads app.mm._cm -> patch the store to avoid MagicMock int()
+    import features.recall_telemetry as rt
+    monkeypatch.setattr(rt, "count_recalls", AsyncMock(return_value=0))
     mem = app.mm.user_memory.return_value
     mem.l1 = MagicMock()
     mem.l1.size = MagicMock(return_value=0)

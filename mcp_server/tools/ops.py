@@ -56,6 +56,7 @@ async def memory_stats(
     wiki = _get_wiki(app, layer)
     graph = _get_graph(app, layer)
     l3_count = await mem.l3.count(user_id)
+    from features.recall_telemetry import count_recalls
     return StatsResult(
         l1_buffer=mem.l1.size(),
         l2_sessions=await mem.l2.count_sessions(user_id),
@@ -64,6 +65,7 @@ async def memory_stats(
         wiki_pages=await wiki.count(),
         graph_nodes=await graph.count_nodes(user_id),
         avg_session_quality=await mem.l2.avg_quality(user_id),
+        recall_count=await count_recalls(app.mm._cm, user_id),
     ).dict()
 
 
