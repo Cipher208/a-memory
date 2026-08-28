@@ -22,7 +22,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 def _verify_api_key(auth: str) -> bool:
-    """True when the header carries a valid API key (Bearer ak_...)."""
+    """Return True when the header carries a valid API key (Bearer ak_...)."""
     if not auth.startswith("Bearer ak_"):
         return False
     from features.auth import api_key_auth
