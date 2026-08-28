@@ -28,6 +28,7 @@ def test_formulas_zero_signals():
         duration_min=0,
         n_l4=0,
         n_l3=0,
+        n_recall=0,
         n_topics=0,
         n_state_deltas=0,
     )
@@ -36,6 +37,7 @@ def test_formulas_zero_signals():
         "decision": 0.0,
         "linked_entries": 0.0,
         "user_engagement": 0.0,
+        "recall_usage": 0.0,
     }
 
 
@@ -45,6 +47,7 @@ def test_formulas_depth_caps():
         duration_min=20,
         n_l4=0,
         n_l3=0,
+        n_recall=0,
         n_topics=0,
         n_state_deltas=0,
     )
@@ -57,6 +60,7 @@ def test_formulas_depth_mid():
         duration_min=3,
         n_l4=0,
         n_l3=0,
+        n_recall=0,
         n_topics=0,
         n_state_deltas=0,
     )
@@ -69,6 +73,7 @@ def test_formulas_decision_caps():
         duration_min=0,
         n_l4=10,
         n_l3=0,
+        n_recall=0,
         n_topics=0,
         n_state_deltas=0,
     )
@@ -81,6 +86,7 @@ def test_formulas_linked_and_engagement():
         duration_min=0,
         n_l4=0,
         n_l3=8,
+        n_recall=0,
         n_topics=2,
         n_state_deltas=1,
     )
@@ -94,11 +100,12 @@ def test_formulas_total_is_sum():
         duration_min=3,
         n_l4=2,
         n_l3=4,
+        n_recall=0,
         n_topics=1,
         n_state_deltas=2,
     )
     total = sum(parts.values())
-    assert total == parts["depth"] + parts["decision"] + parts["linked_entries"] + parts["user_engagement"]
+    assert total == parts["depth"] + parts["decision"] + parts["linked_entries"] + parts["user_engagement"] + parts["recall_usage"]
 
 
 # ── JSON helpers ──────────────────────────────────────────────────────
@@ -144,6 +151,7 @@ async def test_compute_session_quality_no_signals(tmp_path):
         "decision": 0.0,
         "linked_entries": 0.0,
         "user_engagement": 0.0,
+        "recall_usage": 0.0,
     }
 
 
@@ -192,7 +200,7 @@ async def test_close_session_writes_score_and_parts(tmp_path):
     assert score > 0
     assert score <= 80
     parts = json.loads(parts_json)
-    assert set(parts.keys()) == {"depth", "decision", "linked_entries", "user_engagement"}
+    assert set(parts.keys()) == {"depth", "decision", "linked_entries", "user_engagement", "recall_usage"}
 
 
 @pytest.mark.asyncio

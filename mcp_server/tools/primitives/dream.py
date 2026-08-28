@@ -63,6 +63,13 @@ async def dream(
     full_summary = "\n\n".join(summary_parts)
     summary, truncated = _truncate_to_budget(full_summary, DEFAULT_TOKEN_BUDGET)
 
+    # Recall telemetry (non-fatal): record the fact of the recall for usage analytics.
+    from features.recall_telemetry import record_recall
+    try:
+        await record_recall(app.mm._cm, layer, user_id, query, intent, len(results))
+    except Exception as exc:
+        logger.warning("dream: recall telemetry failed: %s", exc)
+
     # 3. Hooks
     mem = _get_memory(app, layer, user_id)
     hook_tasks = [
