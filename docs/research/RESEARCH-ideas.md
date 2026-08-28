@@ -9,24 +9,24 @@
 
 ### 2026-07-10 — консолидированные идеи из 15+ репозиториев
 
-**Priority 1 — easy wins (low effort, high value):**
-1. Session quality scoring (icarus): 5-component (depth, decision, recall_usage, linked_entries, user_engagement)
-2. Recall telemetry: track recalled vs actually used → usage_rate metric
-3. Auto training_value classification via DECISION_RE + OUTCOME_RE regex
-4. Daily brief tool: pending work + recent activity + suggested action in one call
-5. 6 analytical perspectives for wiki_summarize (pluton): practical/epistemic/psychological/social/temporal/metacognitive
-6. Auto-maintained INDEX.md for wiki categories
+**Priority 1 — easy wins (low effort, high value):** *(все 6 — реализованы в v1.8.1)*
+- [x] 1. Session quality scoring (icarus): 5-component (depth, decision, recall_usage, linked_entries, user_engagement)
+- [x] 2. Recall telemetry: track recalled vs actually used → usage_rate metric (signal = fact of dream call; `recall_events`)
+- [x] 3. Auto training_value classification via DECISION_RE + OUTCOME_RE regex
+- [x] 4. Daily brief tool: pending work + recent activity + suggested action in one call (`daily_brief`, tier `brief`)
+- [x] 5. 6 analytical perspectives for wiki_summarize (pluton): practical/epistemic/psychological/social/temporal/metacognitive
+- [x] 6. Auto-maintained INDEX.md for wiki categories (wiki lint `missing_index` auto-fix)
 
 **Priority 2 — moderate effort:**
-7. Wiki lint tool с schema enforcement (6 checks: frontmatter, required fields, broken wikilinks, missing index, page length, unknown tags) — из memory-wiki-plugin
-8. Ref chain linking (review_of + revises) между wiki entries
-9. Promotion pipeline: detect preference signals → candidates → wiki pages
-10. Secret detection on wiki ingest (GitHub PATs, API keys, PEM headers)
-11. SPLIT/MERGE/RETIRE organic wiki operations
+- [x] 7. Wiki lint tool с schema enforcement (6 checks: frontmatter, required fields, broken wikilinks, missing index, page length, unknown tags) — из memory-wiki-plugin
+- [ ] 8. Ref chain linking (review_of + revises) между wiki entries
+- [ ] 9. Promotion pipeline: detect preference signals → candidates → wiki pages
+- [ ] 10. Secret detection on wiki ingest (GitHub PATs, API keys, PEM headers)
+- [ ] 11. SPLIT/MERGE/RETIRE organic wiki operations
 
 **Priority 3 — major features:**
-12. Dream cycle consolidation pipeline (pluton): mine→curate→compress→inject
-13. CONTEXT.md compression: auto-generated ~3000 char summary for system prompt
+- [x] 12. Dream cycle consolidation pipeline (pluton): mine→curate→compress→inject (inject step)
+- [x] 13. CONTEXT.md compression: auto-generated ~3000 char summary for system prompt (`memory_context_inject` writes per-layer `CONTEXT.md`)
 
 ### Оценка репозиториев (из сессии 2026-07-10)
 

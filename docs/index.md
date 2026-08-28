@@ -5,7 +5,7 @@
 **4-tier Memory MCP Server for AI agents — layer-isolated, plain SQLite, zero cloud**
 
 [![CI](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-600 passed-brightgreen)](https://github.com/Cipher208/a-memory/actions)
+[![Tests](https://img.shields.io/badge/tests-635 passed-brightgreen)](https://github.com/Cipher208/a-memory/actions)
 [![Python](https://img.shields.io/badge/python-3.10--3.13-blue)](https://www.python.org/)
 
 ---
@@ -25,7 +25,7 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 
 | Feature | Description |
 |---------|-------------|
-| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`/`wiki_summarize`, `all` exposes the full 35-tool surface |
+| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`/`wiki_summarize`, `brief` adds `daily_brief`, `all` exposes the full 36-tool surface |
 | **4-tier memory** | L1 ReflexBuffer → L2 SessionStore → L3 EpisodicMemory → L4 CoreMemory, layer-isolated `(layer, user_id, key)` namespaces |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
 | **RAG search** | FTS5 + binary embeddings + hybrid RRF ranking, multi-source merge |
@@ -89,9 +89,9 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 
 ## Status
 
-- **Version:** 1.8.0
-- **Tests:** 600+ passed (including 25 property-based Hypothesis tests)
+- **Version:** 1.8.1
+- **Tests:** 635+ passed (including 25 property-based Hypothesis tests)
 - **DB tables:** 23 (alembic head `init_v8`)
-- **Tool surface:** 5 primitives by default · 10 with `primitives,wiki` · 35 with `all`
+- **Tool surface:** 5 primitives by default · 10 with `primitives,wiki` · 11 with `primitives,wiki,brief` · 36 with `all`
 - **Python:** 3.10–3.13
 - **Platform:** Windows, Linux, macOS, Docker

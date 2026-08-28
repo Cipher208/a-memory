@@ -91,7 +91,7 @@ backup:
 | `MCP_MASTER_KEY` | auto-generated | Master key for envelope encryption |
 | `MCP_MEMORY_DATA_DIR` | `~/.mcp-ariel-memory` | Data directory for SQLite databases |
 | `MCP_CONFIG_PATH` | repo-root `config.yaml` | Per-agent config file path |
-| `ARIEL_EXPOSE` | `primitives` | Tool exposure tier: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`/`wiki_summarize`; `all` restores the full 35-tool surface |
+| `ARIEL_EXPOSE` | `primitives` | Tool exposure tier: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`/`wiki_summarize`; `brief` adds `daily_brief`; `all` restores the full 36-tool surface |
 | `MCP_AUTH_TOKEN` | auto-generated | Bearer token for HTTP transport |
 | `MCP_AUTH_DISABLED` | unset | Set to `1` to disable auth (`--no-auth` does this) |
 | `BACKUP_CRON_DISABLED` | false | Disable backup cron daemon |

@@ -9,7 +9,7 @@
 │      mcp_server (MCPServer, mcp 2.x)        │
 │  ┌─────────────┐  ┌──────────────────────┐  │
 │  │ Tools Layer  │  │    Hooks Pipeline    │  │
-│  │ (35 tools,   │  │ (19 hooks, gating)   │  │
+│  │ (36 tools,   │  │ (19 hooks, gating)   │  │
 │  │ 5 exposed)   │  │                      │  │
 │  └──────┬───────┘  └──────────┬───────────┘  │
 │         │                     │              │
@@ -29,7 +29,7 @@
 └─────────────────────────────────────────────┘
 ```
 
-Agents see the five primitives (`think` / `dream` / `forget` / `evolve` / `project`) by default; `ARIEL_EXPOSE=primitives,wiki` adds the five wiki tools, and `ARIEL_EXPOSE=all` restores the full 35-tool surface.
+Agents see the five primitives (`think` / `dream` / `forget` / `evolve` / `project`) by default; `ARIEL_EXPOSE=primitives,wiki` adds the five wiki tools, `brief` adds `daily_brief`, and `ARIEL_EXPOSE=all` restores the full 36-tool surface.
 
 ## Memory Layers
 
