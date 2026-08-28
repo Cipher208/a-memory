@@ -88,3 +88,22 @@ from wiki.secrets import scan_secrets
 
 findings = scan_secrets(content)  # -> [SecretFinding(kind=..., location="body")]
 ```
+
+## Ref chain linking
+
+Pages can be linked with typed relationships — `review_of`, `revises`, or
+`follows` — so an agent can traverse a review/revision history. Links are
+stored in a `wiki_links` table (separate from page content).
+
+`[[wikilinks]]` in page content are auto-linked to resolvable pages on
+`add()`/`update()` (resolved by title or filename stem; unresolvable links are
+silently skipped). Explicit links go through the `wiki_link` tool or
+`WikiManager`:
+
+```python
+from mcp_server.tools.wiki_link import wiki_link
+
+await wiki_link(action="add", from_path="a.md", to_path="b.md", link_type="review_of")
+links = await wiki_link(action="list", from_path="a.md")
+# -> {status: ok, links: [{path, link_type, direction}]}
+```

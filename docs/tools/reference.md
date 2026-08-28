@@ -216,6 +216,7 @@ Returns a dict with `perspective`, `layer`, `wiki_type`, `pages` (list of `{titl
 |------|-------------|
 | `memory_stats` | Per-level counts: L1 buffer, L2 sessions, L3 episodes, L4 facts, wiki pages, graph nodes. Also `recall_count` (total `dream` calls) and `avg_session_quality` (0-100). |
 | `daily_brief` | One-call daily brief: pending work (L4 todo), recent activity (temporal + recall count), suggested action (todo follow-ups + open sessions). Non-fatal per section; deterministic, no LLM. Exposed via `ARIEL_EXPOSE=primitives,brief` or `all`. |
+| `wiki_link` | List or add typed links between wiki pages (`review_of` / `revises` / `follows`). `action="list"` returns a page's in/out links; `action="add"` creates one. Auto-exposed by the `wiki` tier. |
 | `memory_context` | Compressed context summary for prompt injection (top-10 facts, recent turns, wiki, episodes). |
 | `memory_context_inject` | Same, plus explicit `estimated_tokens`/`was_truncated` against the token budget. Runs an inline L3→L4 consolidation step before reading L4 (returns `consolidated_episodes` and `last_consolidation_ts`). Also writes a 3-section `CONTEXT.md` snapshot to `<MCP_MEMORY_DATA_DIR>/<layer>/CONTEXT.md` (returns `context_md_path` and `perspectives_count`); write failures are non-fatal. |
 | `memory_search` | Hybrid search over RAG + Wiki with `strategy` and `sources` selection. |

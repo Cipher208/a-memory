@@ -221,6 +221,7 @@ class WikiManager:
         if not entry.content or "[[" not in entry.content:
             return
         from .lint import _WIKILINK_RE
+
         entries = await self.list_all(limit=500)
         by_title = {e.title: e.file_path for e in entries}
         by_stem = {Path(e.file_path).stem: e.file_path for e in entries}

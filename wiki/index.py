@@ -263,14 +263,18 @@ class WikiIndex:
     async def get_links(self, path: str) -> list[dict[str, Any]]:
         """Return typed links involving `path`, both out (from) and in (to)."""
         conn = await self._cm.get(DB_NAME)
-        out_rows = await (await conn.execute(
-            "SELECT to_path, link_type FROM wiki_links WHERE layer=? AND from_path=?",
-            (self.layer, path),
-        )).fetchall()
-        in_rows = await (await conn.execute(
-            "SELECT from_path, link_type FROM wiki_links WHERE layer=? AND to_path=?",
-            (self.layer, path),
-        )).fetchall()
+        out_rows = await (
+            await conn.execute(
+                "SELECT to_path, link_type FROM wiki_links WHERE layer=? AND from_path=?",
+                (self.layer, path),
+            )
+        ).fetchall()
+        in_rows = await (
+            await conn.execute(
+                "SELECT from_path, link_type FROM wiki_links WHERE layer=? AND to_path=?",
+                (self.layer, path),
+            )
+        ).fetchall()
         links = [{"path": r[0], "link_type": r[1], "direction": "out"} for r in out_rows]
         links += [{"path": r[0], "link_type": r[1], "direction": "in"} for r in in_rows]
         return links

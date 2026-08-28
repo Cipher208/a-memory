@@ -7,6 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 - **Wiki secret detection** — `add()` and `sync_external()` scan content for well-known secret formats (GitHub PATs, API keys, PEM private-key headers). Matches are WARNING-logged (kind + path only, never the value) and never block the save. New pure `wiki/secrets.py::scan_secrets`. No new tool/config/DB. Closes research backlog P2 item 10.
+- **Wiki ref chain linking** — typed page links (`review_of` / `revises` / `follows`) in a new `wiki_links` table. `[[wikilinks]]` are auto-linked to resolvable pages on `add()`/`update()`. New `wiki_link` tool (list/add), auto-exposed by the `wiki` tier (tool count 36→37). Closes research backlog P2 item 8.
 
 ## [1.8.1] - 2026-08-27
 

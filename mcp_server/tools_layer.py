@@ -15,6 +15,7 @@ from .tools.episodic import memory_episode_save, memory_episode_recall, memory_e
 from .tools.graph import memory_graph_add, memory_graph_query, memory_graph_nodes, memory_graph_edges
 from .tools.wiki import wiki_add, wiki_search, wiki_list, wiki_delete
 from .tools.wiki_summarize import wiki_summarize
+from .tools.wiki_link import wiki_link
 from .tools.brief import daily_brief
 from .tools.ops import (
     memory_stats,
@@ -71,6 +72,7 @@ _register_tools: dict[str, Any] = {
     "wiki_list": wiki_list,
     "wiki_delete": wiki_delete,
     "wiki_summarize": wiki_summarize,
+    "wiki_link": wiki_link,
     "daily_brief": daily_brief,
 }
 
