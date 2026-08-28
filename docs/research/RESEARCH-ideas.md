@@ -22,7 +22,7 @@
 - [x] 8. Ref chain linking (review_of + revises) между wiki entries
 - [x] 9. Promotion pipeline: detect preference signals → candidates → wiki pages
 - [ ] 10. Secret detection on wiki ingest (GitHub PATs, API keys, PEM headers) — *in progress*
-- [ ] 11. SPLIT/MERGE/RETIRE organic wiki operations
+- [x] 11. SPLIT/MERGE/RETIRE organic wiki operations
 
 **Priority 3 — major features:**
 - [x] 12. Dream cycle consolidation pipeline (pluton): mine→curate→compress→inject (inject step)

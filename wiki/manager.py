@@ -311,6 +311,7 @@ class WikiManager:
         archive_dir = self.base_dir / "_retired" / entry.wiki_type
         archive_dir.mkdir(parents=True, exist_ok=True)
         import time as _t
+
         archive_path = archive_dir / f"{p.stem}_{int(_t.time())}.md"
         header = f"> retired: {reason}\n\n" if reason else "> retired\n\n"
         body = header + entry.content

@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Wiki secret detection** — `add()` and `sync_external()` scan content for well-known secret formats (GitHub PATs, API keys, PEM private-key headers). Matches are WARNING-logged (kind + path only, never the value) and never block the save. New pure `wiki/secrets.py::scan_secrets`. No new tool/config/DB. Closes research backlog P2 item 10.
 - **Wiki ref chain linking** — typed page links (`review_of` / `revises` / `follows`) in a new `wiki_links` table. `[[wikilinks]]` are auto-linked to resolvable pages on `add()`/`update()`. New `wiki_link` tool (list/add), auto-exposed by the `wiki` tier (tool count 36→37). Closes research backlog P2 item 8.
 - **Wiki promotion pipeline** — `WikiManager.promote_from_core()` turns high-importance L4 `rule`/`preference` facts into wiki pages (deterministic, idempotent, no LLM). Closes research backlog P2 item 9.
+- **Wiki organic operations** — `WikiManager.split()` / `merge()` / `retire()` reorganize pages without losing history: split into `(title, content)` parts, merge into a destination with `## source` separators, retire to a `_retired/` archive (removed from search, never hard-deleted). All non-fatal on missing paths. Closes research backlog P2 item 11.
 
 ## [1.8.1] - 2026-08-27
 

@@ -122,3 +122,25 @@ Selects `core_memory` facts with `memory_kind` in (`rule`, `preference`) at or
 above the threshold. Type mapping: `rule` → `work_notes` (user) / `principle_log`
 (agent); `preference` → `preferences` (user) / `emotional_context` (agent).
 Idempotent — a fact whose key already has a page is skipped on re-run.
+
+## Organic operations
+
+`WikiManager` exposes split / merge / retire for reorganizing pages without
+losing history:
+
+```python
+# split one page into several from (title, content) pairs
+await wm.split("path/BigNote.md", [("Architecture", "..."), ("Data", "...")])
+
+# merge several pages into one
+await wm.merge(["path/A.md", "path/B.md"], "Merged")
+
+# retire a page to _retired/<type>/ (removed from search, never hard-deleted)
+await wm.retire("path/OldPage.md", reason="superseded")
+```
+
+- `split` leaves the source page untouched (caller deletes/retires it).
+- `merge` leaves source pages untouched, joins content under `## source-title`
+  headings.
+- `retire` moves the file to `_retired/` with a `> retired:` marker and drops it
+  from the index; re-running on a gone path returns an error (no crash).

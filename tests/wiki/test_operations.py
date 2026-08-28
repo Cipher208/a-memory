@@ -1,4 +1,5 @@
 """Tests for wiki organic operations (split / merge / retire)."""
+
 from __future__ import annotations
 
 import pathlib
