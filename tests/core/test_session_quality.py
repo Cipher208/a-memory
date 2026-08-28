@@ -1,4 +1,5 @@
 """Tests for core.session_quality (4-component 0-80 scorer)."""
+
 from __future__ import annotations
 
 import json
@@ -23,39 +24,65 @@ from shared.constants import DB_NAME
 
 def test_formulas_zero_signals():
     parts = _component_formulas(
-        message_count=0, duration_min=0,
-        n_l4=0, n_l3=0, n_topics=0, n_state_deltas=0,
+        message_count=0,
+        duration_min=0,
+        n_l4=0,
+        n_l3=0,
+        n_topics=0,
+        n_state_deltas=0,
     )
     assert parts == {
-        "depth": 0.0, "decision": 0.0,
-        "linked_entries": 0.0, "user_engagement": 0.0,
+        "depth": 0.0,
+        "decision": 0.0,
+        "linked_entries": 0.0,
+        "user_engagement": 0.0,
     }
 
 
 def test_formulas_depth_caps():
     parts = _component_formulas(
-        message_count=20, duration_min=20, n_l4=0, n_l3=0, n_topics=0, n_state_deltas=0,
+        message_count=20,
+        duration_min=20,
+        n_l4=0,
+        n_l3=0,
+        n_topics=0,
+        n_state_deltas=0,
     )
     assert parts["depth"] == 20.0
 
 
 def test_formulas_depth_mid():
     parts = _component_formulas(
-        message_count=5, duration_min=3, n_l4=0, n_l3=0, n_topics=0, n_state_deltas=0,
+        message_count=5,
+        duration_min=3,
+        n_l4=0,
+        n_l3=0,
+        n_topics=0,
+        n_state_deltas=0,
     )
     assert parts["depth"] == 8.0
 
 
 def test_formulas_decision_caps():
     parts = _component_formulas(
-        message_count=0, duration_min=0, n_l4=10, n_l3=0, n_topics=0, n_state_deltas=0,
+        message_count=0,
+        duration_min=0,
+        n_l4=10,
+        n_l3=0,
+        n_topics=0,
+        n_state_deltas=0,
     )
     assert parts["decision"] == 20.0
 
 
 def test_formulas_linked_and_engagement():
     parts = _component_formulas(
-        message_count=0, duration_min=0, n_l4=0, n_l3=8, n_topics=2, n_state_deltas=1,
+        message_count=0,
+        duration_min=0,
+        n_l4=0,
+        n_l3=8,
+        n_topics=2,
+        n_state_deltas=1,
     )
     assert parts["linked_entries"] == 16.0
     assert parts["user_engagement"] == 15.0
@@ -63,7 +90,12 @@ def test_formulas_linked_and_engagement():
 
 def test_formulas_total_is_sum():
     parts = _component_formulas(
-        message_count=5, duration_min=3, n_l4=2, n_l3=4, n_topics=1, n_state_deltas=2,
+        message_count=5,
+        duration_min=3,
+        n_l4=2,
+        n_l3=4,
+        n_topics=1,
+        n_state_deltas=2,
     )
     total = sum(parts.values())
     assert total == parts["depth"] + parts["decision"] + parts["linked_entries"] + parts["user_engagement"]
@@ -105,13 +137,13 @@ async def test_compute_session_quality_no_signals(tmp_path):
     await EpisodicMemory(cm=cm)._init_db()
     store = SessionStore(cm=cm)
     await store._init_db()
-    total, parts = await compute_session_quality(
-        cm, "default", started_at=0.0, ended_at=30.0, message_count=0, topics=[], state_deltas={}
-    )
+    total, parts = await compute_session_quality(cm, "default", started_at=0.0, ended_at=30.0, message_count=0, topics=[], state_deltas={})
     assert total == 0.0
     assert parts == {
-        "depth": 0.0, "decision": 0.0,
-        "linked_entries": 0.0, "user_engagement": 0.0,
+        "depth": 0.0,
+        "decision": 0.0,
+        "linked_entries": 0.0,
+        "user_engagement": 0.0,
     }
 
 
@@ -144,14 +176,14 @@ async def test_close_session_writes_score_and_parts(tmp_path):
     )
     await conn.commit()
 
-    await store.close_session(
-        sess_id, summary="did things", topics=["alpha", "beta"], state_deltas={"step": 1}
-    )
+    await store.close_session(sess_id, summary="did things", topics=["alpha", "beta"], state_deltas={"step": 1})
 
-    rows = await (await conn.execute(
-        "SELECT quality_score, quality_parts FROM sessions WHERE session_id=?",
-        (sess_id,),
-    )).fetchall()
+    rows = await (
+        await conn.execute(
+            "SELECT quality_score, quality_parts FROM sessions WHERE session_id=?",
+            (sess_id,),
+        )
+    ).fetchall()
     assert len(rows) == 1
     row = rows[0]
     score = row["quality_score"]
@@ -175,6 +207,7 @@ async def test_close_session_non_fatal_on_scoring_failure(tmp_path, caplog):
     # _count_window asserts `table in {"episodes", "core_memory"}` so we go through
     # the real path: create core_memory, drop it, then call close_session.
     from core.memory import CoreMemory
+
     await CoreMemory(cm=cm)._init_db()
     await conn.execute("DROP TABLE core_memory")
     await conn.commit()
@@ -182,9 +215,11 @@ async def test_close_session_non_fatal_on_scoring_failure(tmp_path, caplog):
     with caplog.at_level("WARNING", logger="core.session_quality"):
         await store.close_session(sess_id, summary="ok", topics=[], state_deltas={})
 
-    row = await (await conn.execute(
-        "SELECT quality_score, ended_at FROM sessions WHERE session_id=?",
-        (sess_id,),
-    )).fetchone()
+    row = await (
+        await conn.execute(
+            "SELECT quality_score, ended_at FROM sessions WHERE session_id=?",
+            (sess_id,),
+        )
+    ).fetchone()
     assert row["ended_at"] is not None
     assert row["quality_score"] is None

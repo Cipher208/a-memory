@@ -102,10 +102,12 @@ class SessionStore:
         conn = await self._cm.get(DB_NAME)
         await self._ensure_quality_columns(conn)
 
-        row = await (await conn.execute(
-            "SELECT user_id, started_at, message_count FROM sessions WHERE session_id=?",
-            (session_id,),
-        )).fetchone()
+        row = await (
+            await conn.execute(
+                "SELECT user_id, started_at, message_count FROM sessions WHERE session_id=?",
+                (session_id,),
+            )
+        ).fetchone()
         if row is None:
             logger.warning("SessionStore.close_session: no row for %s", session_id)
             return
@@ -176,9 +178,7 @@ class SessionStore:
                 (user_id,),
             )
         else:
-            cursor = await conn.execute(
-                "SELECT AVG(quality_score) FROM sessions WHERE quality_score IS NOT NULL"
-            )
+            cursor = await conn.execute("SELECT AVG(quality_score) FROM sessions WHERE quality_score IS NOT NULL")
         row = await cursor.fetchone()
         if row is None or row[0] is None:
             return None

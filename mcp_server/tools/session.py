@@ -52,9 +52,7 @@ async def memory_session_end(
     if rate_limit:
         return rate_limit
 
-    await _get_memory(app, layer, user_id).l2.close_session(
-        session_id, summary, state_deltas=state_deltas, topics=topics
-    )
+    await _get_memory(app, layer, user_id).l2.close_session(session_id, summary, state_deltas=state_deltas, topics=topics)
 
     await _fire_hook("consolidation", layer, {"trigger": "session_end", "session_id": session_id, "user_id": user_id})
     await _fire_hook("state_delta", layer, {"trigger": "session_end", "session_id": session_id, "summary": summary, "user_id": user_id})
