@@ -184,6 +184,9 @@ class AsyncConnectionManager:
 
         conn = await aiosqlite.connect(db_path)
         conn.row_factory = aiosqlite.Row
+        # page_size/auto_vacuum must precede journal_mode=WAL (WAL seals page size)
+        await conn.execute("PRAGMA page_size=16384")  # 16KB pages, new DBs only (no-op on existing)
+        await conn.execute("PRAGMA auto_vacuum=INCREMENTAL")  # new DBs only
         if _wal_enabled():
             await conn.execute("PRAGMA journal_mode=WAL")
         await conn.execute("PRAGMA busy_timeout=5000")
@@ -200,6 +203,9 @@ class AsyncConnectionManager:
         def _connect() -> sqlite3.Connection:
             conn = sqlite3.connect(db_path, check_same_thread=False)
             conn.row_factory = sqlite3.Row
+            # page_size/auto_vacuum must precede journal_mode=WAL (WAL seals page size)
+            conn.execute("PRAGMA page_size=16384")  # 16KB pages, new DBs only (no-op on existing)
+            conn.execute("PRAGMA auto_vacuum=INCREMENTAL")  # new DBs only
             if _wal_enabled():
                 conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")

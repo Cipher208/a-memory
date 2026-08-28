@@ -29,6 +29,23 @@ def test_connection_rollback():
     asyncio.run(t())
 
 
+def test_new_db_pragmas(tmp_path):
+    """A2.6: fresh DB gets page_size=16384 + auto_vacuum=INCREMENTAL."""
+    import asyncio
+
+    from shared.connection import AsyncConnectionManager
+
+    async def t():
+        cm = AsyncConnectionManager(base_dir=str(tmp_path))
+        conn = await cm.get(f"pragmas_{_uid()}.db")
+        cur = await conn.execute("PRAGMA page_size")
+        assert (await cur.fetchone())[0] == 16384
+        cur = await conn.execute("PRAGMA auto_vacuum")
+        assert (await cur.fetchone())[0] == 2  # INCREMENTAL
+
+    asyncio.run(t())
+
+
 def test_connection_stale_reopen():
     """Stale connection should be reopened automatically."""
     from shared.connection import AsyncConnectionManager
