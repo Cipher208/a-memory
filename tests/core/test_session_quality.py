@@ -15,6 +15,7 @@ from core.session import SessionStore
 from core.episodic import EpisodicMemory
 from core.memory import CoreMemory
 from shared.connection import AsyncConnectionManager
+from shared.constants import DB_NAME
 
 
 # ── Pure formula tests ────────────────────────────────────────────────
@@ -90,6 +91,7 @@ def test_parts_json_none_and_invalid():
 @pytest.mark.asyncio
 async def test_count_window_zero(tmp_path):
     cm = AsyncConnectionManager(base_dir=tmp_path)
+    await EpisodicMemory(cm=cm)._init_db()
     store = SessionStore(cm=cm)
     await store._init_db()
     n = await _count_window(cm, "default", 100.0, 200.0, "episodes")
@@ -99,10 +101,12 @@ async def test_count_window_zero(tmp_path):
 @pytest.mark.asyncio
 async def test_compute_session_quality_no_signals(tmp_path):
     cm = AsyncConnectionManager(base_dir=tmp_path)
+    await CoreMemory(cm=cm)._init_db()
+    await EpisodicMemory(cm=cm)._init_db()
     store = SessionStore(cm=cm)
     await store._init_db()
     total, parts = await compute_session_quality(
-        cm, "default", started_at=0.0, ended_at=60.0, message_count=0, topics=[], state_deltas={}
+        cm, "default", started_at=0.0, ended_at=30.0, message_count=0, topics=[], state_deltas={}
     )
     assert total == 0.0
     assert parts == {
@@ -124,13 +128,16 @@ async def test_close_session_writes_score_and_parts(tmp_path):
 
     sess_id = await store.create_session("default")
     now = 1_700_000_000.0
-    core = CoreMemory(cm=cm)
-    await core.add("default", "user", "k", "v", importance=0.9, created_at=now + 10)
-    epi = EpisodicMemory(cm=cm)
-    await epi.add("default", "user", "summary", 0.5, tags="", created_at=now + 20)
-
-    from shared.constants import DB_NAME
+    # Insert directly so we control created_at inside the session window.
     conn = await cm.get(DB_NAME)
+    await conn.execute(
+        "INSERT INTO core_memory (user_id, layer, key, value, importance, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("default", "user", "k", "v", 0.9, now + 10, now + 10),
+    )
+    await conn.execute(
+        "INSERT INTO episodes (user_id, layer, summary, emotional_weight, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("default", "user", "summary", 0.5, now + 20),
+    )
     await conn.execute(
         "UPDATE sessions SET started_at=?, message_count=? WHERE session_id=?",
         (now - 100, 5, sess_id),
@@ -163,7 +170,6 @@ async def test_close_session_non_fatal_on_scoring_failure(tmp_path, caplog):
     await store._init_db()
     sess_id = await store.create_session("default")
 
-    from shared.constants import DB_NAME
     conn = await cm.get(DB_NAME)
     # Force the count query to fail by dropping the core_memory table mid-flight.
     # _count_window asserts `table in {"episodes", "core_memory"}` so we go through
