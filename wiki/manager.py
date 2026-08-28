@@ -258,6 +258,51 @@ class WikiManager:
     def get_external_dirs(self) -> list[str]:
         return get_external_dirs(self.layer)
 
+    @staticmethod
+    def _promote_type_for(kind: str, layer: str) -> str:
+        table = {
+            ("rule", "agent"): "principle_log",
+            ("rule", "user"): "work_notes",
+            ("preference", "user"): "preferences",
+            ("preference", "agent"): "emotional_context",
+        }
+        return table[(kind, layer)]
+
+    async def promote_from_core(
+        self,
+        cm: AsyncConnectionManager,
+        layer: str,
+        user_id: str,
+        min_importance: float = 0.8,
+    ) -> dict[str, int]:
+        """Promote high-importance rule/preference L4 facts to wiki pages.
+
+        Deterministic, no LLM. Returns {"promoted": n, "skipped": n}.
+        Idempotent: a fact whose key already has a page is skipped.
+        """
+        from core.memory import CoreMemory
+
+        core = CoreMemory(cm=cm, layer=layer)
+        promoted = 0
+        skipped = 0
+        for kind in ("rule", "preference"):
+            rows = await core.list_by_kind(user_id, kind, min_importance=max(0.01, min_importance))
+            wiki_type = self._promote_type_for(kind, layer)
+            existing_titles = {e.title for e in await self.list_by_type(wiki_type, limit=500)}
+            for r in rows:
+                title = "".join(c if c.isalnum() or c in " _-" else "_" for c in str(r["key"])).strip().replace(" ", "_")
+                if title in existing_titles:
+                    skipped += 1
+                    continue
+                try:
+                    await self.add(wiki_type=wiki_type, title=title, content=str(r["value"]))
+                    existing_titles.add(title)
+                    promoted += 1
+                except Exception as exc:
+                    logger.warning("wiki promote failed for %s: %s", title, exc)
+                    skipped += 1
+        return {"promoted": promoted, "skipped": skipped}
+
     async def reindex_all(self) -> dict[str, int]:
         """Re-index all .md files from disk to DB using batching and hash checks."""
         result = {"indexed": 0, "skipped": 0, "errors": 0}
