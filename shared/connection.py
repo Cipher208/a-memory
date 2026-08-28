@@ -191,6 +191,7 @@ class AsyncConnectionManager:
         await conn.execute("PRAGMA foreign_keys=ON")
         await conn.execute("PRAGMA cache_size=-64000")  # 64MB page cache
         await conn.execute("PRAGMA temp_store=MEMORY")
+        await conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
         return conn
 
     async def _get_sync_conn(self, db_path: str) -> _SyncConnectionWrapper:
@@ -206,6 +207,7 @@ class AsyncConnectionManager:
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB page cache
             conn.execute("PRAGMA temp_store=MEMORY")
+            conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
             return conn
 
         raw_conn = await asyncio.to_thread(_connect)
@@ -215,6 +217,9 @@ class AsyncConnectionManager:
         """Close all open connections (on shutdown)."""
         for name, conn in self._conns.items():
             with contextlib.suppress(Exception):
+                # PRAGMA optimize lets SQLite run ANALYZE if the query planner
+                # needs it — cheap, recommended before closing a connection.
+                await conn.execute("PRAGMA optimize")
                 await conn.close()
                 logger.debug("closed connection %s", name)
         self._conns.clear()
