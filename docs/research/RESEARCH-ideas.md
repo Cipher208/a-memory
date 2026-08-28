@@ -21,7 +21,7 @@
 - [x] 7. Wiki lint tool с schema enforcement (6 checks: frontmatter, required fields, broken wikilinks, missing index, page length, unknown tags) — из memory-wiki-plugin
 - [x] 8. Ref chain linking (review_of + revises) между wiki entries
 - [x] 9. Promotion pipeline: detect preference signals → candidates → wiki pages
-- [ ] 10. Secret detection on wiki ingest (GitHub PATs, API keys, PEM headers) — *in progress*
+- [x] 10. Secret detection on wiki ingest (GitHub PATs, API keys, PEM headers)
 - [x] 11. SPLIT/MERGE/RETIRE organic wiki operations
 
 **Priority 3 — major features:**
