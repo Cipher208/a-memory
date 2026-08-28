@@ -65,6 +65,7 @@ async def dream(
 
     # Recall telemetry (non-fatal): record the fact of the recall for usage analytics.
     from features.recall_telemetry import record_recall
+
     try:
         await record_recall(app.mm._cm, layer, user_id, query, intent, len(results))
     except Exception as exc:

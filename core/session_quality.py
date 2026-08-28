@@ -87,6 +87,7 @@ async def compute_session_quality(
     # otherwise the COUNT below would raise on a missing table and the
     # non-fatal wrapper in close_session would null the whole score.
     from features.recall_telemetry import ensure as ensure_recall_table
+
     await ensure_recall_table(cm)
 
     duration_min = max(0, int((ended_at - started_at) // 60))

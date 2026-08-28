@@ -57,6 +57,7 @@ async def memory_stats(
     graph = _get_graph(app, layer)
     l3_count = await mem.l3.count(user_id)
     from features.recall_telemetry import count_recalls
+
     return StatsResult(
         l1_buffer=mem.l1.size(),
         l2_sessions=await mem.l2.count_sessions(user_id),

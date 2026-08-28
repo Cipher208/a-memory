@@ -1,4 +1,5 @@
 """Tests for features.recall_telemetry (recall event store)."""
+
 from __future__ import annotations
 
 import time
@@ -17,10 +18,12 @@ async def test_record_recall_inserts(tmp_path):
     eid = await record_recall(cm, "user", "default", "dark mode", "balanced", 3)
     assert eid > 0
     conn = await cm.get(DB_NAME)
-    row = await (await conn.execute(
-        "SELECT layer, user_id, query, intent, result_count FROM recall_events WHERE event_id=?",
-        (eid,),
-    )).fetchone()
+    row = await (
+        await conn.execute(
+            "SELECT layer, user_id, query, intent, result_count FROM recall_events WHERE event_id=?",
+            (eid,),
+        )
+    ).fetchone()
     assert row["layer"] == "user"
     assert row["user_id"] == "default"
     assert row["query"] == "dark mode"

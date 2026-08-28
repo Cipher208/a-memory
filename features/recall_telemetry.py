@@ -8,6 +8,7 @@ Kept separate from temporal_events so the timeline shown by
 dream(intent='recent') stays clean: a recall is an ephemeral "agent asked"
 operation, not a durable "something happened" event.
 """
+
 from __future__ import annotations
 
 import time
