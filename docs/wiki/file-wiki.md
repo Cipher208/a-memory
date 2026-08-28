@@ -107,3 +107,18 @@ await wiki_link(action="add", from_path="a.md", to_path="b.md", link_type="revie
 links = await wiki_link(action="list", from_path="a.md")
 # -> {status: ok, links: [{path, link_type, direction}]}
 ```
+
+## Promotion pipeline
+
+High-importance L4 rules and preferences can be promoted to wiki pages so they
+participate in wiki search. Deterministic, no LLM:
+
+```python
+await wm.promote_from_core(cm, layer="user", user_id="default", min_importance=0.8)
+# -> {"promoted": n, "skipped": n}
+```
+
+Selects `core_memory` facts with `memory_kind` in (`rule`, `preference`) at or
+above the threshold. Type mapping: `rule` → `work_notes` (user) / `principle_log`
+(agent); `preference` → `preferences` (user) / `emotional_context` (agent).
+Idempotent — a fact whose key already has a page is skipped on re-run.

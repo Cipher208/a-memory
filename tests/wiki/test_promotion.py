@@ -1,4 +1,5 @@
 """Tests for wiki promotion pipeline (L4 rule/preference -> wiki pages)."""
+
 from __future__ import annotations
 
 import pytest
