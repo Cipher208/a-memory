@@ -166,3 +166,70 @@ class UserHooks:
         if any(c in text for c in ["!", "?"]):
             return 0.05
         return 0.0
+
+    # ── Phase C external events (spec S3) ──
+
+    @hook_registry.mark("session_started", layer="user")
+    async def _session_started(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """Cold start: return the critical inject block (same computation as /api/context-inject)."""
+        from features.inject import build_inject_blocks
+
+        app = ctx.get("_app")
+        if app is None:
+            return {"blocks": [], "error": "no_app_context"}
+        budget = int(ctx.get("budget", 2000))
+        blocks = await build_inject_blocks(app, "user", ctx.get("user_id", self.user_id), text=ctx.get("text", ""), budget=budget)
+        return {"blocks": blocks}
+
+    @hook_registry.mark("session_ended", layer="user")
+    async def _session_ended(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """Harness sends the session summary; ariel persists it to L3."""
+        summary = (ctx.get("summary") or "").strip()
+        if not summary or mem is None:
+            return {"saved": False}
+        await mem.l3.save(ctx.get("user_id", self.user_id), summary[:500], 0.6, ["session_summary"])
+        return {"saved": True}
+
+    @hook_registry.mark("new_message", layer="user")
+    async def _new_message(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
+        """Evaluate importance of incoming text; threshold-gated auto-save."""
+        from hooks.external import auto_save_text
+
+        text = ctx.get("text", "")
+        if not text or mem is None or graph is None:
+            return {"auto_save": {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}, "skipped": "no_text_or_mem"}
+        result = await auto_save_text(mem, graph, ctx.get("user_id", self.user_id), text)
+        return {"auto_save": result}
+
+    @hook_registry.mark("auto_save_candidate", layer="user")
+    async def _auto_save_candidate(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
+        """Explicit candidate pushed by a daemon — same pipeline as new_message."""
+        return await self._new_message(ctx, mem=mem, graph=graph)
+
+    @hook_registry.mark("context_threshold", layer="user")
+    async def _context_threshold(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """Thin advice: eviction candidates = oldest staging entries. Decision stays harness-side."""
+        recent = mem.l1.get_recent(10) if mem else []
+        advice = [{"role": r.role, "content": r.content[:80]} for r in recent[:3]]
+        return {"advice": "evict_oldest", "candidates": advice}
+
+    @hook_registry.mark("memory_pressure", layer="user")
+    async def _memory_pressure(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """Thin advice: L1 ring is 50 entries; suggest compression when >40."""
+        size = len(mem.l1.get_full()) if mem and hasattr(mem.l1, "get_full") else 0
+        return {"advice": "compress_similar" if size > 40 else "ok", "l1_size": size}
+
+    @hook_registry.mark("post_context_compression", layer="user")
+    async def _post_context_compression(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """Rehydrate candidates after compaction: retrieval over the query."""
+        query = ctx.get("query", "")
+        rag = ctx.get("_rag")
+        if not query or rag is None:
+            return {"candidates": []}
+        hits = await rag.search(query, user_id=ctx.get("user_id", self.user_id), limit=5)
+        candidates = []
+        for h in hits:
+            content = str(h.get("content") or h.get("value") or h.get("summary") or h.get("title") or "")
+            if content:
+                candidates.append({"content": content, "score": float(h.get("score", 0.0))})
+        return {"candidates": candidates}
