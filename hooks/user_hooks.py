@@ -243,15 +243,24 @@ class UserHooks:
 
     @hook_registry.mark("post_context_compression", layer="user")
     async def _post_context_compression(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
-        """Rehydrate candidates after compaction: retrieval over the query."""
+        """Log the compaction drift, then rehydrate candidates: retrieval over the query."""
+        from features.rehydrate import log_compaction
+
+        logged = log_compaction(
+            ctx.get("user_id", self.user_id),
+            old_session_id=ctx.get("old_session_id"),
+            new_session_id=ctx.get("new_session_id"),
+            reason=ctx.get("reason") or "compaction",
+            summary=ctx.get("query"),
+        )
         query = ctx.get("query", "")
         rag = ctx.get("_rag")
         if not query or rag is None:
-            return {"candidates": []}
+            return {"candidates": [], "logged": logged}
         hits = await rag.search(query, user_id=ctx.get("user_id", self.user_id), limit=5)
         candidates = []
         for h in hits:
             content = str(h.get("content") or h.get("value") or h.get("summary") or h.get("title") or "")
             if content:
                 candidates.append({"content": content, "score": float(h.get("score", 0.0))})
-        return {"candidates": candidates}
+        return {"candidates": candidates, "logged": logged}

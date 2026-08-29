@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,6 +10,30 @@ import pytest
 
 import hooks.user_hooks as uh
 from hooks.registry import HookRegistry
+
+from shared.connection import connection_manager
+
+
+@pytest.fixture
+def compaction_db(tmp_path, monkeypatch):
+    """Redirect base_dir to a scratch dir with the compaction_events table; restore after."""
+    original = connection_manager.base_dir
+    monkeypatch.setattr(connection_manager, "base_dir", tmp_path)
+    db = tmp_path / "memory.db"
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS compaction_events ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " user_id TEXT NOT NULL,"
+            " old_session_id TEXT,"
+            " new_session_id TEXT,"
+            " reason TEXT,"
+            " summary TEXT,"
+            " created_at REAL NOT NULL)"
+        )
+        conn.commit()
+    yield db
+    connection_manager.base_dir = original
 
 
 def test_all_seven_events_registered() -> None:
@@ -80,7 +105,7 @@ async def test_new_message_below_threshold(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
-async def test_post_context_compression_returns_candidates() -> None:
+async def test_post_context_compression_returns_candidates(compaction_db) -> None:
     hooks = uh.UserHooks()
 
     class _Rag:
@@ -89,6 +114,23 @@ async def test_post_context_compression_returns_candidates() -> None:
 
     result = await hooks._post_context_compression({"user_id": "u1", "query": "q", "_rag": _Rag()})
     assert result["candidates"] == [{"content": "c1", "score": 0.7}]
+    assert result["logged"] is True
+
+
+@pytest.mark.asyncio
+async def test_post_context_compression_logs_session_ids(compaction_db) -> None:
+    hooks = uh.UserHooks()
+    result = await hooks._post_context_compression(
+        {"user_id": "u1", "old_session_id": "s-old", "new_session_id": "s-new", "reason": "split"}
+    )
+    assert result == {"candidates": [], "logged": True}
+    from features.rehydrate import recent_compaction
+
+    row = recent_compaction("u1", 1.0)
+    assert row is not None
+    assert row["old_session_id"] == "s-old"
+    assert row["new_session_id"] == "s-new"
+    assert row["reason"] == "split"
 
 
 @pytest.mark.asyncio
