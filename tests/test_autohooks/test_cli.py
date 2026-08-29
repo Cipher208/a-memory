@@ -61,3 +61,23 @@ def test_parse_inject_args(tmp_path: Path) -> None:
     assert ns.command == "inject"
     assert ns.text == "привет"
     assert ns.format == "json"
+
+
+def test_parse_dispatch_args(tmp_path: Path) -> None:
+    ns = _parse_args(
+        [
+            "dispatch",
+            "--config",
+            str(_cfg_file(tmp_path)),
+            "--event",
+            "post_session_diff",
+            "--since",
+            "0",
+            "--until",
+            "100",
+        ]
+    )
+    assert ns.command == "dispatch"
+    assert ns.event == "post_session_diff"
+    assert ns.since == "0"
+    assert ns.until == "100"

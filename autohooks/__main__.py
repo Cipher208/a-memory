@@ -1,14 +1,15 @@
 # autohooks/__main__.py
-"""CLI: daemon | inject.
+"""CLI: daemon | inject | dispatch.
 
 Import order is the contract: parse args → load config (ariel-free) → set env
-→ THEN import ariel-side modules (appctx, daemon, inject).
+→ THEN import ariel-side modules (appctx, daemon, inject, dispatch).
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -20,12 +21,15 @@ from autohooks.config import AgentConfig, load_config
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="autohooks", description="Universal autohooks runtime (C1.9)")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("daemon", "inject"):
+    for name in ("daemon", "inject", "dispatch"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True, help="path to <agent>.yaml")
     sub.choices["inject"].add_argument("--text", default="", help="current message for relevance ranking")
     sub.choices["inject"].add_argument("--format", default="md", choices=["md", "json"])
     sub.choices["daemon"].add_argument("--once", action="store_true", help="one poll iteration (debug)")
+    sub.choices["dispatch"].add_argument("--event", required=True, help="KNOWN_EVENTS name to fire")
+    sub.choices["dispatch"].add_argument("--since", default="0", help="since timestamp for diff-style events")
+    sub.choices["dispatch"].add_argument("--until", default="0", help="until timestamp for diff-style events")
     return parser.parse_args(argv)
 
 
@@ -70,6 +74,28 @@ def main(argv: list[str] | None = None) -> int:
 
         source = SqliteSource.from_config(cfg)
         asyncio.run(run_daemon(cfg, source, mem, graph, rag, max_iterations=1 if ns.once else None))
+        return 0
+
+    if ns.command == "dispatch":
+        from autohooks.appctx import build_app_context, resolve_layer
+        from hooks.external import dispatch_event
+
+        # build_app_context was already called above; re-resolve just to be explicit.
+        _ = (build_app_context, resolve_layer)
+        since = float(ns.since) if ns.since else 0.0
+        until = float(ns.until) if ns.until else 0.0
+        result = asyncio.run(
+            dispatch_event(
+                ns.event,
+                cfg.layer,
+                cfg.user_id,
+                {"since": since, "until": until},
+                mem,
+                graph,
+                rag,
+            )
+        )
+        print(json.dumps(result, ensure_ascii=False))
         return 0
 
     from autohooks.inject import run_inject
