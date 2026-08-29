@@ -91,6 +91,9 @@ class MultiSourceRAG:
             except Exception as e:
                 logger.warning("%s search failed: %s", source.capitalize(), e)
 
+        # GraphRAG (B1.6): expand primary graph hits with 1-hop neighbors.
+        results = await self._expand_graph(results, user_id)
+
         # Dedup by (title, content_prefix) — RAG + Wiki may store same record twice
         dedup: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
@@ -211,3 +214,50 @@ class MultiSourceRAG:
             }
             for r in graph_rows
         ]
+
+    async def _expand_graph(self, results: list[dict[str, Any]], user_id: str) -> list[dict[str, Any]]:
+        """GraphRAG stage (B1.6): append 1-hop epi_edges neighbors of graph hits.
+
+        Neighbors enter the rerank with a damped score (0.5 * edge weight *
+        confidence) under source="graph_expand". Primary results pass through
+        untouched; no-op without a cm or without graph hits.
+        """
+        if not self.cm:
+            return results
+        node_ids = [
+            -r["id"] - _ID_OFFSET_GRAPH
+            for r in results
+            if r.get("source") == "graph" and isinstance(r.get("id"), int) and r["id"] <= -_ID_OFFSET_GRAPH
+        ]
+        if not node_ids:
+            return results
+
+        from shared.constants import DB_NAME
+
+        conn = await self.cm.get(DB_NAME)
+        ph = ",".join("?" * len(node_ids))
+        cur = await conn.execute(
+            f"""SELECT n.node_id, n.content, n.node_type, n.confidence, e.weight
+                FROM epi_edges e
+                JOIN epi_nodes n
+                  ON (n.node_id = e.target_id AND e.source_id IN ({ph}))
+                  OR (n.node_id = e.source_id AND e.target_id IN ({ph}))
+                WHERE n.user_id=?""",
+            (*node_ids, *node_ids, user_id),
+        )
+        existing = {r.get("id") for r in results}
+        for row in await cur.fetchall():
+            rid = -int(row["node_id"]) - _ID_OFFSET_GRAPH
+            if rid in existing:
+                continue
+            existing.add(rid)
+            results.append(
+                {
+                    "id": rid,
+                    "title": f"Graph Node {row['node_id']} ({row['node_type']})",
+                    "content": row["content"],
+                    "score": 0.5 * float(row["weight"]) * float(row["confidence"]),
+                    "source": "graph_expand",
+                }
+            )
+        return results

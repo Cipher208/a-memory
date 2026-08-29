@@ -55,12 +55,18 @@ AGENT_TAGS = {
 SOCIAL_NODE_TYPES = {"person", "organization"}
 SOCIAL_RELATIONS = {"knows", "works_with", "family_of", "friend_of", "met", "mentions"}
 
+# B1.7 Causal memory: action → outcome links. Weight = causal strength.
+CAUSAL_RELATIONS = {"caused", "led_to", "prevented"}
+CAUSAL_NODE_TYPES = {"action", "outcome"}
+
 
 class EpistemicGraph:
     USER_TAGS = USER_TAGS
     AGENT_TAGS = AGENT_TAGS
     SOCIAL_NODE_TYPES = SOCIAL_NODE_TYPES
     SOCIAL_RELATIONS = SOCIAL_RELATIONS
+    CAUSAL_RELATIONS = CAUSAL_RELATIONS
+    CAUSAL_NODE_TYPES = CAUSAL_NODE_TYPES
 
     def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user") -> None:
         self._cm = cm or connection_manager
@@ -141,6 +147,40 @@ class EpistemicGraph:
             return int(row["node_id"]), False
         node_id = await self.add_node(user_id, name, entity_type, tags, confidence)
         return node_id, True
+
+    async def record_causal(
+        self,
+        user_id: str,
+        action: str,
+        outcome: str,
+        relation: str = "led_to",
+        strength: float = 0.8,
+    ) -> tuple[int, int]:
+        """Record an action → outcome causal link (B1.7).
+
+        Creates an "action" node and an "outcome" node (idempotent by exact
+        content within the layer+user scope) joined by an edge whose weight
+        is the causal strength. Non-causal relations are rejected.
+        """
+        if relation not in CAUSAL_RELATIONS:
+            raise ValueError(f"relation must be one of {sorted(CAUSAL_RELATIONS)}, got {relation!r}")
+
+        conn = await self._cm.get(DB_NAME)
+
+        async def _node(node_type: str, content: str) -> int:
+            cur = await conn.execute(
+                "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=? AND content=? LIMIT 1",
+                (self.layer, user_id, node_type, content),
+            )
+            row = await cur.fetchone()
+            if row:
+                return int(row["node_id"])
+            return await self.add_node(user_id, content, node_type, None, strength)
+
+        action_id = await _node("action", action)
+        outcome_id = await _node("outcome", outcome)
+        await self.add_edge(action_id, outcome_id, relation, strength)
+        return action_id, outcome_id
 
     async def add_node(self, user_id: str, content: str, node_type: str, tags: list[str] | None = None, confidence: float = 0.5) -> int:
         if tags:

@@ -159,6 +159,4 @@ class TestGraphExpand:
         from rag.multi_source import MultiSourceRAG
 
         m = MultiSourceRAG(FakeRAG(), FakeWiki(), cm=None)
-        assert asyncio.run(m._expand_graph([{"id": 1, "source": "core", "score": 0.5}], "u1")) == [
-            {"id": 1, "source": "core", "score": 0.5}
-        ]
+        assert asyncio.run(m._expand_graph([{"id": 1, "source": "core", "score": 0.5}], "u1")) == [{"id": 1, "source": "core", "score": 0.5}]
