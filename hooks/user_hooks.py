@@ -189,6 +189,29 @@ class UserHooks:
         await mem.l3.save(ctx.get("user_id", self.user_id), summary[:500], 0.6, ["session_summary"])
         return {"saved": True}
 
+    @hook_registry.mark("post_session_diff", layer="user")
+    async def _post_session_diff(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """Server-side: compute session diff and materialize gaps as L3 diff_gap episodes.
+
+        The harness fires this event after session_ended (e.g. the daemon or the
+        Hermes session-end hook). One row per gap → next session_started surfaces
+        them via build_inject_blocks (gap block kind).
+        """
+        if mem is None:
+            return {"gaps": 0, "skipped": "no_mem"}
+        import time as _time
+
+        from features.diff import compute_session_gaps
+
+        since = float(ctx.get("since", 0))
+        until = float(ctx.get("until", _time.time()))
+        user_id = ctx.get("user_id", self.user_id)
+        gaps = compute_session_gaps(mem, since, until)
+        for g in gaps:
+            summary = f"diff_gap: msg={g['source_msg_id']} score={g['score']:.2f} missing={','.join(g['missing'])} preview={g['text_preview'][:200]}"
+            await mem.l3.save(user_id, summary[:500], 0.5, ["diff_gap", "auto_review"])
+        return {"gaps": len(gaps), "since": since, "until": until}
+
     @hook_registry.mark("new_message", layer="user")
     async def _new_message(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
         """Evaluate importance of incoming text; threshold-gated auto-save."""

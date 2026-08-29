@@ -25,6 +25,7 @@ KNOWN_EVENTS: frozenset[str] = frozenset(
         "context_threshold",
         "memory_pressure",
         "post_context_compression",
+        "post_session_diff",
     }
 )
 

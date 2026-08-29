@@ -50,6 +50,19 @@ async def build_inject_blocks(
             blocks.append({"kind": "recent", "content": content, "score": 0.0})
             remaining -= cost
 
+    # diff_gap block: surface recent L3 episodes tagged diff_gap (C1.10 S4).
+    try:
+        l3_recent = mem.l3.get_recent(20) if hasattr(mem, "l3") and hasattr(mem.l3, "get_recent") else []
+    except Exception:
+        l3_recent = []
+    gap_lines = [str(getattr(e, "content", "") or "").strip() for e in l3_recent if str(getattr(e, "content", "")).startswith("diff_gap:")]
+    if gap_lines:
+        content = " | ".join(gap_lines)[: max(0, remaining)]
+        cost = estimate_tokens(content)
+        if cost <= remaining:
+            blocks.append({"kind": "gap", "content": content, "score": 0.5})
+            remaining -= cost
+
     important_min = float(config.get("inject", "important_min", default=0.8))
     facts = await mem.l4.get_all(user_id, 50)
     important = [f for f in facts if f.importance >= important_min]
