@@ -736,3 +736,87 @@ async def memory_proposals(
         result = await revert(proposal_id, mem=app)
         return {"status": "ok", **result}
     raise ValueError(f"unknown action: {action!r}")
+
+
+# ─── memory_report_card (Phase C C1.14 S5) ─────────────────────────────────────
+
+
+async def memory_report_card(
+    period_hours: int = 24,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Operator digest: what automation did to memory in the window (C1.14 S5)."""
+    _ = _get_ctx(ctx)
+    import sqlite3 as _sqlite3
+    import time as _time
+
+    from shared.connection import connection_manager
+
+    since = _time.time() - max(1, int(period_hours)) * 3600
+    db_path = connection_manager.base_dir / DB_NAME
+    card: dict[str, Any] = {"status": "ok", "period_hours": period_hours}
+    if not db_path.exists():
+        card.update(
+            {
+                "proposals": {"created": 0, "recent": []},
+                "auto_save": {"dispatched": 0, "saved_l3": 0, "saved_l4": 0, "saved_graph": 0},
+                "gaps": {"count": 0, "previews": []},
+                "dream_markers": 0,
+            }
+        )
+        return card
+    with _sqlite3.connect(str(db_path)) as conn:
+        prow = conn.execute(
+            "SELECT count(*),"
+            " sum(CASE WHEN status='applied' THEN 1 ELSE 0 END),"
+            " sum(CASE WHEN status='reverted' THEN 1 ELSE 0 END),"
+            " sum(CASE WHEN status='rejected' THEN 1 ELSE 0 END),"
+            " sum(CASE WHEN status='expired' THEN 1 ELSE 0 END),"
+            " sum(CASE WHEN status='pending' THEN 1 ELSE 0 END)"
+            " FROM mutation_proposals WHERE proposed_at >= ?",
+            (since,),
+        ).fetchone()
+        recent = conn.execute(
+            "SELECT id, kind, status, decided_at FROM mutation_proposals WHERE decided_at IS NOT NULL AND decided_at >= ?"
+            " ORDER BY decided_at DESC LIMIT 5",
+            (since,),
+        ).fetchall()
+        drow = conn.execute(
+            "SELECT count(*), sum(saved_l3), sum(saved_l4), sum(saved_graph) FROM memory_dispatch_log"
+            " WHERE event IN ('new_message', 'auto_save_candidate') AND created_at >= ?",
+            (since,),
+        ).fetchone()
+        dreams = conn.execute(
+            "SELECT count(*) FROM mutation_proposals WHERE source = 'dream' AND proposed_at >= ?",
+            (since,),
+        ).fetchone()
+
+    card["proposals"] = {
+        "created": int(prow[0] or 0),
+        "applied": int(prow[1] or 0),
+        "reverted": int(prow[2] or 0),
+        "rejected": int(prow[3] or 0),
+        "expired": int(prow[4] or 0),
+        "pending": int(prow[5] or 0),
+        "recent": [{"id": r[0], "kind": r[1], "status": r[2], "decided_at": r[3]} for r in recent],
+    }
+    card["auto_save"] = {
+        "dispatched": int(drow[0] or 0),
+        "saved_l3": int(drow[1] or 0),
+        "saved_l4": int(drow[2] or 0),
+        "saved_graph": int(drow[3] or 0),
+    }
+    card["dream_markers"] = int(dreams[0] or 0)
+    try:
+        from features.diff import compute_session_gaps
+        from mcp_server.context import AppContext
+
+        app = AppContext()
+        mem = app.mm.user_memory(user_id) if layer == "user" else app.mm.agent_memory(user_id)
+        gaps = compute_session_gaps(mem, since, _time.time())
+        card["gaps"] = {"count": len(gaps), "previews": [g["text_preview"][:80] for g in gaps[:5]]}
+    except Exception:
+        card["gaps"] = {"count": 0, "previews": []}
+    return card
