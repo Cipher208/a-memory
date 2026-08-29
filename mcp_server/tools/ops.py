@@ -730,4 +730,9 @@ async def memory_proposals(
 
         result = await decide(proposal_id, approve, mem=app)
         return {"status": "ok", **result}
+    if action == "revert":
+        from features.staging import revert
+
+        result = await revert(proposal_id, mem=app)
+        return {"status": "ok", **result}
     raise ValueError(f"unknown action: {action!r}")

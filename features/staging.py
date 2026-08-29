@@ -165,3 +165,54 @@ async def _apply(kind: str, user_id: str, layer: str, payload: dict[str, Any], m
         count = await ForgettingSystem(layer=layer).archive_entries([int(i) for i in payload.get("ids", [])])
         return f"archived={count}"
     raise ValueError(f"unknown proposal kind: {kind!r}")
+
+
+async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
+    """Undo an APPLIED proposal (C1.13). Only kinds with exact provenance: core_write, archive."""
+    conn = await connection_manager.get(DB_NAME)
+    cur = await conn.execute(
+        "SELECT id, kind, user_id, layer, payload, status, result_ref FROM mutation_proposals WHERE id = ?",
+        (proposal_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise ValueError(f"unknown proposal id: {proposal_id}")
+    if row["status"] != "applied":
+        raise ValueError(f"proposal {proposal_id} is not applied (status={row['status']}) — nothing to revert")
+    payload = json.loads(row["payload"])
+    if row["kind"] == "core_write":
+        mem_obj = getattr(mem, "mm", None)
+        if mem_obj is not None:
+            mem_u = mem_obj.user_memory(row["user_id"]) if row["layer"] == "user" else mem_obj.agent_memory(row["user_id"])
+            forget = getattr(mem_u, "forget", None)
+            if forget is None:
+                raise ValueError("revert requires a memory facade with forget()")
+            await forget(payload["key"])
+            restored = 1
+        elif mem is not None and hasattr(mem, "forget"):
+            await mem.forget(payload["key"])
+            restored = 1
+        else:
+            raise ValueError("revert requires mem (AppContext or a memory facade)")
+    elif row["kind"] == "archive":
+        from lifecycle.forgetting import ForgettingSystem
+
+        restored = await ForgettingSystem(layer=row["layer"]).restore_entries([int(i) for i in payload.get("ids", [])])
+    else:
+        raise ValueError(f"revert not supported for kind {row['kind']!r} (v1: core_write, archive)")
+
+    await conn.execute(
+        "UPDATE mutation_proposals SET status = 'reverted', decided_at = ?, decided_by = 'tool' WHERE id = ?",
+        (time.time(), proposal_id),
+    )
+    await conn.commit()
+    from features.audit_trail import AuditTrail
+
+    await AuditTrail().log(
+        row["user_id"],
+        "proposal_reverted",
+        layer=row["layer"],
+        target_id=str(proposal_id),
+        details={"kind": row["kind"], "restored": restored},
+    )
+    return {"id": proposal_id, "status": "reverted", "restored": restored}

@@ -123,6 +123,44 @@ class ForgettingSystem:
             logger.exception("archive_entries failed")
             return 0
 
+    async def restore_entries(self, ids: list[int]) -> int:
+        """Restore archived rows (matched by original_id) back into core_memory (C1.13 revert).
+
+        Mirror of archive_entries: deletes the archived row after restore.
+        Best-effort: missing archive rows are skipped.
+        """
+        if not ids:
+            return 0
+        try:
+            conn = await self._cm.get(DB_NAME)
+            now = time.time()
+            restored = 0
+            for entry_id in ids:
+                cur = await conn.execute("SELECT * FROM archived_memories WHERE original_id = ?", (entry_id,))
+                row = await cur.fetchone()
+                if row is None:
+                    continue
+                key, _, value = str(row["content"]).partition("=")
+                await conn.execute(
+                    "INSERT INTO core_memory (user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row["user_id"],
+                        key or f"restored_{entry_id}",
+                        value or str(row["content"]),
+                        row["importance"],
+                        now,
+                        now,
+                        row["memory_type"] or "fact",
+                    ),
+                )
+                await conn.execute("DELETE FROM archived_memories WHERE id = ?", (row["id"],))
+                restored += 1
+            await conn.commit()
+            return restored
+        except Exception:
+            logger.exception("restore_entries failed")
+            return 0
+
     async def _find_archivable_entries(self, conn: Any, now: float) -> list[sqlite3.Row]:
         # Expired goals/todos/commitments
         expired = await (
