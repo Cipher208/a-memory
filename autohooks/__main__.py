@@ -68,20 +68,29 @@ def main(argv: list[str] | None = None) -> int:
     app = build_app_context()
     mem, graph, rag = resolve_layer(app, cfg.layer, cfg.user_id)
 
+    def _close_ariel() -> None:
+        """Close ariel's aiosqlite connections before exit.
+
+        Without this the non-daemon aiosqlite worker threads block interpreter
+        shutdown and the CLI hangs after printing its output (found via
+        faulthandler during C1.10 e2e; exit codes were masked by pipes).
+        """
+        from shared.connection import connection_manager
+
+        asyncio.run(connection_manager.close_all())
+
     if ns.command == "daemon":
         from autohooks.daemon import run_daemon
         from autohooks.source import SqliteSource
 
         source = SqliteSource.from_config(cfg)
         asyncio.run(run_daemon(cfg, source, mem, graph, rag, max_iterations=1 if ns.once else None))
+        _close_ariel()
         return 0
 
     if ns.command == "dispatch":
-        from autohooks.appctx import build_app_context, resolve_layer
         from hooks.external import dispatch_event
 
-        # build_app_context was already called above; re-resolve just to be explicit.
-        _ = (build_app_context, resolve_layer)
         since = float(ns.since) if ns.since else 0.0
         until = float(ns.until) if ns.until else 0.0
         result = asyncio.run(
@@ -95,12 +104,14 @@ def main(argv: list[str] | None = None) -> int:
                 rag,
             )
         )
+        _close_ariel()
         print(json.dumps(result, ensure_ascii=False))
         return 0
 
     from autohooks.inject import run_inject
 
     out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format))
+    _close_ariel()
     print(out)
     return 0
 
