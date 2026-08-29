@@ -28,11 +28,16 @@ class Batch:
 
 
 class SqliteSource:
-    """Read-only tail over one SQLite table. SQL is built once from config."""
+    """Read-only tail over one SQLite table. SQL is built once from config.
+
+    The source owns its connection: lazily opened on first query, closed via
+    close(). Read-only URI — the daemon must never write agent DBs.
+    """
 
     def __init__(self, db_path: Path, source: SourceConfig) -> None:
         self._db_path = db_path
         self._source = source
+        self._conn: sqlite3.Connection | None = None
         s = source
         select = f"SELECT {s.cursor_column} AS _cursor, {sql_expr(s.role)} AS _role, {sql_expr(s.text)} AS _text"
         if s.ts is not None:
@@ -50,19 +55,29 @@ class SqliteSource:
             raise ValueError(f"unsupported driver: {cfg.source.driver!r} (v1: sqlite only)")
         return cls(cfg.source.path, cfg.source)
 
-    def connect(self) -> sqlite3.Connection:
-        """Read-only connection — the daemon must never write agent DBs."""
-        conn = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> sqlite3.Connection:
+        if self._conn is None:
+            conn = sqlite3.connect(f"file:{self._db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            self._conn = conn
+        return self._conn
 
-    def max_id(self, conn: sqlite3.Connection) -> int:
+    def connect(self) -> sqlite3.Connection:
+        """Public read-only connection handle (used by tests and debugging)."""
+        return self._connect()
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
+
+    def max_id(self) -> int:
         """First-run baseline: start at the newest existing row, no replay."""
-        row = conn.execute(self._max_sql).fetchone()
+        row = self._connect().execute(self._max_sql).fetchone()
         return int(row[0]) if row and row[0] is not None else 0
 
-    def fetch_after(self, conn: sqlite3.Connection, cursor: int, limit: int) -> Batch:
-        rows = conn.execute(self._select, (cursor, limit)).fetchall()
+    def fetch_after(self, cursor: int, limit: int) -> Batch:
+        rows = self._connect().execute(self._select, (cursor, limit)).fetchall()
         if not rows:
             return Batch(messages=[], cursor=cursor)
         keys = rows[0].keys()

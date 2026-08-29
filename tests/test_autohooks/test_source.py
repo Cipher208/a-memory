@@ -88,55 +88,50 @@ def _cfg(tmp_path: Path, template: str):
 
 
 def test_fetch_after_respects_cursor_and_filter(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, PLAIN)
-    src = SqliteSource.from_config(cfg)
-    with src.connect() as conn:
-        batch = src.fetch_after(conn, cursor=1, limit=100)
+    src = SqliteSource.from_config(_cfg(tmp_path, PLAIN))
+    batch = src.fetch_after(cursor=1, limit=100)
+    src.close()
     assert [m.source_id for m in batch.messages] == [3]
     assert batch.messages[0].sender == "assistant"
     assert batch.cursor == 3
 
 
 def test_empty_batch_keeps_cursor(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, PLAIN)
-    src = SqliteSource.from_config(cfg)
-    with src.connect() as conn:
-        batch = src.fetch_after(conn, cursor=3, limit=100)
+    src = SqliteSource.from_config(_cfg(tmp_path, PLAIN))
+    batch = src.fetch_after(cursor=3, limit=100)
+    src.close()
     assert batch.messages == []
     assert batch.cursor == 3
 
 
 def test_max_id_baseline(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, PLAIN)
-    src = SqliteSource.from_config(cfg)
-    with src.connect() as conn:
-        assert src.max_id(conn) == 3
+    src = SqliteSource.from_config(_cfg(tmp_path, PLAIN))
+    assert src.max_id() == 3
+    src.close()
 
 
 def test_json_path_extraction_event_store(tmp_path: Path) -> None:
     _make_event_db(tmp_path)
-    cfg = load_config(_write(tmp_path, EVENT.format(tmp=tmp_path)))
-    src = SqliteSource.from_config(cfg)
-    with src.connect() as conn:
-        batch = src.fetch_after(conn, cursor=0, limit=100)
+    src = SqliteSource.from_config(load_config(_write(tmp_path, EVENT.format(tmp=tmp_path))))
+    batch = src.fetch_after(cursor=0, limit=100)
+    src.close()
     assert [m.text for m in batch.messages] == ["событийная строка", "ответ событием"]
     assert [m.sender for m in batch.messages] == ["user", "assistant"]
 
 
 def test_limit_respected(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, PLAIN)
-    src = SqliteSource.from_config(cfg)
-    with src.connect() as conn:
-        batch = src.fetch_after(conn, cursor=0, limit=1)
+    src = SqliteSource.from_config(_cfg(tmp_path, PLAIN))
+    batch = src.fetch_after(cursor=0, limit=1)
+    src.close()
     assert [m.source_id for m in batch.messages] == [1]
 
 
 def test_read_only_connection_rejects_writes(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, PLAIN)
-    src = SqliteSource.from_config(cfg)
+    src = SqliteSource.from_config(_cfg(tmp_path, PLAIN))
     with pytest.raises(sqlite3.OperationalError), src.connect() as conn:
         conn.execute("DELETE FROM messages")
         conn.commit()
+    src.close()
 
 
 def test_unsupported_driver_rejected(tmp_path: Path) -> None:
