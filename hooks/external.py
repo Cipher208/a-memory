@@ -53,15 +53,32 @@ async def dispatch_event(
     return await hook_registry.fire(event, layer, context, mem=mem, graph=graph)
 
 
-async def auto_save_text(mem: Any, graph: Any, user_id: str, text: str) -> dict[str, Any]:
-    """evaluate_importance → threshold-gated saves. Shared by new_message + auto_save_candidate.
+async def auto_save_text(
+    mem: Any,
+    graph: Any,
+    user_id: str,
+    text: str,
+    *,
+    event: str = "new_message",
+    source_msg_id: int | None = None,
+) -> dict[str, Any]:
+    """evaluate_importance → threshold-gated saves + one memory_dispatch_log row.
 
     score >= hooks.auto_save_threshold (default 0.5) → L3 episodic + graph node;
     score >= 0.8 → also L4 core. Never raises past the caller (fire catches).
-    """
-    from config import config
 
+    The log row is the C1.10 substrate for compute_session_gaps and the
+    memory_watch tool's hits_24h counter. `event` is the high-level lifecycle
+    event that triggered the save (always "new_message" or "auto_save_candidate"
+    in v1; the dispatcher calls auto_save_text with that name so the log
+    carries the same tag as metrics.inc("hook_event_<event>")).
+    """
+    import time as _time
+    import sqlite3 as _sqlite3
+
+    from config import config
     from features.importance import evaluate_importance
+    from shared.connection import connection_manager
 
     score = evaluate_importance(text)
     result: dict[str, Any] = {"score": score, "saved_l3": False, "saved_l4": False, "saved_graph": False}
@@ -75,4 +92,30 @@ async def auto_save_text(mem: Any, graph: Any, user_id: str, text: str) -> dict[
     if score >= 0.8:
         await mem.remember("auto_save", text[:500], score)
         result["saved_l4"] = True
+
+    # C1.10: one log row per save path. Best-effort — failure here never
+    # blocks the save (the dispatcher catches), but a missing log row silently
+    # disables memory_diff for this event.
+    try:
+        db_path = connection_manager.base_dir / "memory.db"
+        with _sqlite3.connect(str(db_path)) as _conn:
+            _conn.execute(
+                "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event,
+                    source_msg_id,
+                    "user",
+                    user_id,
+                    score,
+                    int(result["saved_l3"]),
+                    int(result["saved_l4"]),
+                    int(result["saved_graph"]),
+                    _time.time(),
+                ),
+            )
+            _conn.commit()
+    except Exception as _e:
+        logger.debug("memory_dispatch_log insert failed: %s", _e)
+
     return result
