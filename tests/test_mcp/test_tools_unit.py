@@ -170,3 +170,50 @@ async def test_stats(monkeypatch):
     graph.count_nodes = AsyncMock(return_value=0)
     result = await memory_stats(layer="user", user_id="u1", ctx=ctx)
     assert isinstance(result, dict)
+
+
+# ── memory_graph_edges direction (B1.1 backlinks) ──
+
+
+@pytest.mark.asyncio
+async def test_graph_edges_direction_sql():
+    """direction param switches the WHERE clause of the edges query."""
+    from mcp_server.tools.graph import memory_graph_edges
+
+    for direction, fragment in [("out", "e.source_id = ?"), ("in", "e.target_id = ?"), ("both", "e.source_id = ? OR e.target_id = ?")]:
+        ctx, app = _make_ctx()
+        cur = MagicMock()
+        cur.fetchall = AsyncMock(return_value=[])
+        conn = MagicMock()
+        conn.execute = AsyncMock(return_value=cur)
+        graph = MagicMock()
+        graph.layer = "user"
+        graph._cm = MagicMock()
+        graph._cm.get = AsyncMock(return_value=conn)
+        app.user_graph = graph
+        await memory_graph_edges(layer="user", user_id="u1", node_id=7, direction=direction, ctx=ctx)
+        sql = conn.execute.call_args[0][0]
+        assert fragment in sql, f"{direction}: {fragment!r} not in {sql}"
+
+
+@pytest.mark.asyncio
+async def test_graph_edges_direction_in_real_graph(tmp_path):
+    """Integration: edge A→B is a backlink of B."""
+    from graph.epistemic import EpistemicGraph
+    from mcp_server.tools.graph import memory_graph_edges
+    from shared.connection import AsyncConnectionManager
+
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    graph = EpistemicGraph(cm=cm, layer="user")
+    await graph.init_db()
+    a = await graph.add_node("u1", "source node", "fact")
+    b = await graph.add_node("u1", "target node", "fact")
+    await graph.add_edge(a, b, "relates_to")
+
+    ctx, app = _make_ctx()
+    app.user_graph = graph
+    backlinks = await memory_graph_edges(layer="user", user_id="u1", node_id=b, direction="in", ctx=ctx)
+    assert backlinks["count"] == 1
+    assert backlinks["edges"][0]["source"] == a
+    outgoing = await memory_graph_edges(layer="user", user_id="u1", node_id=b, direction="out", ctx=ctx)
+    assert outgoing["count"] == 0

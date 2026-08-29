@@ -6,7 +6,7 @@ from shared.constants import DB_NAME
 from shared.metrics import metrics
 
 from .base import _validate_layer, _check_rate_limit, _get_graph, _invalidate_cache, _fire_hook
-from typing import Any
+from typing import Any, Literal
 
 # Runtime import: MCPServer evaluates tool annotations at registration;
 # hiding Context under TYPE_CHECKING breaks tools/list (fix 419d577).
@@ -105,9 +105,14 @@ async def memory_graph_edges(
     user_id: str = "",
     node_id: int = 0,
     limit: int = 20,
+    direction: Literal["out", "in", "both"] = "out",
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """List edges from the epistemic graph."""
+    """List edges from the epistemic graph.
+
+    direction: "out" (default, edges leaving node_id), "in" (backlinks),
+    "both" (either endpoint matches).
+    """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
@@ -115,15 +120,21 @@ async def memory_graph_edges(
     graph = _get_graph(app, layer)
     conn = await graph._cm.get(DB_NAME)
     if node_id:
+        where = {
+            "out": "e.source_id = ?",
+            "in": "e.target_id = ?",
+            "both": "(e.source_id = ? OR e.target_id = ?)",
+        }[direction]
+        params: tuple[Any, ...] = (node_id,) if direction != "both" else (node_id, node_id)
         cur = await conn.execute(
-            """SELECT e.source_id, e.target_id, e.relation, e.weight,
+            f"""SELECT e.source_id, e.target_id, e.relation, e.weight,
                       s.content as src_content, t.content as tgt_content
                FROM epi_edges e
                JOIN epi_nodes s ON e.source_id = s.node_id
                JOIN epi_nodes t ON e.target_id = t.node_id
-               WHERE e.source_id = ? AND s.layer = ?
+               WHERE {where} AND s.layer = ?
                ORDER BY e.weight DESC LIMIT ?""",
-            (node_id, graph.layer, limit),
+            (*params, graph.layer, limit),
         )
     else:
         cur = await conn.execute(
