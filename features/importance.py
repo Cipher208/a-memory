@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re as _re
+
 _KEYWORDS = (
     "решил",
     "помни",
@@ -62,3 +64,14 @@ def evaluate_importance(text: str) -> float:
     if has_question and has_keyword:
         score += 0.1
     return min(1.0, score)
+
+
+_DREAM_RE = _re.compile(r"DREAM:\s*(memory|fact|skill):\s*(.+)", _re.IGNORECASE | _re.DOTALL)
+
+
+def detect_dream_marker(text: str) -> dict[str, str] | None:
+    """Detect a DREAM: memory:/fact:/skill: durable signal (C1.12). First match wins."""
+    m = _DREAM_RE.search(text or "")
+    if not m:
+        return None
+    return {"target": m.group(1).lower(), "content": m.group(2).strip()[:500]}

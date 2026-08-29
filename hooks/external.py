@@ -90,6 +90,51 @@ async def auto_save_text(
 
     score = evaluate_importance(text)
     result: dict[str, Any] = {"score": score, "saved_l3": False, "saved_l4": False, "saved_graph": False}
+
+    # C1.12: DREAM: markers are durable signals — route through staging at 0.95.
+    from features.importance import detect_dream_marker
+
+    marker = detect_dream_marker(text)
+    if marker is not None:
+        if _staging_enabled():
+            try:
+                from features.staging import propose
+
+                await propose(
+                    "dream",
+                    "core_write",
+                    user_id,
+                    "user",
+                    {
+                        "key": f"dream_{marker['target']}_{int(_time.time())}",
+                        "value": marker["content"],
+                        "importance": 0.95,
+                    },
+                )
+                if marker["target"] == "skill":
+                    await mem.l3.save(user_id, marker["content"], 0.95, ["dream_skill"])
+                result["dream"] = {"target": marker["target"], "staged": True}
+            except Exception:
+                logger.exception("dream marker staging failed — falling through to heuristics")
+        else:
+            await mem.remember(f"dream_{marker['target']}", marker["content"], 0.95)
+            if marker["target"] == "skill":
+                await mem.l3.save(user_id, marker["content"], 0.95, ["dream_skill"])
+            result["dream"] = {"target": marker["target"], "staged": False}
+        result["score"] = 0.95
+        try:
+            db_path = connection_manager.base_dir / "memory.db"
+            with _sqlite3.connect(str(db_path)) as _conn:
+                _conn.execute(
+                    "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (event, source_msg_id, "user", user_id, 0.95, 0, 0, 0, _time.time()),
+                )
+                _conn.commit()
+        except Exception as _e:
+            logger.debug("memory_dispatch_log insert failed: %s", _e)
+        return result
+
     threshold = float(config.get("hooks", "auto_save_threshold", default=0.5))
     if score < threshold:
         return result
