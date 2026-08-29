@@ -9,6 +9,7 @@ aiosqlite and silently dropped saves).
 """
 
 import logging
+import time
 from typing import Any
 
 from lifecycle.consolidation import ConsolidationEngine
@@ -16,14 +17,31 @@ from lifecycle.forgetting import ForgettingSystem
 from rag.conflict import ConflictResolver
 from rag.router import RetrievalRouter
 
-from shared.constants import DEFAULT_USER
+from shared.constants import DB_NAME, DEFAULT_USER
 
 logger = logging.getLogger(__name__)
 
 
 async def forgetting_ritual(ctx: dict[str, Any]) -> dict[str, Any]:
+    from config import config
+
     fs = ForgettingSystem()
-    return await fs.cleanup()
+    if not config.get("staging", "enabled", default=True):
+        return await fs.cleanup()
+
+    # C1.11: archive (destructive) is staged; decay + compress stay direct.
+    conn = await fs._cm.get(DB_NAME)
+    rows = await fs._find_archivable_entries(conn, time.time())
+    ids = [r["entry_id"] for r in rows]
+    staged: dict[str, Any] = {"decayed": await fs.decay_importance(), "compressed": await fs.compress_duplicates()}
+    if not ids:
+        staged["archived"] = 0
+        return staged
+    from features.staging import propose
+
+    pid = await propose("forgetting", "archive", "default", "user", {"ids": ids})
+    staged.update({"staged": True, "proposal_id": pid, "archived": 0})
+    return staged
 
 
 async def conflict_resolver(ctx: dict[str, Any], user_id: str = DEFAULT_USER) -> dict[str, Any]:
@@ -81,13 +99,23 @@ async def consolidation(
     min_importance: float | None = None,
     action_key: str | None = None,
 ) -> dict[str, Any]:
-    staging = ctx.get("staging_items", [])
-    engine = ConsolidationEngine()
+    staging_items = ctx.get("staging_items", [])
     final_key = action_key or "consolidated"
+    from config import config
+
+    if config.get("staging", "enabled", default=True):
+        from features.staging import propose
+
+        payload: dict[str, Any] = {"items": staging_items}
+        if min_importance is not None:
+            payload["min_importance"] = min_importance
+        pid = await propose("consolidation", "consolidate_staging", user_id, "user", payload)
+        return {"action": final_key, "staged": True, "proposal_id": pid, "promoted": 0, "skipped": 0}
+    engine = ConsolidationEngine()
     if min_importance is not None:
-        result = await engine.consolidate_staging(user_id, staging, min_importance=min_importance)
+        result = await engine.consolidate_staging(user_id, staging_items, min_importance=min_importance)
     else:
-        result = await engine.consolidate_staging(user_id, staging)
+        result = await engine.consolidate_staging(user_id, staging_items)
     return {"action": final_key, **result}
 
 

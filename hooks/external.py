@@ -16,6 +16,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+def _staging_enabled() -> bool:
+    from config import config
+
+    return bool(config.get("staging", "enabled", default=True))
+
+
 KNOWN_EVENTS: frozenset[str] = frozenset(
     {
         "session_started",
@@ -91,8 +98,20 @@ async def auto_save_text(
     await graph.add_node(user_id, text[:500], "fact", [], score)
     result["saved_graph"] = True
     if score >= 0.8:
-        await mem.remember("auto_save", text[:500], score)
-        result["saved_l4"] = True
+        if _staging_enabled():
+            from features.staging import propose
+
+            await propose(
+                "auto_save",
+                "core_write",
+                user_id,
+                "user",
+                {"key": "auto_save", "value": text[:500], "importance": score},
+            )
+            result["staged_l4"] = True
+        else:
+            await mem.remember("auto_save", text[:500], score)
+            result["saved_l4"] = True
 
     # C1.10: one log row per save path. Best-effort — failure here never
     # blocks the save (the dispatcher catches), but a missing log row silently

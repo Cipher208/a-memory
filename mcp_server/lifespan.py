@@ -67,11 +67,28 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                             items = await buf.get_staging(uid)
                             if not items:
                                 continue
-                            res = await engine.consolidate_staging(uid, items, min_importance=min_weight)
+                            from config import config as _cfg
+
+                            if _cfg.get("staging", "enabled", default=True):
+                                from features.staging import propose
+
+                                await propose(
+                                    "consolidation",
+                                    "consolidate_staging",
+                                    uid,
+                                    layer,
+                                    {"items": items, "min_importance": min_weight},
+                                )
+                                res = {"staged": True}
+                            else:
+                                res = await engine.consolidate_staging(uid, items, min_importance=min_weight)
                             await buf.clear_staging(uid)
                             staged_any = True
                             logging.getLogger(__name__).info("Staging drained (layer=%s user=%s): %s", layer, uid, res)
 
+                        # ponytail: consolidate_episodes not staged (C1.11) — its candidate set
+                        # is scan-derived; staging would duplicate the scan. Revisit if a
+                        # real gap shows up in proposals review.
                         promoted = await engine.consolidate_episodes("default", min_weight=min_weight)
 
                         await buf.cleanup_old()  # unpromoted staging >24h is ephemeral
