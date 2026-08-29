@@ -30,6 +30,7 @@ from .tools.ops import (
     memory_cleanup,
     memory_lucidity_purge,
     memory_search,
+    memory_watch,  # Phase C C1.10 S6
 )
 
 # Re-export _fire_hook for backward compatibility and tests
@@ -63,6 +64,7 @@ _register_tools: dict[str, Any] = {
     "memory_cleanup": memory_cleanup,
     "memory_lucidity_purge": memory_lucidity_purge,
     "memory_search": memory_search,
+    "memory_watch": memory_watch,
     "memory_hook": memory_hook,
     "think": think,
     "dream": dream,
