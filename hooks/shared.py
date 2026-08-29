@@ -103,7 +103,8 @@ async def consolidation(
     final_key = action_key or "consolidated"
     from config import config
 
-    if config.get("staging", "enabled", default=True):
+    if staging_items and config.get("staging", "enabled", default=True):
+        # Empty items → old engine behavior was a harmless no-op; do NOT stage junk proposals.
         from features.staging import propose
 
         payload: dict[str, Any] = {"items": staging_items}

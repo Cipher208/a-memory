@@ -61,6 +61,35 @@ Fired from: episodic save (`consolidation`), session end (`consolidation`), thin
 
 Known noise: consolidation handler reads `staging_items` from ctx which no caller provides → effectively no-op (real promotion lives in the hourly sweep, see §2).
 
+### 3.1 External events + auto-hooks (Phase C, 2026-08-29)
+
+Harnesses push lifecycle events **without an agent tool call** →
+`hooks/external.py::dispatch_event` (transports: `POST /api/hooks/{event}`,
+MCP `memory_hook`, in-process `python -m autohooks dispatch`) → same
+`HookRegistry.fire` gate. 8 events: `session_started`, `session_ended`,
+`new_message`, `auto_save_candidate`, `post_session_diff`,
+`post_context_compression`, `context_threshold`, `memory_pressure`.
+Full wiring guide: `docs/hooks/autohooks-platforms.md`.
+
+Knobs added by Phase C:
+
+| Key / Env | Default | Controls |
+|---|---|---|
+| `hooks.auto_save_threshold` | 0.5 | external new_message → L3+graph (≥0.8 tier → staged L4) |
+| `staging.enabled` | true | risk-tier staging: L4 saves / consolidation promos / archive sweeps → `mutation_proposals`; false = direct writes |
+| `staging.expire_days` | 7 | proposal lazy expiry |
+| `staging.dream_markers` | true | `DREAM: memory:/fact:/skill:` marker routing |
+| `inject.token_budget` | 2000 | critical-set inject cap |
+| `inject.important_min` | 0.8 | L4 facts in inject block |
+| `ARIEL_EXPOSE=primitives,review` | `primitives` | opt-in tier exposing `memory_proposals` + `memory_report_card` to agents |
+| `ARIEL_HASH_EMBEDDINGS=1` | unset | hash-embedding fast path — REQUIRED in daemon/hook units (ST model >15 s per CLI process) |
+
+Observability surfaces: `memory_dispatch_log` + `mutation_proposals` tables
+(alembic `20260829_1300_d1c110`, `20260829_1600_c111`), tools `memory_watch`
+/ `memory_proposals` / `memory_report_card`, inject block kinds
+`relevant|recent|gap|proposals|important`, script
+`scripts/verify_autohooks.py` (24 checks).
+
 ## 4. config.yaml — section audit
 
 | Section | Status | Consumer / note |

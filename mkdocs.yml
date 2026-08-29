@@ -101,6 +101,8 @@ nav:
     - AgentWiki: wiki/agent-wiki.md
   - Hooks & Lifecycle:
     - Hooks System: hooks/system.md
+    - Auto-Hooks: hooks/auto-hooks.md
+    - Platform Wiring Guide: hooks/autohooks-platforms.md
     - Lifecycle: lifecycle/overview.md
   - Operations:
     - Deployment: operations/deployment.md

@@ -107,3 +107,15 @@ async def test_staging_disabled_writes_l4_directly(ensure_schema: Path, monkeypa
     assert result["saved_l4"] is True
     assert mem.remembered, "staging disabled → direct L4 write"
     assert result.get("staged_l4") is None
+
+
+async def test_consolidation_empty_items_no_junk_proposal(ensure_schema: Path) -> None:
+    """session_end fires consolidation with no staging_items — must stay a no-op (C1.11)."""
+    from hooks.shared import consolidation
+
+    out = await consolidation({}, "u1")
+    assert "staged" not in out, "empty staging_items must not create a proposal"
+    conn = sqlite3.connect(connection_manager.base_dir / "memory.db")
+    rows = conn.execute("SELECT count(*) FROM mutation_proposals").fetchone()[0]
+    conn.close()
+    assert rows == 0

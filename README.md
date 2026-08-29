@@ -113,6 +113,7 @@ print(res["summary"])
 | 🔍 **Search** | FTS5 + MIB binary embeddings + hybrid RRF ranking, multi-source merge (RAG + Wiki + Episodic + Core + Graph), dream digest |
 | 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal |
 | 📁 **Projects** | Decision log (what/why/outcome), artifact map, graphify code index — survives between sessions |
+| ⚡ **Auto-Hooks** | Push-model memory: a per-agent daemon tails the conversation and ariel saves what matters on its own — importance thresholds, staged mutations (proposal → review → apply → revert), `DREAM:` markers, session-start inject, gap reports. No memory tool calls required. [Wiring guide →](docs/hooks/autohooks-platforms.md) |
 | 🔐 **Security** | Envelope encryption (NaCl `SecretBox` = XSalsa20-Poly1305), master key chain, rate limiting |
 | 🛠️ **Ops** | Auto-backup cron, saga rollback pattern, Prometheus metrics, read-only replica, hourly self-maintenance (decay + consolidation + auto-VACUUM) |
 | 🌐 **Wiki** | FTS5-indexed markdown files — edit in Obsidian/VS Code, search from MCP, 6 analytical perspectives (`wiki_summarize`), schema lint on save, external-dir sync |
@@ -182,8 +183,10 @@ Notes (Sep 2026): mem0 now ships a self-hosted Docker image and a managed cloud 
 - [x] Repo renamed to `Cipher208/a-memory`; PyPI package live (`pip install a-memory`)
 - [x] **Temporal timeline wired end to end (think/evolve/project events + dream recent digest)**
 - [x] **Dream-cycle inject + auto-generated CONTEXT.md snapshot** (curated context + 6 wiki perspectives + recent episodes, per-layer, per-agent)
+- [x] **Phase C — auto-hooks keystone** (push-model memory: per-agent conversation daemons, external event dispatcher, importance-gated auto-save, staged mutations with review/revert, dream markers, session-start inject, gap reports; [guide](docs/hooks/autohooks-platforms.md))
 - [ ] **Screenshot / asciinema demo** in README
 - [ ] **LLM-assisted consolidation** on top of the deterministic sweep
+- [ ] **Phase D** — memory tools (`/recall`, session continuity), Markdown skill store, persona graph
 
 ## Contributing
 
