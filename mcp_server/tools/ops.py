@@ -748,7 +748,8 @@ async def memory_report_card(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Operator digest: what automation did to memory in the window (C1.14 S5)."""
-    _ = _get_ctx(ctx)
+    if ctx is not None:
+        _get_ctx(ctx)  # strict when called over MCP; CLI/one-liners pass ctx=None
     import sqlite3 as _sqlite3
     import time as _time
 
