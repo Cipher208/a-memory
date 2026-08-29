@@ -117,9 +117,7 @@ class ConsolidationEngine:
     async def get_lineage(self, entry_id: int) -> list[str]:
         """Return the parent references recorded for a promoted fact (B1.4)."""
         conn = await self._cm.get(DB_NAME)
-        row = await (
-            await conn.execute("SELECT metadata FROM core_memory WHERE entry_id=?", (entry_id,))
-        ).fetchone()
+        row = await (await conn.execute("SELECT metadata FROM core_memory WHERE entry_id=?", (entry_id,))).fetchone()
         if not row or not row["metadata"]:
             return []
         try:
