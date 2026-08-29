@@ -36,6 +36,8 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
     # tier name -> matcher(tool_name, all_names) returning extra tools to expose
     "wiki": lambda name, names: {n for n in names if n.startswith("wiki_")},
     "brief": lambda name, names: {n for n in names if n.startswith("daily_")},
+    # review: staged-mutation review surface (C1.11/C1.13/C1.14) — opt-in per instance
+    "review": lambda name, names: names & {"memory_proposals", "memory_report_card"},
 }
 
 

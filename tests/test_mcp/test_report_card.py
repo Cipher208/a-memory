@@ -97,3 +97,13 @@ async def test_report_card_empty_db_zeroed(tmp_path: Path) -> None:
     finally:
         connection_manager._conns.clear()
         connection_manager.base_dir = original
+
+
+def test_review_tier_exposure() -> None:
+    from mcp_server.server import resolve_exposure
+
+    names = {"memory_proposals", "memory_report_card", "think", "memory_stats"}
+    exposed = resolve_exposure("primitives,review", names)
+    assert {"memory_proposals", "memory_report_card", "think"} <= exposed
+    assert "memory_stats" not in exposed
+    assert resolve_exposure("primitives", names) == {"think"}
