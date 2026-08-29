@@ -2,6 +2,19 @@
 
 Full history lives in [CHANGELOG.md](https://github.com/Cipher208/a-memory/blob/master/CHANGELOG.md).
 
+## v1.9.0 (2026-08-29)
+
+### Highlights
+- **Memory Scopes (D1.13)** — per-user isolation on HTTP: an API-key-bound client cannot spoof another user's `user_id`; stdio/local unchanged
+- **Self-building graph (B1.2 + B1.3)** — `person`/`organization` entities with per-user dedup and `relates_to`/`relation` edges on `memory_graph_add`; nightly `graph_builder` extracts people and relationships from episodes (RU+EN patterns); graph backlinks via `memory_graph_edges(direction=...)`
+- **ACT-R activation + CLS replay (D1.17 + D1.18)** — recall frequency + recency boost retrieval scoring; `dream` confirms used facts (`recall_useful`), nightly replay boosts confirmed L4 facts
+- **GraphRAG (B1.6)** — retrieval chain vector/FTS → graph expand → rerank; 1-hop neighbors of graph hits join results with damped scores
+- **Lineage + transitions (B1.4 + B1.5)** — promoted facts record parent summaries (`get_lineage`); every memory move (staging→l4, l4→archived, …) validated and persisted to `memory_transitions` with metrics
+- **Causal memory (B1.7)** — `record_causal` action→outcome links with strength in the epistemic graph
+- **SQLite quick wins (A2.6–A2.9)** — PRAGMA set completed (page_size/auto_vacuum), bulk `executemany` imports, 8 composite indexes for hot queries
+
+See the repo CHANGELOG for the complete list.
+
 ## v1.8.1 (2026-08-27)
 
 ### Highlights
