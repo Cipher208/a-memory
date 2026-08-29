@@ -48,6 +48,7 @@ class EpisodeResult(BaseModel):
 
 class GraphNodeResult(BaseModel):
     node_id: int | None = Field(default=None, description="Graph node ID")
+    created: bool | None = Field(default=None, description="Whether the node was newly created (social upsert)")
     nodes: list[dict[str, Any]] | None = Field(default=None, description="List of graph nodes")
 
 

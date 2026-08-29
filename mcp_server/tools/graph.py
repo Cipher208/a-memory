@@ -5,6 +5,8 @@ from mcp_server.registry import _get_ctx
 from shared.constants import DB_NAME
 from shared.metrics import metrics
 
+from graph.epistemic import SOCIAL_NODE_TYPES
+
 from .base import _validate_layer, _check_rate_limit, _get_graph, _invalidate_cache, _fire_hook
 from typing import Any, Literal
 
@@ -19,9 +21,16 @@ async def memory_graph_add(
     content: str = "",
     node_type: str = "fact",
     tags: list[str] | None = None,
+    relates_to: int = 0,
+    relation: str = "",
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Add a node to the epistemic graph."""
+    """Add a node to the epistemic graph.
+
+    Social entities (node_type="person"/"organization") are deduplicated:
+    re-adding the same name returns the existing node (created=False).
+    relates_to + relation optionally create an edge from the new node.
+    """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
@@ -31,7 +40,16 @@ async def memory_graph_add(
     if rate_limit:
         return dict(rate_limit)
 
-    node_id = await _get_graph(app, layer).add_node(user_id, content, node_type, tags)
+    graph = _get_graph(app, layer)
+    created: bool | None = None
+    if node_type in SOCIAL_NODE_TYPES:
+        node_id, created = await graph.find_or_add_entity(user_id, content, entity_type=node_type, tags=tags)
+    else:
+        node_id = await graph.add_node(user_id, content, node_type, tags)
+
+    if relates_to:
+        await graph.add_edge(node_id, relates_to, relation or "relates_to")
+
     _invalidate_cache(layer, user_id)
 
     # Fire graph-specific hooks
@@ -45,7 +63,7 @@ async def memory_graph_add(
     if hook_name:
         await _fire_hook(hook_name, layer, {"node_type": node_type, "content": content, "user_id": user_id})
 
-    return GraphNodeResult(node_id=node_id).dict()
+    return GraphNodeResult(node_id=node_id, created=created).dict()
 
 
 async def memory_graph_query(

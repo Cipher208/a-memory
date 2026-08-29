@@ -49,10 +49,18 @@ AGENT_TAGS = {
     "personality_trait": "Personality trait",
 }
 
+# B1.2 Social Memory Graph: entity node types + relationship vocabulary.
+# Entities are deduplicated per (layer, user_id, node_type, content) —
+# re-adding "Alice" returns the existing node instead of forking it.
+SOCIAL_NODE_TYPES = {"person", "organization"}
+SOCIAL_RELATIONS = {"knows", "works_with", "family_of", "friend_of", "met", "mentions"}
+
 
 class EpistemicGraph:
     USER_TAGS = USER_TAGS
     AGENT_TAGS = AGENT_TAGS
+    SOCIAL_NODE_TYPES = SOCIAL_NODE_TYPES
+    SOCIAL_RELATIONS = SOCIAL_RELATIONS
 
     def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user") -> None:
         self._cm = cm or connection_manager
@@ -110,6 +118,29 @@ class EpistemicGraph:
         except Exception:
             # Table already has column or other harmless migration error
             logger.debug("Layer column migration skipped (likely already exists)")
+
+    async def find_or_add_entity(
+        self,
+        user_id: str,
+        name: str,
+        entity_type: str = "person",
+        tags: list[str] | None = None,
+        confidence: float = 0.5,
+    ) -> tuple[int, bool]:
+        """Social entity upsert: exact-match dedup per (layer, user, type, content).
+
+        Returns (node_id, created).
+        """
+        conn = await self._cm.get(DB_NAME)
+        cur = await conn.execute(
+            "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=? AND content=? LIMIT 1",
+            (self.layer, user_id, entity_type, name),
+        )
+        row = await cur.fetchone()
+        if row:
+            return int(row["node_id"]), False
+        node_id = await self.add_node(user_id, name, entity_type, tags, confidence)
+        return node_id, True
 
     async def add_node(self, user_id: str, content: str, node_type: str, tags: list[str] | None = None, confidence: float = 0.5) -> int:
         if tags:
