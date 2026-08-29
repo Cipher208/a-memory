@@ -631,7 +631,7 @@ async def memory_watch(
 
     if action == "list":
         sql = "SELECT id, name, trigger, predicate, action, enabled, created_at FROM watch_rules"
-        params: tuple = ()
+        params: tuple[Any, ...] = ()
         if enabled_only:
             sql += " WHERE enabled = 1"
         sql += " ORDER BY id"
@@ -679,7 +679,7 @@ async def memory_watch(
                 (name, trigger, _json.dumps(pred_obj, ensure_ascii=False), action_kind, _time.time()),
             )
             conn.commit()
-            return {"status": "ok", "id": int(cur.lastrowid)}
+            return {"status": "ok", "id": int(cur.lastrowid or 0)}
 
     if action == "disable":
         if not rule_id:
