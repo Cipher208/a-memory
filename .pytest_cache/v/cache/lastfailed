@@ -1,5 +1,3 @@
 {
-  "tests/test_infra_overhaul.py": true,
-  "tests/test_mcp/test_tools_unit.py": true,
   "tests/test_mcp/test_primitives_upgrades.py::test_forget_shadow_bin": true
 }
