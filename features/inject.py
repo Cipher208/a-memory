@@ -52,10 +52,14 @@ async def build_inject_blocks(
 
     # diff_gap block: surface recent L3 episodes tagged diff_gap (C1.10 S4).
     try:
-        l3_recent = mem.l3.get_recent(20) if hasattr(mem, "l3") and hasattr(mem.l3, "get_recent") else []
+        gap_episodes = await mem.l3.search_by_tag(user_id, "diff_gap", limit=5)
     except Exception:
-        l3_recent = []
-    gap_lines = [str(getattr(e, "content", "") or "").strip() for e in l3_recent if str(getattr(e, "content", "")).startswith("diff_gap:")]
+        gap_episodes = []
+    gap_lines = [
+        str(getattr(e, "summary", "") or "").strip()
+        for e in gap_episodes
+        if float(getattr(e, "created_at", 0) or 0) >= cutoff and str(getattr(e, "summary", "")).startswith("diff_gap:")
+    ]
     if gap_lines:
         content = " | ".join(gap_lines)[: max(0, remaining)]
         cost = estimate_tokens(content)
