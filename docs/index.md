@@ -34,6 +34,7 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 | **Context snapshot** | `memory_context_inject` auto-writes a per-layer `CONTEXT.md` (curated context + 6 wiki perspectives + recent episodes) for cross-session agent access |
 | **Saga pattern** | Multi-step ops with retry, idempotency, compensation |
 | **Envelope encryption** | NaCl `SecretBox` (XSalsa20-Poly1305) via PyNaCl, keychain-first key resolution |
+| **Memory scopes** | Per-user isolation on HTTP: an API-key-bound client cannot spoof another user's `user_id` (stdio/local unchanged) |
 | **Platform-aware async** | aiosqlite on Linux/macOS, asyncio.to_thread on Windows |
 | **SHA-256 dedup** | Prevents duplicate observations within 5-minute window |
 | **Circuit breaker** | Prevents cascading LLM/embedding failures |

@@ -6,10 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Memory Scopes (per-user isolation)** — on HTTP transports an API key bound to a user now locks the `user_id` seen by every memory tool. `mcp_server/tools/base.py::_resolve_user_id` reads `Authorization` from the request (`ctx.request_context.request.headers`, mcp 2.x); a `Bearer ak_...` header with a valid key returns the key-bound user_id, anything else (bearer token, no header, stdio/local) passes the requested value through unchanged. All `user_id`-bearing tools are registered through the `_scope_tool` wrapper in `mcp_server/server.py`; `AuthMiddleware` now accepts a bearer token OR a valid API key, and the dead `/mcp` skip is removed (MCP is mounted at `/`). No DB changes, no new endpoints, no new tools; stdio and `MCP_AUTH_DISABLED` behaviour unchanged. Closes roadmap D1.13 (cross-tenant leak: any client with a valid token could pass `user_id="bob"`).
 - **Wiki secret detection** — `add()` and `sync_external()` scan content for well-known secret formats (GitHub PATs, API keys, PEM private-key headers). Matches are WARNING-logged (kind + path only, never the value) and never block the save. New pure `wiki/secrets.py::scan_secrets`. No new tool/config/DB. Closes research backlog P2 item 10.
 - **Wiki ref chain linking** — typed page links (`review_of` / `revises` / `follows`) in a new `wiki_links` table. `[[wikilinks]]` are auto-linked to resolvable pages on `add()`/`update()`. New `wiki_link` tool (list/add), auto-exposed by the `wiki` tier (tool count 36→37). Closes research backlog P2 item 8.
 - **Wiki promotion pipeline** — `WikiManager.promote_from_core()` turns high-importance L4 `rule`/`preference` facts into wiki pages (deterministic, idempotent, no LLM). Closes research backlog P2 item 9.
 - **Wiki organic operations** — `WikiManager.split()` / `merge()` / `retire()` reorganize pages without losing history: split into `(title, content)` parts, merge into a destination with `## source` separators, retire to a `_retired/` archive (removed from search, never hard-deleted). All non-fatal on missing paths. Closes research backlog P2 item 11.
+
+### Changed
+- **SQLite connection PRAGMA set completed** — `shared/connection.py` now sets `PRAGMA page_size=16384` and `PRAGMA auto_vacuum=INCREMENTAL` on connect, ordered BEFORE `journal_mode=WAL` (WAL seals page size; empirically verified). Applies to newly created databases only — existing DBs are silent no-ops. Earlier: `PRAGMA mmap_size=256MB` + `PRAGMA optimize` in `close_all()`.
+- **Bulk import via executemany** — `ImportExport.import_user` inserts `core_memory` / `episodes` / `sessions` as one `executemany` per table instead of row-by-row executes; newest-wins `ON CONFLICT` guard preserved verbatim, transaction/rollback semantics unchanged.
+- **Composite indexes for hot queries** — 8 idempotent `CREATE INDEX IF NOT EXISTS` entries in the owning modules' `_init_db` (created at next startup on existing DBs, no alembic): `core_memory(layer,user_id,importance DESC)`, `episodes(layer,user_id,created_at DESC)`, `epi_nodes(layer,user_id,node_type,confidence DESC)`, `sessions(user_id,started_at DESC)`, `audit_log(user_id,action,timestamp DESC)`, `wiki_index(layer,wiki_type,updated_at DESC)`, `archived_memories(user_id,archived_at DESC)` (table had no indexes), `staging_memories(layer,user_id,session_id,created_at)`.
+
+### Security
+- **Untrack encrypted auth stores** — `data/auth/keys.enc` and `data/auth/token.enc` were committed to the repo (recreated on every test run by default paths); removed from the index and ignored via `*.enc`.
 
 ## [1.8.1] - 2026-08-27
 
