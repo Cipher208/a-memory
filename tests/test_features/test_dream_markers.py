@@ -106,9 +106,7 @@ async def test_marker_routes_to_staged_proposal(ensure_schema: Path) -> None:
     assert '"importance": 0.95' in rows[0][2]
 
 
-async def test_dream_markers_toggle_disabled_falls_to_heuristics(
-    ensure_schema: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_dream_markers_toggle_disabled_falls_to_heuristics(ensure_schema: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """staging.dream_markers=false → marker text takes the regular heuristic path."""
     import hooks.external as ext
 

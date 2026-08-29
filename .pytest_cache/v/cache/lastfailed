@@ -1,3 +1,4 @@
 {
-  "tests/test_mcp/test_primitives_upgrades.py::test_forget_shadow_bin": true
+  "tests/test_mcp/test_primitives_upgrades.py::test_forget_shadow_bin": true,
+  "tests/test_hooks/test_dispatch_log.py::test_auto_save_text_writes_dispatch_log_row": true
 }

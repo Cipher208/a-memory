@@ -116,9 +116,14 @@ async def main() -> int:
         user_id="verify",
         layer="user",
         source=SourceConfig(
-            driver="sqlite", path=SCRATCH / "conversation.db", table="messages",
-            cursor_column="id", order_by="id", role=FieldMap(column="role"),
-            text=FieldMap(column="content"), ts=FieldMap(column="timestamp"),
+            driver="sqlite",
+            path=SCRATCH / "conversation.db",
+            table="messages",
+            cursor_column="id",
+            order_by="id",
+            role=FieldMap(column="role"),
+            text=FieldMap(column="content"),
+            ts=FieldMap(column="timestamp"),
             filter="role IN ('user', 'assistant')",
         ),
         poll_seconds=0.01,
@@ -233,7 +238,10 @@ async def main() -> int:
 
     await connection_manager.close_all()  # aiosqlite workers block interpreter exit otherwise
     failed = [r for r in RESULTS if not r[1]]
-    print(f"\n{'=' * 64}\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed" + (f" — FAILURES: {[f[0] for f in failed]}" if failed else " — ALL GREEN"))
+    print(
+        f"\n{'=' * 64}\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed"
+        + (f" — FAILURES: {[f[0] for f in failed]}" if failed else " — ALL GREEN")
+    )
     sys.stdout.flush()
     # Known repo-wide aiosqlite quirk: a lingering worker thread blocks interpreter
     # shutdown (same workaround as tests/conftest.py pytest_sessionfinish).

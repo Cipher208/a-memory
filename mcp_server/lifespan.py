@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
+from typing import Any
 from mcp.server.mcpserver import MCPServer
 from config import config
 from mcp_server.context import AppContext
@@ -79,9 +80,9 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                                     layer,
                                     {"items": items, "min_importance": min_weight},
                                 )
-                                res = {"staged": True}
+                                res: dict[str, Any] = {"staged": True}
                             else:
-                                res = await engine.consolidate_staging(uid, items, min_importance=min_weight)
+                                res = dict(await engine.consolidate_staging(uid, items, min_importance=min_weight))
                             await buf.clear_staging(uid)
                             staged_any = True
                             logging.getLogger(__name__).info("Staging drained (layer=%s user=%s): %s", layer, uid, res)
