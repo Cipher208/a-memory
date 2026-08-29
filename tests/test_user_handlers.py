@@ -120,9 +120,7 @@ async def test_post_context_compression_returns_candidates(compaction_db) -> Non
 @pytest.mark.asyncio
 async def test_post_context_compression_logs_session_ids(compaction_db) -> None:
     hooks = uh.UserHooks()
-    result = await hooks._post_context_compression(
-        {"user_id": "u1", "old_session_id": "s-old", "new_session_id": "s-new", "reason": "split"}
-    )
+    result = await hooks._post_context_compression({"user_id": "u1", "old_session_id": "s-old", "new_session_id": "s-new", "reason": "split"})
     assert result == {"candidates": [], "logged": True}
     from features.rehydrate import recent_compaction
 

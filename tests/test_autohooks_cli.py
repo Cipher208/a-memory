@@ -20,9 +20,7 @@ def _cfg(tmp_path):
 
 
 def test_parse_args_payload_and_blocks():
-    ns = cli._parse_args(
-        ["dispatch", "--config", "x.yaml", "--event", "post_context_compression", "--payload", '{"a":1}']
-    )
+    ns = cli._parse_args(["dispatch", "--config", "x.yaml", "--event", "post_context_compression", "--payload", '{"a":1}'])
     assert ns.payload == '{"a":1}'
     ns2 = cli._parse_args(["inject", "--config", "x.yaml", "--blocks", "rehydrate"])
     assert ns2.blocks == "rehydrate"

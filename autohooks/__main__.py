@@ -31,9 +31,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sub.choices["dispatch"].add_argument("--event", required=True, help="KNOWN_EVENTS name to fire")
     sub.choices["dispatch"].add_argument("--since", default="0", help="since timestamp for diff-style events")
     sub.choices["dispatch"].add_argument("--until", default="0", help="until timestamp for diff-style events")
-    sub.choices["dispatch"].add_argument(
-        "--payload", default="{}", help="JSON object merged into the event context"
-    )
+    sub.choices["dispatch"].add_argument("--payload", default="{}", help="JSON object merged into the event context")
     return parser.parse_args(argv)
 
 
@@ -97,8 +95,8 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             extra = json.loads(ns.payload) if ns.payload else {}
-        except json.JSONDecodeError as e:
-            logger.error("invalid --payload JSON: %s", e)
+        except json.JSONDecodeError:
+            logger.exception("invalid --payload JSON")
             return 2
         if not isinstance(extra, dict):
             logger.error("--payload must be a JSON object")

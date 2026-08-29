@@ -33,8 +33,7 @@ def log_compaction(
     try:
         with sqlite3.connect(str(_db_path())) as conn:
             conn.execute(
-                "INSERT INTO compaction_events (user_id, old_session_id, new_session_id, reason, summary, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO compaction_events (user_id, old_session_id, new_session_id, reason, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (user_id, old_session_id, new_session_id, reason, (summary or "")[:2000], time.time()),
             )
             conn.commit()
@@ -58,8 +57,7 @@ def recent_compaction(user_id: str, window_hours: float) -> dict[str, Any] | Non
         with sqlite3.connect(str(_db_path())) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT * FROM compaction_events WHERE user_id = ? AND created_at >= ?"
-                " ORDER BY created_at DESC LIMIT 1",
+                "SELECT * FROM compaction_events WHERE user_id = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
                 (user_id, cutoff),
             ).fetchone()
         return dict(row) if row else None

@@ -230,7 +230,7 @@ async def main() -> int:
             check("POST /api/hooks/{event} 200", resp.status_code == 200, f"{resp.status_code} {resp.text[:100]}")
             resp = await client.post("/api/context-inject", json={"user_id": "verify"})
             check("POST /api/context-inject 200 + blocks", resp.status_code == 200 and "blocks" in resp.json())
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         check("HTTP surfaces", False, repr(e)[:150])
 
     # ── summary ───────────────────────────────────────────────────────────
