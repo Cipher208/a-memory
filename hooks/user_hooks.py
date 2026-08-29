@@ -85,6 +85,12 @@ class UserHooks:
         result = {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
         with contextlib.suppress(Exception):
             result["cls_replay"] = await cls_replay_hook(ctx, self.user_id)
+        with contextlib.suppress(Exception):
+            from lifecycle.graph_builder import build_from_episodes
+
+            from shared.connection import connection_manager
+
+            result["graph_build"] = await build_from_episodes(connection_manager, self.user_id, layer="user")
         return result
 
     @hook_registry.mark("importance_gate", layer="user")
