@@ -43,7 +43,7 @@ class AgentConfig:
     source: SourceConfig
     poll_seconds: int = 15
     batch_limit: int = 100
-    state_file: Path | None = None
+    state_file: Path = Path()  # always set by load_config (data_dir / "autohooks-cursor.json")
     master_key: str | None = None
 
 

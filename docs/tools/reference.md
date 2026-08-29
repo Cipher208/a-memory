@@ -150,6 +150,11 @@ Fires one external lifecycle event into the hook system. This is the **harness t
 
 Returns the fired handlers' results dict.
 
+The reference harness-side client for both surfaces is the bundled
+`autohooks` runtime (`python -m autohooks daemon|inject --config <agent>.yaml`):
+a per-agent daemon tails the conversation store and fires `new_message`, and
+`inject` prints the session-start critical set. See `autohooks/examples/`.
+
 ---
 
 ## Full surface (`ARIEL_EXPOSE=all`)
