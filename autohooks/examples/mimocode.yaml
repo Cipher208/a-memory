@@ -1,0 +1,15 @@
+# MiMoCode stores message text in `part` (JSON), role on the parent `message` row.
+# Verified against the live DB 2026-08-29 (part.data: $.type='text', $.text;
+# role via subquery on message.data $.role).
+data_dir: ~/.mcp-ariel-memory-mimocode
+user_id: default
+layer: user
+source:
+  driver: sqlite
+  path: ~/.local/share/mimocode/mimocode.db
+  table: part
+  cursor_column: rowid
+  order_by: rowid
+  role: {column: "(SELECT json_extract(m.data, '$.role') FROM message m WHERE m.id = part.message_id)"}
+  text: {json_path: [data, '$.text']}
+  filter: "json_extract(data, '$.type') = 'text'"

@@ -1,0 +1,13 @@
+# CowAgent (persona: Eli). Live data dir per cowagent/config.json.
+data_dir: ~/.mcp-ariel-memory-cowagent
+user_id: default
+layer: user
+source:
+  driver: sqlite
+  path: ~/cow/memory/long-term/index.db
+  table: messages
+  cursor_column: id
+  order_by: id
+  role: {column: role}
+  text: {column: content}
+  ts: {column: created_at}

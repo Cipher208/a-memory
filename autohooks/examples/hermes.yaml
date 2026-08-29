@@ -1,0 +1,13 @@
+data_dir: ~/.mcp-ariel-memory-hermes
+user_id: default
+layer: user
+source:
+  driver: sqlite
+  path: ~/.hermes/state.db
+  table: messages
+  cursor_column: id
+  order_by: id
+  role: {column: role}
+  text: {column: content}
+  ts: {column: timestamp}
+  filter: "role IN ('user', 'assistant')"
