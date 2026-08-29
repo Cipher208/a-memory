@@ -23,6 +23,12 @@ def _staging_enabled() -> bool:
     return bool(config.get("staging", "enabled", default=True))
 
 
+def _dream_markers_enabled() -> bool:
+    from config import config
+
+    return bool(config.get("staging", "dream_markers", default=True))
+
+
 KNOWN_EVENTS: frozenset[str] = frozenset(
     {
         "session_started",
@@ -92,9 +98,10 @@ async def auto_save_text(
     result: dict[str, Any] = {"score": score, "saved_l3": False, "saved_l4": False, "saved_graph": False}
 
     # C1.12: DREAM: markers are durable signals — route through staging at 0.95.
+    # Toggle: staging.dream_markers (default true) — disabled → plain heuristic path.
     from features.importance import detect_dream_marker
 
-    marker = detect_dream_marker(text)
+    marker = detect_dream_marker(text) if _dream_markers_enabled() else None
     if marker is not None:
         if _staging_enabled():
             try:

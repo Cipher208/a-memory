@@ -106,6 +106,22 @@ async def test_marker_routes_to_staged_proposal(ensure_schema: Path) -> None:
     assert '"importance": 0.95' in rows[0][2]
 
 
+async def test_dream_markers_toggle_disabled_falls_to_heuristics(
+    ensure_schema: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """staging.dream_markers=false → marker text takes the regular heuristic path."""
+    import hooks.external as ext
+
+    monkeypatch.setattr(ext, "_dream_markers_enabled", lambda: False)
+    mem = _FakeMem()
+    result = await ext.auto_save_text(mem, _FakeGraph(), user_id="u1", text="DREAM: memory: важное решение о стеке")
+    assert "dream" not in result
+    conn = sqlite3.connect(connection_manager.base_dir / "memory.db")
+    rows = conn.execute("SELECT count(*) FROM mutation_proposals").fetchone()[0]
+    conn.close()
+    assert rows == 0
+
+
 async def test_skill_marker_also_writes_l3_episode(ensure_schema: Path) -> None:
     from hooks.external import auto_save_text
 
