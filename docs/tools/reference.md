@@ -164,7 +164,7 @@ Legacy granular operations behind the primitives. Grouped by domain.
 | `memory_graph_add` | Add a node (`content`, `node_type`, `tags`); type maps to domain hooks (error/decision/personality/emotion). |
 | `memory_graph_query` | Query by tag or node type. |
 | `memory_graph_nodes` | List nodes (optionally by type), highest confidence first. |
-| `memory_graph_edges` | List edges (optionally outgoing from one node) with both endpoint contents. |
+| `memory_graph_edges` | List edges (optionally for one node: `direction` = `out` outgoing (default), `in` backlinks, `both`) with both endpoint contents. |
 
 ### Wiki
 
