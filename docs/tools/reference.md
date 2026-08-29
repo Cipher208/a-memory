@@ -161,7 +161,7 @@ Legacy granular operations behind the primitives. Grouped by domain.
 
 | Tool | Description |
 |------|-------------|
-| `memory_graph_add` | Add a node (`content`, `node_type`, `tags`); type maps to domain hooks (error/decision/personality/emotion). |
+| `memory_graph_add` | Add a node (`content`, `node_type`, `tags`); type maps to domain hooks (error/decision/personality/emotion). Social types (`person`, `organization`) dedup per user — re-add returns the existing node. Optional `relates_to` (node_id) + `relation` (`knows`, `works_with`, `family_of`, `friend_of`, `met`, `mentions`) create an edge in the same call. |
 | `memory_graph_query` | Query by tag or node type. |
 | `memory_graph_nodes` | List nodes (optionally by type), highest confidence first. |
 | `memory_graph_edges` | List edges (optionally for one node: `direction` = `out` outgoing (default), `in` backlinks, `both`) with both endpoint contents. |
