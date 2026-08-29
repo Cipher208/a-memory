@@ -36,8 +36,17 @@ def ensure_schema(fresh_dir: Path) -> Path:
             memory_kind TEXT, expires_at REAL, source TEXT DEFAULT 'manual', metadata TEXT
         );
         CREATE TABLE IF NOT EXISTS archived_memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, content TEXT,
-            memory_type TEXT, importance REAL, original_id INTEGER, reason TEXT, archived_at REAL
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            original_id INTEGER, content TEXT NOT NULL,
+            memory_type TEXT, importance REAL,
+            archive_reason TEXT NOT NULL,
+            archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS memory_transitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+            kind TEXT NOT NULL, from_ref TEXT NOT NULL, to_ref TEXT NOT NULL,
+            reason TEXT, ts REAL NOT NULL
         );
     """)
     now = time.time()
