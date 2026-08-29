@@ -14,6 +14,7 @@ from mcp_server.endpoints.dashboard import DashboardEndpoints
 from mcp_server.endpoints.auth import AuthEndpoints
 from mcp_server.endpoints.backup import BackupEndpoints
 from mcp_server.endpoints.system import SystemEndpoints
+from mcp_server.endpoints.hooks import HooksEndpoints
 
 
 def create_app(mcp: MCPServer, ctx: AppContext) -> Starlette:
@@ -30,6 +31,7 @@ def create_app(mcp: MCPServer, ctx: AppContext) -> Starlette:
     auth = AuthEndpoints(api_limiter)
     backup = BackupEndpoints(api_limiter)
     system = SystemEndpoints(api_limiter)
+    hooks = HooksEndpoints(ctx, api_limiter)
 
     app = Starlette(
         routes=[
@@ -47,6 +49,8 @@ def create_app(mcp: MCPServer, ctx: AppContext) -> Starlette:
             Route("/api/auth/create", auth.auth_create, methods=["POST"]),
             Route("/api/backup/trigger", backup.backup_trigger, methods=["POST"]),
             Route("/api/backup/list", backup.backup_list),
+            Route("/api/hooks/{event}", hooks.hooks_event, methods=["POST"]),
+            Route("/api/context-inject", hooks.context_inject, methods=["POST"]),
             Route("/metrics", system.metrics_endpoint),
             Route("/metrics/json", system.metrics_json),
             Mount("/", app=mcp.streamable_http_app()),
