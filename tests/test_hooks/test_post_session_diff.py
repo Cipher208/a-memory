@@ -16,10 +16,12 @@ if TYPE_CHECKING:
 
 @pytest.fixture()
 def fresh_dir(tmp_path: Path) -> Path:
+    original = connection_manager.base_dir
     connection_manager.base_dir = tmp_path
     connection_manager._conns.clear()
     yield tmp_path
     connection_manager._conns.clear()
+    connection_manager.base_dir = original
 
 
 @pytest.fixture()

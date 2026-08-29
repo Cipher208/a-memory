@@ -26,10 +26,12 @@ BELOW_TEXT = "ок"  # len < 20 → score 0
 @pytest.fixture()
 def fresh_dir(tmp_path: Path) -> Path:
     """Redirect ariel's connection_manager to a tmp dir for one test."""
+    original = connection_manager.base_dir
     connection_manager.base_dir = tmp_path
     connection_manager._conns.clear()
     yield tmp_path
     connection_manager._conns.clear()
+    connection_manager.base_dir = original
 
 
 @pytest.fixture()

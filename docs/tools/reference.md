@@ -251,6 +251,7 @@ Returns a dict with `perspective`, `layer`, `wiki_type`, `pages` (list of `{titl
 | `memory_search` | Hybrid search over RAG + Wiki with `strategy` and `sources` selection. |
 | `memory_cleanup` | Maintenance sweep: dedup core, compress episodes, clean dream buffer/audit/backup/saga, run forgetting compaction. |
 | `memory_lucidity_purge` | Emergency purge of everything newer than N hours (L4, L3, audit log, graph, staging). |
+| `memory_watch` | Operator CRUD over `watch_rules` (introspection of the rules ariel's `auto_save_text` already applies — no new behavior). `action="list"` returns `{id, name, trigger, predicate, action, enabled, hits_24h}`; `add` accepts `name, trigger, predicate_json, action_kind`; `disable` and `delete` take `rule_id`. Predicate keys are whitelisted (`min_importance`, `l4_min_importance`, `keywords`, `sender`). |
 | `memory_backup` | Backup management: `status` \| `now` \| `list` \| `restore`. |
 | `memory_saga` | Run compensation sagas (`consolidate` \| `backup`) with auto-rollback. |
 | `memory_data` | Per-user export/import of memory data. |
