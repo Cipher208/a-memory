@@ -99,16 +99,23 @@ async def auto_save_text(
     result["saved_graph"] = True
     if score >= 0.8:
         if _staging_enabled():
-            from features.staging import propose
+            try:
+                from features.staging import propose
 
-            await propose(
-                "auto_save",
-                "core_write",
-                user_id,
-                "user",
-                {"key": "auto_save", "value": text[:500], "importance": score},
-            )
-            result["staged_l4"] = True
+                await propose(
+                    "auto_save",
+                    "core_write",
+                    user_id,
+                    "user",
+                    {"key": "auto_save", "value": text[:500], "importance": score},
+                )
+                result["staged_l4"] = True
+            except Exception:
+                # Bookkeeping must never lose the memory: if the proposals table
+                # is missing (mis-migration), fall back to the direct write.
+                logger.exception("staging propose failed — falling back to direct L4 write")
+                await mem.remember("auto_save", text[:500], score)
+                result["saved_l4"] = True
         else:
             await mem.remember("auto_save", text[:500], score)
             result["saved_l4"] = True

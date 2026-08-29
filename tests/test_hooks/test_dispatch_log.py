@@ -50,6 +50,14 @@ def ensure_schema(fresh_dir: Path) -> Path:
             saved_graph INTEGER NOT NULL DEFAULT 0,
             created_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS mutation_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL, kind TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT 'default', layer TEXT NOT NULL DEFAULT 'user',
+            payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            proposed_at REAL NOT NULL, expires_at REAL NOT NULL,
+            decided_at REAL, decided_by TEXT, result_ref TEXT
+        );
     """)
     conn.commit()
     conn.close()
