@@ -40,8 +40,17 @@ async def memory_hook(
         Handler results dict; unknown event raises ValueError (MCP error).
 
     """
+    from hooks.external import KNOWN_EVENTS, dispatch_event
+    from mcp_server.tools.base import _get_graph, _get_memory, _get_rag
+
+    if event not in KNOWN_EVENTS:
+        raise ValueError(f"unknown event: {event!r}. Must be one of {sorted(KNOWN_EVENTS)}")
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
-    from hooks.external import dispatch_event
-
-    return await dispatch_event(app, event, layer, user_id, dict(payload or {}))
+    mem = _get_memory(app, layer, user_id)
+    graph = _get_graph(app, layer)
+    try:
+        rag = _get_rag(app, layer)
+    except Exception:
+        rag = None
+    return await dispatch_event(event, layer, user_id, dict(payload or {}), mem, graph, rag)

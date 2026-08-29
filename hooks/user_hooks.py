@@ -174,11 +174,10 @@ class UserHooks:
         """Cold start: return the critical inject block (same computation as /api/context-inject)."""
         from features.inject import build_inject_blocks
 
-        app = ctx.get("_app")
-        if app is None:
-            return {"blocks": [], "error": "no_app_context"}
+        if mem is None:
+            return {"blocks": [], "error": "no_mem"}
         budget = int(ctx.get("budget", 2000))
-        blocks = await build_inject_blocks(app, "user", ctx.get("user_id", self.user_id), text=ctx.get("text", ""), budget=budget)
+        blocks = await build_inject_blocks(mem, ctx.get("_rag"), ctx.get("user_id", self.user_id), text=ctx.get("text", ""), budget=budget)
         return {"blocks": blocks}
 
     @hook_registry.mark("session_ended", layer="user")

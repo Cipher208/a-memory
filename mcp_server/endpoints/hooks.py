@@ -1,7 +1,9 @@
 """HTTP surfaces for the external event dispatcher (spec S5).
 
 Auth/rate-limit ride the shared helpers; isolation is inherited from the
-per-agent instance (own process + MCP_MEMORY_DATA_DIR).
+per-agent instance (own process + MCP_MEMORY_DATA_DIR). This module resolves
+mem/graph/rag via the layer registry (mcp_server-internal — no cycle) and
+hands the resolved objects to the mcp_server-free dispatcher.
 """
 
 from __future__ import annotations
@@ -18,6 +20,19 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 
+def _resolve_mem_graph_rag(app_ctx: Any, layer: str, user_id: str) -> tuple[Any, Any, Any]:
+    """Resolve layer backends once per request. rag=None when unavailable."""
+    from mcp_server.tools.base import _get_graph, _get_memory, _get_rag
+
+    mem = _get_memory(app_ctx, layer, user_id)
+    graph = _get_graph(app_ctx, layer)
+    try:
+        rag = _get_rag(app_ctx, layer)
+    except Exception:
+        rag = None
+    return mem, graph, rag
+
+
 class HooksEndpoints:
     def __init__(self, app_ctx: Any, rate_limiter: RateLimiter | None):
         self.app_ctx = app_ctx
@@ -30,18 +45,14 @@ class HooksEndpoints:
             return JSONResponse({"error": ERROR_RATE_LIMIT}, status_code=429)
         event = request.path_params["event"]
         body = await request.json()
-        from hooks.external import dispatch_event
+        from hooks.external import KNOWN_EVENTS, dispatch_event
 
-        try:
-            result = await dispatch_event(
-                self.app_ctx,
-                event,
-                body.get("layer", "user"),
-                body.get("user_id", "default"),
-                body.get("payload", {}) or {},
-            )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        if event not in KNOWN_EVENTS:
+            return JSONResponse({"error": f"unknown event: {event!r}. Must be one of {sorted(KNOWN_EVENTS)}"}, status_code=400)
+        layer = body.get("layer", "user")
+        user_id = body.get("user_id", "default")
+        mem, graph, rag = _resolve_mem_graph_rag(self.app_ctx, layer, user_id)
+        result = await dispatch_event(event, layer, user_id, body.get("payload", {}) or {}, mem, graph, rag)
         return JSONResponse({"event": event, "result": result})
 
     async def context_inject(self, request: Request) -> JSONResponse:
@@ -55,9 +66,10 @@ class HooksEndpoints:
         from features.inject import build_inject_blocks
 
         budget = int(body.get("budget") or config.get("inject", "token_budget", default=2000))
+        mem, _graph, rag = _resolve_mem_graph_rag(self.app_ctx, body.get("layer", "user"), body.get("user_id", "default"))
         blocks = await build_inject_blocks(
-            self.app_ctx,
-            body.get("layer", "user"),
+            mem,
+            rag,
             body.get("user_id", "default"),
             text=body.get("text", ""),
             budget=budget,

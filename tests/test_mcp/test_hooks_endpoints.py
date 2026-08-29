@@ -35,7 +35,6 @@ async def test_hooks_event_unknown_event_400(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.asyncio
 async def test_context_inject_returns_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MCP_AUTH_DISABLED", "1")
-    import features.inject as inj
 
     async def _empty_get_all(user_id: str, limit: int = 50) -> list[Any]:
         return []
@@ -48,21 +47,19 @@ async def test_context_inject_returns_blocks(monkeypatch: pytest.MonkeyPatch) ->
         async def search(self, query: str, user_id: str = "default", limit: int = 5, **kw: Any) -> list[dict[str, Any]]:
             return [{"content": "c", "score": 0.5}]
 
-    orig_mem, orig_rag = inj._resolve_mem, inj._resolve_rag
-    inj._resolve_mem = lambda app, layer, user_id: _FakeMem()  # type: ignore[assignment]
-    inj._resolve_rag = lambda app, layer: _FakeRag()  # type: ignore[assignment]
-    try:
-        ep = HooksEndpoints(_App(), None)
+    monkeypatch.setattr(
+        "mcp_server.endpoints.hooks._resolve_mem_graph_rag",
+        lambda app, layer, user_id: (_FakeMem(), None, _FakeRag()),
+    )
+    ep = HooksEndpoints(_App(), None)
 
-        class _Req:
-            headers: dict[str, str] = {}
+    class _Req:
+        headers: dict[str, str] = {}
 
-            async def json(self) -> dict[str, Any]:
-                return {"user_id": "u1", "layer": "user", "text": "q", "budget": 500}
+        async def json(self) -> dict[str, Any]:
+            return {"user_id": "u1", "layer": "user", "text": "q", "budget": 500}
 
-        resp = await ep.context_inject(_Req())  # type: ignore[arg-type]
-        assert resp.status_code == 200
-        body = resp.body if isinstance(resp.body, bytes) else b"{}"
-        assert b"blocks" in body
-    finally:
-        inj._resolve_mem, inj._resolve_rag = orig_mem, orig_rag  # type: ignore[assignment]
+    resp = await ep.context_inject(_Req())  # type: ignore[arg-type]
+    assert resp.status_code == 200
+    body = resp.body if isinstance(resp.body, bytes) else b"{}"
+    assert b"blocks" in body

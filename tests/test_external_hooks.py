@@ -27,13 +27,11 @@ def test_known_events_exact_set() -> None:
 @pytest.mark.asyncio
 async def test_dispatch_unknown_event_raises() -> None:
     with pytest.raises(ValueError, match="unknown event"):
-        await dispatch_event(app=None, event="nope", layer="user", user_id="u1", payload={})
+        await dispatch_event(event="nope", layer="user", user_id="u1", payload={}, mem=None, graph=None)
 
 
 @pytest.mark.asyncio
 async def test_dispatch_fires_hook_by_event_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    from types import SimpleNamespace
-
     from hooks.registry import HookRegistry
 
     reg = HookRegistry()
@@ -50,8 +48,7 @@ async def test_dispatch_fires_hook_by_event_name(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("hooks.registry.hook_registry", reg)
 
     fake_mem, fake_graph = _FakeMem(), _FakeGraph()
-    app = SimpleNamespace(mm=SimpleNamespace(user_memory=lambda uid: fake_mem), user_graph=fake_graph)
-    result = await dispatch_event(app=app, event="new_message", layer="user", user_id="u1", payload={"text": "hi"})
+    result = await dispatch_event(event="new_message", layer="user", user_id="u1", payload={"text": "hi"}, mem=fake_mem, graph=fake_graph)
     assert result["results"] == [{"score": 0.9}]
     assert seen["text"] == "hi" and seen["mem"] is fake_mem
 
@@ -137,19 +134,7 @@ async def test_build_inject_blocks_shapes_and_budget() -> None:
             super().__init__()
             self.l4 = _FakeL4()
 
-    class _App:
-        pass
-
-    app = _App()
-    import features.inject as inj
-
-    orig_mem, orig_rag = inj._resolve_mem, inj._resolve_rag
-    inj._resolve_mem = lambda app, layer, user_id: _FakeMem2()  # type: ignore[assignment]
-    inj._resolve_rag = lambda app, layer: _FakeRag()  # type: ignore[assignment]
-    try:
-        blocks = await build_inject_blocks(app, "user", "u1", text="поиск", budget=500)
-    finally:
-        inj._resolve_mem, inj._resolve_rag = orig_mem, orig_rag  # type: ignore[assignment]
+    blocks = await build_inject_blocks(_FakeMem2(), _FakeRag(), "u1", text="поиск", budget=500)
     kinds = [b["kind"] for b in blocks]
     assert kinds[0] == "relevant" and len([k for k in kinds if k == "relevant"]) == 2
     assert "important" in kinds  # only the 0.9 fact
