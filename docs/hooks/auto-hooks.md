@@ -42,7 +42,7 @@ agent runs its own ariel instance with its own `MCP_MEMORY_DATA_DIR`.
 | `session_ended` | harness session end | saves `payload.summary` to L3 |
 | `new_message` | autohooks daemon | `evaluate_importance` → threshold-gated saves |
 | `auto_save_candidate` | daemon/harness | same pipeline as `new_message` |
-| `post_context_compression` | harness | rehydrate candidates via retrieval |
+| `post_context_compression` | harness (compaction boundary) | drift log row + rehydrate candidates via retrieval |
 | `context_threshold` | harness | thin advice: eviction candidates |
 | `memory_pressure` | harness | thin advice: compression candidates |
 | `post_session_diff` | harness session end (C1.10) | materializes save gaps as L3 `diff_gap` episodes |
@@ -69,6 +69,30 @@ message bypass the importance heuristic and go through staging at importance
 0.95 (`skill:` also writes an L3 `dream_skill` episode for the future skill
 store). Toggle: `staging.dream_markers` (default `true`).
 
+## Compaction rehydrate (D3.5)
+
+Compaction-aware memory: ariel learns that an agent's context was compacted
+and rehydrates the critical set instead of silently losing it.
+
+- **Drift log** — every `post_context_compression` dispatch writes a
+  `compaction_events` row (user, old/new session ids, reason, summary).
+- **MiMoCode** — the `ariel-inject` plugin wires real fork hooks:
+  `experimental.session.compacting` appends the ariel critical set to the
+  summarizer prompt (salvage); the `session.compacted` event dispatches the
+  drift and arms a one-shot `[ariel rehydrate]` block delivered via
+  `experimental.chat.system.transform`; `session.post` fires the debounced
+  `post_session_diff`.
+- **Hermes** — the gateway emits a `compaction` event at the compression
+  boundary; the `ariel-compaction` hook dir dispatches it to ariel. Because
+  Hermes rotates the session id on compression, the rotated session's
+  session-start inject carries the rehydrate block.
+- **Inject block** — `build_inject_blocks` emits a `rehydrate` block (important
+  L4 facts, score 0.9) when a compaction happened within
+  `rehydrate.window_hours` (default 6h); `rehydrate.enabled = false` turns it
+  off. `autohooks inject --blocks rehydrate` renders just this block.
+- `dispatch --payload '{"old_session_id": …, "reason": …}'` passes event
+  context through the CLI.
+
 ## The autohooks runtime
 
 `python -m autohooks` (package `autohooks/`) — per-agent daemon + inject CLI.
@@ -78,6 +102,7 @@ the full wiring guide, config schema and troubleshooting.
 ## Observability
 
 - `memory_dispatch_log` — one row per save path (substrate for gaps).
+- `compaction_events` — one row per detected compaction (drift log for rehydrate).
 - `memory_watch` — operator CRUD over the rules ariel applies.
 - `memory_report_card(period_hours=24)` — digest: proposal decisions,
   save-tier sums, open gaps, dream markers.

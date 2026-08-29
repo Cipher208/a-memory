@@ -79,6 +79,8 @@ Knobs added by Phase C:
 | `staging.enabled` | true | risk-tier staging: L4 saves / consolidation promos / archive sweeps → `mutation_proposals`; false = direct writes |
 | `staging.expire_days` | 7 | proposal lazy expiry |
 | `staging.dream_markers` | true | `DREAM: memory:/fact:/skill:` marker routing |
+| `rehydrate.enabled` | true | compaction drift log + rehydrate inject block (D3.5) |
+| `rehydrate.window_hours` | 6.0 | compaction older than this no longer rehydrates |
 | `inject.token_budget` | 2000 | critical-set inject cap |
 | `inject.important_min` | 0.8 | L4 facts in inject block |
 | `ARIEL_EXPOSE=primitives,review` | `primitives` | opt-in tier exposing `memory_proposals` + `memory_report_card` to agents |
