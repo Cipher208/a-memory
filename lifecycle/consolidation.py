@@ -5,9 +5,11 @@ Consolidation Engine — L1→L2→L3→L4 memory promotion (async)
 Type-aware promotion with memory_kind support.
 """
 
+import contextlib
 import json
 from typing import Any
 
+from lifecycle.transitions import record_transition
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.memory_types import MemoryKind, get_policy, validate_kind
@@ -59,7 +61,7 @@ class ConsolidationEngine:
                 continue
 
             key = "staging_{}".format(content[:30].replace(" ", "_").lower())
-            await cm.save(
+            entry_id = await cm.save(
                 user_id,
                 key,
                 content,
@@ -68,6 +70,9 @@ class ConsolidationEngine:
                 source="staging_promotion",
                 metadata=_parent_refs(f"event:{item['event_id']}" if item.get("event_id") else None),
             )
+            with contextlib.suppress(Exception):
+                from_ref = f"event:{item['event_id']}" if item.get("event_id") else f"staging:{key}"
+                await record_transition(self._cm, user_id, "staging", from_ref, "l4", f"core:{entry_id}", "staging_promotion")
             promoted += 1
 
         return {"promoted": promoted, "skipped": skipped}
@@ -102,7 +107,7 @@ class ConsolidationEngine:
             summary = row["summary"]
             weight = row["emotional_weight"]
             key = "ep_{}".format(summary[:30].replace(" ", "_").lower())
-            await cm.save(
+            entry_id = await cm.save(
                 user_id,
                 key,
                 summary[:200],
@@ -111,6 +116,8 @@ class ConsolidationEngine:
                 source="episode_promotion",
                 metadata=_parent_refs(f"episode:{row['episode_id']}"),
             )
+            with contextlib.suppress(Exception):
+                await record_transition(self._cm, user_id, "episode", f"episode:{row['episode_id']}", "l4", f"core:{entry_id}", "episode_promotion")
             consolidated += 1
         return consolidated
 

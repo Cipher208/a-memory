@@ -4,6 +4,7 @@ from __future__ import annotations
 MemoryCompressor — async dedup and compression
 """
 
+import contextlib
 import logging
 import time
 
@@ -70,7 +71,7 @@ class MemoryCompressor:
         am = ArchivedMemories(cm=self._cm)
         await am._init_db()
         for r in doomed:
-            await am.archive(
+            archived_id = await am.archive(
                 user_id=user_id,
                 content=r["summary"],
                 memory_type="episode",
@@ -78,6 +79,12 @@ class MemoryCompressor:
                 original_id=int(r["episode_id"]),
                 reason="compression_low_weight",
             )
+            with contextlib.suppress(Exception):
+                from lifecycle.transitions import record_transition
+
+                await record_transition(
+                    self._cm, user_id, "episode", f"episode:{r['episode_id']}", "archived", f"archived:{archived_id}", "compression_low_weight"
+                )
 
         cursor = await conn.execute(
             "DELETE FROM episodes WHERE user_id=? AND layer=? AND emotional_weight < ? AND created_at < ?",

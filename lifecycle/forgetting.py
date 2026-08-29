@@ -4,6 +4,7 @@ from __future__ import annotations
 Forgetting System — type-aware decay, archiving, compression
 """
 
+import contextlib
 import logging
 import time
 from pathlib import Path
@@ -131,7 +132,7 @@ class ForgettingSystem:
         am = ArchivedMemories(cm=self._cm)
         count = 0
         for r in rows:
-            await am.archive(
+            archived_id = await am.archive(
                 user_id=r["user_id"],
                 content="{}={}".format(r["key"], r["value"]),
                 memory_type=r["memory_kind"] or "fact",
@@ -139,6 +140,18 @@ class ForgettingSystem:
                 original_id=r["entry_id"],
                 reason="expired" if (r["expires_at"] and r["expires_at"] < now) else f"inactive_{self.archive_days}d",
             )
+            with contextlib.suppress(Exception):
+                from lifecycle.transitions import record_transition
+
+                await record_transition(
+                    self._cm,
+                    r["user_id"],
+                    "l4",
+                    f"core:{r['entry_id']}",
+                    "archived",
+                    f"archived:{archived_id}",
+                    "expired" if (r["expires_at"] and r["expires_at"] < now) else f"inactive_{self.archive_days}d",
+                )
             count += 1
         return count
 
