@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp.server.mcpserver import Context
+from mcp.server.mcpserver import Context  # noqa: TC002 — annotation eval at registration requires runtime import
 from mcp_server.registry import _get_ctx
 
-from mcp_server.tools.base import _validate_layer  # noqa: TC001 — runtime annotation eval
+from mcp_server.tools.base import _validate_layer
 
 
 async def memory_hook(
@@ -38,6 +38,7 @@ async def memory_hook(
 
     Returns:
         Handler results dict; unknown event raises ValueError (MCP error).
+
     """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
