@@ -22,6 +22,7 @@ class HookHandler(BaseModel):
     layer: str
     is_async: bool
     takes_mem: bool
+    takes_graph: bool = False
     instance: Any | None = None
 
 
@@ -45,6 +46,7 @@ class HookRegistry:
                     layer=meta["layer"],
                     is_async=meta["is_async"],
                     takes_mem=meta["takes_mem"],
+                    takes_graph=meta.get("takes_graph", False),
                     instance=obj,
                 )
                 self.register(handler)
@@ -57,12 +59,13 @@ class HookRegistry:
                 "layer": layer,
                 "is_async": asyncio.iscoroutinefunction(func),
                 "takes_mem": "mem" in sig.parameters,
+                "takes_graph": "graph" in sig.parameters,
             }
             return func
 
         return decorator
 
-    async def fire(self, hook_name: str, layer: str, context: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+    async def fire(self, hook_name: str, layer: str, context: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
         # Hot path optimization: check if we should skip
         # Note: In production we use config.is_hook_enabled
         try:
@@ -84,7 +87,12 @@ class HookRegistry:
                 continue
             fired_count += 1
             try:
-                res = h.func(context, mem=mem) if h.takes_mem else h.func(context)
+                kwargs: dict[str, Any] = {}
+                if h.takes_mem:
+                    kwargs["mem"] = mem
+                if h.takes_graph:
+                    kwargs["graph"] = graph
+                res = h.func(context, **kwargs) if kwargs else h.func(context)
                 if h.is_async:
                     res = await res
                 results.append(res)

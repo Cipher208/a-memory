@@ -109,9 +109,9 @@ async def test_remember_triggers_hooks(app):
 
     orig = hook_registry.fire
 
-    async def track(name, layer, ctx, mem=None):
+    async def track(name, layer, ctx, mem=None, graph=None):
         fired.add(name)
-        return await orig(name, layer, ctx, mem=mem)
+        return await orig(name, layer, ctx, mem=mem, graph=graph)
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(hook_registry, "fire", track)
@@ -302,9 +302,9 @@ async def test_hook_dispatch_all_tools(app):
 
     orig = hook_registry.fire
 
-    async def track(name, layer, ctx, mem=None):
+    async def track(name, layer, ctx, mem=None, graph=None):
         fired.add(name)
-        return await orig(name, layer, ctx, mem=mem)
+        return await orig(name, layer, ctx, mem=mem, graph=graph)
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(hook_registry, "fire", track)

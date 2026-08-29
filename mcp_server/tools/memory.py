@@ -71,23 +71,23 @@ async def memory_remember(
                 importance,
             ),
         )
-        await _fire_post_remember_hooks(layer, user_id, key, value, mem)
+        await _fire_post_remember_hooks(layer, user_id, key, value, mem, graph)
     else:
         entry_id = await mem.remember(key, value, importance)
         node_id = await graph.add_node(user_id, value, "fact", [], importance)
-        await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
-        await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
+        await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem, graph=graph)
+        await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem, graph=graph)
 
     _invalidate_cache(layer, user_id)
     return RememberResult(status="ok", entry_id=entry_id, graph_node_id=node_id).dict()
 
 
-async def _fire_post_remember_hooks(layer: str, user_id: str, key: str, value: str, mem: Any) -> None:
-    await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
+async def _fire_post_remember_hooks(layer: str, user_id: str, key: str, value: str, mem: Any, graph: Any = None) -> None:
+    await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem, graph=graph)
     # User-emotion analysis on agent texts is semantically wrong; agent
     # self-reflection has its own hooks (error/decision/personality/emotion_context).
     if layer == "user":
-        await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
+        await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem, graph=graph)
     if "error" in key.lower():
         await _fire_hook("error_occurred", layer, {"key": key, "value": value, "user_id": user_id})
     elif "decision" in key.lower():

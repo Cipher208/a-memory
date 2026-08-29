@@ -154,12 +154,12 @@ def _validate_layer(layer: str) -> str:
     return normalized
 
 
-async def _fire_hook(hook_name: str, layer: str, context: dict[str, Any], mem: Any = None) -> dict[str, Any]:
+async def _fire_hook(hook_name: str, layer: str, context: dict[str, Any], mem: Any = None, graph: Any = None) -> dict[str, Any]:
     """Fire a hook safely — logs errors but never breaks the tool."""
     from hooks.registry import hook_registry
 
     try:
-        return await hook_registry.fire(hook_name, layer, context, mem=mem)
+        return await hook_registry.fire(hook_name, layer, context, mem=mem, graph=graph)
     except Exception as e:
         logger.warning(f"Hook {hook_name} failed: {e}")
         return {"error": str(e)}
