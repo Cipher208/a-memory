@@ -77,6 +77,30 @@ async def build_inject_blocks(
             blocks.append({"kind": "gap", "content": content, "score": 0.5})
             remaining -= cost
 
+    # rehydrate block: compaction drift recovery (D3.5 S4)
+    try:
+        from features.rehydrate import rehydrate_enabled, recent_compaction
+
+        compaction = None
+        if rehydrate_enabled():
+            window = float(config.get("rehydrate", "window_hours", default=6.0))
+            compaction = recent_compaction(user_id, window)
+    except Exception:
+        compaction = None
+    if compaction is not None:
+        try:
+            important_min = float(config.get("inject", "important_min", default=0.8))
+            facts = await mem.l4.get_all(user_id, 50)
+            top = [f for f in facts if f.importance >= important_min]
+        except Exception:
+            top = []
+        if top:
+            content = "; ".join(f"{f.key}={f.value[:80]}" for f in top)
+            cost = estimate_tokens(content)
+            if cost <= remaining:
+                blocks.append({"kind": "rehydrate", "content": content, "score": 0.9})
+                remaining -= cost
+
     # pending proposals: staged mutations awaiting review (C1.11 S5)
     try:
         pending = await _pending_proposals(user_id)

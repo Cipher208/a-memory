@@ -44,6 +44,13 @@ def log_compaction(
         return False
 
 
+def rehydrate_enabled() -> bool:
+    """Gate knob: rehydrate.enabled (default true)."""
+    from config import config
+
+    return bool(config.get("rehydrate", "enabled", default=True))
+
+
 def recent_compaction(user_id: str, window_hours: float) -> dict[str, Any] | None:
     """Newest compaction row for user within the window, or None."""
     cutoff = time.time() - window_hours * 3600
