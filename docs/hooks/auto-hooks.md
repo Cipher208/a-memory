@@ -82,10 +82,17 @@ and rehydrates the critical set instead of silently losing it.
   drift and arms a one-shot `[ariel rehydrate]` block delivered via
   `experimental.chat.system.transform`; `session.post` fires the debounced
   `post_session_diff`.
-- **Hermes** — the gateway emits a `compaction` event at the compression
-  boundary; the `ariel-compaction` hook dir dispatches it to ariel. Because
-  Hermes rotates the session id on compression, the rotated session's
-  session-start inject carries the rehydrate block.
+- **Hermes** — **native `MemoryProvider` plugin** (`~/.hermes/plugins/ariel/`,
+  `memory.provider: ariel`): `system_prompt_block` carries the critical set,
+  `sync_turn` pushes every turn (no conversation-tailing needed for turn
+  capture), `on_pre_compress` logs the drift and feeds the critical set into
+  the compression summary prompt, `on_session_end` fires the diff,
+  `on_memory_write` mirrors MEMORY.md writes, `queue_prefetch`/`prefetch`
+  give per-turn recall. The plugin is pure-stdlib over the ariel venv CLI —
+  `hermes update` venv rebuilds cannot break it. The earlier file-hook layer
+  (`~/.hermes/hooks/ariel-autohooks`, `ariel-compaction`) and the two ariel
+  core commits (gateway compaction emit, prompt-builder slot) were retired
+  after the plugin went live.
 - **Inject block** — `build_inject_blocks` emits a `rehydrate` block (important
   L4 facts, score 0.9) when a compaction happened within
   `rehydrate.window_hours` (default 6h); `rehydrate.enabled = false` turns it
