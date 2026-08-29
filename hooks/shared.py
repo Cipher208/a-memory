@@ -89,3 +89,12 @@ async def consolidation(
     else:
         result = await engine.consolidate_staging(user_id, staging)
     return {"action": final_key, **result}
+
+
+async def cls_replay_hook(ctx: dict[str, Any], user_id: str = DEFAULT_USER) -> dict[str, Any]:
+    """Nightly 2nd phase: boost L4 facts confirmed by recall in the window."""
+    from features.replay import cls_replay
+    from shared.connection import connection_manager
+
+    layer = ctx.get("layer", "user")
+    return await cls_replay(connection_manager, user_id, layer=layer)

@@ -71,6 +71,15 @@ async def dream(
     except Exception as exc:
         logger.warning("dream: recall telemetry failed: %s", exc)
 
+    # Recall confirmation (non-fatal): mark core facts as actually used.
+    from features.replay import record_recall_useful
+
+    try:
+        core_hits = [(r["entry_id"], r.get("title", "")) for r in results if r.get("source") == "core" and r.get("entry_id")]
+        await record_recall_useful(app.mm._cm, layer, user_id, core_hits)
+    except Exception as exc:
+        logger.warning("dream: recall_useful telemetry failed: %s", exc)
+
     # 3. Hooks
     mem = _get_memory(app, layer, user_id)
     hook_tasks = [

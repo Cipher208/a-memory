@@ -10,6 +10,7 @@ from typing import Any
 from .registry import hook_registry
 from .shared import (
     auto_context,
+    cls_replay_hook,
     conflict_resolver,
     consolidation,
     dream_buffer_staging,
@@ -80,7 +81,12 @@ class UserHooks:
 
     @hook_registry.mark("nightly", layer="user")
     async def _nightly(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
+        result = {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
+        try:
+            result["cls_replay"] = await cls_replay_hook(ctx, self.user_id)
+        except Exception:
+            pass
+        return result
 
     @hook_registry.mark("importance_gate", layer="user")
     async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:
