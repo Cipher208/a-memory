@@ -99,6 +99,30 @@ class ForgettingSystem:
             logger.exception("Archive failed")
             return 0
 
+    async def archive_entries(self, ids: list[int]) -> int:
+        """Archive + delete exactly these core entry ids (C1.11 staged apply).
+
+        Best-effort: ids that no longer exist are skipped. Pins the proposal's
+        id list — no re-scan, no drift between propose-time and apply-time.
+        """
+        if not ids:
+            return 0
+        try:
+            conn = await self._cm.get(DB_NAME)
+            now = time.time()
+            placeholders = ",".join(["?"] * len(ids))
+            cur = await conn.execute(f"SELECT * FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
+            rows = await cur.fetchall()
+            if not rows:
+                return 0
+            archived_count = await self._perform_archiving(rows, now)
+            await self._delete_archived(conn, rows)
+            await conn.commit()
+            return archived_count
+        except Exception:
+            logger.exception("archive_entries failed")
+            return 0
+
     async def _find_archivable_entries(self, conn: Any, now: float) -> list[sqlite3.Row]:
         # Expired goals/todos/commitments
         expired = await (
