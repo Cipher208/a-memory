@@ -26,10 +26,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         p.add_argument("--config", required=True, help="path to <agent>.yaml")
     sub.choices["inject"].add_argument("--text", default="", help="current message for relevance ranking")
     sub.choices["inject"].add_argument("--format", default="md", choices=["md", "json"])
+    sub.choices["inject"].add_argument("--blocks", default="", help="comma-separated block kinds to keep (empty = all)")
     sub.choices["daemon"].add_argument("--once", action="store_true", help="one poll iteration (debug)")
     sub.choices["dispatch"].add_argument("--event", required=True, help="KNOWN_EVENTS name to fire")
     sub.choices["dispatch"].add_argument("--since", default="0", help="since timestamp for diff-style events")
     sub.choices["dispatch"].add_argument("--until", default="0", help="until timestamp for diff-style events")
+    sub.choices["dispatch"].add_argument(
+        "--payload", default="{}", help="JSON object merged into the event context"
+    )
     return parser.parse_args(argv)
 
 
@@ -91,6 +95,14 @@ def main(argv: list[str] | None = None) -> int:
     if ns.command == "dispatch":
         from hooks.external import dispatch_event
 
+        try:
+            extra = json.loads(ns.payload) if ns.payload else {}
+        except json.JSONDecodeError as e:
+            logger.error("invalid --payload JSON: %s", e)
+            return 2
+        if not isinstance(extra, dict):
+            logger.error("--payload must be a JSON object")
+            return 2
         since = float(ns.since) if ns.since else 0.0
         until = float(ns.until) if ns.until else 0.0
         result = asyncio.run(
@@ -98,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
                 ns.event,
                 cfg.layer,
                 cfg.user_id,
-                {"since": since, "until": until},
+                {"since": since, "until": until, **extra},
                 mem,
                 graph,
                 rag,
@@ -110,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from autohooks.inject import run_inject
 
-    out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format))
+    out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format, blocks=ns.blocks))
     _close_ariel()
     print(out)
     return 0

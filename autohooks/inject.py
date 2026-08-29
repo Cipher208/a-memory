@@ -43,8 +43,12 @@ async def run_inject(
     *,
     dispatch: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     budget: int | None = None,
+    blocks: str = "",
 ) -> str:
-    """Dispatch session_started (its handler builds the budget-capped critical set) and render it."""
+    """Dispatch session_started (its handler builds the budget-capped critical set) and render it.
+
+    `blocks` is a comma-separated kind filter (empty = all kinds).
+    """
     from config import config
 
     from hooks.external import dispatch_event
@@ -60,7 +64,10 @@ async def run_inject(
         graph,
         rag,
     )
-    blocks = _collect_blocks(result)
+    blocks_list = _collect_blocks(result)
+    if blocks:
+        keep = {k.strip() for k in blocks.split(",") if k.strip()}
+        blocks_list = [b for b in blocks_list if b.get("kind") in keep]
     if fmt == "json":
-        return json.dumps({"blocks": blocks, "budget": budget}, ensure_ascii=False)
-    return _render_md(blocks)
+        return json.dumps({"blocks": blocks_list, "budget": budget}, ensure_ascii=False)
+    return _render_md(blocks_list)
