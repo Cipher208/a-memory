@@ -115,3 +115,50 @@ class TestMultiSourceRAG:
 
         result = asyncio.run(m.search("test"))
         assert len(result) == 1  # RAG still works
+
+
+class TestGraphExpand:
+    """B1.6: GraphRAG — primary hits expand 1-hop through epi_edges."""
+
+    def test_graph_expand_adds_neighbors(self, tmp_path):
+        import asyncio
+
+        from graph.epistemic import EpistemicGraph
+        from rag.multi_source import MultiSourceRAG
+        from shared.connection import AsyncConnectionManager
+
+        cm = AsyncConnectionManager(base_dir=str(tmp_path))
+        graph = EpistemicGraph(cm=cm, layer="user")
+
+        async def t():
+            await graph.init_db()
+            alice, _ = await graph.find_or_add_entity("u1", "Алиса")
+            acme, _ = await graph.find_or_add_entity("u1", "Яндекс", entity_type="organization")
+            await graph.add_edge(alice, acme, "works_with")
+            m = MultiSourceRAG(FakeRAG(), FakeWiki(), cm=cm)
+            primary = [
+                {
+                    "id": -alice - 3_000_000,
+                    "title": "Graph Node",
+                    "content": "Алиса",
+                    "score": 0.9,
+                    "source": "graph",
+                }
+            ]
+            return await m._expand_graph(primary, "u1")
+
+        expanded = asyncio.run(t())
+        assert any("Яндекс" in r["content"] for r in expanded), f"expanded={expanded!r}"
+        assert any(r["source"] == "graph_expand" for r in expanded)
+        # Original result kept intact
+        assert expanded[0]["source"] == "graph"
+
+    def test_graph_expand_no_cm_no_crash(self):
+        import asyncio
+
+        from rag.multi_source import MultiSourceRAG
+
+        m = MultiSourceRAG(FakeRAG(), FakeWiki(), cm=None)
+        assert asyncio.run(m._expand_graph([{"id": 1, "source": "core", "score": 0.5}], "u1")) == [
+            {"id": 1, "source": "core", "score": 0.5}
+        ]
