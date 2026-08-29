@@ -698,3 +698,36 @@ async def memory_watch(
         return {"status": "ok"}
 
     raise ValueError(f"unknown action: {action!r}")
+
+
+# ─── memory_proposals (Phase C C1.11 S5) ───────────────────────────────────────
+
+
+async def memory_proposals(
+    action: str,
+    *,
+    proposal_id: int = 0,
+    approve: bool = True,
+    status: str = "pending",
+    limit: int = 20,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Review surface for staged mutations (C1.11 S5).
+
+    action: "list" (pending proposals for user_id) | "decide" (apply/reject one
+    proposal via proposal_id + approve). The apply path executes the exact write
+    the direct path would have done; every decision is audit-logged.
+    """
+    app = _get_ctx(ctx)  # live AppContext — passed into decide for core_write apply
+    if action == "list":
+        from features.staging import list_pending
+
+        return {"status": "ok", "proposals": await list_pending(user_id, limit)}
+    if action == "decide":
+        from features.staging import decide
+
+        result = await decide(proposal_id, approve, mem=app)
+        return {"status": "ok", **result}
+    raise ValueError(f"unknown action: {action!r}")

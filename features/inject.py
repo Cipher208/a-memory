@@ -14,6 +14,16 @@ import time
 from typing import Any
 
 
+async def _pending_proposals(user_id: str = "default", limit: int = 5) -> list[Any]:
+    """Indirection for tests; returns pending proposals via features.staging."""
+    try:
+        from features.staging import list_pending
+
+        return await list_pending(user_id, limit)
+    except Exception:
+        return []
+
+
 async def build_inject_blocks(
     mem: Any,
     rag: Any,
@@ -65,6 +75,25 @@ async def build_inject_blocks(
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "gap", "content": content, "score": 0.5})
+            remaining -= cost
+
+    # pending proposals: staged mutations awaiting review (C1.11 S5)
+    try:
+        pending = await _pending_proposals(user_id)
+    except Exception:
+        pending = []
+    if pending:
+        lines = []
+        for p in pending[:5]:
+            payload = p.get("payload", {})
+            gist = str(payload.get("value") or payload.get("ids") or payload.get("items") or "")[:80]
+            age_days = (time.time() - float(p.get("proposed_at", time.time()))) / 86400
+            lines.append(f"#{p['id']} {p['kind']}: {gist} ({age_days:.0f}d)")
+        header = f"{len(pending)} staged mutation(s) await review (expire in 7d). Decide: memory_proposals(action='decide', proposal_id=…, approve=true|false)"
+        content = header + "\n" + "\n".join(lines)
+        cost = estimate_tokens(content)
+        if cost <= remaining:
+            blocks.append({"kind": "proposals", "content": content, "score": 0.6})
             remaining -= cost
 
     important_min = float(config.get("inject", "important_min", default=0.8))
