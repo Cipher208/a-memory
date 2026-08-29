@@ -13,6 +13,7 @@ from .tools.primitives import think, dream, forget, evolve, project
 from .tools.session import memory_session_start, memory_session_end, memory_session_list
 from .tools.episodic import memory_episode_save, memory_episode_recall, memory_episode_list, memory_episode_get
 from .tools.graph import memory_graph_add, memory_graph_query, memory_graph_nodes, memory_graph_edges
+from .tools.hooks import memory_hook
 from .tools.wiki import wiki_add, wiki_search, wiki_list, wiki_delete
 from .tools.wiki_summarize import wiki_summarize
 from .tools.wiki_link import wiki_link
@@ -62,6 +63,7 @@ _register_tools: dict[str, Any] = {
     "memory_cleanup": memory_cleanup,
     "memory_lucidity_purge": memory_lucidity_purge,
     "memory_search": memory_search,
+    "memory_hook": memory_hook,
     "think": think,
     "dream": dream,
     "forget": forget,

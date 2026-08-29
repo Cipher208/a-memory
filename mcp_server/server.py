@@ -29,7 +29,7 @@ STDIO_TRANSPORT: Literal["stdio"] = "stdio"
 
 # Tools agents always see: the universal primitives. Everything else stays
 # reachable through them (and ops via the dashboard HTTP surface).
-PRIMITIVE_TOOLS = frozenset({"think", "dream", "forget", "evolve", "project"})
+PRIMITIVE_TOOLS = frozenset({"think", "dream", "forget", "evolve", "project", "memory_hook"})
 
 
 EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
