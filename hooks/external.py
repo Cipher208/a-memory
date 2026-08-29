@@ -7,7 +7,10 @@ instance (own process + MCP_MEMORY_DATA_DIR).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 KNOWN_EVENTS: frozenset[str] = frozenset(
     {
@@ -40,8 +43,8 @@ async def dispatch_event(app: Any, event: str, layer: str, user_id: str, payload
         from mcp_server.tools.base import _get_rag
 
         context["_rag"] = _get_rag(app, layer)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("rag resolution for external event failed: %s", exc)
     from hooks.registry import hook_registry
 
     return await hook_registry.fire(event, layer, context, mem=mem, graph=graph)

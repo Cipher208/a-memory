@@ -11,7 +11,7 @@ from hooks.external import KNOWN_EVENTS, auto_save_text, dispatch_event
 
 
 def test_known_events_exact_set() -> None:
-    assert KNOWN_EVENTS == frozenset(
+    assert sorted(KNOWN_EVENTS) == sorted(
         {
             "session_started",
             "session_ended",
