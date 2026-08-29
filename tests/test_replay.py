@@ -79,9 +79,7 @@ def test_replay_cap_and_stale_window(tmp_path):
 
     asyncio.run(record_recall_useful(cm, "user", "u1", [(maxed_id, "maxed"), (old_id, "old")]))
     # Backdate the 'old' recall beyond the 24h window
-    asyncio.run(
-        conn.execute("UPDATE audit_log SET timestamp=? WHERE target_id=?", (time.time() - 48 * 3600, str(old_id)))
-    )
+    asyncio.run(conn.execute("UPDATE audit_log SET timestamp=? WHERE target_id=?", (time.time() - 48 * 3600, str(old_id))))
     asyncio.run(conn.commit())
 
     result = asyncio.run(cls_replay(cm, "u1", layer="user", window_hours=24))

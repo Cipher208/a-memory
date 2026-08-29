@@ -4,6 +4,7 @@ from __future__ import annotations
 User Layer Hooks - 12 hooks for user memory events
 """
 
+import contextlib
 from typing import Any
 
 
@@ -82,10 +83,8 @@ class UserHooks:
     @hook_registry.mark("nightly", layer="user")
     async def _nightly(self, ctx: dict[str, Any]) -> dict[str, Any]:
         result = {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
-        try:
+        with contextlib.suppress(Exception):
             result["cls_replay"] = await cls_replay_hook(ctx, self.user_id)
-        except Exception:
-            pass
         return result
 
     @hook_registry.mark("importance_gate", layer="user")

@@ -13,7 +13,7 @@ SECONDS_PER_DAY = 86400.0
 
 
 def actr_activation(now: float, last_access: float, access_count: int, decay: float = 0.5) -> float:
-    """Normalized base-level activation in [0, 1]. Zero accesses -> 0.0."""
+    """Return normalized base-level activation in [0, 1]. Zero accesses -> 0.0."""
     if access_count <= 0:
         return 0.0
     age_days = max(0.0, (now - last_access) / SECONDS_PER_DAY)
