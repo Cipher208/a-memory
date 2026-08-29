@@ -128,6 +128,30 @@ Returns `ProjectResult` (+ `wiki_ref`, `code_map`, decisions/artifacts arrays de
 
 ---
 
+### `memory_hook`
+
+Fires one external lifecycle event into the hook system. This is the **harness transport** (stdio/MCP) for the auto-hooks push model — the agent's harness (or a daemon) calls it on lifecycle moments; both it and `POST /api/hooks/{event}` route through the same dispatcher. Isolation is inherited: each agent instance has its own data dir.
+
+```json
+{ "event": "session_ended", "payload": { "summary": "fixed deploy script" }, "layer": "user", "user_id": "default" }
+```
+
+**Events** (unknown → `ValueError`)
+
+| Event | Payload keys | What ariel does |
+|-------|--------------|-----------------|
+| `session_started` | `text`?, `budget`? | Returns the critical inject block (ACT-R top-5 relevant + recent L1 + important facts, token-capped) |
+| `session_ended` | `summary` | Persists the session summary to L3 episodic (`session_summary` tag) |
+| `new_message` | `text` | `evaluate_importance` heuristic; score ≥ `hooks.auto_save_threshold` (0.5) → L3 + graph node; ≥ 0.8 → also L4 core |
+| `auto_save_candidate` | `text` | Same pipeline as `new_message` (explicit candidate from a daemon) |
+| `post_context_compression` | `query` | Returns rehydrate candidates via retrieval |
+| `context_threshold` | — | Advice: eviction candidates from L1 (decision stays harness-side) |
+| `memory_pressure` | — | Advice: L1 ring size + compress hint (decision stays harness-side) |
+
+Returns the fired handlers' results dict.
+
+---
+
 ## Full surface (`ARIEL_EXPOSE=all`)
 
 Legacy granular operations behind the primitives. Grouped by domain.

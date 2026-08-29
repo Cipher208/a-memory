@@ -3,6 +3,11 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Auto-hooks foundation (Phase C)** — external event dispatcher (`hooks/external.py::dispatch_event`) with two transports: `POST /api/hooks/{event}` (HTTP harnesses) and the new `memory_hook` MCP tool (stdio agents; primitive tier, tool count 37→38). Seven events with day-one handlers: `session_started` (returns the critical inject block), `session_ended` (session summary → L3), `new_message`/`auto_save_candidate` (`evaluate_importance` heuristic — no LLM; score ≥ 0.5 → L3 episodic + graph node, ≥ 0.8 → also L4 core), `post_context_compression` (rehydrate candidates via retrieval), `context_threshold`/`memory_pressure` (thin advice; decisions stay harness-side). New `POST /api/context-inject` returns the budget-capped critical set (ACT-R top-5 relevant when a query is given + recent L1 (24h) + important facts ≥ `inject.important_min`). Graph is now threaded through the hook registry (`fire(..., graph=)`, C1.1). Per-agent isolation inherited (own process + `MCP_MEMORY_DATA_DIR`; D1.13 API-key binding applies to both surfaces). Harness-side daemon (C1.9) is the next step.
+
 ## [1.9.0] - 2026-08-29
 
 ### Added
