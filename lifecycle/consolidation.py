@@ -5,11 +5,21 @@ Consolidation Engine — L1→L2→L3→L4 memory promotion (async)
 Type-aware promotion with memory_kind support.
 """
 
+import json
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.memory_types import MemoryKind, get_policy, validate_kind
+
+# B1.4: provenance of derived summaries. A promoted fact stores its source
+# references in core_memory.metadata["parents"] as "<kind>:<id>" strings —
+# a DAG (a fact may merge several parents), no schema change required.
+
+
+def _parent_refs(*refs: str | None) -> dict[str, Any] | None:
+    parents = [r for r in refs if r]
+    return {"parents": parents} if parents else None
 
 
 class ConsolidationEngine:
@@ -56,6 +66,7 @@ class ConsolidationEngine:
                 importance=importance,
                 memory_kind=kind_str,
                 source="staging_promotion",
+                metadata=_parent_refs(f"event:{item['event_id']}" if item.get("event_id") else None),
             )
             promoted += 1
 
@@ -78,7 +89,7 @@ class ConsolidationEngine:
         epi_db = episodic_db or "memory.db"
         epi_conn = await self._cm.get(epi_db)
         cursor = await epi_conn.execute(
-            "SELECT summary, emotional_weight, tags FROM episodes WHERE layer=? AND user_id=? AND emotional_weight > ? ORDER BY created_at DESC LIMIT 10",
+            "SELECT episode_id, summary, emotional_weight, tags FROM episodes WHERE layer=? AND user_id=? AND emotional_weight > ? ORDER BY created_at DESC LIMIT 10",
             (self.layer, user_id, min_weight),
         )
         rows = await cursor.fetchall()
@@ -91,9 +102,32 @@ class ConsolidationEngine:
             summary = row["summary"]
             weight = row["emotional_weight"]
             key = "ep_{}".format(summary[:30].replace(" ", "_").lower())
-            await cm.save(user_id, key, summary[:200], importance=weight, memory_kind="fact", source="episode_promotion")
+            await cm.save(
+                user_id,
+                key,
+                summary[:200],
+                importance=weight,
+                memory_kind="fact",
+                source="episode_promotion",
+                metadata=_parent_refs(f"episode:{row['episode_id']}"),
+            )
             consolidated += 1
         return consolidated
+
+    async def get_lineage(self, entry_id: int) -> list[str]:
+        """Return the parent references recorded for a promoted fact (B1.4)."""
+        conn = await self._cm.get(DB_NAME)
+        row = await (
+            await conn.execute("SELECT metadata FROM core_memory WHERE entry_id=?", (entry_id,))
+        ).fetchone()
+        if not row or not row["metadata"]:
+            return []
+        try:
+            meta = json.loads(row["metadata"])
+        except (TypeError, ValueError):
+            return []
+        parents = meta.get("parents", []) if isinstance(meta, dict) else []
+        return [str(p) for p in parents if p]
 
     async def get_stats(self, user_id: str) -> dict[str, int]:
         conn = await self._cm.get(DB_NAME)
