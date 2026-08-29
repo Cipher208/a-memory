@@ -203,7 +203,16 @@ class CoreMemory:
             scored.append((matched, float(r["importance"]), r))
         scored.sort(key=lambda x: (-x[0], -x[1]))
 
-        return [{"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])} for _, _, r in scored[:limit]]
+        return [
+            {
+                "key": str(r["key"]),
+                "value": str(r["value"]),
+                "importance": float(r["importance"]),
+                "entry_id": int(r["entry_id"]),
+                "updated_at": float(r["updated_at"]),
+            }
+            for _, _, r in scored[:limit]
+        ]
 
     async def count(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)

@@ -7,6 +7,7 @@ deduplicates by (title, content_prefix), and reranks by score.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -134,12 +135,15 @@ class MultiSourceRAG:
 
         episodic = EpisodicMemory(cm=self.cm)
         episodes: list[Any] = await episodic.search(user_id, query, limit=limit)
+        from rag.actr import actr_activation
+
+        now = time.time()
         return [
             {
                 "id": -episode.episode_id - _ID_OFFSET_EPISODIC,
                 "title": f"Episode {episode.episode_id}",
                 "content": episode.summary,
-                "score": episode.emotional_weight * weight,
+                "score": episode.emotional_weight * weight * (1 + 0.3 * actr_activation(now, episode.created_at, 1)),
                 "source": "episodic",
                 "created_at": episode.created_at,
             }
@@ -148,16 +152,38 @@ class MultiSourceRAG:
 
     async def _from_core(self, query: str, user_id: str, limit: int, strategy: str, weight: float) -> list[dict[str, Any]]:
         from core.memory import CoreMemory
+        from rag.actr import actr_activation
 
         core = CoreMemory(cm=self.cm)
         facts = await core.search(user_id, query, limit=limit)
+
+        # ACT-R frequency: one batched recall_useful count per entry.
+        from shared.constants import DB_NAME
+
+        now = time.time()
+        entry_ids = [f["entry_id"] for f in facts if f.get("entry_id")]
+        freq: dict[int, int] = {}
+        if entry_ids:
+            conn = await core._cm.get(DB_NAME)
+            ph = ",".join("?" * len(entry_ids))
+            cur = await conn.execute(
+                f"""SELECT target_id, COUNT(*) c FROM audit_log
+                    WHERE action='recall_useful' AND layer='core_memory'
+                    AND target_id IN ({ph}) GROUP BY target_id""",
+                tuple(str(i) for i in entry_ids),
+            )
+            freq = {int(r["target_id"]): int(r["c"]) for r in await cur.fetchall()}
+
         return [
             {
                 "id": hash(f["key"]) % 10000000,
                 "title": f["key"],
                 "content": f["value"],
-                "score": f["importance"] * weight,
+                "score": f["importance"]
+                * weight
+                * (1 + 0.3 * actr_activation(now, f.get("updated_at", now), freq.get(int(f.get("entry_id", 0)), 0))),
                 "source": "core",
+                "entry_id": f.get("entry_id"),
             }
             for f in facts
         ]
