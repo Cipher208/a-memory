@@ -143,14 +143,21 @@ async def _apply(kind: str, user_id: str, layer: str, payload: dict[str, Any], m
         if mem_obj is not None:
             mem_u = mem_obj.user_memory(user_id) if layer == "user" else mem_obj.agent_memory(user_id)
             entry_id = await mem_u.remember(payload["key"], payload["value"], float(payload["importance"]))
-        else:
+        elif mem is not None:
             entry_id = await mem.remember(payload["key"], payload["value"], float(payload["importance"]))
+        else:
+            raise ValueError("core_write apply requires mem (AppContext or a memory facade)")
         return str(entry_id)
     if kind == "consolidate_staging":
         from lifecycle.consolidation import ConsolidationEngine
 
         engine = ConsolidationEngine(layer=layer)
-        result = await engine.consolidate_staging(user_id, payload.get("items", []), min_importance=payload.get("min_importance"))
+        items = payload.get("items", [])
+        min_imp = payload.get("min_importance")
+        if min_imp is not None:
+            result = await engine.consolidate_staging(user_id, items, min_importance=float(min_imp))
+        else:
+            result = await engine.consolidate_staging(user_id, items)
         return f"promoted={result.get('promoted', 0)}"
     if kind == "archive":
         from lifecycle.forgetting import ForgettingSystem
