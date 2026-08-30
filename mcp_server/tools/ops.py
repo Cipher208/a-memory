@@ -846,3 +846,29 @@ async def memory_recall_protocol(
     blocks = await recall_protocol(mem, rag, user_id, query=query, budget=int(budget))
     metrics.inc(METRIC_TOOL_CALLS)
     return {"blocks": blocks, "axes": [b["axis"] for b in blocks], "count": len(blocks)}
+
+
+async def memory_get_smart_context(
+    query: str = "",
+    budget: int = 2000,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Weighted token distribution across memory sources (D1.10).
+
+    Every source (important/relevant/recent/day/ops) gets a weight-proportional
+    floor first; leftover redistributes with a 2x-floor ceiling — a fat source
+    can no longer starve the rest (unlike the sequential inject builder).
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    from .base import _get_memory, _get_rag
+
+    mem = _get_memory(app, layer, user_id)
+    rag = _get_rag(app, layer)
+    from features.smart_context import build_smart_context
+
+    out = await build_smart_context(mem, rag, user_id, query=query, budget=int(budget))
+    metrics.inc(METRIC_TOOL_CALLS)
+    return out
