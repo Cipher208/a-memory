@@ -872,3 +872,40 @@ async def memory_get_smart_context(
     out = await build_smart_context(mem, rag, user_id, query=query, budget=int(budget))
     metrics.inc(METRIC_TOOL_CALLS)
     return out
+
+
+async def memory_reflect(
+    period_hours: int = 24,
+    topic: str = "",
+    action: Literal["write", "list"] = "write",
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Reflection system (D1.16): deterministic meta-memories.
+
+    `write` computes a reflection over the window (episode counts, recurring
+    topics) and stores it as a meta-memory row; `list` reads recent
+    reflections back (topic filter optional). The nightly hook's 5th phase
+    writes the daily reflection automatically.
+    """
+    if ctx is not None:
+        _get_ctx(ctx)  # strict over MCP; CLI one-liners pass ctx=None
+    _ = _validate_layer(layer)
+    from features.reflection import build_reflection, save_reflection, list_reflections
+
+    if action == "list":
+        rows = list_reflections(user_id, topic=topic, limit=10)
+        return {"action": "list", "count": len(rows), "reflections": rows}
+
+    if ctx is not None:
+        app = _get_ctx(ctx)
+        mem = app.mm.user_memory(user_id) if layer == "user" else app.mm.agent_memory(user_id)
+    else:
+        from core.episodic import EpisodicMemory
+
+        mem = EpisodicMemory(layer=layer)
+    out = build_reflection(mem, user_id, period_hours=int(period_hours))
+    rid = save_reflection(user_id, topic=topic or "manual", insight=out["insight"], stats=out["stats"])
+    metrics.inc(METRIC_TOOL_CALLS)
+    return {"action": "write", "id": rid, "insight": out["insight"], "stats": out["stats"]}

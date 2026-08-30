@@ -11,16 +11,19 @@ Takes PRE-RESOLVED mem/rag — no mcp_server imports (module-cycle rule).
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # source → (weight, kind for the block)
 WEIGHTS: dict[str, float] = {
     "important": 0.30,  # L4 facts ≥ inject.important_min
-    "relevant": 0.30,   # RAG hits (needs query)
-    "recent": 0.15,     # L1 chatter, 24h
-    "day": 0.15,        # L3 auto_save digest, 24h
-    "ops": 0.10,        # open diff_gaps (proposals ride the inject builder)
+    "relevant": 0.30,  # RAG hits (needs query)
+    "recent": 0.15,  # L1 chatter, 24h
+    "day": 0.15,  # L3 auto_save digest, 24h
+    "ops": 0.10,  # open diff_gaps (proposals ride the inject builder)
 }
 
 
@@ -50,13 +53,9 @@ async def build_smart_context(
         from config import config as _cfg
 
         important_min = float(_cfg.get("inject", "important_min", default=0.8))
-        candidates["important"] = [
-            (f"{f.key}={f.value[:80]}", float(f.importance))
-            for f in facts
-            if f.importance >= important_min
-        ]
-    except Exception:
-        pass
+        candidates["important"] = [(f"{f.key}={f.value[:80]}", float(f.importance)) for f in facts if f.importance >= important_min]
+    except Exception as exc:
+        logger.debug("smart context read failed: %s", exc)
 
     if full and rag is not None:
         try:
@@ -69,43 +68,39 @@ async def build_smart_context(
                 for h in hits
             ]
             candidates["relevant"] = [(c, s) for c, s in candidates["relevant"] if c]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("smart context relevant read failed: %s", exc)
 
     try:
         recent = [r for r in mem.l1.get_recent(10) if float(getattr(r, "timestamp", 0)) >= cutoff]
-        candidates["recent"] = [
-            (f"{r.role}: {r.content[:80]}", 0.5) for r in recent
-        ]
-    except Exception:
-        pass
+        candidates["recent"] = [(f"{r.role}: {r.content[:80]}", 0.5) for r in recent]
+    except Exception as exc:
+        logger.debug("smart context read failed: %s", exc)
 
     try:
         day_eps = await mem.l3.search_by_tag(user_id, "auto_save", 5)
         candidates["day"] = [
             (str(getattr(e, "summary", "") or "").strip(), 0.4)
             for e in day_eps
-            if float(getattr(e, "created_at", 0) or 0) >= cutoff
-            and str(getattr(e, "summary", "")).strip()
+            if float(getattr(e, "created_at", 0) or 0) >= cutoff and str(getattr(e, "summary", "")).strip()
         ]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("smart context read failed: %s", exc)
 
     try:
         gap_eps = await mem.l3.search_by_tag(user_id, "diff_gap", 5)
         candidates["ops"] = [
             (str(getattr(e, "summary", "") or "").strip(), 0.6)
             for e in gap_eps
-            if float(getattr(e, "created_at", 0) or 0) >= cutoff
-            and str(getattr(e, "summary", "")).strip()
+            if float(getattr(e, "created_at", 0) or 0) >= cutoff and str(getattr(e, "summary", "")).strip()
         ]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("smart context read failed: %s", exc)
 
     # ── pass 1: fill each source up to its weight-proportional floor ────
     blocks: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    used: dict[str, int] = {s: 0 for s in WEIGHTS}
+    seen: set[str] = set()  # normalized content, first source wins
+    used: dict[str, int] = dict.fromkeys(WEIGHTS, 0)
     floors = {s: int(budget * w) for s, w in WEIGHTS.items()}
 
     def _try_add(source: str, content: str, score: float, cap: int) -> bool:
@@ -148,9 +143,7 @@ async def build_smart_context(
                 if _try_add(source, content, score, cap):
                     leftover -= used[source] - before
 
-    allocations = {
-        s: {"floor": floors[s], "used": used[s], "weight": WEIGHTS[s]} for s in WEIGHTS
-    }
+    allocations = {s: {"floor": floors[s], "used": used[s], "weight": WEIGHTS[s]} for s in WEIGHTS}
     return {
         "blocks": blocks,
         "allocations": allocations,

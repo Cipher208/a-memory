@@ -69,9 +69,7 @@ async def test_weighted_allocation_gives_each_source_a_floor(isolated_db):
     out = await build_smart_context(mem, _FakeRag([]), "u1", query="", budget=400)
     axes = {b["source"] for b in out["blocks"]}
     assert "important" in axes and "recent" in axes and "day" in axes
-    used_important = sum(
-        b["tokens"] for b in out["blocks"] if b["source"] == "important"
-    )
+    used_important = sum(b["tokens"] for b in out["blocks"] if b["source"] == "important")
     # floor 0.30*400=120, ceiling 2x floor=240: the fat list may not take everything
     assert used_important <= 245
     assert used_important >= 100  # but it does get its floor's worth

@@ -97,6 +97,10 @@ class UserHooks:
             from wiki.manager import WikiManager
 
             result["skill_promotion"] = await auto_promote_fresh(mem, WikiManager(layer="user"), self.user_id)
+        with contextlib.suppress(Exception):
+            from features.reflection import nightly_reflection
+
+            result["reflection"] = nightly_reflection(mem, self.user_id)
         return result
 
     @hook_registry.mark("importance_gate", layer="user")
