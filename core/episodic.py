@@ -70,6 +70,31 @@ class EpisodicMemory:
         """B7: Specialized tag search (part of search() logic, but kept for API compat)."""
         return await self.search(user_id, tag, limit, use_tag_match=True)
 
+    async def get_by_id(self, episode_id: int) -> Episode | None:
+        """Fetch one episode by id (D2.2 promotion pipeline)."""
+        conn = await self._cm.get(DB_NAME)
+        cursor = await conn.execute("SELECT * FROM episodes WHERE episode_id = ?", (episode_id,))
+        row = await cursor.fetchone()
+        return self._row_to_episode(row) if row else None
+
+    async def add_tag(self, episode_id: int, tag: str) -> bool:
+        """Append a tag to an episode's JSON tag list (idempotent). D2.2."""
+        conn = await self._cm.get(DB_NAME)
+        cursor = await conn.execute("SELECT tags FROM episodes WHERE episode_id = ?", (episode_id,))
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        try:
+            tags = json.loads(row["tags"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            tags = []
+        if tag in tags:
+            return True
+        tags.append(tag)
+        await conn.execute("UPDATE episodes SET tags = ? WHERE episode_id = ?", (json.dumps(tags), episode_id))
+        await conn.commit()
+        return True
+
     async def search(self, user_id: str, query: str, limit: int = 10, use_tag_match: bool = False) -> list[Episode]:
         """Unified search across summary and tags."""
         conn = await self._cm.get(DB_NAME)

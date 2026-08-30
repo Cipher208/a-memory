@@ -15,6 +15,7 @@ from .tools.episodic import memory_episode_save, memory_episode_recall, memory_e
 from .tools.graph import memory_graph_add, memory_graph_query, memory_graph_nodes, memory_graph_edges
 from .tools.hooks import memory_hook
 from .tools.wiki import wiki_add, wiki_search, wiki_list, wiki_read, wiki_delete
+from .tools.skills import memory_skill_promote
 from .tools.wiki_summarize import wiki_summarize
 from .tools.wiki_link import wiki_link
 from .tools.brief import daily_brief
@@ -71,6 +72,7 @@ _register_tools: dict[str, Any] = {
     "memory_proposals": memory_proposals,
     "memory_report_card": memory_report_card,
     "memory_recall_protocol": memory_recall_protocol,
+    "memory_skill_promote": memory_skill_promote,
     "memory_hook": memory_hook,
     "think": think,
     "dream": dream,

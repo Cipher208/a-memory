@@ -81,7 +81,7 @@ class UserHooks:
         return {"saved_episode": False, "reason": reason}
 
     @hook_registry.mark("nightly", layer="user")
-    async def _nightly(self, ctx: dict[str, Any]) -> dict[str, Any]:
+    async def _nightly(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         result = {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
         with contextlib.suppress(Exception):
             result["cls_replay"] = await cls_replay_hook(ctx, self.user_id)
@@ -91,6 +91,12 @@ class UserHooks:
             from shared.connection import connection_manager
 
             result["graph_build"] = await build_from_episodes(connection_manager, self.user_id, layer="user")
+        with contextlib.suppress(Exception):
+            from features.skill_pipeline import auto_promote_fresh
+
+            from wiki.manager import WikiManager
+
+            result["skill_promotion"] = await auto_promote_fresh(mem, WikiManager(layer="user"), self.user_id)
         return result
 
     @hook_registry.mark("importance_gate", layer="user")
