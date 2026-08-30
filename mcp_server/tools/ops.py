@@ -821,3 +821,28 @@ async def memory_report_card(
     except Exception:
         card["gaps"] = {"count": 0, "previews": []}
     return card
+
+
+async def memory_recall_protocol(
+    query: str = "",
+    budget: int = 2000,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Multi-axis /recall protocol (D1.1): markers → session → semantic → expand → day.
+
+    Proportional: empty query = zero-state (markers + day only). The same
+    engine drives the Hermes prefetch surface via `autohooks recall`.
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    from .base import _get_memory, _get_rag
+
+    mem = _get_memory(app, layer, user_id)
+    rag = _get_rag(app, layer)
+    from features.recall import recall_protocol
+
+    blocks = await recall_protocol(mem, rag, user_id, query=query, budget=int(budget))
+    metrics.inc(METRIC_TOOL_CALLS)
+    return {"blocks": blocks, "axes": [b["axis"] for b in blocks], "count": len(blocks)}

@@ -87,8 +87,10 @@ and rehydrates the critical set instead of silently losing it.
   `sync_turn` pushes every turn (no conversation-tailing needed for turn
   capture), `on_pre_compress` logs the drift and feeds the critical set into
   the compression summary prompt, `on_session_end` fires the diff,
-  `on_memory_write` mirrors MEMORY.md writes, `queue_prefetch`/`prefetch`
-  give per-turn recall. The plugin is pure-stdlib over the ariel venv CLI —
+  `on_memory_write` mirrors MEMORY.md writes, and `queue_prefetch`/`prefetch`
+  deliver the **/recall protocol (D1.1)** — multi-axis proportional recall
+  (`markers → session → semantic → expand → day`) driven by each turn's user
+  message. The plugin is pure-stdlib over the ariel venv CLI —
   `hermes update` venv rebuilds cannot break it. The earlier file-hook layer
   (`~/.hermes/hooks/ariel-autohooks`, `ariel-compaction`) and the two ariel
   core commits (gateway compaction emit, prompt-builder slot) were retired

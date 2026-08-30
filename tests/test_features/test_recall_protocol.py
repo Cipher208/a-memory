@@ -72,10 +72,12 @@ async def test_full_protocol_axes_order(compaction_free):
         },
         l4=[SimpleNamespace(key="dream_memory_1", value="durable intent", importance=0.95)],
     )
-    rag = _FakeRag([
-        {"content": "semantic hit", "score": 0.8, "source": "fts"},
-        {"content": "graph neighbor", "score": 0.4, "source": "graph_expand"},
-    ])
+    rag = _FakeRag(
+        [
+            {"content": "semantic hit", "score": 0.8, "source": "fts"},
+            {"content": "graph neighbor", "score": 0.4, "source": "graph_expand"},
+        ]
+    )
     blocks = await recall_protocol(mem, rag, "u1", query="find durable intent")
     axes = [b["axis"] for b in blocks]
     assert axes == ["markers", "session", "semantic", "expand", "day"]
@@ -118,7 +120,8 @@ async def test_budget_skips_oversized_blocks(compaction_free):
     mem = _FakeMem(
         l4=[SimpleNamespace(key="dream_memory_1", value="x" * 5000, importance=0.95)],
     )
-    blocks = await recall_protocol(_FakeMem(), _FakeRag([]), "u1", query="", budget=100)
+    # markers clamp value[:80] (~25 tokens), so a tiny budget must skip them.
+    blocks = await recall_protocol(mem, _FakeRag([]), "u1", query="", budget=10)
     assert blocks == []
 
 

@@ -33,6 +33,7 @@ from .tools.ops import (
     memory_watch,  # Phase C C1.10 S6
     memory_proposals,  # Phase C C1.11 S5
     memory_report_card,  # Phase C C1.14 S5
+    memory_recall_protocol,  # Phase D D1.1 S3
 )
 
 # Re-export _fire_hook for backward compatibility and tests
@@ -69,6 +70,7 @@ _register_tools: dict[str, Any] = {
     "memory_watch": memory_watch,
     "memory_proposals": memory_proposals,
     "memory_report_card": memory_report_card,
+    "memory_recall_protocol": memory_recall_protocol,
     "memory_hook": memory_hook,
     "think": think,
     "dream": dream,

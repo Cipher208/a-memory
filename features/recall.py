@@ -10,8 +10,11 @@ rule); transports (CLI / MCP tool / dispatcher caller) do the resolution.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _DAY_CUTOFF_S = 24 * 3600
 
@@ -64,26 +67,23 @@ async def recall_protocol(
     try:
         parts: list[str] = []
         facts = await mem.l4.get_all(user_id, 50)
-        marker_facts = [
-            f for f in facts if str(f.key).startswith("dream_") or f.importance >= 0.95
-        ]
+        marker_facts = [f for f in facts if str(f.key).startswith("dream_") or f.importance >= 0.95]
         parts.extend(f"{f.key}={f.value[:80]}" for f in marker_facts)
         try:
             skill_eps = await mem.l3.search_by_tag(user_id, "dream_skill", 5)
             parts.extend(
                 str(getattr(e, "summary", "") or "").strip()
                 for e in skill_eps
-                if float(getattr(e, "created_at", 0) or 0) >= cutoff
-                and str(getattr(e, "summary", "")).strip()
+                if float(getattr(e, "created_at", 0) or 0) >= cutoff and str(getattr(e, "summary", "")).strip()
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("recall axis failed: %s", exc)
         parts = [p for p in parts if p]
         values = [f.value[:80] for f in marker_facts]
         if parts:
             await _add("markers", 1.0, "; ".join(parts), extra_keys=tuple(parts) + tuple(values))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("recall axis failed: %s", exc)
 
     if not full:
         # Zero-state: markers + day digest only (~3 lines).
@@ -92,13 +92,12 @@ async def recall_protocol(
             fresh = [
                 str(getattr(e, "summary", "") or "").strip()
                 for e in day_eps
-                if float(getattr(e, "created_at", 0) or 0) >= cutoff
-                and str(getattr(e, "summary", "")).strip()
+                if float(getattr(e, "created_at", 0) or 0) >= cutoff and str(getattr(e, "summary", "")).strip()
             ]
             if fresh:
                 await _add("day", 0.4, " | ".join(fresh))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("recall axis failed: %s", exc)
         return blocks
 
     # Axis 2: session — recent L1 chatter + latest session summary.
@@ -106,19 +105,21 @@ async def recall_protocol(
         recent = [r for r in mem.l1.get_recent(10) if float(getattr(r, "timestamp", 0)) >= cutoff]
         if recent:
             await _add(
-                "session", 0.5,
+                "session",
+                0.5,
                 "; ".join(f"{r.role}: {r.content[:80]}" for r in recent),
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("recall axis failed: %s", exc)
     try:
         from core.session import SessionStore
 
         summary = await SessionStore().get_session_summary(user_id)
-        if summary:
+        # get_session_summary returns a "No sessions yet." sentinel when empty.
+        if summary and summary.strip() != "No sessions yet.":
             await _add("session", 0.55, f"last session: {str(summary)[:160]}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("recall axis failed: %s", exc)
 
     # Axis 3+4: semantic hits and their graph expansion (one RAG call — the
     # B1.6 GraphRAG stage already appended 1-hop neighbors with source tags).
@@ -133,8 +134,8 @@ async def recall_protocol(
                 score = float(h.get("score", 0.0))
                 axis = "expand" if source in ("graph", "graph_expand") else "semantic"
                 await _add(axis, score, content)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("recall axis failed: %s", exc)
 
     # Axis 5: day — the last 24h of captured memory.
     try:
@@ -142,12 +143,11 @@ async def recall_protocol(
         fresh = [
             str(getattr(e, "summary", "") or "").strip()
             for e in day_eps
-            if float(getattr(e, "created_at", 0) or 0) >= cutoff
-            and str(getattr(e, "summary", "")).strip()
+            if float(getattr(e, "created_at", 0) or 0) >= cutoff and str(getattr(e, "summary", "")).strip()
         ]
         if fresh:
             await _add("day", 0.4, " | ".join(fresh))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("recall axis failed: %s", exc)
 
     return blocks
