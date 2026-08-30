@@ -10,8 +10,11 @@ transports (endpoint / MCP tool / dispatcher caller) do the resolution.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 async def _pending_proposals(user_id: str = "default", limit: int = 5) -> list[Any]:
@@ -76,6 +79,21 @@ async def build_inject_blocks(
         if cost <= remaining:
             blocks.append({"kind": "gap", "content": content, "score": 0.5})
             remaining -= cost
+
+    # scratchpad block (D1.15): the agent's own working notes re-inject at
+    # session start — hypotheses/plans survive the context reset.
+    try:
+        from features.scratchpad import read_entries
+
+        pad = read_entries(user_id, "user")
+        if pad:
+            content = "; ".join(f"{e['key']}: {e['content'][:80]}" for e in pad[:10])
+            cost = estimate_tokens(content)
+            if cost <= remaining:
+                blocks.append({"kind": "scratchpad", "content": content, "score": 0.85})
+                remaining -= cost
+    except Exception as exc:
+        logger.debug("scratchpad block skipped: %s", exc)
 
     # rehydrate block: compaction drift recovery (D3.5 S4)
     try:

@@ -909,3 +909,73 @@ async def memory_reflect(
     rid = save_reflection(user_id, topic=topic or "manual", insight=out["insight"], stats=out["stats"])
     metrics.inc(METRIC_TOOL_CALLS)
     return {"action": "write", "id": rid, "insight": out["insight"], "stats": out["stats"]}
+
+
+async def memory_scratchpad(
+    action: Literal["write", "read", "clear", "promote"] = "read",
+    key: str = "",
+    content: str = "",
+    to: str = "l3",
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Agent scratchpad (D1.15, L2.5): working memory between session and episodes.
+
+    Write hypotheses/plans/drafts (capped at 20 entries, oldest evicted);
+    they re-inject at session start as the `scratchpad` block. `promote`
+    moves agent-judged-useful entries into L3 (episode) or L4 (fact) and
+    drops them from the pad — the agent is the distiller (D2.2 ceiling).
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    _ = _validate_layer(layer)
+    from features.scratchpad import write_entry, read_entries, clear_entries, promote_entries
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "write":
+        if not key or not content:
+            raise ValueError("write requires key and content")
+        ok = await write_entry(user_id, layer, key, content)
+        return {"action": "write", "ok": ok, "key": key}
+    if action == "read":
+        return {"action": "read", "entries": read_entries(user_id, layer, key=key)}
+    if action == "clear":
+        return {"action": "clear", "removed": clear_entries(user_id, layer, key=key)}
+    if action == "promote":
+        if ctx is None:
+            raise ValueError("promote requires a live app context (MCP call)")
+        app = _get_ctx(ctx)
+        mem = app.mm.user_memory(user_id) if layer == "user" else app.mm.agent_memory(user_id)
+        keys = [key] if key else [e["key"] for e in read_entries(user_id, layer)]
+        return {"action": "promote", **await promote_entries(mem, user_id, layer, keys=keys, to=to)}
+    raise ValueError(f"unknown action: {action!r}")
+
+
+async def memory_quality(
+    action: Literal["report", "feedback"] = "report",
+    entry_id: int = 0,
+    useful: bool = True,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Memory quality metrics (D1.19): was_useful → score feedback loop.
+
+    `feedback` applies one signal: useful → `recall_useful` audit row (feeds
+    ACT-R frequency, D1.17) + importance boost +0.05 (cap 1.0); not useful →
+    decay −0.05 (floor 0.05). `report` aggregates per-entry useful counts
+    with current importance. Every adjustment is importance_audit-logged
+    (reason='agent_feedback').
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    _ = _validate_layer(layer)
+    from features.quality import record_feedback, quality_report
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "feedback":
+        if not entry_id:
+            raise ValueError("feedback requires entry_id")
+        return {"action": "feedback", **await record_feedback(user_id, layer, int(entry_id), useful=bool(useful))}
+    return {"action": "report", **await quality_report(user_id, layer)}
