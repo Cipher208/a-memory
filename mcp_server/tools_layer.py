@@ -43,6 +43,7 @@ from .tools.ops import (
     memory_recap,  # Phase D D1.2
     memory_steering,  # Phase D D1.3
     memory_compress,  # Phase D D1.4
+    memory_fact_blame,  # Phase D D1.6
 )
 
 # Re-export _fire_hook for backward compatibility and tests
@@ -88,6 +89,7 @@ _register_tools: dict[str, Any] = {
     "memory_recap": memory_recap,
     "memory_steering": memory_steering,
     "memory_compress": memory_compress,
+    "memory_fact_blame": memory_fact_blame,
     "memory_skill_promote": memory_skill_promote,
     "memory_hook": memory_hook,
     "think": think,

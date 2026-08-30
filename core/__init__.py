@@ -32,8 +32,13 @@ class MemoryLayer:
         self.l3 = EpisodicMemory(cm=self._cm, layer=layer_type)
         self.l4 = CoreMemory(cm=self._cm, layer=layer_type)
 
-    async def remember(self, key: str, value: str, importance: float = 0.5) -> int:
-        return await self.l4.save(self.user_id, key, value, importance)
+    async def remember(self, key: str, value: str, importance: float = 0.5, source: str = "user_explicit") -> int:
+        """Write an L4 fact.
+
+        `source` carries the D1.6 provenance contract
+        (user_explicit / staging_promotion / episode_promotion / manual).
+        """
+        return await self.l4.save(self.user_id, key, value, importance, source=source)
 
     async def recall(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         cache_key = f"recall:{self.user_id}:{query}:{limit}"

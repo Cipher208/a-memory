@@ -1074,3 +1074,27 @@ async def memory_compress(
 
     metrics.inc(METRIC_TOOL_CALLS)
     return compress_output(text, mode=mode, max_lines=int(max_lines))
+
+
+async def memory_fact_blame(
+    entry_id: int = 0,
+    key: str = "",
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Provenance / fact blame (D1.6): who wrote this fact, when, and why.
+
+    Rides the existing core_memory.source column (no migration): provenance
+    ∈ {user_explicit, staging_promotion, episode_promotion, manual} (legacy).
+    Returns the entry + importance_audit history (chunk_id = entry_id) +
+    audit_log events (target_id = entry_id) — the evidence trail for
+    debugging hallucinations. Lookup by entry_id or key.
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    _ = _validate_layer(layer)
+    from features.blame import fact_blame
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    return {"action": "blame", **await fact_blame(user_id, layer, entry_id=int(entry_id), key=key)}
