@@ -27,6 +27,7 @@ ALL_USER_TYPES = [
     "work_notes",
     "preferences",
     "retrospective",
+    "skill",  # D2.1 Skill=Memory — agent-read Markdown instructions
 ]
 PROJECT_TYPES = ["project_spec"]  # projects are global; pages live in the user wiki
 ALL_AGENT_TYPES = [

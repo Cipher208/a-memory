@@ -144,6 +144,18 @@ def lint_entry(
             )
         )
 
+    # 5. skill convention (D2.1): skills are agent-read instructions — the
+    #    concept caps them at 4KB ("API table at the top, <100 lines, <4KB").
+    if entry.wiki_type == "skill" and len(entry.content.encode("utf-8")) > 4096:
+        findings.append(
+            Finding(
+                code="skill_too_large",
+                message=f"skill page is {len(entry.content.encode('utf-8'))}B (>4096 cap) — split it",
+                location="content",
+                fixable=False,
+            )
+        )
+
     # 6. unknown tags
     if entry.tags:
         vocab = wiki_lint_tag_vocabulary(types)

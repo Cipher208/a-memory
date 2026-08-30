@@ -37,7 +37,15 @@ async def wiki_search(
     wiki = _get_wiki(app, layer)
     results = await wiki.search(query, limit)
     return {
-        "results": [{"title": str(r.get("title", "")), "type": str(r.get("wiki_type", "")), "tags": list(r.get("tags", []))} for r in results],
+        "results": [
+            {
+                "title": str(r.get("title", "")),
+                "type": str(r.get("wiki_type", "")),
+                "tags": list(r.get("tags", [])),
+                "snippet": str(r.get("content", ""))[:200],
+            }
+            for r in results
+        ],
         "count": len(results),
     }
 
@@ -57,8 +65,34 @@ async def wiki_list(
     else:
         pages = await wiki.list_all(limit)
     return {
-        "pages": [{"title": str(p.title), "type": str(p.wiki_type), "tags": list(p.tags)} for p in pages],
+        "pages": [{"title": str(p.title), "type": str(p.wiki_type), "tags": list(p.tags), "path": str(p.file_path)} for p in pages],
         "count": len(pages),
+    }
+
+
+async def wiki_read(
+    layer: str = "user",
+    path: str = "",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Read a wiki page's full content (progressive-disclosure read leg, D2.1).
+
+    `path` comes from wiki_list / wiki_search results. Skills live under
+    wiki_type="skill" as plain Markdown (SKILL.md convention).
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    wiki = _get_wiki(app, layer)
+    entry = await wiki.get(path)
+    if entry is None:
+        return {"status": "not_found", "path": path}
+    return {
+        "status": "ok",
+        "title": entry.title,
+        "wiki_type": entry.wiki_type,
+        "tags": list(entry.tags),
+        "file_path": entry.file_path,
+        "content": entry.content,
     }
 
 

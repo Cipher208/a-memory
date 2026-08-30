@@ -14,7 +14,7 @@ from .tools.session import memory_session_start, memory_session_end, memory_sess
 from .tools.episodic import memory_episode_save, memory_episode_recall, memory_episode_list, memory_episode_get
 from .tools.graph import memory_graph_add, memory_graph_query, memory_graph_nodes, memory_graph_edges
 from .tools.hooks import memory_hook
-from .tools.wiki import wiki_add, wiki_search, wiki_list, wiki_delete
+from .tools.wiki import wiki_add, wiki_search, wiki_list, wiki_read, wiki_delete
 from .tools.wiki_summarize import wiki_summarize
 from .tools.wiki_link import wiki_link
 from .tools.brief import daily_brief
@@ -80,6 +80,7 @@ _register_tools: dict[str, Any] = {
     "wiki_add": wiki_add,
     "wiki_search": wiki_search,
     "wiki_list": wiki_list,
+    "wiki_read": wiki_read,
     "wiki_delete": wiki_delete,
     "wiki_summarize": wiki_summarize,
     "wiki_link": wiki_link,
