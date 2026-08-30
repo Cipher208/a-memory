@@ -9,8 +9,8 @@
 │      mcp_server (MCPServer, mcp 2.x)        │
 │  ┌─────────────┐  ┌──────────────────────┐  │
 │  │ Tools Layer  │  │    Hooks Pipeline    │  │
-│  │ (36 tools,   │  │ (19 hooks, gating)   │  │
-│  │ 5 exposed)   │  │                      │  │
+│  │ (56 tools,   │  │ (19 hooks, gating)   │  │
+│  │ 6 exposed)   │  │                      │  │
 │  └──────┬───────┘  └──────────┬───────────┘  │
 │         │                     │              │
 │  ┌──────▼─────────────────────▼───────────┐  │
@@ -29,7 +29,7 @@
 └─────────────────────────────────────────────┘
 ```
 
-Agents see the five primitives (`think` / `dream` / `forget` / `evolve` / `project`) by default; `ARIEL_EXPOSE=primitives,wiki` adds the five wiki tools, `brief` adds `daily_brief`, and `ARIEL_EXPOSE=all` restores the full 36-tool surface.
+Agents see the six primitives (`think` / `dream` / `forget` / `evolve` / `project` / `memory_hook`) by default; coherent opt-in tiers via `ARIEL_EXPOSE` add the rest — `context` (recall protocol, recap, smart context, steering, compression), `insight` (query DSL, fact blame, quality, reflections, stats, raw searches), `write` (remember, typed saves, rules engine, scratchpad, counterfactuals, episodes, sessions), plus `wiki` / `brief` / `review`. Recommended live value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` (46 tools); `ARIEL_EXPOSE=all` restores the full 56-tool surface incl. admin ops.
 
 ## Memory Layers
 

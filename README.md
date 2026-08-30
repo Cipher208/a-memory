@@ -101,7 +101,7 @@ res = await session.call_tool("dream", {"query": "dark mode preference"})
 print(res["summary"])
 ```
 
-36 fine-grained operations exist in total (5 primitives + 5 wiki + 1 daily_brief + 25 typed CRUD per store, sessions, ops/admin): the 5 primitives are exposed by default, the wiki tier (`wiki_add` / `wiki_search` / `wiki_list` / `wiki_delete` / `wiki_summarize`) unlocks via `ARIEL_EXPOSE=primitives,wiki`, `daily_brief` via `ARIEL_EXPOSE=primitives,wiki,brief`, and everything via `ARIEL_EXPOSE=all`.
+56 fine-grained operations exist in total, grouped into coherent opt-in tiers: the 6 primitives are exposed by default; add `context` (recall protocol, /new session recap, smart context budget, steering hints, tool-output compression), `insight` (Memory Query DSL, provenance fact-blame, quality loop, reflections, stats), `write` (typed memory schemas, declarative rules engine, scratchpad, counterfactuals, episodes), plus `wiki`, `brief`, and `review` (staged mutations) — e.g. `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` (46 tools), or everything via `ARIEL_EXPOSE=all`.
 
 ---
 
@@ -109,7 +109,7 @@ print(res["summary"])
 
 | Category | What's inside |
 |----------|--------------|
-| 🧠 **Memory** | L1 Reflex → L2 Sessions → L3 Episodic → L4 Core, importance scoring, typed memory kinds with TTL policies, layer isolation; **49 tools** including `/recall` protocol (multi-axis), smart context budget (weighted token floors), reflections, counterfactuals, was_useful quality loop |
+| 🧠 **Memory** | L1 Reflex → L2 Sessions → L3 Episodic → L4 Core, importance scoring, typed memory kinds with TTL policies, layer isolation; **56 tools** including `/recall` protocol (multi-axis), session continuity recap (/new recovery pack), steering hints, tool-output compression + recall verification, provenance fact-blame, Memory Query DSL, typed memory schemas, a declarative rules engine, smart context budget (weighted token floors), reflections, counterfactuals, was_useful quality loop |
 | 🔍 **Search** | FTS5 + MIB binary embeddings + hybrid RRF ranking, multi-source merge (RAG + Wiki + Episodic + Core + Graph), ACT-R activation scoring, dream digest |
 | 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal, 1-hop GraphRAG expansion |
 | 📁 **Projects** | Decision log (what/why/outcome), artifact map, graphify code index — survives between sessions |
@@ -189,9 +189,10 @@ Notes (Sep 2026): mem0 now ships a self-hosted Docker image and a managed cloud 
 - [x] **Phase D — /recall protocol** (multi-axis proportional recall: markers → session → semantic → expand → day; drives Hermes per-turn prefetch)
 - [x] **Phase D — Skill = Memory** (Markdown skills as a first-class wiki type, progressive disclosure `wiki_list → wiki_search → wiki_read`, 4KB lint cap, promotion pipeline, shared SSOT sync, usage-driven evolution — [skills guide](docs/features/skills.md))
 - [x] **Phase D — working memory + meta-memories** (agent scratchpad re-injected at session start, deterministic reflections, smart context budget with weighted floors, counterfactual notes, was_useful quality feedback loop)
+- [x] **Phase D — memory tools D1.2-D1.9** (session continuity recap + steering hints, tool-output compression + recall verification, provenance fact-blame, Memory Query DSL, typed memory schemas, declarative rules engine; coherent `ARIEL_EXPOSE` tiers: context / insight / write)
 - [ ] **Screenshot / asciinema demo** in README
 - [ ] **LLM-assisted consolidation** on top of the deterministic sweep
-- [ ] **Phase D remainder** — session continuity (/new + recap), Memory Query DSL, typed schemas, memory branches/versioning, persona graph (separate MCP server)
+- [ ] **Phase D remainder** — memory branches / stash / versioning (D1.11/12/14), procedural memory core (D2.5), persona graph (D3.1-D3.4, separate MCP server), cross-audit + memory tiers (D3.6/D3.7)
 
 ## Contributing
 

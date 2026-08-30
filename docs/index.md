@@ -25,7 +25,7 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 
 | Feature | Description |
 |---------|-------------|
-| **5 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project`; exposure tiers via `ARIEL_EXPOSE`: `primitives,wiki` adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete`/`wiki_summarize`, `brief` adds `daily_brief`, `all` exposes the full 36-tool surface |
+| **6 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project` / `memory_hook`; coherent opt-in tiers via `ARIEL_EXPOSE`: `context` (recall protocol, session recap, steering, compression), `insight` (query DSL, fact blame, quality), `write` (typed saves, rules engine, scratchpad), plus `wiki` / `brief` / `review` — e.g. `primitives,context,insight,write,wiki,brief,review` (46 tools), `all` exposes the full 56-tool surface |
 | **4-tier memory** | L1 ReflexBuffer → L2 SessionStore → L3 EpisodicMemory → L4 CoreMemory, layer-isolated `(layer, user_id, key)` namespaces |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
 | **RAG search** | FTS5 + binary embeddings + hybrid RRF ranking, multi-source merge |
@@ -91,8 +91,8 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 ## Status
 
 - **Version:** 1.8.1
-- **Tests:** 635+ passed (including 25 property-based Hypothesis tests)
+- **Tests:** 927 passed (including 25 property-based Hypothesis tests + Phase D E2E/chaos suites)
 - **DB tables:** 23 (alembic head `init_v8`)
-- **Tool surface:** 5 primitives by default · 10 with `primitives,wiki` · 11 with `primitives,wiki,brief` · 36 with `all`
+- **Tool surface:** 6 primitives by default · 46 with `primitives,context,insight,write,wiki,brief,review` · 56 with `all`
 - **Python:** 3.10–3.13
 - **Platform:** Windows, Linux, macOS, Docker

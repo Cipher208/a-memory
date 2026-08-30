@@ -6,10 +6,16 @@ a-memory exposes three tool surfaces:
 
 | Surface | Tools | How |
 |---------|-------|-----|
-| **Primitives** (default) | 5 | What every MCP client sees out of the box |
-| **Primitives + wiki** | 9 | `ARIEL_EXPOSE=primitives,wiki` — adds `wiki_add`/`wiki_search`/`wiki_list`/`wiki_delete` for agents that manage wiki pages directly |
-| **+ brief** | 10 | `ARIEL_EXPOSE=primitives,wiki,brief` — adds `daily_brief` (one-call status report) |
-| **Full surface** | 36 | `ARIEL_EXPOSE=all` restores legacy granular tools |
+| **Primitives** (default) | 6 | What every MCP client sees out of the box: `think` / `dream` / `forget` / `evolve` / `project` / `memory_hook` |
+| **+ wiki** | +7 | `ARIEL_EXPOSE=primitives,wiki` — `wiki_add`/`wiki_search`/`wiki_list`/`wiki_read`/`wiki_delete`/`wiki_summarize`/`wiki_link` |
+| **+ brief** | +1 | adds `daily_brief` (one-call status report) |
+| **+ review** | +2 | adds `memory_proposals`, `memory_report_card` — staged-mutation review surface (C1.11/C1.14) |
+| **+ context** | +7 | build/recover context: `memory_recall_protocol` (D1.1), `memory_recap` (D1.2), `memory_get_smart_context` (D1.10), `memory_context`, `memory_context_inject`, `memory_steering` (D1.3), `memory_compress` (D1.4) |
+| **+ insight** | +14 | read-side analytics: `memory_query` (D1.7), `memory_fact_blame` (D1.6), `memory_quality` (D1.19), `memory_reflect` (D1.16), `memory_stats`, `memory_search`, `memory_recall`, `memory_episode_recall/list/get`, `memory_session_list`, `memory_graph_query/nodes/edges` |
+| **+ write** | +9 | shape memory: `memory_remember`, `memory_save_typed` (D1.8), `memory_load_rules` (D1.9), `memory_scratchpad` (D1.15), `memory_counterfactual` (D1.20), `memory_episode_save`, `memory_graph_add`, `memory_session_start`, `memory_session_end` |
+| **Full surface** | 56 | `ARIEL_EXPOSE=all` — everything, incl. admin ops (backup, api_key, cleanup, watch, saga, data) |
+
+Recommended live-agent value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` → 46 tools; admin surfaces stay hidden unless `all`.
 
 `think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
 wiki save with an explicit page name instead of the automatic Thought_<ts>
