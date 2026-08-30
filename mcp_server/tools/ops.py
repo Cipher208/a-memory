@@ -1053,3 +1053,24 @@ async def memory_steering(
     metrics.inc(METRIC_TOOL_CALLS)
     hints = steering_hints(query)
     return {"hints": hints, "count": len(hints)}
+
+
+async def memory_compress(
+    text: str,
+    mode: Literal["auto", "log", "code"] = "auto",
+    max_lines: int = 50,
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Tool-output compression (D1.4): shrink bulky text before re-injecting.
+
+    mode="log" — build/test logs → errors only (+header, consecutive-duplicate
+    collapse, cap); mode="code" — Python → skeleton (signatures kept, bodies
+    dropped; non-Python falls back to log); "auto" — tries code first.
+    Deterministic, no LLM.
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    from features.compress_output import compress_output
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    return compress_output(text, mode=mode, max_lines=int(max_lines))

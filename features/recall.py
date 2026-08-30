@@ -126,14 +126,25 @@ async def recall_protocol(
     if rag is not None:
         try:
             hits = await rag.search(query, user_id=user_id, limit=8)
-            for h in hits:
-                source = str(h.get("source", ""))
+            # D1.5 verification: a semantic hit with zero meaningful-token
+            # overlap with the query is retrieval noise → dropped. Expand hits
+            # are exempt — their relevance is structural (1-hop), not lexical.
+            from features.verify import verify_hits
+
+            expand_hits = [h for h in hits if str(h.get("source", "")) in ("graph", "graph_expand")]
+            verified, dropped = verify_hits(query, [h for h in hits if h not in expand_hits])
+            if dropped:
+                logger.debug("verify dropped %d noise hit(s)", len(dropped))
+            for h in verified:
                 content = str(h.get("content") or h.get("value") or h.get("summary") or h.get("title") or "")
                 if not content:
                     continue
-                score = float(h.get("score", 0.0))
-                axis = "expand" if source in ("graph", "graph_expand") else "semantic"
-                await _add(axis, score, content)
+                await _add("semantic", float(h.get("score", 0.0)), content)
+            for h in expand_hits:
+                content = str(h.get("content") or h.get("value") or h.get("summary") or h.get("title") or "")
+                if not content:
+                    continue
+                await _add("expand", float(h.get("score", 0.0)), content)
         except Exception as exc:
             logger.debug("recall axis failed: %s", exc)
 

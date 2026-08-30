@@ -74,7 +74,9 @@ async def test_full_protocol_axes_order(compaction_free):
     )
     rag = _FakeRag(
         [
-            {"content": "semantic hit", "score": 0.8, "source": "fts"},
+            # D1.5: semantic hits must share a query token — zero-overlap
+            # noise ("semantic hit" vs "find durable intent") would be dropped.
+            {"content": "durable intent discussion", "score": 0.8, "source": "fts"},
             {"content": "graph neighbor", "score": 0.4, "source": "graph_expand"},
         ]
     )
