@@ -102,6 +102,25 @@ and rehydrates the critical set instead of silently losing it.
 - `dispatch --payload '{"old_session_id": …, "reason": …}'` passes event
   context through the CLI.
 
+## Phase D surfaces (quick map)
+
+- **/recall protocol (D1.1)** — multi-axis proportional recall
+  (`markers → session → semantic → expand → day`): `autohooks recall --query`,
+  the `memory_recall_protocol` tool, and the Hermes prefetch per turn.
+- **Smart context budget (D1.10)** — weighted token floors per source
+  (important 30 / relevant 30 / recent 15 / day 15 / ops 10) with a 2x-floor
+  ceiling on redistribution: `memory_get_smart_context`.
+- **Agent scratchpad (D1.15)** — `memory_scratchpad` (write/read/clear/
+  promote); entries re-inject at session start as the `scratchpad` block.
+- **Reflections (D1.16)** — `memory_reflect` (write/list) over the
+  `reflections` table; nightly phase 5 writes the daily reflection.
+- **Quality loop (D1.19)** — `memory_quality` feedback: was_useful →
+  `recall_useful` (ACT-R frequency) + importance ±0.05; `report` aggregates.
+- **Counterfactuals (D1.20)** — `memory_counterfactual` save/list by anchor.
+- **Skills (D2.1-D2.4)** — see [Skills](../features/skills.md); the nightly
+  hook now runs **6 phases**: diary → CLS replay → graph build → skill
+  promotion → reflection → skill reinforcement.
+
 ## The autohooks runtime
 
 `python -m autohooks` (package `autohooks/`) — per-agent daemon + inject CLI.
@@ -120,5 +139,5 @@ the full wiring guide, config schema and troubleshooting.
 ## Config
 
 All knobs and their defaults: see the
-[platform guide's config reference](autohooks-platforms.md#config-reference)
+[platform guide's config reference](autohooks-platforms.md#4-config-reference-every-knob-in-one-table)
 and `docs/CONTROL_MAP.md`.

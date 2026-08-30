@@ -130,6 +130,76 @@ wiki; the legacy dir is kept for history). Three agents are wired today:
 Hermes, MiMoCode, CowAgent. The bare `~/.mcp-ariel-memory` dir is dev/legacy
 (no live config points at it).
 
+## 3.2 Runtime components — daemons, plugins, scripts
+
+### Daemons (systemd --user, always on)
+
+```
+ariel-autohooks-hermes.service     ariel-autohooks-mimocode.service     ariel-autohooks-cowagent.service
+```
+
+Each runs `python -m autohooks daemon --config ~/.config/ariel-autohooks/<agent>.yaml`:
+tails the agent's conversation SQLite (read-only URI, first-run baseline =
+max id, at-least-once), pushes `new_message` into the in-process dispatcher.
+Restart after ariel code updates: `systemctl --user restart ariel-autohooks-*`.
+CowAgent additionally runs under a **system** unit `cowagent.service`
+(Restart=always) — the agent itself, not the daemon; killing its PID
+auto-respawns it with new code (do NOT manual-nohup: `-m app` needs
+cwd=/home/murat/cowagent).
+
+### Hermes — native `MemoryProvider` plugin (preferred path)
+
+`~/.hermes/plugins/ariel/` (`plugin.yaml` + `__init__.py`), activated by
+`memory.provider: ariel` in `~/.hermes/config.yaml`. Pure-stdlib over the
+ariel venv CLI — `hermes update` venv rebuilds cannot break it.
+
+| Provider hook | What it does | Replaces |
+|---|---|---|
+| `system_prompt_block()` | critical set at session start (cached) | session-start inject file hook |
+| `queue_prefetch` / `prefetch(query)` | per-turn **/recall protocol** (D1.1), cache pattern | — (new capability) |
+| `sync_turn(user, assistant)` | per-turn push → auto-save pipeline | conversation tailing for turn capture |
+| `on_pre_compress(messages)` | drift log + critical set into the summary prompt (salvage) | gateway compaction emit |
+| `on_session_end` | `post_session_diff` (24h window) | session:end file hook |
+| `on_memory_write` | mirrors MEMORY.md writes → auto-save | — |
+| `on_session_switch` | cache invalidation on reset/compression | — |
+
+The plugin runs every CLI call on one background worker thread; failures are
+visible in `/tmp/ariel-provider.log`. The ariel MCP server stays separate
+(41+ tools via stdio). The legacy file hooks were moved to
+`~/.hermes/hooks.disabled/` and the two ariel core commits (gateway emit,
+prompt slot) were reset to upstream — the plugin is the only integration.
+In-process ariel import is the documented v2 (needs aiosqlite pinned in the
+Hermes venv — volatility risk).
+
+### MiMoCode — fork-hooks plugin
+
+`~/.config/mimocode/hooks/ariel-inject.ts` on REAL fork hook keys
+(`experimental.chat.system.transform`, `experimental.session.compacting`,
+`event` on `session.compacted`, `session.post`). Survives fork updates
+(outside the repo); re-run the bun smoke after fork updates — it depends on
+experimental hook key names.
+
+### CowAgent — code-level hooks
+
+`agent/memory/manager.py::flush_memory` fires the compaction drift
+(overflow/trim only) and `agent/protocol/agent_stream.py` appends the
+one-shot `[ariel rehydrate]` system message after trim/smart-compaction.
+No plugin-bus lifecycle events exist upstream; these are the only dispatch
+points. `flush_memory` excludes `[ariel rehydrate]` messages from the flush
+input (feedback-loop guard).
+
+### Scripts
+
+| Script | Purpose |
+|---|---|
+| `scripts/verify_autohooks.py` | end-to-end ariel-side verification (24 checks) on a scratch data dir |
+| `scripts/sync_skills.py` | shared skill SSOT (`~/skills-ssot`, git) → all agent wikis; `--bootstrap` creates the skeleton; hash-dedup makes repeats no-ops |
+
+Both close ariel's aiosqlite connections before exit — without that the
+non-daemon worker threads hang the interpreter AFTER printing (mask nothing:
+judge outputs, not exit codes through pipes).
+
+
 ## 4. Config reference — every knob in one table
 
 ### ariel `config.yaml` (per data dir; `MCP_CONFIG_PATH`)

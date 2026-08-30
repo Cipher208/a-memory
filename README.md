@@ -109,11 +109,12 @@ print(res["summary"])
 
 | Category | What's inside |
 |----------|--------------|
-| 🧠 **Memory** | L1 Reflex → L2 Sessions → L3 Episodic → L4 Core, importance scoring, typed memory kinds with TTL policies, layer isolation |
-| 🔍 **Search** | FTS5 + MIB binary embeddings + hybrid RRF ranking, multi-source merge (RAG + Wiki + Episodic + Core + Graph), dream digest |
-| 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal |
+| 🧠 **Memory** | L1 Reflex → L2 Sessions → L3 Episodic → L4 Core, importance scoring, typed memory kinds with TTL policies, layer isolation; **49 tools** including `/recall` protocol (multi-axis), smart context budget (weighted token floors), reflections, counterfactuals, was_useful quality loop |
+| 🔍 **Search** | FTS5 + MIB binary embeddings + hybrid RRF ranking, multi-source merge (RAG + Wiki + Episodic + Core + Graph), ACT-R activation scoring, dream digest |
+| 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal, 1-hop GraphRAG expansion |
 | 📁 **Projects** | Decision log (what/why/outcome), artifact map, graphify code index — survives between sessions |
-| ⚡ **Auto-Hooks** | Push-model memory: a per-agent daemon tails the conversation and ariel saves what matters on its own — importance thresholds, staged mutations (proposal → review → apply → revert), `DREAM:` markers, session-start inject, gap reports. No memory tool calls required. [Wiring guide →](docs/hooks/autohooks-platforms.md) |
+| ⚡ **Auto-Hooks** | Push-model memory: a per-agent daemon tails the conversation and ariel saves what matters on its own — importance thresholds, staged mutations (proposal → review → apply → revert), `DREAM:` markers, session-start inject, gap reports, **compaction-aware rehydrate** (drift log + salvage + one-shot rehydrate blocks). **Native integrations**: Hermes runs ariel as an in-process `MemoryProvider` plugin, MiMoCode via a fork-hooks plugin, CowAgent via code-level hooks. [Wiring guide →](docs/hooks/autohooks-platforms.md) |
+| 🎯 **Skills** | Skill = Memory: agent-read Markdown pages (first-class `skill` wiki type), progressive disclosure (`wiki_list → wiki_search → wiki_read`), 4KB lint cap, promotion from `DREAM: skill:` episodes, shared SSOT sync across agents, usage-driven reinforcement — [skills guide →](docs/features/skills.md) |
 | 🔐 **Security** | Envelope encryption (NaCl `SecretBox` = XSalsa20-Poly1305), master key chain, rate limiting |
 | 🛠️ **Ops** | Auto-backup cron, saga rollback pattern, Prometheus metrics, read-only replica, hourly self-maintenance (decay + consolidation + auto-VACUUM) |
 | 🌐 **Wiki** | FTS5-indexed markdown files — edit in Obsidian/VS Code, search from MCP, 6 analytical perspectives (`wiki_summarize`), schema lint on save, external-dir sync |
@@ -184,9 +185,13 @@ Notes (Sep 2026): mem0 now ships a self-hosted Docker image and a managed cloud 
 - [x] **Temporal timeline wired end to end (think/evolve/project events + dream recent digest)**
 - [x] **Dream-cycle inject + auto-generated CONTEXT.md snapshot** (curated context + 6 wiki perspectives + recent episodes, per-layer, per-agent)
 - [x] **Phase C — auto-hooks keystone** (push-model memory: per-agent conversation daemons, external event dispatcher, importance-gated auto-save, staged mutations with review/revert, dream markers, session-start inject, gap reports; [guide](docs/hooks/autohooks-platforms.md))
+- [x] **Phase D — compaction-aware rehydrate** (drift log + salvage into the summarizer + one-shot rehydrate blocks; MiMoCode plugin / Hermes native MemoryProvider / CowAgent hooks — [integration guide](docs/hooks/autohooks-platforms.md))
+- [x] **Phase D — /recall protocol** (multi-axis proportional recall: markers → session → semantic → expand → day; drives Hermes per-turn prefetch)
+- [x] **Phase D — Skill = Memory** (Markdown skills as a first-class wiki type, progressive disclosure `wiki_list → wiki_search → wiki_read`, 4KB lint cap, promotion pipeline, shared SSOT sync, usage-driven evolution — [skills guide](docs/features/skills.md))
+- [x] **Phase D — working memory + meta-memories** (agent scratchpad re-injected at session start, deterministic reflections, smart context budget with weighted floors, counterfactual notes, was_useful quality feedback loop)
 - [ ] **Screenshot / asciinema demo** in README
 - [ ] **LLM-assisted consolidation** on top of the deterministic sweep
-- [ ] **Phase D** — memory tools (`/recall`, session continuity), Markdown skill store, persona graph
+- [ ] **Phase D remainder** — session continuity (/new + recap), Memory Query DSL, typed schemas, memory branches/versioning, persona graph (separate MCP server)
 
 ## Contributing
 

@@ -63,7 +63,6 @@ nav:
     - Configuration: getting-started/configuration.md
     - Quick Start: getting-started/quickstart.md
     - Config Key Map: CONTROL_MAP.md
-    - Config Key Map: CONTROL_MAP.md
   - Architecture:
     - Overview: architecture/overview.md
     - Memory Layers: architecture/layers.md
@@ -92,6 +91,7 @@ nav:
     - Privacy Filter: features/privacy.md
     - Circuit Breaker: features/circuit-breaker.md
     - Token Budget: features/token-budget.md
+    - Skills: features/skills.md
   - Research:
     - Ideas Backlog: research/RESEARCH-ideas.md
   - Wiki:
