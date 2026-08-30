@@ -1098,3 +1098,89 @@ async def memory_fact_blame(
 
     metrics.inc(METRIC_TOOL_CALLS)
     return {"action": "blame", **await fact_blame(user_id, layer, entry_id=int(entry_id), key=key)}
+
+
+async def memory_query(
+    source: Literal["core", "episodes"] = "core",
+    importance_min: float | None = None,
+    importance_max: float | None = None,
+    key_like: str = "",
+    content_like: str = "",
+    created_since: float = 0.0,
+    created_until: float = 0.0,
+    tag: str = "",
+    limit: int = 50,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Memory Query DSL (D1.7): structured analytics without raw SQL.
+
+    Whitelisted filters → parameterized SQL over core_memory or episodes
+    (importance band, key/content LIKE, created_at window, episode tag).
+    Read-only, no injection surface (user SQL is never accepted).
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    from features.query_dsl import query_memory
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    return await query_memory(
+        user_id,
+        layer=layer,
+        source=source,
+        importance_min=importance_min,
+        importance_max=importance_max,
+        key_like=key_like,
+        content_like=content_like,
+        created_since=created_since,
+        created_until=created_until,
+        tag=tag,
+        limit=int(limit),
+    )
+
+
+async def memory_save_typed(
+    type_name: str,
+    fields: dict[str, str] | None = None,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Typed memory schemas (D1.8): validate structured fields, store as L4.
+
+    Built-in schemas: decision / error_pattern / relationship; custom ones
+    in <data_dir>/schemas/*.yaml merge over them. Stored fact: key
+    "<type>:<name>", metadata.typed = <type> — a typed knowledge base, not a
+    bag of strings.
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    from .base import _get_memory
+
+    mem = _get_memory(app, layer, user_id)
+    from features.typed_memory import save_typed
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    return {"action": "save_typed", **await save_typed(mem, user_id, type_name, dict(fields or {}))}
+
+
+async def memory_load_rules(
+    action: Literal["list", "reload"] = "list",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Memory rules engine (D1.9): declarative YAML rules for the write gate.
+
+    Rules live at <data_dir>/rules.yaml: when_content_contains →
+    importance_boost (sum, cap 0.3) + episode tags, applied in auto_save_text.
+    `list` shows the active ruleset; `reload` re-reads the file (it is
+    mtime-cached otherwise).
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    from features.rules import load_rules
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    rules = load_rules(force=(action == "reload"))
+    return {"action": action, "rules": rules, "count": len(rules)}

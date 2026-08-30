@@ -143,9 +143,18 @@ async def auto_save_text(
         return result
 
     threshold = float(config.get("hooks", "auto_save_threshold", default=0.5))
+    # D1.9 rules engine: declarative user rules adjust the write gate.
+    from features.rules import apply_rules
+
+    rule_out = apply_rules(text)
+    if rule_out["importance_boost"]:
+        score = min(1.0, score + rule_out["importance_boost"])
+        result["score"] = score
+    if rule_out["matched"]:
+        result["rules"] = rule_out["matched"]
     if score < threshold:
         return result
-    await mem.l3.save(user_id, text[:500], score, ["auto_save"])
+    await mem.l3.save(user_id, text[:500], score, ["auto_save", *rule_out["tags"]])
     result["saved_l3"] = True
     await graph.add_node(user_id, text[:500], "fact", [], score)
     result["saved_graph"] = True
