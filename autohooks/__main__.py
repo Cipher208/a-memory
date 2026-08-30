@@ -22,7 +22,7 @@ from autohooks.config import AgentConfig, load_config
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="autohooks", description="Universal autohooks runtime (C1.9)")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("daemon", "inject", "dispatch", "recall"):
+    for name in ("daemon", "inject", "dispatch", "recall", "recap"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True, help="path to <agent>.yaml")
     sub.choices["inject"].add_argument("--text", default="", help="current message for relevance ranking")
@@ -31,6 +31,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sub.choices["recall"].add_argument("--query", default="", help="recall query (empty = zero-state)")
     sub.choices["recall"].add_argument("--budget", default="2000", help="token budget")
     sub.choices["recall"].add_argument("--format", default="md", choices=["md", "json"])
+    sub.choices["recap"].add_argument("--budget", default="2000", help="token budget")
+    sub.choices["recap"].add_argument("--format", default="md", choices=["md", "json"])
     sub.choices["daemon"].add_argument("--once", action="store_true", help="one poll iteration (debug)")
     sub.choices["dispatch"].add_argument("--event", required=True, help="KNOWN_EVENTS name to fire")
     sub.choices["dispatch"].add_argument("--since", default="0", help="since timestamp for diff-style events")
@@ -126,6 +128,17 @@ def main(argv: list[str] | None = None) -> int:
         from features.recall import recall_protocol
 
         blocks = asyncio.run(recall_protocol(mem, rag, cfg.user_id, query=ns.query, budget=int(ns.budget)))
+        _close_ariel()
+        if ns.format == "json":
+            print(json.dumps({"blocks": blocks}, ensure_ascii=False))
+        else:
+            print(_render_recall_md(blocks))
+        return 0
+
+    if ns.command == "recap":
+        from features.continuity import session_recap
+
+        blocks = asyncio.run(session_recap(mem, cfg.user_id, budget=int(ns.budget)))
         _close_ariel()
         if ns.format == "json":
             print(json.dumps({"blocks": blocks}, ensure_ascii=False))

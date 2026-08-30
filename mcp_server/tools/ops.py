@@ -1008,3 +1008,48 @@ async def memory_counterfactual(
         cid = save_cf(user_id, anchor, premise, projection, layer=layer)
         return {"action": "save", "id": cid, "anchor": anchor}
     return {"action": "list", "counterfactuals": list_cfs(user_id, anchor=anchor)}
+
+
+async def memory_recap(
+    budget: int = 2000,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Session continuity recap (D1.2): the /new recovery pack.
+
+    One-shot block list for a fresh session: last closed session (summary,
+    topics, state deltas) → pending work (scratchpad, diff gaps, staged
+    proposals) → markers → day digest, all within `budget` tokens. Call this
+    instead of re-reading raw history (~2K tokens vs 50K). Same engine drives
+    the `autohooks recap` CLI.
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    from .base import _get_memory
+
+    mem = _get_memory(app, layer, user_id)
+    from features.continuity import session_recap
+
+    blocks = await session_recap(mem, user_id, budget=int(budget))
+    metrics.inc(METRIC_TOOL_CALLS)
+    return {"blocks": blocks, "count": len(blocks)}
+
+
+async def memory_steering(
+    query: str = "",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Steering hints (D1.3): route common intents to the best ariel tools.
+
+    Deterministic route table + keyword intent match (max 3 hints); empty
+    query returns the full table (boot-time system-prompt appendix). Ariel
+    publishes the routes — the harness decides when to consult them.
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    from features.steering import steering_hints
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    hints = steering_hints(query)
+    return {"hints": hints, "count": len(hints)}
