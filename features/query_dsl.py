@@ -33,6 +33,8 @@ async def query_memory(
         raise ValueError(f"unknown source: {source!r} (core|episodes)")
     if tag and source == "core":
         raise ValueError("tag filter is episodes-only (core_memory has no tags)")
+    if key_like and source == "episodes":
+        raise ValueError("key_like filter is core-only (episodes has no key column)")
     limit = max(1, min(int(limit), 200))
 
     where = ["layer=?", "user_id=?"]
@@ -51,7 +53,7 @@ async def query_memory(
     if importance_max is not None:
         where.append(f"{imp_col} <= ?")
         params.append(float(importance_max))
-    if key_like:
+    if key_like and source == "core":
         where.append("key LIKE ?")
         params.append(f"%{key_like}%")
     if content_like:

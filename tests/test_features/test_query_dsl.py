@@ -84,6 +84,8 @@ async def test_unknown_source_and_core_tag_rejected(query_db):
         await query_memory("u1", source="wiki")
     with pytest.raises(ValueError):
         await query_memory("u1", tag="release")  # core has no tags
+    with pytest.raises(ValueError):
+        await query_memory("u1", source="episodes", key_like="x")  # episodes has no key column
 
 
 @pytest.mark.asyncio
