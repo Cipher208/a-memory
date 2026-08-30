@@ -5,7 +5,7 @@ def test_registered_and_tier():
     from mcp_server.tools_layer import _register_tools
 
     assert "memory_recall_protocol" in _register_tools
-    assert len(_register_tools) == 48  # 41 + recall + wiki_read + skill_promote + smart_context + reflect + scratchpad + quality
+    assert len(_register_tools) == 49  # 41 + recall + wiki_read + skill_promote + smart_context + reflect + scratchpad + quality + counterfactual
     # Operator tier: NOT primitive, NOT in any EXTRA_TIERS prefix match.
     from mcp_server.server import PRIMITIVE_TOOLS
 

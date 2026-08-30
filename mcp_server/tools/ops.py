@@ -979,3 +979,32 @@ async def memory_quality(
             raise ValueError("feedback requires entry_id")
         return {"action": "feedback", **await record_feedback(user_id, layer, int(entry_id), useful=bool(useful))}
     return {"action": "report", **await quality_report(user_id, layer)}
+
+
+async def memory_counterfactual(
+    action: Literal["save", "list"] = "list",
+    anchor: str = "",
+    premise: str = "",
+    projection: str = "",
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Counterfactual memory (D1.20): "what could have been" notes.
+
+    Branches from a real anchor (fact key, decision, episode ref): `premise`
+    = what could have happened instead, `projection` = the expected outcome.
+    Reflective material — saved explicitly, listed by anchor.
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    _ = _validate_layer(layer)
+    from features.counterfactual import save_cf, list_cfs
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "save":
+        if not anchor or not premise or not projection:
+            raise ValueError("save requires anchor, premise and projection")
+        cid = save_cf(user_id, anchor, premise, projection, layer=layer)
+        return {"action": "save", "id": cid, "anchor": anchor}
+    return {"action": "list", "counterfactuals": list_cfs(user_id, anchor=anchor)}

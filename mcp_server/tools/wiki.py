@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+
 from mcp_server.registry import _get_ctx
 from .base import _validate_layer, _get_wiki
 from typing import Any
@@ -78,7 +80,8 @@ async def wiki_read(
     """Read a wiki page's full content (progressive-disclosure read leg, D2.1).
 
     `path` comes from wiki_list / wiki_search results. Skills live under
-    wiki_type="skill" as plain Markdown (SKILL.md convention).
+    wiki_type="skill" as plain Markdown (SKILL.md convention). Skill reads
+    are audit-logged (`skill_read`) — D2.4 usage-driven reinforcement.
     """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -86,6 +89,20 @@ async def wiki_read(
     entry = await wiki.get(path)
     if entry is None:
         return {"status": "not_found", "path": path}
+    with contextlib.suppress(Exception):
+        if entry.wiki_type == "skill":
+            import sqlite3 as _sqlite3
+            import time as _time
+
+            from shared.connection import connection_manager
+
+            with _sqlite3.connect(str(connection_manager.base_dir / "memory.db")) as _conn:
+                _conn.execute(
+                    "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp)"
+                    " VALUES ('default', 'skill_read', 'wiki', ?, '{}', ?)",
+                    (str(entry.file_path), _time.time()),
+                )
+                _conn.commit()  # telemetry is best-effort, never blocks the read
     return {
         "status": "ok",
         "title": entry.title,

@@ -101,6 +101,10 @@ class UserHooks:
             from features.reflection import nightly_reflection
 
             result["reflection"] = nightly_reflection(mem, self.user_id)
+        with contextlib.suppress(Exception):
+            from features.skill_pipeline import skill_reinforce
+
+            result["skill_reinforce"] = await skill_reinforce(WikiManager(layer="user"))
         return result
 
     @hook_registry.mark("importance_gate", layer="user")
