@@ -40,7 +40,7 @@ async def query_memory(
     where = ["layer=?", "user_id=?"]
     params: list[Any] = [layer, user_id]
     if source == "core":
-        sql = "SELECT entry_id, layer, user_id, key, value, importance, memory_kind, source, created_at, updated_at FROM core_memory"
+        sql = "SELECT entry_id, layer, user_id, key, value, importance, memory_kind, source, metadata, created_at, updated_at FROM core_memory"
         imp_col = "importance"
         content_col = "value"
     else:

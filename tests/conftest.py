@@ -63,6 +63,33 @@ def hermetic_global_db():
     connection_manager._conns.clear()
 
 
+@pytest.fixture(autouse=True)
+def deterministic_gate_and_registry():
+    """Deterministic importance gate + clean hook registry per test.
+
+    - adaptive_threshold is a module singleton: gate() reads the cached EMA
+      value and persists updates to the shared preferences DB. Without a
+      reset the threshold drifts with execution order (high-importance tests
+      push later low-importance saves below the gate — the dir-isolated
+      test_mcp order-dependent failures). Pin it to the DEFAULT so every
+      test sees identical gate semantics; tests exercising EMA logic
+      monkeypatch it explicitly (test_hypothesis pattern).
+    - AppContext() (used by several test files, e.g. test_post_session_diff)
+      registers REAL UserHooks/AgentHooks into the GLOBAL hook_registry and
+      never unregisters — handlers then leak into later tests. Snapshot and
+      restore the registry around every test.
+    """
+    from hooks.registry import hook_registry
+    from shared.adaptive import adaptive_threshold
+
+    saved_handlers = {k: list(v) for k, v in hook_registry._hooks.items()}
+    adaptive_threshold._current_value = adaptive_threshold.DEFAULT_THRESHOLD
+    yield
+    hook_registry._hooks.clear()
+    hook_registry._hooks.update(saved_handlers)
+    adaptive_threshold._current_value = None
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """Force exit after all tests complete — aiosqlite worker thread bug."""

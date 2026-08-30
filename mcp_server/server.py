@@ -38,6 +38,55 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
     "brief": lambda name, names: {n for n in names if n.startswith("daily_")},
     # review: staged-mutation review surface (C1.11/C1.13/C1.14) — opt-in per instance
     "review": lambda name, names: names & {"memory_proposals", "memory_report_card"},
+    # Phase D coherent groups:
+    # context = build/recover context (recall protocol, recap, budgets, steering, compression)
+    "context": lambda name, names: (
+        names
+        & {
+            "memory_recall_protocol",
+            "memory_recap",
+            "memory_get_smart_context",
+            "memory_context",
+            "memory_context_inject",
+            "memory_steering",
+            "memory_compress",
+        }
+    ),
+    # insight = read-side analytics (query DSL, provenance blame, quality, reflections, raw search)
+    "insight": lambda name, names: (
+        names
+        & {
+            "memory_query",
+            "memory_fact_blame",
+            "memory_quality",
+            "memory_reflect",
+            "memory_stats",
+            "memory_search",
+            "memory_recall",
+            "memory_episode_recall",
+            "memory_episode_list",
+            "memory_episode_get",
+            "memory_session_list",
+            "memory_graph_query",
+            "memory_graph_nodes",
+            "memory_graph_edges",
+        }
+    ),
+    # write = shape memory (typed saves, rules, scratchpad, counterfactuals, episodes, graph, sessions)
+    "write": lambda name, names: (
+        names
+        & {
+            "memory_remember",
+            "memory_save_typed",
+            "memory_load_rules",
+            "memory_scratchpad",
+            "memory_counterfactual",
+            "memory_episode_save",
+            "memory_graph_add",
+            "memory_session_start",
+            "memory_session_end",
+        }
+    ),
 }
 
 

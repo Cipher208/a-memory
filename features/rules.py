@@ -54,6 +54,10 @@ def load_rules(force: bool = False) -> list[dict[str, Any]]:
         logger.warning("rules.yaml parse failed: %s", exc)
         _cache = (mtime, [])
         return []
+    if not isinstance(data, dict):
+        # A valid-but-wrong-shape file (e.g. a bare list) degrades, never crashes.
+        _cache = (mtime, [])
+        return []
     rules = [
         r
         for r in (data.get("rules") or [])
