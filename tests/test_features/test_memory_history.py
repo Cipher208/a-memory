@@ -69,7 +69,7 @@ async def test_history_failure_never_blocks_save(cm):
     assert eid > 0
 
     # the guard itself: a failing ledger write must never raise
-    await core._record_history(BoomConn(), "user", "u1", "k", None, ("v", 0.5), "t", 0.0)
+    await core._record_history(BoomConn(), "user", "u1", "k", None, {"value": "v", "importance": 0.5}, "t", 0.0)
 
 
 async def test_list_history_filters_and_get_row(cm):
@@ -87,3 +87,35 @@ async def test_list_history_filters_and_get_row(cm):
     row = await get_history_row(cm, int(ka[0]["history_id"]))
     assert row is not None and row["new_value"] == "va"
     assert await get_history_row(cm, 999999) is None
+
+
+async def test_row_json_captured_on_all_mutations(cm):
+    core = CoreMemory(cm=cm, layer="user")
+    await core.save("u1", "k1", "v1", memory_kind="fact", source="user_explicit")
+    await core.save("u1", "k1", "v2", importance=0.9)
+    await core.delete("u1", "k1")
+
+    rows = await _rows(cm)
+    ins, upd, dele = rows[2], rows[1], rows[0]
+
+    assert ins["old_row_json"] is None
+    assert '"value": "v1"' in ins["new_row_json"] and '"source": "user_explicit"' in ins["new_row_json"]
+
+    assert '"value": "v1"' in upd["old_row_json"]
+    assert '"value": "v2"' in upd["new_row_json"] and '"importance": 0.9' in upd["new_row_json"]
+
+    assert '"value": "v2"' in dele["old_row_json"] and '"importance": 0.9' in dele["old_row_json"] and dele["new_row_json"] is None
+
+
+async def test_list_is_slim_get_is_full(cm):
+    from features.history import get_history_row, list_history
+
+    core = CoreMemory(cm=cm, layer="user")
+    await core.save("u1", "k1", "v1")
+    await core.save("u1", "k1", "v2")
+
+    listed = await list_history(cm, "u1", "user")
+    assert "old_row_json" not in listed[0] and "new_row_json" not in listed[0]
+
+    full = await get_history_row(cm, int(listed[0]["history_id"]))
+    assert '"value": "v1"' in (full["old_row_json"] or "")

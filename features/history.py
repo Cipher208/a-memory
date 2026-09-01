@@ -13,6 +13,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# list() stays slim — the row-JSON blobs are context bloat; get() returns them
+_SLIM_COLS = (
+    "history_id, layer, user_id, key, old_value, new_value, old_importance, new_importance, commit_hash, triggered_by, created_at"
+)
+
 
 async def list_history(
     cm: AsyncConnectionManager,
@@ -26,12 +31,12 @@ async def list_history(
         conn = await cm.get("memory.db")
         if key:
             cursor = await conn.execute(
-                "SELECT * FROM core_memory_history WHERE user_id=? AND layer=? AND key=? ORDER BY history_id DESC LIMIT ?",
+                f"SELECT {_SLIM_COLS} FROM core_memory_history WHERE user_id=? AND layer=? AND key=? ORDER BY history_id DESC LIMIT ?",
                 (user_id, layer, key, int(limit)),
             )
         else:
             cursor = await conn.execute(
-                "SELECT * FROM core_memory_history WHERE user_id=? AND layer=? ORDER BY history_id DESC LIMIT ?",
+                f"SELECT {_SLIM_COLS} FROM core_memory_history WHERE user_id=? AND layer=? ORDER BY history_id DESC LIMIT ?",
                 (user_id, layer, int(limit)),
             )
         rows = await cursor.fetchall()
