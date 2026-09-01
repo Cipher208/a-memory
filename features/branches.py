@@ -162,10 +162,10 @@ async def delete_branch(cm: AsyncConnectionManager, base_layer: str, user_id: st
 async def list_branches(cm: AsyncConnectionManager, user_id: str = "") -> list[dict[str, Any]]:
     conn = await cm.get("memory.db")
     sql = "SELECT layer, COUNT(*) AS n FROM core_memory WHERE layer LIKE '%@%'"
-    params: list[Any] = []
+    params: tuple[Any, ...] = ()
     if user_id:
         sql += " AND user_id=?"
-        params.append(user_id)
+        params = (user_id,)
     sql += " GROUP BY layer ORDER BY layer"
     rows = await (await conn.execute(sql, params)).fetchall()
     out = []
