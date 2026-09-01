@@ -91,7 +91,7 @@ backup:
 | `MCP_MASTER_KEY` | auto-generated | Master key for envelope encryption |
 | `MCP_MEMORY_DATA_DIR` | `~/.mcp-ariel-memory` | Data directory for SQLite databases |
 | `MCP_CONFIG_PATH` | repo-root `config.yaml` | Per-agent config file path |
-| `ARIEL_EXPOSE` | `primitives` | Tool exposure tiers (comma-separated): `context` / `insight` / `write` / `wiki` / `brief` / `review` — e.g. `primitives,context,insight,write,wiki,brief,review` (46 tools); `all` restores the full 56-tool surface |
+| `ARIEL_EXPOSE` | `primitives` | Tool exposure tiers (comma-separated): `context` / `insight` / `write` / `wiki` / `brief` / `review` — e.g. `primitives,context,insight,write,wiki,brief,review` (46 tools); `all` restores the full 56-tool surface. **⚠️ stdio clients pass a sanitized environment** — set this variable in the MCP client's server `env` block, not in your shell profile; the server logs the resolved surface at startup (`tool exposure: N/56 tools`) and tool lists are cached per client session, so restart the session after changing it |
 | `MCP_AUTH_TOKEN` | auto-generated | Bearer token for HTTP transport |
 | `MCP_AUTH_DISABLED` | unset | Set to `1` to disable auth (`--no-auth` does this) |
 | `BACKUP_CRON_DISABLED` | false | Disable backup cron daemon |

@@ -130,6 +130,7 @@ def _register_all_tools() -> None:
 
     expose = os.environ.get("ARIEL_EXPOSE", "primitives").strip().lower()
     tools = get_all_tools()
+    total = len(tools)
     if expose != "all":
         allowed = resolve_exposure(expose, set(tools))
         hidden = sorted(set(tools) - allowed)
@@ -139,6 +140,15 @@ def _register_all_tools() -> None:
     for name, func in tools.items():
         mcp.tool(name=name)(_scope_tool(func))
 
+    # Startup evidence for the env-sanitization gotcha: MCP stdio clients pass
+    # a sanitized environment, so a shell-profile ARIEL_EXPOSE silently never
+    # reaches the server. Log the resolved surface so misconfiguration shows
+    # up in logs instead of an agent reporting "I only see 6 tools".
+    global _EXPOSURE_SUMMARY
+    _EXPOSURE_SUMMARY = (len(tools), total, expose)
+
+
+_EXPOSURE_SUMMARY: tuple[int, int, str] | None = None
 
 _register_all_tools()
 
@@ -164,6 +174,12 @@ def _setup_logging() -> None:
         root.addHandler(handler)
     except OSError:
         pass  # unwritable dir — console logging still works
+
+    # _EXPOSURE_SUMMARY is captured at import (before logging is configured) —
+    # emit it here so the resolved tool surface lands in memory.log.
+    if _EXPOSURE_SUMMARY is not None:
+        exposed, total, expose = _EXPOSURE_SUMMARY
+        logging.getLogger(__name__).info("tool exposure: %d/%d tools (ARIEL_EXPOSE=%s)", exposed, total, expose)
 
 
 def main() -> None:

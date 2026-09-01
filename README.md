@@ -103,6 +103,8 @@ print(res["summary"])
 
 56 fine-grained operations exist in total, grouped into coherent opt-in tiers: the 6 primitives are exposed by default; add `context` (recall protocol, /new session recap, smart context budget, steering hints, tool-output compression), `insight` (Memory Query DSL, provenance fact-blame, quality loop, reflections, stats), `write` (typed memory schemas, declarative rules engine, scratchpad, counterfactuals, episodes), plus `wiki`, `brief`, and `review` (staged mutations) — e.g. `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` (46 tools), or everything via `ARIEL_EXPOSE=all`.
 
+> **⚠️ Env sanitization gotcha (stdio):** MCP clients pass a *sanitized* environment to stdio servers — setting `ARIEL_EXPOSE` in your shell profile does nothing. Define the tier set in your **MCP client config** (the `env` block of the server entry — see [configuration guide](docs/getting-started/configuration.md)). The server logs its resolved surface at startup (`tool exposure: 46/56 tools`) — if your agent reports seeing only the primitives, check that line first, then restart the client session (tool lists are cached per session).
+
 ---
 
 ## Features
