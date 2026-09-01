@@ -1324,3 +1324,48 @@ async def memory_stash(
             raise ValueError("drop requires name")
         return {"action": "drop", **st.stash_drop(user_id, layer, name)}
     raise ValueError(f"unknown action: {action!r}")
+
+
+async def memory_procedure(
+    action: Literal["save", "list", "get", "use", "delete"] = "list",
+    name: str = "",
+    steps: list[str] | None = None,
+    notes: str = "",
+    success: bool = True,
+    learned: str = "",
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Procedural memory (D2.5): HOW-knowledge with execution stats.
+
+    save registers a named procedure (steps list); use records an execution
+    outcome (success/fail) and optionally appends a learned note; success_rate
+    is computed, never stored. Procedures are a declarative cheat-sheet — the
+    agent reads get() and acts itself; there is no execute-engine.
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    _validate_layer(layer)
+    from features import procedures as pr
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "save":
+        if not name:
+            raise ValueError("save requires name")
+        return {"action": "save", **pr.proc_save(user_id, layer, name, list(steps or []), notes)}
+    if action == "list":
+        return {"action": "list", "procedures": pr.proc_list(user_id, layer)}
+    if action == "get":
+        if not name:
+            raise ValueError("get requires name")
+        return {"action": "get", **pr.proc_get(user_id, layer, name)}
+    if action == "use":
+        if not name:
+            raise ValueError("use requires name")
+        return {"action": "use", **pr.proc_use(user_id, layer, name, bool(success), learned)}
+    if action == "delete":
+        if not name:
+            raise ValueError("delete requires name")
+        return {"action": "delete", **pr.proc_delete(user_id, layer, name)}
+    raise ValueError(f"unknown action: {action!r}")

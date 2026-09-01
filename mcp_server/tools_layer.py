@@ -50,6 +50,7 @@ from .tools.ops import (
     memory_history,  # A2.2
     memory_branch,  # Phase D D1.11
     memory_stash,  # Phase D D1.12
+    memory_procedure,  # Phase D D2.5
 )
 
 # Re-export _fire_hook for backward compatibility and tests
@@ -102,6 +103,7 @@ _register_tools: dict[str, Any] = {
     "memory_history": memory_history,
     "memory_branch": memory_branch,
     "memory_stash": memory_stash,
+    "memory_procedure": memory_procedure,
     "memory_skill_promote": memory_skill_promote,
     "memory_hook": memory_hook,
     "think": think,

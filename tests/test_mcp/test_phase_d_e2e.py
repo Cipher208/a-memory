@@ -258,3 +258,27 @@ async def test_stash_context_switch_chain(phase_d_app):
 
     pad2 = await memory_scratchpad(action="read", user_id="eu", ctx=phase_d_app)
     assert pad2["entries"][0]["content"] == "project A plan"
+
+
+async def test_procedure_lifecycle_chain(phase_d_app):
+    """D2.5: save → use success → use fail w/ learned → get → list → delete."""
+    from mcp_server.tools_layer import memory_procedure
+
+    saved = await memory_procedure(action="save", name="deploy-flow", steps=["git pull", "uv sync", "restart unit"], notes="master only", user_id="eu", ctx=phase_d_app)
+    assert saved["steps"] == 3
+
+    r1 = await memory_procedure(action="use", name="deploy-flow", success=True, user_id="eu", ctx=phase_d_app)
+    assert r1["success_rate"] == 1.0
+    r2 = await memory_procedure(action="use", name="deploy-flow", success=False, learned="uv sync before kill", user_id="eu", ctx=phase_d_app)
+    assert r2["success_rate"] == 0.5
+
+    got = await memory_procedure(action="get", name="deploy-flow", user_id="eu", ctx=phase_d_app)
+    assert got["steps"] == ["git pull", "uv sync", "restart unit"]
+    assert got["notes"] == "master only; learned: uv sync before kill"
+
+    listed = await memory_procedure(action="list", user_id="eu", ctx=phase_d_app)
+    assert [p["name"] for p in listed["procedures"]] == ["deploy-flow"]
+    assert "steps" not in listed["procedures"][0]
+
+    deleted = await memory_procedure(action="delete", name="deploy-flow", user_id="eu", ctx=phase_d_app)
+    assert deleted["deleted"] is True
