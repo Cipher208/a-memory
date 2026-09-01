@@ -7,6 +7,7 @@ Layer-isolated: every row carries the memory layer ('user' | 'agent', ...),
 so agent identity never collides with user facts.
 """
 
+import hashlib
 import json
 import logging
 import time
@@ -70,6 +71,7 @@ class CoreMemory:
         source: str = "manual",
         metadata: dict[str, Any] | None = None,
         layer: str | None = None,
+        triggered_by: str | None = None,
     ) -> int:
         layer = layer or self.layer
         now = time.time()
@@ -80,10 +82,13 @@ class CoreMemory:
         existing_id = await self._find_existing_id(conn, layer, user_id, key)
 
         if existing_id is not None:
+            old = await self._fetch_old(conn, existing_id)
             await self._update_entry(conn, existing_id, value, importance, memory_kind, expires_at, source, metadata_json, now)
             entry_id = existing_id
+            await self._record_history(conn, layer, user_id, key, old, (value, importance), triggered_by or source, now)
         else:
             entry_id = await self._insert_entry(conn, layer, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now)
+            await self._record_history(conn, layer, user_id, key, None, (value, importance), triggered_by or source, now)
 
         await conn.commit()
         return entry_id
@@ -136,6 +141,38 @@ class CoreMemory:
         )
         return int(cursor.lastrowid or 0)
 
+    async def _fetch_old(self, conn: Any, eid: int) -> tuple[str, float] | None:
+        cursor = await conn.execute("SELECT value, importance FROM core_memory WHERE entry_id=?", (eid,))
+        row = await cursor.fetchone()
+        return (str(row[0]), float(row[1])) if row else None
+
+    async def _record_history(
+        self,
+        conn: Any,
+        layer: str,
+        user_id: str,
+        key: str,
+        old: tuple[str, float] | None,
+        new: tuple[str, float] | None,
+        triggered_by: str,
+        now: float,
+    ) -> None:
+        """Append one A2.2 ledger row. Degrades to a warning so memory writes never fail on history."""
+        try:
+            old_value = old[0] if old else None
+            old_imp = old[1] if old else None
+            new_value = new[0] if new else None
+            new_imp = new[1] if new else None
+            commit_hash = hashlib.sha256(f"{layer}|{user_id}|{key}|{old_value}|{new_value}".encode()).hexdigest()[:16]
+            await conn.execute(
+                """INSERT INTO core_memory_history
+                   (layer, user_id, key, old_value, new_value, old_importance, new_importance, commit_hash, triggered_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (layer, user_id, key, old_value, new_value, old_imp, new_imp, commit_hash, triggered_by, now),
+            )
+        except Exception as exc:
+            logger.warning("core_memory_history write failed: %s", exc)
+
     async def get(self, user_id: str, key: str) -> CoreEntry | None:
         """Get a fact by key. Returns None if not found."""
         conn = await self._cm.get(DB_NAME)
@@ -157,8 +194,15 @@ class CoreMemory:
         rows = await cursor.fetchall()
         return [self._row_to_entry(r) for r in rows]
 
-    async def delete(self, user_id: str, key: str) -> bool:
+    async def delete(self, user_id: str, key: str, triggered_by: str | None = None) -> bool:
         conn = await self._cm.get(DB_NAME)
+        cursor = await conn.execute(
+            "SELECT value, importance FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        await self._record_history(conn, self.layer, user_id, key, (str(row[0]), float(row[1])), None, triggered_by or "delete", time.time())
         cursor = await conn.execute("DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
         await conn.commit()
         return cursor.rowcount > 0
