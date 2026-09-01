@@ -47,6 +47,7 @@ from .tools.ops import (
     memory_query,  # Phase D D1.7
     memory_save_typed,  # Phase D D1.8
     memory_load_rules,  # Phase D D1.9
+    memory_history,  # A2.2
 )
 
 # Re-export _fire_hook for backward compatibility and tests
@@ -96,6 +97,7 @@ _register_tools: dict[str, Any] = {
     "memory_query": memory_query,
     "memory_save_typed": memory_save_typed,
     "memory_load_rules": memory_load_rules,
+    "memory_history": memory_history,
     "memory_skill_promote": memory_skill_promote,
     "memory_hook": memory_hook,
     "think": think,

@@ -33,6 +33,7 @@ def test_insight_tier_exact_set():
     assert exposed == {
         "memory_query",
         "memory_fact_blame",
+        "memory_history",
         "memory_quality",
         "memory_reflect",
         "memory_stats",

@@ -1184,3 +1184,32 @@ async def memory_load_rules(
     metrics.inc(METRIC_TOOL_CALLS)
     rules = load_rules(force=(action == "reload"))
     return {"action": action, "rules": rules, "count": len(rules)}
+
+
+async def memory_history(
+    action: Literal["list", "get"] = "list",
+    layer: str = "user",
+    user_id: str = "default",
+    key: str = "",
+    history_id: int = 0,
+    limit: int = 50,
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Mutation ledger for L4 core facts (A2.2): every insert/update/delete
+    with old/new values, commit_hash and triggered_by provenance. Scars stay
+    forever; D1.14 (snapshot/rollback) extends this tool later.
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    from features.history import get_history_row, list_history
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "list":
+        rows = await list_history(app.mm._cm, user_id, layer, key=key, limit=int(limit))
+        return {"action": "list", "rows": rows, "count": len(rows)}
+    if action == "get":
+        row = await get_history_row(app.mm._cm, history_id=int(history_id))
+        if row is None:
+            raise ValueError(f"history_id not found: {history_id}")
+        return {"action": "get", "row": row}
+    raise ValueError(f"unknown action: {action!r}")

@@ -52,12 +52,13 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_compress",
         }
     ),
-    # insight = read-side analytics (query DSL, provenance blame, quality, reflections, raw search)
+    # insight = read-side analytics (query DSL, provenance blame, quality, reflections, raw search, history ledger)
     "insight": lambda name, names: (
         names
         & {
             "memory_query",
             "memory_fact_blame",
+            "memory_history",
             "memory_quality",
             "memory_reflect",
             "memory_stats",
