@@ -194,3 +194,41 @@ async def test_branch_ab_persona_chain(phase_d_app):
 
     await memory_branch(action="delete", name="exp1", user_id="eu", ctx=phase_d_app)
     assert (await memory_branch(action="list", user_id="eu", ctx=phase_d_app))["branches"] == []
+
+
+async def test_versioning_snapshot_rollback_chain(phase_d_app, monkeypatch):
+    """D1.14: snapshot → mutations → rollback one → full restore."""
+    # the importance gate's EMA drifts within the test (first save raises the
+    # threshold); this chain is about versioning, not gate dynamics — pin it open.
+    from shared.adaptive import adaptive_threshold
+
+    async def _always_pass(score):
+        return {"importance": score, "threshold": 0.0, "bypass": False}
+
+    monkeypatch.setattr(adaptive_threshold, "gate", _always_pass)
+
+    from mcp_server.tools_layer import memory_history, memory_query, memory_remember
+
+    await memory_remember(key="persona_a", value="original persona", importance=0.9, user_id="eu", ctx=phase_d_app)
+    snap = await memory_history(action="snapshot_create", name="saga1", user_id="eu", ctx=phase_d_app)
+    assert snap["facts"] == 1
+
+    await memory_remember(key="persona_a", value="broken persona", importance=0.9, user_id="eu", ctx=phase_d_app)
+    await memory_remember(key="extra", value="junk", user_id="eu", ctx=phase_d_app)
+
+    # rollback the "broken" update: find its ledger row
+    hist = await memory_history(action="list", key="persona_a", layer="user", user_id="eu", ctx=phase_d_app)
+    upd = next(r for r in hist["rows"] if r["new_value"] == "broken persona")
+    rb = await memory_history(action="rollback", history_id=int(upd["history_id"]), user_id="eu", ctx=phase_d_app)
+    assert rb["action"] == "restored"
+
+    q = await memory_query(source="core", key_like="persona_a", user_id="eu", ctx=phase_d_app)
+    row = next(r for r in q["rows"] if r["key"] == "persona_a")
+    assert row["value"] == "original persona"
+
+    # full restore removes 'extra' and keeps persona_a at the snapshot state
+    out = await memory_history(action="snapshot_restore", name="saga1", user_id="eu", ctx=phase_d_app)
+    assert out["restored"] == 1 and out["deleted"] == 1
+    q2 = await memory_query(source="core", key_like="persona", user_id="eu", ctx=phase_d_app)
+    assert {r["key"] for r in q2["rows"]} == {"persona_a"}
+    assert next(r["value"] for r in q2["rows"] if r["key"] == "persona_a") == "original persona"

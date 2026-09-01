@@ -58,6 +58,7 @@ def test_write_tier_exact_set():
         "memory_scratchpad",
         "memory_counterfactual",
         "memory_branch",
+        "memory_history",
         "memory_episode_save",
         "memory_graph_add",
         "memory_session_start",

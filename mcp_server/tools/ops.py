@@ -1187,19 +1187,22 @@ async def memory_load_rules(
 
 
 async def memory_history(
-    action: Literal["list", "get"] = "list",
+    action: Literal["list", "get", "rollback", "snapshot_create", "snapshot_list", "snapshot_restore"] = "list",
     layer: str = "user",
     user_id: str = "default",
     key: str = "",
     history_id: int = 0,
+    name: str = "",
     limit: int = 50,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Mutation ledger for L4 core facts (A2.2).
+    """Mutation ledger for L4 core facts (A2.2) + memory versioning (D1.14).
 
-    Every insert/update/delete recorded with old/new values, commit_hash and
-    triggered_by provenance. Scars stay forever; D1.14 (snapshot/rollback)
-    extends this tool later.
+    list/get browse the ledger (slim/full rows with commit_hash and
+    triggered_by provenance). rollback = git revert of ONE mutation
+    (history_id): reinstates its pre-state. snapshot_create/list/restore
+    manage named point-in-time captures of the (layer, user) fact set;
+    restore is ledger-traced and idempotent. Scars stay forever.
     """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -1214,6 +1217,28 @@ async def memory_history(
         if row is None:
             raise ValueError(f"history_id not found: {history_id}")
         return {"action": "get", "row": row}
+    if action == "rollback":
+        if not history_id:
+            raise ValueError("rollback requires history_id")
+        from features.versioning import rollback
+
+        return {"action": "rollback", **await rollback(app.mm._cm, int(history_id))}
+    if action == "snapshot_create":
+        if not name:
+            raise ValueError("snapshot_create requires name")
+        from features.versioning import snapshot_create
+
+        return {"action": "snapshot_create", **await snapshot_create(app.mm._cm, layer, user_id, name)}
+    if action == "snapshot_list":
+        from features.versioning import snapshot_list
+
+        return {"action": "snapshot_list", "snapshots": await snapshot_list(app.mm._cm, user_id, base_layer=layer)}
+    if action == "snapshot_restore":
+        if not name:
+            raise ValueError("snapshot_restore requires name")
+        from features.versioning import snapshot_restore
+
+        return {"action": "snapshot_restore", **await snapshot_restore(app.mm._cm, layer, user_id, name)}
     raise ValueError(f"unknown action: {action!r}")
 
 
