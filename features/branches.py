@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.memory import CoreMemory
-from shared.connection import AsyncConnectionManager
+
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +47,7 @@ async def create_branch(cm: AsyncConnectionManager, base_layer: str, user_id: st
     """Full clone: copy every base-layer fact for this user into the branch."""
     layer = branch_layer(base_layer, name)
     conn = await cm.get("memory.db")
-    existing = await (
-        await conn.execute("SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (layer, user_id))
-    ).fetchone()
+    existing = await (await conn.execute("SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (layer, user_id))).fetchone()
     if existing and int(existing[0]) > 0:
         raise ValueError(f"branch already exists: {name!r}")
     cur = await conn.execute(
@@ -76,9 +76,7 @@ async def write_branch(
     return {"name": name, "key": key, "entry_id": eid}
 
 
-async def read_branch(
-    cm: AsyncConnectionManager, base_layer: str, user_id: str, name: str, limit: int = 200
-) -> list[dict[str, Any]]:
+async def read_branch(cm: AsyncConnectionManager, base_layer: str, user_id: str, name: str, limit: int = 200) -> list[dict[str, Any]]:
     core = CoreMemory(cm=cm, layer=branch_layer(base_layer, name))
     entries = await core.get_all(user_id, limit=int(limit))
     return [
@@ -97,12 +95,8 @@ async def diff_branch(cm: AsyncConnectionManager, base_layer: str, user_id: str,
     """Branch vs base per key: added / changed / unchanged (+ changed values)."""
     layer = branch_layer(base_layer, name)
     conn = await cm.get("memory.db")
-    b_rows = await (
-        await conn.execute("SELECT key, value FROM core_memory WHERE layer=? AND user_id=?", (layer, user_id))
-    ).fetchall()
-    m_rows = await (
-        await conn.execute("SELECT key, value FROM core_memory WHERE layer=? AND user_id=?", (base_layer, user_id))
-    ).fetchall()
+    b_rows = await (await conn.execute("SELECT key, value FROM core_memory WHERE layer=? AND user_id=?", (layer, user_id))).fetchall()
+    m_rows = await (await conn.execute("SELECT key, value FROM core_memory WHERE layer=? AND user_id=?", (base_layer, user_id))).fetchall()
     b_map = {str(r["key"]): str(r["value"]) for r in b_rows}
     m_map = {str(r["key"]): str(r["value"]) for r in m_rows}
     added = sorted(k for k in b_map if k not in m_map)
@@ -123,8 +117,10 @@ async def merge_branch(
     name: str,
     keys: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Cherry-pick: upsert listed keys (default: all differing) from branch
-    into base with branch_merge provenance. Unchanged/unknown keys are skipped."""
+    """Cherry-pick upsert listed keys (default: all differing) from branch into base.
+
+    Provenance: branch_merge. Unchanged/unknown keys are skipped.
+    """
     layer = branch_layer(base_layer, name)
     diff = await diff_branch(cm, base_layer, user_id, name)
     differing = set(diff["added"]) | set(diff["changed"])

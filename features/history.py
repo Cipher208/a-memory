@@ -1,13 +1,15 @@
-"""A2.2 core_memory_history read surface — the mutation ledger behind D1.11
-branches and D1.14 snapshots. Scars stay forever (no retention cap yet; D1.14
-owns pruning)."""
+"""A2.2 core_memory_history read surface — the mutation ledger behind D1.11 branches and D1.14 snapshots.
+
+Scars stay forever (no retention cap yet; D1.14 owns pruning).
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from shared.connection import AsyncConnectionManager
+if TYPE_CHECKING:
+    from shared.connection import AsyncConnectionManager
 
 logger = logging.getLogger(__name__)
 

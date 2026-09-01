@@ -196,9 +196,7 @@ class CoreMemory:
 
     async def delete(self, user_id: str, key: str, triggered_by: str | None = None) -> bool:
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT value, importance FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key)
-        )
+        cursor = await conn.execute("SELECT value, importance FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
         row = await cursor.fetchone()
         if not row:
             return False

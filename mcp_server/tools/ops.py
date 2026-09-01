@@ -1195,9 +1195,11 @@ async def memory_history(
     limit: int = 50,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Mutation ledger for L4 core facts (A2.2): every insert/update/delete
-    with old/new values, commit_hash and triggered_by provenance. Scars stay
-    forever; D1.14 (snapshot/rollback) extends this tool later.
+    """Mutation ledger for L4 core facts (A2.2).
+
+    Every insert/update/delete recorded with old/new values, commit_hash and
+    triggered_by provenance. Scars stay forever; D1.14 (snapshot/rollback)
+    extends this tool later.
     """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)

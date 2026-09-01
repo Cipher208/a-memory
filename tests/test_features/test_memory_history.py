@@ -24,9 +24,7 @@ async def _rows(cm, user_id="u1", layer="user", key=""):
             (user_id, layer, key),
         )
     else:
-        cur = await conn.execute(
-            "SELECT * FROM core_memory_history WHERE user_id=? AND layer=? ORDER BY history_id DESC", (user_id, layer)
-        )
+        cur = await conn.execute("SELECT * FROM core_memory_history WHERE user_id=? AND layer=? ORDER BY history_id DESC", (user_id, layer))
     return [dict(r) for r in await cur.fetchall()]
 
 
@@ -48,7 +46,7 @@ async def test_commit_hash_deterministic(cm):
     core = CoreMemory(cm=cm)
     await core.save("u1", "k", "v")
     rows = await _rows(cm)
-    expected = hashlib.sha256("user|u1|k|None|v".encode()).hexdigest()[:16]
+    expected = hashlib.sha256(b"user|u1|k|None|v").hexdigest()[:16]
     assert rows[0]["commit_hash"] == expected
 
 

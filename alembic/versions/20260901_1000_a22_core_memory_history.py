@@ -31,9 +31,7 @@ def upgrade() -> None:
             created_at REAL NOT NULL
         )
     """)
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_core_history_lookup ON core_memory_history(layer, user_id, key, created_at)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_core_history_lookup ON core_memory_history(layer, user_id, key, created_at)")
 
 
 def downgrade() -> None:
