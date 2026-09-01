@@ -1213,3 +1213,50 @@ async def memory_history(
             raise ValueError(f"history_id not found: {history_id}")
         return {"action": "get", "row": row}
     raise ValueError(f"unknown action: {action!r}")
+
+
+async def memory_branch(
+    action: Literal["create", "write", "read", "diff", "merge", "delete", "list"] = "list",
+    name: str = "",
+    key: str = "",
+    value: str = "",
+    importance: float | None = None,
+    keys: list[str] | None = None,
+    base_layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Memory branches (D1.11): A/B persona staging for L4 facts.
+
+    Branch = "<base>@<name>" namespace in core_memory; invisible to
+    retrieval until merged. create = full clone; write = branch-local fact;
+    diff = branch vs base; merge = cherry-pick keys (default: all differing)
+    into base with branch_merge provenance; delete drops the branch.
+    """
+    app = _get_ctx(ctx)
+    base_layer = _validate_layer(base_layer)
+    from features import branches as br
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    cm = app.mm._cm
+    if action == "create":
+        if not name:
+            raise ValueError("create requires name")
+        return {"action": "create", **await br.create_branch(cm, base_layer, user_id, name)}
+    if action == "write":
+        if not (name and key and value):
+            raise ValueError("write requires name, key and value")
+        return {"action": "write", **await br.write_branch(cm, base_layer, user_id, name, key, value, importance=importance)}
+    if action == "read":
+        return {"action": "read", "facts": await br.read_branch(cm, base_layer, user_id, name)}
+    if action == "diff":
+        return {"action": "diff", **await br.diff_branch(cm, base_layer, user_id, name)}
+    if action == "merge":
+        if not name:
+            raise ValueError("merge requires name")
+        return {"action": "merge", **await br.merge_branch(cm, base_layer, user_id, name, keys=keys)}
+    if action == "delete":
+        return {"action": "delete", **await br.delete_branch(cm, base_layer, user_id, name)}
+    if action == "list":
+        return {"action": "list", "branches": await br.list_branches(cm, user_id=user_id)}
+    raise ValueError(f"unknown action: {action!r}")

@@ -73,7 +73,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_graph_edges",
         }
     ),
-    # write = shape memory (typed saves, rules, scratchpad, counterfactuals, episodes, graph, sessions)
+    # write = shape memory (typed saves, rules, scratchpad, counterfactuals, episodes, graph, sessions, branches)
     "write": lambda name, names: (
         names
         & {
@@ -82,6 +82,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_load_rules",
             "memory_scratchpad",
             "memory_counterfactual",
+            "memory_branch",
             "memory_episode_save",
             "memory_graph_add",
             "memory_session_start",

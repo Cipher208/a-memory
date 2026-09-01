@@ -169,3 +169,28 @@ async def test_steering_and_compress_surfaces():
     comp = await memory_compress(text="$ pytest\nPASSED a\nFAILED b - assert\nERROR teardown")
     assert comp["mode"] == "log"  # non-python → auto falls back to log
     assert "FAILED b" in comp["text"] and "PASSED a" not in comp["text"]
+
+
+async def test_branch_ab_persona_chain(phase_d_app):
+    """D1.11: create → diverge → diff → cherry-pick merge → provenance → delete."""
+    from mcp_server.tools_layer import memory_branch, memory_history, memory_remember
+
+    await memory_remember(key="principle_yagni", value="YAGNI ruthlessly", importance=0.9, user_id="eu", ctx=phase_d_app)
+
+    created = await memory_branch(action="create", name="exp1", user_id="eu", ctx=phase_d_app)
+    assert created["copied"] == 1
+
+    await memory_branch(action="write", name="exp1", key="principle_yagni", value="BUT: test first", importance=0.8, user_id="eu", ctx=phase_d_app)
+    await memory_branch(action="write", name="exp1", key="principle_ab", value="A/B test personas", user_id="eu", ctx=phase_d_app)
+
+    diff = await memory_branch(action="diff", name="exp1", user_id="eu", ctx=phase_d_app)
+    assert diff["added"] == ["principle_ab"] and diff["changed"] == ["principle_yagni"]
+
+    merged = await memory_branch(action="merge", name="exp1", keys=["principle_ab"], user_id="eu", ctx=phase_d_app)
+    assert merged["merged"] == ["principle_ab"]
+
+    hist = await memory_history(action="list", key="principle_ab", layer="user", user_id="eu", ctx=phase_d_app)
+    assert hist["rows"][0]["triggered_by"] == "branch_merge:exp1"
+
+    await memory_branch(action="delete", name="exp1", user_id="eu", ctx=phase_d_app)
+    assert (await memory_branch(action="list", user_id="eu", ctx=phase_d_app))["branches"] == []
