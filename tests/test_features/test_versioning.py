@@ -92,7 +92,7 @@ async def test_rollback_insert_update_delete(cm):
     rb2 = await vs.rollback(cm, int(rows[1]["history_id"]))
     assert rb2["action"] == "restored"
     assert (await core.get("u1", "k")).value == "v1"
-    assert [r["triggered_by"] for r in await list_history(cm, "u1", "user")][0] == f"rollback:{rows[1]['history_id']}"
+    assert next(r["triggered_by"] for r in await list_history(cm, "u1", "user")) == f"rollback:{rows[1]['history_id']}"
 
     # undo the INSERT → fact deleted again
     rb3 = await vs.rollback(cm, int(rows[2]["history_id"]))

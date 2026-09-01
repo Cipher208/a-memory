@@ -69,10 +69,10 @@ async def snapshot_create(cm: AsyncConnectionManager, base_layer: str, user_id: 
 async def snapshot_list(cm: AsyncConnectionManager, user_id: str, base_layer: str = "") -> list[dict[str, Any]]:
     conn = await cm.get("memory.db")
     sql = "SELECT snapshot_id, layer, user_id, name, fact_count, created_at FROM core_memory_snapshots WHERE user_id=?"
-    params: list[Any] = [user_id]
+    params: tuple[Any, ...] = (user_id,)
     if base_layer:
         sql += " AND layer=?"
-        params.append(base_layer)
+        params = (*params, base_layer)
     sql += " ORDER BY created_at DESC"
     rows = await (await conn.execute(sql, params)).fetchall()
     return [dict(r) for r in rows]
