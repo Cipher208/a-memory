@@ -1296,11 +1296,12 @@ async def memory_stash(
     user_id: str = "default",
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Memory stash (D1.12): git-stash for the working context — L1 chatter
-    + scratchpad entries, stashed under a name, cleared, restorable later.
-    L4 facts and sessions are NOT stashed (identity, not context — branches
-    and snapshots handle those). Pop refuses while the current scratchpad is
-    non-empty (stash it first).
+    """Memory stash (D1.12): git-stash for the working context.
+
+    L1 chatter + scratchpad entries, stashed under a name, cleared,
+    restorable later. L4 facts and sessions are NOT stashed (identity, not
+    context — branches and snapshots handle those). Pop refuses while the
+    current scratchpad is non-empty (stash it first).
     """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)

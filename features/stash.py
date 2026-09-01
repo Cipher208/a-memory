@@ -21,12 +21,9 @@ import logging
 import re
 import sqlite3
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from features.scratchpad import _db_path, clear_entries, read_entries, write_entry
-
-if TYPE_CHECKING:
-    from core.reflex import ReflexBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +55,7 @@ def _validate_name(name: str) -> str:
 def _fetch_row(user_id: str, layer: str, name: str) -> dict[str, Any] | None:
     with sqlite3.connect(str(_db_path())) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT * FROM memory_stash WHERE user_id=? AND layer=? AND name=?", (user_id, layer, name)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM memory_stash WHERE user_id=? AND layer=? AND name=?", (user_id, layer, name)).fetchone()
         return dict(row) if row else None
 
 
