@@ -6,6 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- **Procedural memory minimal core (Phase D D2.5)** — `memory_procedure` (60): HOW-knowledge with execution stats, author-trimmed from §13's 8 tables/12 tools/8 hooks down to ONE table + ONE multi-action tool (Stage-1 directive). `save` registers a named step list (branch-regex names, duplicate → error), `use` records an execution outcome — counters update and an optional `learned` note APPENDS to notes (the trimmed §13.2 learn hook); `success_rate` is computed on read, never stored (no drift); `list` is payload-free, `get` returns full steps, `delete` removes. No execute-engine: procedures are a declarative cheat-sheet — the agent reads get() and acts. Discoverability rides the D1.3 steering route (updated: memory_procedure for repeatable procedures, wiki stays for rich skill docs). Lazy `procedural_memory` table (no migration). Write tier. Tool count 59 → 60.
+
+### Changed
 - **Memory stash (Phase D D1.12)** — `memory_stash` (59): git-stash for the working context — `save` captures the L1 reflex buffer (role/content/tokens; timestamps refreshed on pop — resumed chatter becomes "recent" again) + scratchpad entries under a name in a lazily-created `memory_stash` table and clears both; `pop` restores the exact working set and consumes the row (refuses while the current scratchpad is non-empty — stash first, no silent data loss); `list` (payload-free) and `drop` manage the set. L4 facts and sessions are deliberately NOT stashed — identity is D1.11 branches / D1.14 snapshots territory; after per-user layer keying the live use case is one agent switching between contexts (project A ↔ project B). Write tier. Tool count 58 → 59.
 
 ### Changed
