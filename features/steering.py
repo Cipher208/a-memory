@@ -42,9 +42,9 @@ ROUTE_TABLE: tuple[dict[str, str], ...] = (
     {
         "when": "procedural / skill knowledge",
         "match": "how do i|how to|procedure|skill|инструкция|как делать|шаги",
-        "use": "wiki_search then wiki_read",
+        "use": "memory_procedure for repeatable procedures; wiki_search then wiki_read for rich skill docs",
         "instead": "memory_episode_recall",
-        "why": "skills are wiki pages — progressive disclosure (D2.1)",
+        "why": "procedures carry execution stats (D2.5); skills are wiki pages (D2.1)",
     },
     {
         "when": "rate whether recalled memory helped",
