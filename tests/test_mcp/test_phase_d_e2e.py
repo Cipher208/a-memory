@@ -232,3 +232,29 @@ async def test_versioning_snapshot_rollback_chain(phase_d_app, monkeypatch):
     q2 = await memory_query(source="core", key_like="persona", user_id="eu", ctx=phase_d_app)
     assert {r["key"] for r in q2["rows"]} == {"persona_a"}
     assert next(r["value"] for r in q2["rows"] if r["key"] == "persona_a") == "original persona"
+
+
+async def test_stash_context_switch_chain(phase_d_app):
+    """D1.12: stash → clean context → work → pop refuses → pop restores."""
+    from mcp_server.tools_layer import memory_scratchpad, memory_stash
+
+    await memory_scratchpad(action="write", key="plan", content="project A plan", user_id="eu", ctx=phase_d_app)
+    out = await memory_stash(action="save", name="proj-a", user_id="eu", ctx=phase_d_app)
+    assert out["scratchpad_items"] == 1
+
+    pad = await memory_scratchpad(action="read", user_id="eu", ctx=phase_d_app)
+    assert pad["entries"] == []  # context clean
+
+    await memory_scratchpad(action="write", key="plan", content="project B plan", user_id="eu", ctx=phase_d_app)
+    with pytest.raises(ValueError, match="stash the current context first"):
+        await memory_stash(action="pop", name="proj-a", user_id="eu", ctx=phase_d_app)
+
+    listed = await memory_stash(action="list", user_id="eu", ctx=phase_d_app)
+    assert [s["name"] for s in listed["stashes"]] == ["proj-a"]
+
+    await memory_scratchpad(action="clear", user_id="eu", ctx=phase_d_app)
+    popped = await memory_stash(action="pop", name="proj-a", user_id="eu", ctx=phase_d_app)
+    assert popped["scratchpad_items"] == 1
+
+    pad2 = await memory_scratchpad(action="read", user_id="eu", ctx=phase_d_app)
+    assert pad2["entries"][0]["content"] == "project A plan"

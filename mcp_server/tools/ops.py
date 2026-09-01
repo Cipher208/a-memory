@@ -1287,3 +1287,39 @@ async def memory_branch(
     if action == "list":
         return {"action": "list", "branches": await br.list_branches(cm, user_id=user_id)}
     raise ValueError(f"unknown action: {action!r}")
+
+
+async def memory_stash(
+    action: Literal["save", "pop", "list", "drop"] = "list",
+    name: str = "",
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Memory stash (D1.12): git-stash for the working context — L1 chatter
+    + scratchpad entries, stashed under a name, cleared, restorable later.
+    L4 facts and sessions are NOT stashed (identity, not context — branches
+    and snapshots handle those). Pop refuses while the current scratchpad is
+    non-empty (stash it first).
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    mem = _get_memory(app, layer, user_id)
+    from features import stash as st
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "save":
+        if not name:
+            raise ValueError("save requires name")
+        return {"action": "save", **await st.stash_save(mem, user_id, layer, name)}
+    if action == "pop":
+        if not name:
+            raise ValueError("pop requires name")
+        return {"action": "pop", **await st.stash_pop(mem, user_id, layer, name)}
+    if action == "list":
+        return {"action": "list", "stashes": st.stash_list(user_id, layer)}
+    if action == "drop":
+        if not name:
+            raise ValueError("drop requires name")
+        return {"action": "drop", **st.stash_drop(user_id, layer, name)}
+    raise ValueError(f"unknown action: {action!r}")
