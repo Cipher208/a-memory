@@ -264,7 +264,9 @@ async def test_procedure_lifecycle_chain(phase_d_app):
     """D2.5: save → use success → use fail w/ learned → get → list → delete."""
     from mcp_server.tools_layer import memory_procedure
 
-    saved = await memory_procedure(action="save", name="deploy-flow", steps=["git pull", "uv sync", "restart unit"], notes="master only", user_id="eu", ctx=phase_d_app)
+    saved = await memory_procedure(
+        action="save", name="deploy-flow", steps=["git pull", "uv sync", "restart unit"], notes="master only", user_id="eu", ctx=phase_d_app
+    )
     assert saved["steps"] == 3
 
     r1 = await memory_procedure(action="use", name="deploy-flow", success=True, user_id="eu", ctx=phase_d_app)
