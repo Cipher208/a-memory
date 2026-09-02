@@ -287,6 +287,7 @@ class CoreMemory:
                 "importance": float(r["importance"]),
                 "entry_id": int(r["entry_id"]),
                 "updated_at": float(r["updated_at"]),
+                "memory_kind": r["memory_kind"],  # E15: kind weights read this
             }
             for _, _, r in scored[:limit]
         ]

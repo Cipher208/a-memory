@@ -25,6 +25,18 @@ _ID_OFFSET_WIKI = 1_000_000
 _ID_OFFSET_EPISODIC = 2_000_000
 _ID_OFFSET_GRAPH = 3_000_000
 
+# E15: memory_type weights — working-memory kinds outrank plain facts.
+# Overridable via config `retrieval.kind_weights` (merged over defaults).
+_KIND_WEIGHT_DEFAULTS: dict[str, float] = {"instruction": 1.1, "rule": 1.1, "commitment": 1.1}
+
+
+def _kind_weight(kind: str | None) -> float:
+    from config import config
+
+    overrides = config.get("retrieval", "kind_weights", default=None) or {}
+    table = {**_KIND_WEIGHT_DEFAULTS, **overrides}
+    return float(table.get(str(kind or "fact"), 1.0))
+
 
 class MultiSourceRAG:
     def __init__(self, rag: Any, wiki: Any, cm: Any | None = None):
@@ -184,6 +196,7 @@ class MultiSourceRAG:
                 "content": f["value"],
                 "score": f["importance"]
                 * weight
+                * _kind_weight(f.get("memory_kind"))
                 * (1 + 0.3 * actr_activation(now, f.get("updated_at", now), freq.get(int(f.get("entry_id", 0)), 0))),
                 "source": "core",
                 "entry_id": f.get("entry_id"),
