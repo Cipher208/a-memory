@@ -121,6 +121,16 @@ async def recall_protocol(
     except Exception as exc:
         logger.debug("recall axis failed: %s", exc)
 
+    # E11: disclosure triggers — operator rules surface matching content.
+    if full:
+        try:
+            from features.disclosure import evaluate_disclosures
+
+            for hit in evaluate_disclosures(user_id, query):
+                await _add("triggered", 0.95, f"{hit['name']}: {hit['content']}")
+        except Exception as exc:
+            logger.debug("disclosure axis failed: %s", exc)
+
     # Axis 3+4: semantic hits and their graph expansion (one RAG call — the
     # B1.6 GraphRAG stage already appended 1-hop neighbors with source tags).
     if rag is not None:

@@ -843,6 +843,45 @@ async def memory_report_card(
     return card
 
 
+# ─── memory_disclose (Phase E E11) ─────────────────────────────────────────────
+
+
+async def memory_disclose(
+    action: str,
+    *,
+    name: str = "",
+    trigger_keywords: list[str] | None = None,
+    content: str = "",
+    rule_id: int = 0,
+    limit: int = 50,
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Disclosure triggers (E11): recall-side rules — «when X, surface Y».
+
+    Pair of memory_watch (save-side). Rules match case-insensitive keywords
+    against recall/inject text and surface their content as a `triggered`
+    block. action: "list" | "add" | "disable" | "enable" | "delete".
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    from features import disclosure
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "list":
+        return {"status": "ok", "rules": disclosure.list_rules(user_id, int(limit))}
+    if action == "add":
+        rule = disclosure.add_rule(user_id, name, trigger_keywords or [], content)
+        return {"status": "ok", "rule_id": rule}
+    if action == "disable":
+        return {"status": "ok", "updated": disclosure.set_enabled(user_id, int(rule_id), False)}
+    if action == "enable":
+        return {"status": "ok", "updated": disclosure.set_enabled(user_id, int(rule_id), True)}
+    if action == "delete":
+        return {"status": "ok", "deleted": disclosure.delete_rule(user_id, int(rule_id))}
+    raise ValueError(f"unknown action: {action!r} (list|add|disable|enable|delete)")
+
+
 # ─── memory_diagnose / memory_heal (Phase E E3) ────────────────────────────────
 
 

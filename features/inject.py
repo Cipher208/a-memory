@@ -138,6 +138,20 @@ async def build_inject_blocks(
             blocks.append({"kind": "proposals", "content": content, "score": 0.6})
             remaining -= cost
 
+    # E11: disclosure triggers — operator rules surface matching content
+    # (dynamic side of the E9 ordering; never part of the stable prefix).
+    try:
+        from features.disclosure import evaluate_disclosures
+
+        for hit in evaluate_disclosures(user_id, text):
+            content = f"{hit['name']}: {hit['content']}"
+            cost = estimate_tokens(content)
+            if cost <= remaining:
+                blocks.append({"kind": "triggered", "content": content, "score": 0.95})
+                remaining -= cost
+    except Exception as exc:
+        logger.debug("disclosure block skipped: %s", exc)
+
     important_min = float(config.get("inject", "important_min", default=0.8))
     facts = await mem.l4.get_all(user_id, 50)
     important = [f for f in facts if f.importance >= important_min]

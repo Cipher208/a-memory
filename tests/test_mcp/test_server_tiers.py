@@ -67,6 +67,7 @@ def test_write_tier_exact_set():
         "memory_session_start",
         "memory_session_end",
         "memory_heal",  # Phase E E3
+        "memory_disclose",  # Phase E E11
     }
 
 

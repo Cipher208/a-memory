@@ -92,6 +92,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_session_start",
             "memory_session_end",
             "memory_heal",  # Phase E E3 — mutating operator surface
+            "memory_disclose",  # Phase E E11 — disclosure rule CRUD
         }
     ),
 }
