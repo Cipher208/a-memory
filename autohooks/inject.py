@@ -28,8 +28,12 @@ def _render_md(blocks: list[dict[str, Any]]) -> str:
     for b in blocks:
         kind = b.get("kind", "memory")
         content = str(b.get("content", "")).strip()
-        if content:
-            lines.append(f"- [{kind}] {content}")
+        if not content:
+            continue
+        if kind == "cache_break":
+            lines.append("<cache:break>")  # E9: bare marker line, not a bullet
+            continue
+        lines.append(f"- [{kind}] {content}")
     return "\n".join(lines) if lines else "—"
 
 

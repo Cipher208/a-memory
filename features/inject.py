@@ -147,4 +147,12 @@ async def build_inject_blocks(
         if cost <= remaining:
             blocks.append({"kind": "important", "content": content, "score": max(f.importance for f in important)})
 
+    # E9: prompt-cache-friendly ordering — query-independent blocks (stable
+    # across calls) form the prefix; a <cache:break> marker separates them
+    # from per-query dynamics so provider prompt caches hit the prefix.
+    stable = [b for b in blocks if b["kind"] in ("rehydrate", "important")]
+    dynamic = [b for b in blocks if b["kind"] not in ("rehydrate", "important")]
+    if stable and dynamic:
+        marker = {"kind": "cache_break", "content": "<cache:break>", "score": 0.0}
+        return stable + [marker] + dynamic
     return blocks
