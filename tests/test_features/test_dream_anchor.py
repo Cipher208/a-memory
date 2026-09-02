@@ -1,7 +1,5 @@
 """E18: DREAM markers anchored to message start — document-fragment junk eliminated."""
 
-import pytest
-
 from features.importance import detect_dream_marker
 
 

@@ -42,10 +42,8 @@ def test_kind_weight_config_override(hermetic_base, monkeypatch):
 async def test_scoring_applies_kind_weight(hermetic_base):
     """Same importance/recency, different kind → instruction outranks fact."""
     from core.memory import CoreMemory
-    from datetime import datetime, timezone
 
     core = CoreMemory(cm=connection_manager)
-    ts = datetime.now(timezone.utc).timestamp()
     await core.save("u1", "kw_do_x", "how to do x properly", importance=0.5, memory_kind="instruction")
     await core.save("u1", "kw_fact_x", "how to do x properly", importance=0.5, memory_kind="fact")
 

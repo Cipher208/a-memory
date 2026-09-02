@@ -24,9 +24,7 @@ def _ctx():
 
     ctx = MagicMock()
     ctx.request_context = MagicMock()
-    ctx.request_context.lifespan_context = SimpleNamespace(
-        mm=None, cache=None, user_wiki=None, agent_wiki=None, user_graph=None, agent_graph=None
-    )
+    ctx.request_context.lifespan_context = SimpleNamespace(mm=None, cache=None, user_wiki=None, agent_wiki=None, user_graph=None, agent_graph=None)
     return ctx
 
 

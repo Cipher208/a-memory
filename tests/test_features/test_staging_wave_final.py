@@ -1,7 +1,6 @@
 """E17b+E17c: wiki_write staging kind + transition-level consolidation revert."""
 
 import asyncio
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -35,7 +34,7 @@ def _app(tmp_path):
 
 
 async def test_wiki_write_apply_and_revert(hermetic_base):
-    from features.staging import _apply, decide, propose, revert
+    from features.staging import decide, propose, revert
 
     await propose("tool", "wiki_write", "default", "user", {"title": "e17 note", "content": "staged wiki page body", "wiki_type": "work_notes"})
     pending = await _pending_first()
@@ -46,8 +45,6 @@ async def test_wiki_write_apply_and_revert(hermetic_base):
     path = res["result_ref"].removeprefix("wiki:")
     rev = await revert(pending, mem=_app(hermetic_base))
     assert rev["status"] == "reverted" and rev["restored"] == 1
-
-    from pathlib import Path
 
     assert not (hermetic_base / "wiki" / "user" / "concept" / f"{path}").exists() or not any(
         (hermetic_base / "wiki" / "user").rglob("*.md")
@@ -75,7 +72,6 @@ async def test_revert_transition_removes_promoted_l4(hermetic_base):
     """Episode promotion → L4; revert_transition removes the L4 row, episode stays."""
     from core.memory import CoreMemory
     from features.staging import revert_transition
-    from lifecycle.consolidation import ConsolidationEngine
     from lifecycle.transitions import record_transition
 
     # seed one high-weight episode
@@ -90,7 +86,11 @@ async def test_revert_transition_removes_promoted_l4(hermetic_base):
     assert tid > 0
 
     # sanity: L4 row exists
-    assert await CoreMemory(cm=connection_manager, layer="user").recall_key_exists("ep_the_big_consolidation_fact") if hasattr(cm, "recall_key_exists") else True
+    assert (
+        await CoreMemory(cm=connection_manager, layer="user").recall_key_exists("ep_the_big_consolidation_fact")
+        if hasattr(cm, "recall_key_exists")
+        else True
+    )
     res = await revert_transition("default", tid)
     assert res["deleted"] is True
 
