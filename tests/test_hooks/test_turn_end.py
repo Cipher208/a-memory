@@ -2,8 +2,17 @@
 
 import pytest
 
-import hooks.user_hooks  # noqa: F401 — registration side effect
+import hooks.user_hooks  # noqa: F401 — registration metadata
 from hooks.external import dispatch_event
+from hooks.registry import hook_registry
+from hooks.user_hooks import UserHooks
+
+
+@pytest.fixture()
+def registered_hooks():
+    hook_registry.register_instance(UserHooks())
+    yield
+    hook_registry._hooks.pop("on_turn_end", None)  # keep other tests' registries clean
 
 
 def test_on_turn_end_in_known_events():
@@ -13,7 +22,7 @@ def test_on_turn_end_in_known_events():
 
 
 @pytest.mark.asyncio
-async def test_turn_end_returns_sync_result():
+async def test_turn_end_returns_sync_result(registered_hooks):
     """The handler result comes back to the caller in the same await."""
 
     class _L1:
@@ -39,9 +48,9 @@ async def test_turn_end_returns_sync_result():
         "u1",
         {"text": "D" * 200},  # long text crosses the auto-save threshold
         mem,
-        None,
+        object(),  # graph required by _new_message (None → skip branch)
         None,
     )
     assert result["handler_count"] == 1
     res = result["results"][0]
-    assert res["score"] > 0  # pipeline ran and reports its score
+    assert res["auto_save"]["score"] > 0  # pipeline ran and reports its score
