@@ -20,9 +20,15 @@ def test_detect_memory_target() -> None:
 
 
 def test_detect_fact_case_insensitive() -> None:
-    m = detect_dream_marker("drem ignored\nDream: Fact: сервер vm1282045")
+    # E18: marker must START the message — case-insensitivity still holds
+    m = detect_dream_marker("Dream: Fact: сервер vm1282045")
     assert m is not None
     assert m["target"] == "fact"
+
+
+def test_mid_text_marker_rejected() -> None:
+    # E18: the mid-text case the old test asserted is now the bug, not a feature
+    assert detect_dream_marker("drem ignored\nDream: Fact: сервер vm1282045") is None
 
 
 def test_detect_skill_target() -> None:

@@ -66,11 +66,16 @@ def evaluate_importance(text: str) -> float:
     return min(1.0, score)
 
 
-_DREAM_RE = _re.compile(r"DREAM:\s*(memory|fact|skill):\s*(.+)", _re.IGNORECASE | _re.DOTALL)
+_DREAM_RE = _re.compile(r"^\s*DREAM:\s*(memory|fact|skill):\s*(.+)", _re.IGNORECASE | _re.DOTALL)
 
 
 def detect_dream_marker(text: str) -> dict[str, str] | None:
-    """Detect a DREAM: memory:/fact:/skill: durable signal (C1.12). First match wins."""
+    """Detect a DREAM: memory:/fact:/skill: durable signal (C1.12, E18-anchored).
+
+    The marker is a deliberate protocol — it must START the message. Mid-text
+    matches produced junk skills from document fragments (6 false episodes in
+    live dirs); anchoring kills the false positives at the source.
+    """
     m = _DREAM_RE.search(text or "")
     if not m:
         return None
