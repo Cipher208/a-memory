@@ -86,7 +86,7 @@ def test_import_user_bulk_insert(tmp_path):
             encoding="utf-8",
         )
         imported = await ie.import_user(str(export_file))
-        assert imported == {"core_memory": 2, "episodes": 1, "sessions": 0}
+        assert imported == {"core_memory": 2, "episodes": 1, "sessions": 0, "l1": 0}
 
         conn = await cm.get("memory.db")
         cur = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id='u1'")

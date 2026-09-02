@@ -10,29 +10,38 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path  # noqa: TC003 — do_export return type
 
 from shared.connection import connection_manager
 from shared.memory_types import backfill_null_kinds, kind_for_text
 
 
-async def do_export(user_id: str, kind: str | None) -> None:
-    conn = await connection_manager.get("memory.db")
-    if kind:
-        await (
-            await conn.execute(
-                "SELECT * FROM core_memory WHERE user_id=? AND memory_kind=?",
-                (user_id, kind),
-            )
-        ).fetchall()
-    else:
-        await (
-            await conn.execute(
-                "SELECT * FROM core_memory WHERE user_id=?",
-                (user_id,),
-            )
-        ).fetchall()
+async def do_export(user_id: str, kind: str | None) -> Path:
+    """Export typed rows to a JSON file (E4: previously fetched and dropped)."""
+    import json
+    import time
+    from pathlib import Path
 
-    return
+    conn = await connection_manager.get("memory.db")
+    sql = "SELECT * FROM core_memory WHERE user_id=?"
+    params: list[str] = [user_id]
+    if kind:
+        sql += " AND memory_kind=?"
+        params.append(kind)
+    rows = await (await conn.execute(sql, params)).fetchall()
+
+    base = Path(str(connection_manager.base_dir)) / "exports"
+    base.mkdir(parents=True, exist_ok=True)
+    suffix = f"_{kind}" if kind else ""
+    out = base / f"typed_export_{user_id}{suffix}_{int(time.time())}.json"
+    payload = {
+        "user_id": user_id,
+        "memory_kind": kind,
+        "exported_at": time.time(),
+        "rows": [dict(r) for r in rows],
+    }
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
 
 
 async def do_reclassify(user_id: str, dry_run: bool) -> None:

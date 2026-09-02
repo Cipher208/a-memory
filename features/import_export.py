@@ -37,13 +37,15 @@ class ImportExport:
         core_memory: list[dict[str, Any]] = []
         episodes: list[dict[str, Any]] = []
         sessions: list[dict[str, Any]] = []
+        l1: dict[str, list[dict[str, Any]]] = {"user": [], "agent": []}
         data = {
             "user_id": user_id,
             "exported_at": time.time(),
-            "version": "1.1",
+            "version": "1.2",
             "core_memory": core_memory,
             "episodes": episodes,
             "sessions": sessions,
+            "l1": l1,
         }
 
         conn = await self._cm.get(DB_NAME)
@@ -88,6 +90,16 @@ class ImportExport:
                     "ended_at": r["ended_at"],
                 }
             )
+
+        # E4: L1 reflex rings (in-memory since E1; deque maxlen governs size)
+        from core import memory_manager
+
+        memory_manager._cm = self._cm  # keep the manager on this instance's connection scope
+        for label, layer in (
+            ("user", memory_manager.user_memory(user_id)),
+            ("agent", memory_manager.agent_memory(user_id)),
+        ):
+            l1[label] = [vars(e) for e in layer.l1.get_full()]
 
         filename = f"export_{user_id}_{int(time.time())}.json"
         filepath = self.export_dir / filename
@@ -170,6 +182,17 @@ class ImportExport:
                     session_rows,
                 )
             imported["sessions"] = len(session_rows)
+
+            # E4: L1 restore — v1.1 payloads have no "l1" key and import as before.
+            from core import memory_manager
+            from core.reflex import ReflexEntry
+
+            memory_manager._cm = self._cm
+            imported["l1"] = 0
+            for label, entries in (data.get("l1") or {}).items():
+                layer = memory_manager.user_memory(user_id) if label == "user" else memory_manager.agent_memory(user_id)
+                layer.l1.restore([ReflexEntry(**e) for e in entries])
+                imported["l1"] += len(entries)
 
             await conn.commit()
         except Exception:
