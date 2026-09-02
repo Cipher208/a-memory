@@ -4,7 +4,9 @@ from __future__ import annotations
 L1 ReflexBuffer - ring buffer for recent messages
 """
 
+import contextlib
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -77,10 +79,23 @@ class ReflexBuffer:
             except (FileNotFoundError, json.JSONDecodeError, KeyError):
                 pass
 
+    def restore(self, entries: list[ReflexEntry]) -> None:
+        """Bulk-restore exported entries (E4 import). Newest wins via maxlen."""
+        with self._lock:
+            self._buffer.extend(entries)
+            self._adds_since_save = _SAVE_EVERY_ADDS  # force save on next add
+
     def _save(self) -> None:
-        if self.persist_path:
-            try:
-                with Path(self.persist_path, "w").open() as f:
-                    json.dump([vars(e) for e in self._buffer], f)
-            except (OSError, TypeError):
-                pass
+        if not self.persist_path:
+            return
+        path = Path(self.persist_path)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            with tmp.open("w") as f:
+                json.dump([vars(e) for e in self._buffer], f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)  # atomic on POSIX and Windows
+        except (OSError, TypeError):
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)

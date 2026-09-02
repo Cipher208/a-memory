@@ -6,6 +6,9 @@ Two-layer: user facts + agent identity
 """
 
 from typing import Optional, Any
+import hashlib
+import re
+from pathlib import Path
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -18,6 +21,17 @@ from .session import SessionStore
 
 from shared.constants import DEFAULT_USER, DEFAULT_LAYER, AGENT_LAYER, UTF8
 
+_SAFE_USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _l1_persist_name(layer_type: str, user_id: str) -> str:
+    """Filename-safe per-(layer, user) L1 persist name (E1)."""
+    if _SAFE_USER_RE.match(user_id):
+        safe = user_id
+    else:
+        safe = hashlib.sha1(user_id.encode()).hexdigest()[:12]
+    return f"l1_{layer_type}_{safe}.json"
+
 
 class MemoryLayer:
     """Unified async memory layer for both user and agent."""
@@ -27,7 +41,12 @@ class MemoryLayer:
         self.user_id = user_id
         self._cm = cm or connection_manager
         self._cache: Any = cache
-        self.l1 = ReflexBuffer(max_size=config.get_limit("l1_buffer_size"))
+        persist = None
+        base = getattr(self._cm, "base_dir", None)
+        if base:
+            # E1: L1 now survives restarts (was in-memory only since forever)
+            persist = str(Path(str(base)) / _l1_persist_name(layer_type, user_id))
+        self.l1 = ReflexBuffer(max_size=config.get_limit("l1_buffer_size"), persist_path=persist)
         self.l2 = SessionStore(cm=self._cm)
         self.l3 = EpisodicMemory(cm=self._cm, layer=layer_type)
         self.l4 = CoreMemory(cm=self._cm, layer=layer_type)
