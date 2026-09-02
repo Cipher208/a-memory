@@ -4,6 +4,9 @@
 
 Prevents cascading failures when LLM or embedding services are unavailable.
 
+Restored from commit `538c61b` (purged as unwired dead code in `94a7c52`) and
+wired as of Phase E / E2.
+
 ## States
 
 - closed: Normal operation
@@ -17,7 +20,7 @@ Prevents cascading failures when LLM or embedding services are unavailable.
 
 ## Usage
 
-from mcp_server.utils.circuit_breaker import CircuitBreaker
+from shared.circuit_breaker import CircuitBreaker
 
 breaker = CircuitBreaker(threshold=3, recovery_timeout=30)
 
@@ -30,6 +33,15 @@ try:
 except Exception:
     breaker.record_failure()
 
+## Wiring (E2)
+
+Gates `EmbeddingCache._compute_missing_embeddings` (`shared/embeddings.py`):
+3 consecutive `model.encode` failures → open 30s → hash-fallback vectors keep
+recall serving (cached under the `hash-fallback/<model>` tag). Module
+singleton: `_embedding_breaker`; metrics via
+`shared.circuit_breaker.breaker_registry.get_all_metrics()`
+(surfaced by `memory_diagnose`).
+
 ## Testing
 
-pytest tests/test_circuit_breaker.py -v
+pytest tests/test_shared/test_circuit_breaker.py tests/test_shared/test_embedding_breaker.py -v

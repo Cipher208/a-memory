@@ -11,8 +11,12 @@ import re
 import struct
 from typing import Any
 
+from shared.circuit_breaker import CircuitBreaker
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+
+# E2: 3 consecutive model.encode failures → open 30s → hash-fallback service.
+_embedding_breaker = CircuitBreaker(threshold=3, recovery_timeout=30.0, name="embedding_model")
 
 
 def _configured_model() -> str:
@@ -159,11 +163,19 @@ class EmbeddingCache:
     async def _compute_missing_embeddings(self, to_compute: list[tuple[int, str]], cache_tag: str, has_model: bool) -> dict[int, list[float]]:
         computed: dict[int, list[float]] = {}
 
-        if has_model:
+        # E2 circuit breaker: allow_request() is False while open → hash
+        # fallback keeps recall serving; hash vectors cache under the
+        # hash-fallback tag so they never masquerade as model embeddings.
+        if has_model and _embedding_breaker.allow_request():
             model = _get_model()
             compute_texts = [t for _, t in to_compute]
             # encode() is CPU-bound sync work — keep it off the event loop
-            embeddings = await asyncio.to_thread(model.encode, compute_texts)
+            try:
+                embeddings = await asyncio.to_thread(model.encode, compute_texts)
+            except Exception:
+                _embedding_breaker.record_failure()
+                raise
+            _embedding_breaker.record_success()
             embeddings = embeddings.tolist()
             for (idx, text), emb in zip(to_compute, embeddings, strict=False):
                 computed[idx] = emb
@@ -172,7 +184,7 @@ class EmbeddingCache:
             for idx, text in to_compute:
                 emb = _hash_embedding(text)
                 computed[idx] = emb
-                await self._cache(text, emb, cache_tag)
+                await self._cache(text, emb, f"hash-fallback/{cache_tag}")
         return computed
 
     async def embed_single(self, text: str, *, prefix: str = "") -> list[float]:
