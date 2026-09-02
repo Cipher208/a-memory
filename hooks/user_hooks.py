@@ -276,9 +276,7 @@ class UserHooks:
 
             from features.semantic_audit import run_semantic_audit
 
-            self._semantic_audit = await run_semantic_audit(
-                ctx.get("user_id", self.user_id), _time.time(), str(ctx.get("query") or "")
-            )
+            self._semantic_audit = await run_semantic_audit(ctx.get("user_id", self.user_id), _time.time(), str(ctx.get("query") or ""))
         except Exception as exc:
             logger.debug("semantic audit skipped: %s", exc)
         query = ctx.get("query", "")

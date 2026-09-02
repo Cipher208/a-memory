@@ -25,8 +25,7 @@ def _seed(tmp_path, rows):
     conn = sqlite3.connect(tmp_path / "memory.db")
     for summary, tags in rows:
         conn.execute(
-            "INSERT INTO episodes (user_id, layer, summary, emotional_weight, tags, created_at)"
-            " VALUES ('default', 'user', ?, 0.5, ?, ?)",
+            "INSERT INTO episodes (user_id, layer, summary, emotional_weight, tags, created_at) VALUES ('default', 'user', ?, 0.5, ?, ?)",
             (summary, json.dumps(tags), 1000.0),
         )
     conn.commit()
