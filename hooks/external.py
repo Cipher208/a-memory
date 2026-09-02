@@ -39,6 +39,7 @@ KNOWN_EVENTS: frozenset[str] = frozenset(
         "memory_pressure",
         "post_context_compression",
         "post_session_diff",
+        "on_turn_end",
     }
 )
 

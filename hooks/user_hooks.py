@@ -245,6 +245,11 @@ class UserHooks:
         """Explicit candidate pushed by a daemon — same pipeline as new_message."""
         return await self._new_message(ctx, mem=mem, graph=graph)
 
+    @hook_registry.mark("on_turn_end", layer="user")
+    async def _on_turn_end(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
+        """E14: turn-level capture — same pipeline as new_message, sync result to the caller."""
+        return await self._new_message(ctx, mem=mem, graph=graph)
+
     @hook_registry.mark("context_threshold", layer="user")
     async def _context_threshold(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         """Thin advice: eviction candidates = oldest staging entries. Decision stays harness-side."""

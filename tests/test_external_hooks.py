@@ -21,6 +21,7 @@ def test_known_events_exact_set() -> None:
             "memory_pressure",
             "post_context_compression",
             "post_session_diff",  # C1.10
+            "on_turn_end",  # E14
         }
     )
 
