@@ -708,6 +708,7 @@ async def memory_proposals(
     *,
     proposal_id: int = 0,
     approve: bool = True,
+    transition_id: int = 0,
     status: str = "pending",
     limit: int = 20,
     layer: str = "user",
@@ -717,8 +718,11 @@ async def memory_proposals(
     """Review surface for staged mutations (C1.11 S5).
 
     action: "list" (pending proposals for user_id) | "decide" (apply/reject one
-    proposal via proposal_id + approve). The apply path executes the exact write
-    the direct path would have done; every decision is audit-logged.
+    proposal via proposal_id + approve) | "revert" (undo an applied proposal) |
+    "revert_transition" (E17c/C1.13: undo one consolidation promotion by its
+    transitions-table id — removes the promoted L4 fact, source episode stays).
+    The apply path executes the exact write the direct path would have done;
+    every decision is audit-logged.
     """
     app = _get_ctx(ctx)  # live AppContext — passed into decide for core_write apply
     if action == "list":
@@ -734,6 +738,11 @@ async def memory_proposals(
         from features.staging import revert
 
         result = await revert(proposal_id, mem=app)
+        return {"status": "ok", **result}
+    if action == "revert_transition":
+        from features.staging import revert_transition
+
+        result = await revert_transition(user_id, int(transition_id))
         return {"status": "ok", **result}
     raise ValueError(f"unknown action: {action!r}")
 

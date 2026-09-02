@@ -148,6 +148,23 @@ async def _apply(kind: str, user_id: str, layer: str, payload: dict[str, Any], m
         else:
             raise ValueError("core_write apply requires mem (AppContext or a memory facade)")
         return str(entry_id)
+    if kind == "wiki_write":
+        # E17b (C1.11): staged proposals can promote into wiki pages.
+        from wiki.manager import WikiManager
+
+        wm = WikiManager(layer=layer)
+        title = str(payload.get("title") or "").strip()
+        content = str(payload.get("content") or "").strip()
+        if not title or not content:
+            raise ValueError("wiki_write requires title and content")
+        path = await wm.add(
+            wiki_type=str(payload.get("wiki_type") or "concept"),
+            title=title,
+            content=content,
+            tags=payload.get("tags"),
+            importance=float(payload.get("importance", 0.5)),
+        )
+        return f"wiki:{path}"
     if kind == "consolidate_staging":
         from lifecycle.consolidation import ConsolidationEngine
 
@@ -198,8 +215,17 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
         from lifecycle.forgetting import ForgettingSystem
 
         restored = await ForgettingSystem(layer=row["layer"]).restore_entries([int(i) for i in payload.get("ids", [])])
+    elif row["kind"] == "wiki_write":
+        # E17b: remove the wiki page the proposal created (result_ref = wiki:{path}).
+        from wiki.manager import WikiManager
+
+        wm = WikiManager(layer=row["layer"])
+        path = str(row["result_ref"] or "").removeprefix("wiki:")
+        if not path:
+            raise ValueError(f"proposal {proposal_id} has no wiki path in result_ref")
+        restored = 1 if await wm.delete(path) else 0
     else:
-        raise ValueError(f"revert not supported for kind {row['kind']!r} (v1: core_write, archive)")
+        raise ValueError(f"revert not supported for kind {row['kind']!r} (v2: core_write, archive, wiki_write)")
 
     await conn.execute(
         "UPDATE mutation_proposals SET status = 'reverted', decided_at = ?, decided_by = 'tool' WHERE id = ?",
@@ -216,3 +242,45 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
         details={"kind": row["kind"], "restored": restored},
     )
     return {"id": proposal_id, "status": "reverted", "restored": restored}
+
+
+async def revert_transition(user_id: str, transition_id: int) -> dict[str, Any]:
+    """C1.13: undo one consolidation transition (episode/staging → L4 promotion).
+
+    The transitions table pins to_ref=core:{entry_id} — the "ids not pinned"
+    problem is solved at the transition layer (every promotion records one
+    row). Consolidation never deletes the source episode, so reverting only
+    removes the promoted L4 fact. Audit-logged; no schema change.
+    """
+    conn = await connection_manager.get(DB_NAME)
+    cur = await conn.execute(
+        "SELECT id, user_id, kind, from_ref, to_ref FROM memory_transitions WHERE id = ?",
+        (int(transition_id),),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        raise ValueError(f"unknown transition id: {transition_id}")
+    if row["user_id"] != user_id:
+        raise ValueError(f"transition {transition_id} belongs to another user")
+    if not str(row["to_ref"]).startswith("core:"):
+        raise ValueError(f"transition {transition_id} is not an L4 promotion (to_ref={row['to_ref']!r})")
+    entry_id = int(str(row["to_ref"]).removeprefix("core:"))
+
+    key_cur = await conn.execute("SELECT key, layer FROM core_memory WHERE entry_id = ?", (entry_id,))
+    key_row = await key_cur.fetchone()
+    if key_row is None:
+        return {"transition_id": int(transition_id), "deleted": False, "reason": "already reverted or absent"}
+
+    from core.memory import CoreMemory
+
+    deleted = await CoreMemory(cm=connection_manager, layer=str(key_row["layer"])).delete(user_id, str(key_row["key"]))
+    from features.audit_trail import AuditTrail
+
+    await AuditTrail().log(
+        user_id,
+        "consolidation_reverted",
+        layer=str(key_row["layer"]),
+        target_id=str(transition_id),
+        details={"to_ref": row["to_ref"], "from_ref": row["from_ref"], "deleted": bool(deleted)},
+    )
+    return {"transition_id": int(transition_id), "deleted": bool(deleted)}
