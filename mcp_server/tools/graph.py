@@ -23,6 +23,9 @@ async def memory_graph_add(
     tags: list[str] | None = None,
     relates_to: int = 0,
     relation: str = "",
+    action: str = "node",
+    outcome: str = "",
+    strength: float = 0.8,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Add a node to the epistemic graph.
@@ -30,6 +33,11 @@ async def memory_graph_add(
     Social entities (node_type="person"/"organization") are deduplicated:
     re-adding the same name returns the existing node (created=False).
     relates_to + relation optionally create an edge from the new node.
+
+    action="causal" (E17a, B1.7 producer): record an action → outcome causal
+    link instead — idempotent action/outcome nodes joined by a strength edge.
+    Requires content (the action) and outcome; relation must be causal
+    (led_to/caused/blocked, see CAUSAL_RELATIONS).
     """
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -41,6 +49,16 @@ async def memory_graph_add(
         return dict(rate_limit)
 
     graph = _get_graph(app, layer)
+
+    if action == "causal":
+        if not content or not outcome:
+            raise ValueError("causal action requires content (the action) and outcome")
+        action_id, outcome_id = await graph.record_causal(
+            user_id, content, outcome, relation=relation or "led_to", strength=float(strength)
+        )
+        _invalidate_cache(layer, user_id)
+        return {"status": "ok", "action_node": action_id, "outcome_node": outcome_id}
+
     created: bool | None = None
     if node_type in SOCIAL_NODE_TYPES:
         node_id, created = await graph.find_or_add_entity(user_id, content, entity_type=node_type, tags=tags)
