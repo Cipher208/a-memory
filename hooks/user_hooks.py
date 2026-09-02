@@ -5,6 +5,7 @@ User Layer Hooks - 12 hooks for user memory events
 """
 
 import contextlib
+import logging
 from typing import Any
 
 
@@ -18,6 +19,8 @@ from .shared import (
     forgetting_ritual,
     retrieval_router,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class UserHooks:
@@ -267,6 +270,17 @@ class UserHooks:
             reason=ctx.get("reason") or "compaction",
             summary=ctx.get("query"),
         )
+        # E13: semantic audit — cosine coverage of the pre-compaction window.
+        try:
+            import time as _time
+
+            from features.semantic_audit import run_semantic_audit
+
+            self._semantic_audit = await run_semantic_audit(
+                ctx.get("user_id", self.user_id), _time.time(), str(ctx.get("query") or "")
+            )
+        except Exception as exc:
+            logger.debug("semantic audit skipped: %s", exc)
         query = ctx.get("query", "")
         rag = ctx.get("_rag")
         if not query or rag is None:
