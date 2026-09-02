@@ -71,6 +71,7 @@ async def run_daemon(
                 loop.add_signal_handler(sig, stop.set)
 
         iterations = 0
+        last_pressure = 0
         while not stop.is_set():
             batch = source.fetch_after(cursor, cfg.batch_limit)
             for msg in batch.messages:
@@ -87,6 +88,11 @@ async def run_daemon(
             if batch.messages:
                 cursor = batch.cursor
                 save_cursor(cfg.state_file, cursor)
+            # E16: memory_pressure — ariel-side emitter (L1 ring growth with hysteresis).
+            size = len(mem.l1.get_full()) if mem is not None and hasattr(mem, "l1") and hasattr(mem.l1, "get_full") else 0
+            if size > 40 and size - last_pressure >= 10:
+                await dispatch("memory_pressure", cfg.layer, cfg.user_id, {"l1_size": size}, mem, graph, rag)
+                last_pressure = size
             iterations += 1
             if max_iterations is not None and iterations >= max_iterations:
                 return
