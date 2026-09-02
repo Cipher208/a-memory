@@ -422,6 +422,20 @@ class WikiManager:
         result = {"imported": 0, "skipped": 0, "errors": 0}
         enabled_types = self._get_enabled_types()
 
+        # E7 least privilege: external roots are read-only mirrors. A dir that
+        # resolves inside the instance data dir would let wiki import capture
+        # its own data (backups, exports, DB-adjacent files) — reject it.
+        from shared.connection import connection_manager as _cm
+
+        data_root = Path(str(_cm.base_dir)).resolve() if _cm.base_dir else None
+        for dir_path in dirs:
+            resolved = Path(dir_path).expanduser().resolve()
+            if data_root and (data_root == resolved or data_root in resolved.parents):
+                raise ValueError(
+                    f"external dir {resolved} is inside the data directory {data_root} — "
+                    "wiki external roots are read-only mirrors, not data-dir content (E7)"
+                )
+
         # Concurrency control: max 10 files at a time to prevent DB/FS locks
         sem = asyncio.Semaphore(10)
 
@@ -440,7 +454,7 @@ class WikiManager:
             if tasks:
                 outcomes = await asyncio.gather(*tasks)
                 for o in outcomes:
-                    result[o] += 1
+                    result["errors" if o == "error" else o] += 1
 
         return result
 

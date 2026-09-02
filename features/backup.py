@@ -65,7 +65,11 @@ class BackupManager:
         return str(dest)
 
     async def restore(self, backup_name: str) -> dict[str, Any]:
-        src = self.backup_dir / backup_name
+        # E7: reject traversal names before any filesystem access
+        try:
+            src = safe_resolve(self.backup_dir, backup_name)
+        except ValueError as exc:
+            return {"error": str(exc)}
         if not src.exists() or src.is_symlink():
             return {"error": f"Backup not found or invalid: {backup_name}"}
 
