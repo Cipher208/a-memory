@@ -74,6 +74,15 @@ class WikiIndex:
             CREATE INDEX IF NOT EXISTS idx_wiki_links_to ON wiki_links(layer, to_path);
             """,
         )
+        # A1.2: lifecycle status column (feature-private table — lazy ALTER,
+        # no alembic; existing DBs get the column on first use).
+        try:
+            await self._cm.execute_script(
+                DB_NAME,
+                "ALTER TABLE wiki_index ADD COLUMN status TEXT NOT NULL DEFAULT 'active';",
+            )
+        except Exception:
+            pass  # column already exists
         # Layer-scoped path uniqueness. Created separately and guarded:
         # a legacy DB holding the same file_path in both layers would make
         # the new UNIQUE index fail, and init must not die on that.
@@ -131,9 +140,9 @@ class WikiIndex:
 
         await conn.execute(
             """UPDATE wiki_index
-               SET title=?, tags=?, importance=?, content=?, content_hash=?, wiki_type=?, updated_at=?
+               SET title=?, tags=?, importance=?, content=?, content_hash=?, wiki_type=?, status=?, updated_at=?
                WHERE entry_id=?""",
-            (entry.title, tags_json, entry.importance, entry.content, content_hash, entry.wiki_type, now, entry_id),
+            (entry.title, tags_json, entry.importance, entry.content, content_hash, entry.wiki_type, entry.status, now, entry_id),
         )
 
         await conn.execute(
@@ -145,9 +154,9 @@ class WikiIndex:
         tags_json = json.dumps(entry.tags)
         cur = await conn.execute(
             """INSERT INTO wiki_index
-               (layer, wiki_type, title, file_path, tags, importance, content, content_hash, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (self.layer, entry.wiki_type, entry.title, entry.file_path, tags_json, entry.importance, entry.content, content_hash, now, now),
+               (layer, wiki_type, title, file_path, tags, importance, content, content_hash, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (self.layer, entry.wiki_type, entry.title, entry.file_path, tags_json, entry.importance, entry.content, content_hash, entry.status, now, now),
         )
         entry_id = cur.lastrowid
         await conn.execute(
@@ -165,17 +174,25 @@ class WikiIndex:
         row = await cur.fetchone()
         return dict(row) if row else None
 
-    async def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        """Optimized FTS5 search JOINing wiki_fts with wiki_index."""
+    async def search(self, query: str, limit: int = 10, status: str | None = "active") -> list[dict[str, Any]]:
+        """Optimized FTS5 search JOINing wiki_fts with wiki_index.
+
+        A1.2: status filter — default 'active' hides stale/archived; None = all.
+        """
         conn = await self._cm.get(DB_NAME)
         try:
+            status_sql = "AND wi.status = ?" if status else ""
+            params: list[Any] = [query, self.layer]
+            if status:
+                params.append(status)
+            params.append(limit)
             cur = await conn.execute(
-                """SELECT wi.*, fts.rank
-                   FROM wiki_fts fts
-                   JOIN wiki_index wi ON fts.rowid = wi.entry_id
-                   WHERE wiki_fts MATCH ? AND wi.layer = ?
-                   ORDER BY fts.rank LIMIT ?""",
-                (query, self.layer, limit),
+                f"""SELECT wi.*, fts.rank
+                    FROM wiki_fts fts
+                    JOIN wiki_index wi ON fts.rowid = wi.entry_id
+                    WHERE wiki_fts MATCH ? AND wi.layer = ? {status_sql}
+                    ORDER BY fts.rank LIMIT ?""",
+                params,
             )
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
@@ -183,22 +200,32 @@ class WikiIndex:
             logger.exception("Search failed for query '%s'", query)
             return []
 
-    async def list_by_type(self, wiki_type: str, limit: int = 20) -> list[dict[str, Any]]:
-        """List entries of a specific type."""
+    async def list_by_type(self, wiki_type: str, limit: int = 20, status: str | None = "active") -> list[dict[str, Any]]:
+        """List entries of a specific type (A1.2: default active only)."""
         conn = await self._cm.get(DB_NAME)
+        status_sql = "AND status = ?" if status else ""
+        params: list[Any] = [self.layer, wiki_type]
+        if status:
+            params.append(status)
+        params.append(limit)
         cur = await conn.execute(
-            "SELECT * FROM wiki_index WHERE layer=? AND wiki_type=? ORDER BY updated_at DESC LIMIT ?",
-            (self.layer, wiki_type, limit),
+            f"SELECT * FROM wiki_index WHERE layer=? AND wiki_type=? {status_sql} ORDER BY updated_at DESC LIMIT ?",
+            params,
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def list_all(self, limit: int = 50) -> list[dict[str, Any]]:
-        """List all entries in the current layer."""
+    async def list_all(self, limit: int = 50, status: str | None = "active") -> list[dict[str, Any]]:
+        """List all entries in the current layer (A1.2: default active only)."""
         conn = await self._cm.get(DB_NAME)
+        status_sql = "AND status = ?" if status else ""
+        params: list[Any] = [self.layer]
+        if status:
+            params.append(status)
+        params.append(limit)
         cur = await conn.execute(
-            "SELECT * FROM wiki_index WHERE layer=? ORDER BY updated_at DESC LIMIT ?",
-            (self.layer, limit),
+            f"SELECT * FROM wiki_index WHERE layer=? {status_sql} ORDER BY updated_at DESC LIMIT ?",
+            params,
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]

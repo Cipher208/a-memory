@@ -51,6 +51,11 @@ class WikiParser:
         entry_id = metadata.get("entry_id")
         validated_id = int(entry_id) if isinstance(entry_id, (int, float, str)) and str(entry_id).isdigit() else None
 
+        # A1.2 lifecycle: status frontmatter, whitelisted values, default active
+        status = str(metadata.get("status") or "active").strip().lower()
+        if status not in ("active", "stale", "archived"):
+            status = "active"
+
         return WikiEntry(
             entry_id=validated_id,
             wiki_type=wiki_type,
@@ -59,6 +64,7 @@ class WikiParser:
             file_path=str(file_path) if file_path else "",
             tags=tags,
             importance=importance,
+            status=status,
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -70,6 +76,7 @@ class WikiParser:
             "title": entry.title,
             "tags": entry.tags,
             "importance": entry.importance,
+            "status": entry.status,  # A1.2: was silently dropped on round-trip
             "created_at": entry.created_at,
             "updated_at": entry.updated_at,
         }

@@ -81,7 +81,15 @@ class WikiManager:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    async def add(self, wiki_type: str, title: str, content: str, tags: list[str] | None = None, importance: float = 0.5) -> str:
+    async def add(
+        self,
+        wiki_type: str,
+        title: str,
+        content: str,
+        tags: list[str] | None = None,
+        importance: float = 0.5,
+        status: str = "active",
+    ) -> str:
         """Create .md file and index it. Returns file path."""
         enabled = self._get_enabled_types()
         if enabled and wiki_type not in enabled:
@@ -106,6 +114,7 @@ class WikiManager:
             file_path=str(file_path),
             tags=tags or [],
             importance=importance,
+            status=status,
             created_at=now,
             updated_at=now,
         )
@@ -154,6 +163,7 @@ class WikiManager:
         content: str | None = None,
         tags: list[str] | None = None,
         importance: float | None = None,
+        status: str | None = None,
     ) -> None:
         """Update .md file and re-index."""
         p = safe_resolve(self.base_dir, file_path)
@@ -171,6 +181,8 @@ class WikiManager:
             entry.tags = tags
         if importance is not None:
             entry.importance = importance
+        if status is not None:
+            entry.status = status
 
         entry.updated_at = time.time()
 
@@ -199,23 +211,23 @@ class WikiManager:
         text = await asyncio.to_thread(p.read_text, encoding="utf-8")
         return self.parser.parse(text, p)
 
-    async def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        """Delegate search to index."""
-        results = await self.index.search(query, limit)
+    async def search(self, query: str, limit: int = 10, status: str | None = "active") -> list[dict[str, Any]]:
+        """Delegate search to index (A1.2: default active only, None = all)."""
+        results = await self.index.search(query, limit, status=status)
         for r in results:
             # Add snippet if missing
             if "content" in r:
                 r["content"] = r["content"][:500]
         return results
 
-    async def list_by_type(self, wiki_type: str, limit: int = 20) -> list[WikiEntry]:
-        """List entries of a specific type."""
-        rows = await self.index.list_by_type(wiki_type, limit)
+    async def list_by_type(self, wiki_type: str, limit: int = 20, status: str | None = "active") -> list[WikiEntry]:
+        """List entries of a specific type (A1.2: default active only)."""
+        rows = await self.index.list_by_type(wiki_type, limit, status=status)
         return await self._rows_to_entries(rows)
 
-    async def list_all(self, limit: int = 50) -> list[WikiEntry]:
-        """List all entries in the layer."""
-        rows = await self.index.list_all(limit)
+    async def list_all(self, limit: int = 50, status: str | None = "active") -> list[WikiEntry]:
+        """List all entries in the layer (A1.2: default active only)."""
+        rows = await self.index.list_all(limit, status=status)
         return await self._rows_to_entries(rows)
 
     async def get_links(self, path: str) -> list[dict[str, Any]]:
