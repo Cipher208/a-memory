@@ -750,6 +750,7 @@ async def memory_report_card(
     """Operator digest: what automation did to memory in the window (C1.14 S5)."""
     if ctx is not None:
         _get_ctx(ctx)  # strict when called over MCP; CLI/one-liners pass ctx=None
+    import json as _json
     import sqlite3 as _sqlite3
     import time as _time
 
@@ -765,6 +766,7 @@ async def memory_report_card(
                 "auto_save": {"dispatched": 0, "saved_l3": 0, "saved_l4": 0, "saved_graph": 0},
                 "gaps": {"count": 0, "previews": []},
                 "dream_markers": 0,
+                "integrity": {"score": None, "verified": 0, "dropped": 0},
             }
         )
         return card
@@ -793,6 +795,11 @@ async def memory_report_card(
             "SELECT count(*) FROM mutation_proposals WHERE source = 'dream' AND proposed_at >= ?",
             (since,),
         ).fetchone()
+        # E5: integrity score — D1.5 verify aggregates logged per recall.
+        vrows = conn.execute(
+            "SELECT details FROM audit_log WHERE action='verify_result' AND timestamp >= ?",
+            (since,),
+        ).fetchall()
 
     card["proposals"] = {
         "created": int(prow[0] or 0),
@@ -810,6 +817,19 @@ async def memory_report_card(
         "saved_graph": int(drow[3] or 0),
     }
     card["dream_markers"] = int(dreams[0] or 0)
+    v_total = {"verified": 0, "dropped": 0}
+    for (details,) in vrows:
+        try:
+            d = _json.loads(details or "{}")
+            v_total["verified"] += int(d.get("verified", 0))
+            v_total["dropped"] += int(d.get("dropped", 0))
+        except (_json.JSONDecodeError, TypeError, ValueError, AttributeError):
+            continue
+    v_sum = v_total["verified"] + v_total["dropped"]
+    card["integrity"] = {
+        "score": round(100.0 * v_total["verified"] / v_sum, 1) if v_sum else None,
+        **v_total,
+    }
     try:
         from features.diff import compute_session_gaps
         from mcp_server.context import AppContext

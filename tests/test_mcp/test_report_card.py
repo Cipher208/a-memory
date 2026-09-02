@@ -42,6 +42,10 @@ def ensure_schema(fresh_dir: Path) -> Path:
             score REAL, saved_l3 INTEGER NOT NULL DEFAULT 0, saved_l4 INTEGER NOT NULL DEFAULT 0,
             saved_graph INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            log_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, action TEXT NOT NULL,
+            layer TEXT, target_id TEXT, details TEXT, timestamp REAL NOT NULL
+        );
     """)
     now = time.time()
     conn.execute(

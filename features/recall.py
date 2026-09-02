@@ -135,6 +135,13 @@ async def recall_protocol(
             verified, dropped = verify_hits(query, [h for h in hits if h not in expand_hits])
             if dropped:
                 logger.debug("verify dropped %d noise hit(s)", len(dropped))
+            # E5: persist the aggregate so report card can score integrity.
+            try:
+                from features.audit_trail import AuditTrail
+
+                await AuditTrail().log_verify(user_id, len(verified), len(dropped))
+            except Exception as exc:
+                logger.debug("verify log skipped: %s", exc)
             for h in verified:
                 content = str(h.get("content") or h.get("value") or h.get("summary") or h.get("title") or "")
                 if not content:

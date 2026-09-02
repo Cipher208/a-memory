@@ -55,6 +55,10 @@ class AuditTrail:
         )
         await conn.commit()
 
+    async def log_verify(self, user_id: str, verified: int, dropped: int) -> None:
+        """E5: record D1.5 verification aggregate per recall (feeds integrity score)."""
+        await self.log(user_id, "verify_result", layer="user", details={"verified": verified, "dropped": dropped})
+
     async def get_history(self, user_id: str, limit: int = 50, action: str | None = None) -> list[dict[str, Any]]:
         conn = await self._cm.get(DB_NAME)
         if action:
