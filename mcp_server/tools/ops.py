@@ -823,6 +823,34 @@ async def memory_report_card(
     return card
 
 
+# ─── memory_diagnose / memory_heal (Phase E E3) ────────────────────────────────
+
+
+async def memory_diagnose(
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Health checks: DB integrity, migrations, L1 files, breakers, staging backlog."""
+    if ctx is not None:
+        _get_ctx(ctx)  # strict when called over MCP; CLI/one-liners pass ctx=None
+    from features.diagnostics import run_diagnose
+
+    return await run_diagnose(user_id)
+
+
+async def memory_heal(
+    user_id: str = "default",
+    actions: list[str] | None = None,
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Safe auto-fixes: remigrate, reset breakers, purge invalid L1 files."""
+    if ctx is not None:
+        _get_ctx(ctx)
+    from features.diagnostics import run_heal
+
+    return await run_heal(user_id, actions)
+
+
 async def memory_recall_protocol(
     query: str = "",
     budget: int = 2000,

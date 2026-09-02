@@ -71,6 +71,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_graph_query",
             "memory_graph_nodes",
             "memory_graph_edges",
+            "memory_diagnose",  # Phase E E3
         }
     ),
     # write = shape memory (typed saves, rules, scratchpad, counterfactuals, episodes, graph, sessions, branches, versioning, stash, procedures)
@@ -90,6 +91,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_graph_add",
             "memory_session_start",
             "memory_session_end",
+            "memory_heal",  # Phase E E3 — mutating operator surface
         }
     ),
 }

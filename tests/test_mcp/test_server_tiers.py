@@ -46,6 +46,7 @@ def test_insight_tier_exact_set():
         "memory_graph_query",
         "memory_graph_nodes",
         "memory_graph_edges",
+        "memory_diagnose",  # Phase E E3
     }
 
 
@@ -65,6 +66,7 @@ def test_write_tier_exact_set():
         "memory_graph_add",
         "memory_session_start",
         "memory_session_end",
+        "memory_heal",  # Phase E E3
     }
 
 

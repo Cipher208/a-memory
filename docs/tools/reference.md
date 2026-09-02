@@ -276,6 +276,8 @@ Returns a dict with `perspective`, `layer`, `wiki_type`, `pages` (list of `{titl
 | `memory_save_typed` | Typed memory schemas (D1.8): validate structured fields, store as an L4 fact. Built-in schemas `decision` / `error_pattern` / `relationship`; custom schemas from `<data_dir>/schemas/*.yaml` merge over them. Stored fact: key `<type>:<name>`, `metadata.typed = <type>` — a typed knowledge base, not a bag of strings. Tool count 54 → 55. |
 | `memory_load_rules` | Memory rules engine (D1.9): declarative YAML rules for the write gate. Rules live at `<data_dir>/rules.yaml` (`when_content_contains` → `importance_boost` sum cap 0.3 + episode `tags`), applied in `auto_save_text` — user-configurable memory behavior without code. `list` shows the ruleset; `reload` re-reads (mtime-cached). Tool count 55 → 56. |
 | `memory_backup` | Backup management: `status` \| `now` \| `list` \| `restore`. |
+| `memory_diagnose` | Operator health checks (E3): DB existence + `PRAGMA quick_check`, alembic head, L1 persist-file JSON validity, pending-proposal backlog, circuit-breaker states. Returns `checks: [{name, status: ok\|warn\|fail, detail}]` + overall `status` (`ok`/`degraded`). Insight tier (read-only). Tool count 60 → 62 (with `memory_heal`). |
+| `memory_heal` | Safe auto-fixes (E3), sibling of `memory_diagnose`: `remigrate` (idempotent alembic), `reset_breakers` (E2 registry), `purge_invalid_l1` (remove corrupt L1 JSON — buffer re-persists atomically). Unknown actions raise; defaults to all three. Write tier. |
 | `memory_saga` | Run compensation sagas (`consolidate` \| `backup`) with auto-rollback. |
 | `memory_data` | Per-user export/import of memory data. |
 | `memory_sync_replica` | Sync the read-only replica used by the dashboard/metrics. |
