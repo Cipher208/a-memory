@@ -1157,6 +1157,7 @@ async def memory_query(
     created_since: float = 0.0,
     created_until: float = 0.0,
     tag: str = "",
+    tags: list[str] | None = None,
     limit: int = 50,
     layer: str = "user",
     user_id: str = "default",
@@ -1166,7 +1167,8 @@ async def memory_query(
 
     Whitelisted filters → parameterized SQL over core_memory or episodes
     (importance band, key/content LIKE, created_at window, episode tag).
-    Read-only, no injection surface (user SQL is never accepted).
+    E10 facets: `tags` entries are `dimension:value` — same-dimension values
+    are OR'd, different dimensions AND'd. Read-only, no injection surface.
     """
     if ctx is not None:
         _get_ctx(ctx)
@@ -1185,6 +1187,7 @@ async def memory_query(
         created_since=created_since,
         created_until=created_until,
         tag=tag,
+        tags=tags,
         limit=int(limit),
     )
 

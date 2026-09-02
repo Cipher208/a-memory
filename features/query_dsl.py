@@ -15,6 +15,27 @@ from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
 
+def _facet_clauses(tags: list[str]) -> tuple[list[str], list[Any]]:
+    """E10: group dim:value tags — same-dim values are OR'd, dims are AND'd.
+
+    A plain (colon-less) tag forms its own singleton dimension, so it ANDs
+    like any other. Backed by json_each over the JSON tags column.
+    """
+    dims: dict[str, list[str]] = {}
+    for t in tags:
+        dim, sep, val = str(t).partition(":")
+        if not sep:
+            dim = f"\x00{t}"  # plain tag = its own dimension
+        dims.setdefault(dim, []).append(t)  # match the FULL tag stored in JSON
+    clauses: list[str] = []
+    params: list[Any] = []
+    for values in dims.values():
+        placeholders = ", ".join("?" for _ in values)
+        clauses.append("EXISTS (SELECT 1 FROM json_each(episodes.tags) je WHERE je.value IN (" + placeholders + "))")
+        params.extend(values)
+    return clauses, params
+
+
 async def query_memory(
     user_id: str,
     layer: str = "user",
@@ -26,6 +47,7 @@ async def query_memory(
     created_since: float = 0.0,
     created_until: float = 0.0,
     tag: str = "",
+    tags: list[str] | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
     """Run whitelisted filters over one memory table. Returns {rows, count, filters}."""
@@ -33,6 +55,8 @@ async def query_memory(
         raise ValueError(f"unknown source: {source!r} (core|episodes)")
     if tag and source == "core":
         raise ValueError("tag filter is episodes-only (core_memory has no tags)")
+    if tags and source == "core":
+        raise ValueError("tags filter is episodes-only (core_memory has no tags)")
     if key_like and source == "episodes":
         raise ValueError("key_like filter is core-only (episodes has no key column)")
     limit = max(1, min(int(limit), 200))
@@ -68,6 +92,10 @@ async def query_memory(
     if tag:
         where.append("tags LIKE ?")
         params.append(f'%"{tag}"%')
+    if tags:
+        facet_clauses, facet_params = _facet_clauses(tags)
+        where.extend(facet_clauses)
+        params.extend(facet_params)
 
     conn = await connection_manager.get(DB_NAME)
     rows = await (await conn.execute(f"{sql} WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ?", (*params, limit))).fetchall()
@@ -94,6 +122,7 @@ async def query_memory(
             "created_since": created_since,
             "created_until": created_until,
             "tag": tag,
+            "tags": tags,
             "limit": limit,
         },
         "queried_at": time.time(),
