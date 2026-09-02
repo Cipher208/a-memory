@@ -53,9 +53,7 @@ async def memory_graph_add(
     if action == "causal":
         if not content or not outcome:
             raise ValueError("causal action requires content (the action) and outcome")
-        action_id, outcome_id = await graph.record_causal(
-            user_id, content, outcome, relation=relation or "led_to", strength=float(strength)
-        )
+        action_id, outcome_id = await graph.record_causal(user_id, content, outcome, relation=relation or "led_to", strength=float(strength))
         _invalidate_cache(layer, user_id)
         return {"status": "ok", "action_node": action_id, "outcome_node": outcome_id}
 
