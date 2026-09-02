@@ -74,9 +74,20 @@ class ReflexBuffer:
             try:
                 with Path(self.persist_path).open() as f:
                     data = json.load(f)
-                for entry in data:
-                    self._buffer.append(ReflexEntry(**entry))
-            except (FileNotFoundError, json.JSONDecodeError, KeyError):
+                if isinstance(data, list):
+                    for entry in data:
+                        if isinstance(entry, dict):
+                            # tolerate schema drift (missing/typed-wrong fields)
+                            # — a corrupt entry degrades to defaults, never raises
+                            self._buffer.append(
+                                ReflexEntry(
+                                    role=str(entry.get("role", "")),
+                                    content=str(entry.get("content", "")),
+                                    tokens=int(entry.get("tokens", 0) or 0),
+                                    timestamp=float(entry.get("timestamp", 0.0) or 0.0),
+                                )
+                            )
+            except (OSError, ValueError, TypeError):
                 pass
 
     def restore(self, entries: list[ReflexEntry]) -> None:

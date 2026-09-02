@@ -87,7 +87,15 @@ class WikiManager:
         if enabled and wiki_type not in enabled:
             raise ValueError(f"Wiki type '{wiki_type}' is disabled. Enabled: {enabled}")
 
+        # Length cap: a 300-char title must not raise OSError "File name too
+        # long" (chaos-test finding). Collision risk handled by content-hash
+        # suffix only when truncation actually bites.
         safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in title).strip().replace(" ", "_")
+        if len(safe_title) > 80:
+            import hashlib as _hashlib
+
+            digest = _hashlib.sha1(safe_title.encode()).hexdigest()[:8]
+            safe_title = f"{safe_title[:70]}_{digest}"
         file_path = self._type_dir(wiki_type) / f"{safe_title}.md"
 
         now = time.time()

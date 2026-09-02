@@ -30,9 +30,10 @@ def _facet_clauses(tags: list[str]) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
     for values in dims.values():
-        placeholders = ", ".join("?" for _ in values)
+        uniq = sorted(set(values))  # duplicate tags collapse (chaos-test finding)
+        placeholders = ", ".join("?" for _ in uniq)
         clauses.append("EXISTS (SELECT 1 FROM json_each(episodes.tags) je WHERE je.value IN (" + placeholders + "))")
-        params.extend(values)
+        params.extend(uniq)
     return clauses, params
 
 

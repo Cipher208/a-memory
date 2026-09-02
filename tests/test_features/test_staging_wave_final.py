@@ -171,5 +171,5 @@ async def test_propose_action_full_lifecycle(hermetic_base):
 async def test_propose_kind_whitelist(hermetic_base):
     from mcp_server.tools.ops import memory_proposals
 
-    with pytest.raises(ValueError, match="wiki_write|core_write"):
+    with pytest.raises(ValueError, match=r"wiki_write|core_write"):
         await memory_proposals("propose", kind="delete_everything", payload={}, user_id="default", ctx=MagicMock())

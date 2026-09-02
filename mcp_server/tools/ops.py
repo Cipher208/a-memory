@@ -335,10 +335,10 @@ async def memory_data(
     app = _get_ctx(ctx)
 
     if action == "export":
-        path = await app.import_export.export_user(user_id)
+        path = await app.import_export.export_user(user_id, mm=app.mm)
         return DataResult(path=path).dict()
     if action == "import":
-        result = await app.import_export.import_user(file_path, target_user_id or user_id)
+        result = await app.import_export.import_user(file_path, target_user_id or user_id, mm=app.mm)
         for layer in ("user", "agent"):
             _invalidate_cache(layer, target_user_id or user_id)
         return DataResult(**result).dict()

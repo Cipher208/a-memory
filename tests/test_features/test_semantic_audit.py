@@ -35,8 +35,7 @@ def _seed(tmp_path, episodes, facts):
         )
     for v in facts:
         conn.execute(
-            "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at)"
-            " VALUES ('user', 'default', ?, ?, 0.9, ?, ?)",
+            "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at) VALUES ('user', 'default', ?, ?, 0.9, ?, ?)",
             (f"k_{v[:12]}", v, time.time(), time.time()),
         )
     conn.commit()

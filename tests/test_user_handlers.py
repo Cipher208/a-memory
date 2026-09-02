@@ -121,7 +121,8 @@ async def test_post_context_compression_returns_candidates(compaction_db) -> Non
 async def test_post_context_compression_logs_session_ids(compaction_db) -> None:
     hooks = uh.UserHooks()
     result = await hooks._post_context_compression({"user_id": "u1", "old_session_id": "s-old", "new_session_id": "s-new", "reason": "split"})
-    assert result == {"candidates": [], "logged": True}
+    # E13: the handler returns a semantic_audit block (payload-independent audit)
+    assert result == {"candidates": [], "logged": True, "semantic_audit": {"score": None, "compared": 0, "facts": 0}}
     from features.rehydrate import recent_compaction
 
     row = recent_compaction("u1", 1.0)

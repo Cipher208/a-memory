@@ -25,9 +25,13 @@ _SAFE_USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _l1_persist_name(layer_type: str, user_id: str) -> str:
-    """Filename-safe per-(layer, user) L1 persist name (E1)."""
+    """Filename-safe per-(layer, user) L1 persist name (E1).
+
+    Hostile ids are hashed; everything is length-capped — a 500-char user_id
+    must not raise OSError "File name too long" (chaos-test finding).
+    """
     safe = user_id if _SAFE_USER_RE.match(user_id) else hashlib.sha1(user_id.encode()).hexdigest()[:12]
-    return f"l1_{layer_type}_{safe}.json"
+    return f"l1_{layer_type}_{safe[:64]}.json"
 
 
 class MemoryLayer:

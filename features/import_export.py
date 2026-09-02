@@ -30,7 +30,7 @@ class ImportExport:
         res: Any = self._cm.base_dir
         return Path(res) if res else Path.home() / ".mcp-ariel-memory"
 
-    async def export_user(self, user_id: str) -> str:
+    async def export_user(self, user_id: str, mm: Any | None = None) -> str:
         if not _USER_ID_RE.match(user_id):
             raise ValueError(f"user_id may contain only [A-Za-z0-9._-], got: {user_id!r}")
 
@@ -91,13 +91,15 @@ class ImportExport:
                 }
             )
 
-        # E4: L1 reflex rings (in-memory since E1; deque maxlen governs size)
-        from core import memory_manager
+        # E4: L1 reflex rings. The caller's manager wins (app.mm is what tools
+        # write through); the global singleton is only a CLI fallback — its
+        # buffers may not match the caller's (E2E-audit finding).
+        from core import MemoryManager, memory_manager
 
-        memory_manager._cm = self._cm  # keep the manager on this instance's connection scope
+        local_mm = mm if mm is not None else (memory_manager if self._cm is connection_manager else MemoryManager(cm=self._cm))
         for label, layer in (
-            ("user", memory_manager.user_memory(user_id)),
-            ("agent", memory_manager.agent_memory(user_id)),
+            ("user", local_mm.user_memory(user_id)),
+            ("agent", local_mm.agent_memory(user_id)),
         ):
             l1[label] = [vars(e) for e in layer.l1.get_full()]
 
@@ -106,7 +108,7 @@ class ImportExport:
         await asyncio.to_thread(filepath.write_text, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return str(filepath)
 
-    async def import_user(self, filepath: str, target_user_id: str | None = None) -> dict[str, int]:
+    async def import_user(self, filepath: str, target_user_id: str | None = None, mm: Any | None = None) -> dict[str, int]:
         resolved = safe_resolve(self.export_dir, filepath)  # raises ValueError if traversal
         content = await asyncio.to_thread(resolved.read_text, encoding="utf-8")
         data = json.loads(content)
@@ -184,13 +186,15 @@ class ImportExport:
             imported["sessions"] = len(session_rows)
 
             # E4: L1 restore — v1.1 payloads have no "l1" key and import as before.
-            from core import memory_manager
+            # Same instance-scoping rule as export: restore into the manager on
+            # this connection scope, not a foreign singleton's buffers.
+            from core import MemoryManager, memory_manager
             from core.reflex import ReflexEntry
 
-            memory_manager._cm = self._cm
+            local_mm = mm if mm is not None else (memory_manager if self._cm is connection_manager else MemoryManager(cm=self._cm))
             imported["l1"] = 0
             for label, entries in (data.get("l1") or {}).items():
-                layer = memory_manager.user_memory(user_id) if label == "user" else memory_manager.agent_memory(user_id)
+                layer = local_mm.user_memory(user_id) if label == "user" else local_mm.agent_memory(user_id)
                 layer.l1.restore([ReflexEntry(**e) for e in entries])
                 imported["l1"] += len(entries)
 
