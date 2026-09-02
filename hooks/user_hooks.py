@@ -275,23 +275,25 @@ class UserHooks:
             reason=ctx.get("reason") or "compaction",
             summary=ctx.get("query"),
         )
-        # E13: semantic audit — cosine coverage of the pre-compaction window.
+        # E13: semantic audit — pre-window episodes vs the L4 set rehydrate
+        # injects. Payload-independent (live harnesses send no summary).
+        semantic_audit: dict[str, Any] = {}
         try:
             import time as _time
 
             from features.semantic_audit import run_semantic_audit
 
-            self._semantic_audit = await run_semantic_audit(ctx.get("user_id", self.user_id), _time.time(), str(ctx.get("query") or ""))
+            semantic_audit = await run_semantic_audit(ctx.get("user_id", self.user_id), _time.time())
         except Exception as exc:
             logger.debug("semantic audit skipped: %s", exc)
         query = ctx.get("query", "")
         rag = ctx.get("_rag")
         if not query or rag is None:
-            return {"candidates": [], "logged": logged}
+            return {"candidates": [], "logged": logged, "semantic_audit": semantic_audit}
         hits = await rag.search(query, user_id=ctx.get("user_id", self.user_id), limit=5)
         candidates = []
         for h in hits:
             content = str(h.get("content") or h.get("value") or h.get("summary") or h.get("title") or "")
             if content:
                 candidates.append({"content": content, "score": float(h.get("score", 0.0))})
-        return {"candidates": candidates, "logged": logged}
+        return {"candidates": candidates, "logged": logged, "semantic_audit": semantic_audit}

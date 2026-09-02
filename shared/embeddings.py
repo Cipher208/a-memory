@@ -11,12 +11,15 @@ import re
 import struct
 from typing import Any
 
-from shared.circuit_breaker import CircuitBreaker
+from shared.circuit_breaker import breaker_registry
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 
 # E2: 3 consecutive model.encode failures → open 30s → hash-fallback service.
-_embedding_breaker = CircuitBreaker(threshold=3, recovery_timeout=30.0, name="embedding_model")
+# Created through the registry factory (E2-audit fix): direct construction
+# bypassed breaker_registry, making the diagnostics breaker check vacuous and
+# the `reset_breakers` heal a no-op.
+_embedding_breaker = breaker_registry.get("embedding_model", threshold=3, recovery_timeout=30.0)
 
 
 def _configured_model() -> str:

@@ -150,9 +150,13 @@ async def _apply(kind: str, user_id: str, layer: str, payload: dict[str, Any], m
         return str(entry_id)
     if kind == "wiki_write":
         # E17b (C1.11): staged proposals can promote into wiki pages.
+        # base_dir must follow the instance's data dir (not _DEFAULT_DIR) —
+        # same instance-scoping rule as every other surface.
+        from pathlib import Path
+
         from wiki.manager import WikiManager
 
-        wm = WikiManager(layer=layer)
+        wm = WikiManager(layer=layer, base_dir=str(Path(str(connection_manager.base_dir)) / "wiki" / layer))
         title = str(payload.get("title") or "").strip()
         content = str(payload.get("content") or "").strip()
         if not title or not content:
@@ -217,9 +221,11 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
         restored = await ForgettingSystem(layer=row["layer"]).restore_entries([int(i) for i in payload.get("ids", [])])
     elif row["kind"] == "wiki_write":
         # E17b: remove the wiki page the proposal created (result_ref = wiki:{path}).
+        from pathlib import Path
+
         from wiki.manager import WikiManager
 
-        wm = WikiManager(layer=row["layer"])
+        wm = WikiManager(layer=row["layer"], base_dir=str(Path(str(connection_manager.base_dir)) / "wiki" / row["layer"]))
         path = str(row["result_ref"] or "").removeprefix("wiki:")
         if not path:
             raise ValueError(f"proposal {proposal_id} has no wiki path in result_ref")

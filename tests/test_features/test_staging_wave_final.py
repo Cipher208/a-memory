@@ -1,6 +1,7 @@
 """E17b+E17c: wiki_write staging kind + transition-level consolidation revert."""
 
 import asyncio
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -132,3 +133,43 @@ def test_tool_surface_revert_transition_registered():
 
     sig = inspect.signature(memory_proposals)
     assert "transition_id" in sig.parameters
+    assert "payload" in sig.parameters  # E17b producer
+
+
+async def test_propose_action_full_lifecycle(hermetic_base):
+    """E17b producer: agent stages a wiki_write → decide applies → revert removes.
+
+    Closes the dead-data gap: wiki_write kind now has a producer surface.
+    """
+    from mcp_server.tools.ops import memory_proposals
+
+    app = _app(hermetic_base)
+    ctx = MagicMock()
+    ctx.request_context = MagicMock()
+    ctx.request_context.lifespan_context = app
+
+    staged = await memory_proposals(
+        "propose",
+        kind="wiki_write",
+        payload={"title": "agent staged page", "content": "deliberate body", "wiki_type": "work_notes"},
+        user_id="default",
+        ctx=ctx,
+    )
+    assert staged["status"] == "ok" and staged["proposal_id"] > 0
+
+    decided = await memory_proposals("decide", proposal_id=staged["proposal_id"], approve=True, ctx=ctx)
+    assert decided["status"] == "applied" and decided["result_ref"].startswith("wiki:")
+
+    pages = list((hermetic_base / "wiki" / "user").rglob("*agent_staged_page*.md"))
+    assert pages, "apply must create the wiki page"
+
+    reverted = await memory_proposals("revert", proposal_id=staged["proposal_id"], ctx=ctx)
+    assert reverted["status"] == "reverted" and reverted["restored"] == 1
+    assert not list((hermetic_base / "wiki" / "user").rglob("*agent_staged_page*.md"))
+
+
+async def test_propose_kind_whitelist(hermetic_base):
+    from mcp_server.tools.ops import memory_proposals
+
+    with pytest.raises(ValueError, match="wiki_write|core_write"):
+        await memory_proposals("propose", kind="delete_everything", payload={}, user_id="default", ctx=MagicMock())

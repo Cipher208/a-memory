@@ -80,10 +80,15 @@ class ReflexBuffer:
                 pass
 
     def restore(self, entries: list[ReflexEntry]) -> None:
-        """Bulk-restore exported entries (E4 import). Newest wins via maxlen."""
+        """Bulk-restore exported entries (E4 import). Newest wins via maxlen.
+
+        Persists immediately — the import surface must not depend on a later
+        add() to hit disk (E2-audit finding).
+        """
         with self._lock:
             self._buffer.extend(entries)
             self._adds_since_save = _SAVE_EVERY_ADDS  # force save on next add
+        self._save()
 
     def _save(self) -> None:
         if not self.persist_path:

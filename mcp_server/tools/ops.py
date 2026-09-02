@@ -709,6 +709,8 @@ async def memory_proposals(
     proposal_id: int = 0,
     approve: bool = True,
     transition_id: int = 0,
+    kind: str = "",
+    payload: dict[str, Any] | None = None,
     status: str = "pending",
     limit: int = 20,
     layer: str = "user",
@@ -720,7 +722,10 @@ async def memory_proposals(
     action: "list" (pending proposals for user_id) | "decide" (apply/reject one
     proposal via proposal_id + approve) | "revert" (undo an applied proposal) |
     "revert_transition" (E17c/C1.13: undo one consolidation promotion by its
-    transitions-table id — removes the promoted L4 fact, source episode stays).
+    transitions-table id — removes the promoted L4 fact, source episode stays) |
+    "propose" (E17b producer: stage a deliberate mutation — kind='wiki_write'
+    {title, content, wiki_type?} or 'core_write' {key, value, importance};
+    requires the review tier so agents stage instead of writing directly).
     The apply path executes the exact write the direct path would have done;
     every decision is audit-logged.
     """
@@ -729,6 +734,13 @@ async def memory_proposals(
         from features.staging import list_pending
 
         return {"status": "ok", "proposals": await list_pending(user_id, limit)}
+    if action == "propose":
+        from features.staging import propose
+
+        if kind not in ("wiki_write", "core_write"):
+            raise ValueError(f"propose kind must be wiki_write|core_write, got {kind!r}")
+        pid = await propose("agent", kind, user_id, layer, payload or {})
+        return {"status": "ok", "proposal_id": pid}
     if action == "decide":
         from features.staging import decide
 

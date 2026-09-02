@@ -38,6 +38,8 @@ def test_restore_roundtrip(tmp_path):
     buf2 = ReflexBuffer(max_size=5, persist_path=str(p))
     buf2.restore([ReflexEntry(**e) for e in json.loads(p.read_text())])
     assert [e.content for e in buf2.get_full()] == [f"m{i}" for i in range(2, 7)]  # maxlen honored
+    # E2-audit: restore persists immediately — no later add() required
+    assert len(json.loads(p.read_text())) == 5
 
 
 def test_memory_layer_wires_persist_path(tmp_path, monkeypatch):
