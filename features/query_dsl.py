@@ -23,7 +23,7 @@ def _facet_clauses(tags: list[str]) -> tuple[list[str], list[Any]]:
     """
     dims: dict[str, list[str]] = {}
     for t in tags:
-        dim, sep, val = str(t).partition(":")
+        dim, sep, _ = str(t).partition(":")
         if not sep:
             dim = f"\x00{t}"  # plain tag = its own dimension
         dims.setdefault(dim, []).append(t)  # match the FULL tag stored in JSON
