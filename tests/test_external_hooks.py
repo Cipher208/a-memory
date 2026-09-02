@@ -138,6 +138,7 @@ async def test_build_inject_blocks_shapes_and_budget() -> None:
 
     blocks = await build_inject_blocks(_FakeMem2(), _FakeRag(), "u1", text="поиск", budget=500)
     kinds = [b["kind"] for b in blocks]
-    assert kinds[0] == "relevant" and len([k for k in kinds if k == "relevant"]) == 2
-    assert "important" in kinds  # only the 0.9 fact
+    # E9 ordering: stable kinds first, then the cache:break marker, then dynamic
+    assert kinds[0] == "important" and kinds[1] == "cache_break"
+    assert len([k for k in kinds if k == "relevant"]) == 2  # only the 0.9 fact survives the L4 filter
     assert all(set(b) == {"kind", "content", "score"} for b in blocks)

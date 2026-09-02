@@ -1,7 +1,6 @@
 """E4: typed_export.do_export must write a file (was: fetch + return, no write)."""
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
 

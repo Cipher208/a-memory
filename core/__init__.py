@@ -26,10 +26,7 @@ _SAFE_USER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 def _l1_persist_name(layer_type: str, user_id: str) -> str:
     """Filename-safe per-(layer, user) L1 persist name (E1)."""
-    if _SAFE_USER_RE.match(user_id):
-        safe = user_id
-    else:
-        safe = hashlib.sha1(user_id.encode()).hexdigest()[:12]
+    safe = user_id if _SAFE_USER_RE.match(user_id) else hashlib.sha1(user_id.encode()).hexdigest()[:12]
     return f"l1_{layer_type}_{safe}.json"
 
 

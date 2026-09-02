@@ -427,9 +427,12 @@ class WikiManager:
         # its own data (backups, exports, DB-adjacent files) — reject it.
         from shared.connection import connection_manager as _cm
 
-        data_root = Path(str(_cm.base_dir)).resolve() if _cm.base_dir else None
-        for dir_path in dirs:
-            resolved = Path(dir_path).expanduser().resolve()
+        def _resolve_roots() -> tuple[Path | None, list[Path]]:
+            root = Path(str(_cm.base_dir)).resolve() if _cm.base_dir else None
+            return root, [Path(d).expanduser().resolve() for d in dirs]
+
+        data_root, resolved_dirs = await asyncio.to_thread(_resolve_roots)
+        for dir_path, resolved in zip(dirs, resolved_dirs, strict=True):
             if data_root and (data_root == resolved or data_root in resolved.parents):
                 raise ValueError(
                     f"external dir {resolved} is inside the data directory {data_root} — "

@@ -1,7 +1,6 @@
 """E3: diagnose/heal tools — behavior + registry wiring on a hermetic base_dir."""
 
 import json
-from unittest.mock import MagicMock
 
 import pytest
 

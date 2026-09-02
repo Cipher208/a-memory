@@ -52,9 +52,8 @@ def test_context_manager_records():
     with b as allowed:
         assert allowed
     assert b.get_metrics()["total_requests"] == 1
-    with pytest.raises(RuntimeError):
-        with b:
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), b:
+        raise RuntimeError("boom")
     assert b.get_metrics()["total_failures"] == 1
 
 

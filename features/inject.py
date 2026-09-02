@@ -154,5 +154,5 @@ async def build_inject_blocks(
     dynamic = [b for b in blocks if b["kind"] not in ("rehydrate", "important")]
     if stable and dynamic:
         marker = {"kind": "cache_break", "content": "<cache:break>", "score": 0.0}
-        return stable + [marker] + dynamic
+        return [*stable, marker, *dynamic]
     return blocks

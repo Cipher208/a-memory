@@ -92,7 +92,11 @@ def test_json_fmt_carries_marker_block():
 
     from autohooks.inject import _collect_blocks
 
-    result = {"results": [{"blocks": [{"kind": "important", "content": "f", "score": 0.9}, {"kind": "cache_break", "content": "<cache:break>", "score": 0.0}]}]}
+    result = {
+        "results": [
+            {"blocks": [{"kind": "important", "content": "f", "score": 0.9}, {"kind": "cache_break", "content": "<cache:break>", "score": 0.0}]}
+        ]
+    }
     blocks = _collect_blocks(result)
     assert [b["kind"] for b in blocks] == ["important", "cache_break"]
     assert _json.dumps(blocks)  # json-serializable

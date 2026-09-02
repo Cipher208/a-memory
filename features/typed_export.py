@@ -24,10 +24,10 @@ async def do_export(user_id: str, kind: str | None) -> Path:
 
     conn = await connection_manager.get("memory.db")
     sql = "SELECT * FROM core_memory WHERE user_id=?"
-    params: list[str] = [user_id]
+    params: tuple[str, ...] = (user_id,)
     if kind:
         sql += " AND memory_kind=?"
-        params.append(kind)
+        params = (user_id, kind)
     rows = await (await conn.execute(sql, params)).fetchall()
 
     base = Path(str(connection_manager.base_dir)) / "exports"

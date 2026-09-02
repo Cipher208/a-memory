@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -37,9 +38,11 @@ async def run_diagnose(user_id: str = "default") -> dict[str, Any]:
             check("db_integrity", False, str(exc))
 
     # L1 persist files (E1) — valid JSON?
-    for p in base.glob("l1_*.json"):
+    l1_paths = await asyncio.to_thread(lambda: sorted(base.glob("l1_*.json")))
+    for p in l1_paths:
         try:
-            json.loads(p.read_text())
+            content = await asyncio.to_thread(p.read_text)
+            json.loads(content)
             check("l1_file:" + p.name, True)
         except (json.JSONDecodeError, OSError) as exc:
             check("l1_file:" + p.name, False, str(exc))
@@ -96,11 +99,12 @@ async def run_heal(user_id: str = "default", actions: list[str] | None = None) -
 
     if "purge_invalid_l1" in wanted:
         purged = 0
-        for p in base.glob("l1_*.json"):
+        l1_paths = await asyncio.to_thread(lambda: sorted(base.glob("l1_*.json")))
+        for p in l1_paths:
             try:
-                json.loads(p.read_text())
+                json.loads(await asyncio.to_thread(p.read_text))
             except (json.JSONDecodeError, OSError):
-                p.unlink(missing_ok=True)  # buffer re-persists atomically on next add
+                await asyncio.to_thread(p.unlink, True)  # buffer re-persists atomically on next add
                 purged += 1
         (healed if purged else skipped).append("purge_invalid_l1" if purged else "purge_invalid_l1 (none invalid)")
 

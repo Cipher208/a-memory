@@ -57,9 +57,7 @@ def test_v11_payload_imports_without_l1(hermetic_base):
 
     ie = ImportExport(cm=connection_manager)
     f = ie.export_dir / "old_v11.json"
-    f.write_text(
-        json.dumps({"user_id": "u1", "version": "1.1", "core_memory": [], "episodes": [], "sessions": []})
-    )
+    f.write_text(json.dumps({"user_id": "u1", "version": "1.1", "core_memory": [], "episodes": [], "sessions": []}))
 
     res = _run(ie.import_user("old_v11.json", target_user_id="u2"))
     assert res.get("l1", 0) == 0

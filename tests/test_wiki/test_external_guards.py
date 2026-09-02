@@ -63,7 +63,7 @@ async def test_restore_accepts_legit_name(hermetic_base):
     from features.backup import BackupManager
 
     bm = BackupManager(base_dir=str(hermetic_base))
-    backup_path = await bm.backup(label="e7test")
+    await bm.backup(label="e7test")
     res = await bm.restore("e7test")
     assert "error" not in res, res
     assert res["backup"] == "e7test"
