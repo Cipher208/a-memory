@@ -41,10 +41,16 @@ def _encode_int8(vec: list[float]) -> bytes:
     return struct.pack("<Hf", 0x00A9, scale) + struct.pack(f"<{len(qs)}b", *qs)
 
 
-def _decode_int8(blob: bytes) -> list[float]:
-    (_, scale) = struct.unpack("<Hf", blob[:6])
-    dims = len(blob) - 6
-    qs = struct.unpack(f"<{dims}b", blob[6:])
+def _decode_int8(blob: bytes) -> list[float] | None:
+    """Decode an INT8 blob; returns None for corrupt/truncated blobs (cache miss)."""
+    if len(blob) < 6:
+        return None
+    try:
+        (_, scale) = struct.unpack("<Hf", blob[:6])
+        dims = len(blob) - 6
+        qs = struct.unpack(f"<{dims}b", blob[6:])
+    except struct.error:
+        return None
     if scale == 0 or scale != scale:  # zero or NaN guard
         return [0.0] * dims
     return [q / 127 * scale for q in qs]
@@ -153,10 +159,12 @@ class EmbeddingCache:
             # A3.2: INT8 blobs start with a magic uint16 (0x00A9) + float32 scale;
             # legacy float32 blobs unpack as before (len % 4 == 0).
             if len(blob) >= 6 and blob[0] == 0xA9 and blob[1] == 0x00:
-                return _decode_int8(blob)
+                return _decode_int8(blob) or None
             if len(blob) % 4 == 0:
                 raw = list(struct.unpack(f"{len(blob) // 4}f", blob))
-                return [v if math.isfinite(v) else 0.0 for v in raw]
+                return [v if math.isfinite(v) else 0.0 for v in raw] or None
+            if len(blob) < 6:
+                return None  # corrupt/truncated row → cache miss, recompute
             return _decode_int8(blob)
         return None
 

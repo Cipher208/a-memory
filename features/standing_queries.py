@@ -39,6 +39,16 @@ _ALLOWED_FILTERS = (
 )
 
 
+def _check_name(name: str) -> None:
+    """One validator for every name→path surface (load/save/delete).
+
+    Hostile or over-long names raise ValueError instead of escaping .meta/ or
+    hitting the fs with an unstatable path (chaos finding: 300-char name → OSError).
+    """
+    if not name or len(name) > 100 or not name.replace("-", "").replace("_", "").isalnum():
+        raise ValueError(f"invalid standing query name: {name!r}")
+
+
 def meta_dir() -> Path:
     base = connection_manager.base_dir
     return (Path(str(base)) / ".meta") if base else Path.home() / ".mcp-ariel-memory" / ".meta"
@@ -63,8 +73,7 @@ def list_standing() -> list[dict[str, Any]]:
 
 def load_standing(name: str) -> dict[str, Any]:
     """Load + validate one standing query. Raises ValueError on unknown/invalid."""
-    if not name.replace("-", "").replace("_", "").isalnum():
-        raise ValueError(f"invalid standing query name: {name!r}")
+    _check_name(name)
     path = meta_dir() / f"{name}.yaml"
     if not path.is_file():
         raise ValueError(f"unknown standing query: {name!r}")
@@ -93,8 +102,7 @@ async def run_standing(name: str, user_id: str = "default") -> dict[str, Any]:
 
 def save_standing(name: str, spec: dict[str, Any]) -> Path:
     """Write a standing query file (operator/agent surface)."""
-    if not name.replace("-", "").replace("_", "").isalnum():
-        raise ValueError(f"invalid standing query name: {name!r}")
+    _check_name(name)
     unknown = set(spec) - set(_ALLOWED_FILTERS) - {"description"}
     if unknown:
         raise ValueError(f"unknown filters: {sorted(unknown)}")
@@ -108,6 +116,7 @@ def save_standing(name: str, spec: dict[str, Any]) -> Path:
 
 
 def delete_standing(name: str) -> bool:
+    _check_name(name)  # traversal guard: ../x.yaml must never unlink outside .meta
     path = meta_dir() / f"{name}.yaml"
     if not path.is_file():
         return False

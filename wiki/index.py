@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 _mutation_lock = asyncio.Lock()
 
 
+def _rebind_mutation_lock() -> None:
+    """Recreate the mutation lock if it is bound to a dead event loop.
+
+    Production runs a single loop, so this is a no-op there; test suites
+    (and anything spawning one-shot loops) would otherwise trip the lock's
+    loop-affinity check on its second acquire.
+    """
+    global _mutation_lock
+    loop = asyncio.get_running_loop()
+    bound = getattr(_mutation_lock, "_loop", None)
+    if bound is not None and bound is not loop and bound.is_closed():
+        _mutation_lock = asyncio.Lock()
+
+
 class WikiIndex:
     """Encapsulates all database operations for the Wiki index."""
 
@@ -97,6 +111,7 @@ class WikiIndex:
 
     async def save(self, entry: WikiEntry, content_hash: str) -> None:
         """Atomic insert/update in both wiki_index and wiki_fts."""
+        _rebind_mutation_lock()
         async with _mutation_lock:
             conn = await self._cm.get(DB_NAME)
             try:
@@ -242,6 +257,7 @@ class WikiIndex:
 
     async def delete(self, file_path: str) -> None:
         """Remove from both tables."""
+        _rebind_mutation_lock()
         async with _mutation_lock:
             conn = await self._cm.get(DB_NAME)
             try:

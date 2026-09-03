@@ -254,6 +254,13 @@ class WikiManager:
         # A2.3: doc → searchable sections (fail-soft)
         await self._ingest_into_rag(entry)
 
+        # A1.1: regenerate the type's MOC hub (non-fatal) — the docstring
+        # promises "regenerated on every add/update"; update() lacked the call.
+        try:
+            await self._write_moc(entry.wiki_type)
+        except Exception as exc:
+            logger.warning("wiki MOC regeneration failed for %s: %s", entry.wiki_type, exc)
+
     async def get(self, file_path: str) -> WikiEntry | None:
         """Fetch entry from disk, validated by existence."""
         try:
@@ -561,6 +568,9 @@ class WikiManager:
             parsed_entry.file_path = str(dest)
             parsed_entry.wiki_type = wiki_type
             await self.index.save(parsed_entry, content_hash)
+
+            # A2.3: sync writes chunk too (same fail-soft contract as add())
+            await self._ingest_into_rag(parsed_entry)
 
             # Schema lint (same pattern as add())
             try:

@@ -11,7 +11,8 @@ def test_builtin_table():
 
 def test_expansion_produces_or_group():
     out = expand_fts_query("postgres tuning")
-    assert out == "(postgres OR postgresql OR psql) tuning"
+    # explicit AND: FTS5 rejects a bare token after a group ("(a OR b) c")
+    assert out == "(postgres OR postgresql OR psql) AND tuning"
 
 
 def test_untouched_query_passthrough():
@@ -28,7 +29,7 @@ def test_case_insensitive_lookup_normalizes_token():
     """Lookup is case-insensitive; the group uses the normalized key (FTS is
     case-insensitive by default, so lowercase is the canonical form)."""
     out = expand_fts_query("Postgres tuning")
-    assert out == "(postgres OR postgresql OR psql) tuning"
+    assert out == "(postgres OR postgresql OR psql) AND tuning"
 
 
 def test_config_override_merges(monkeypatch):

@@ -48,4 +48,10 @@ def expand_fts_query(query: str, synonyms: dict[str, list[str]] | None = None) -
             changed = True
         else:
             out.append(tok)
-    return " ".join(out) if changed else str(query)
+    if not changed:
+        return str(query)
+    # FTS5: an explicit group followed by a bare token is a syntax error —
+    # adjacent phrases need an explicit AND ("(a OR b) AND c"), otherwise the
+    # whole MATCH raises and search_fts5 silently degrades to LIKE (chaos/E2E
+    # finding: expansion never reached the engine).
+    return " AND ".join(out)
