@@ -40,8 +40,6 @@ async def wiki_query_bfs(
         recursive = f"JOIN wiki_links l ON (l.from_path = g.path OR l.to_path = g.path) AND l.layer = ? {type_filter}"
 
     base_params: list[Any] = [start_path, layer] + ([link_type] if link_type else [])
-    if direction == "both":
-        base_params = base_params  # already includes both sides
     rec_params: list[Any] = [layer] + ([link_type] if link_type else [])
 
     sql = f"""

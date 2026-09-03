@@ -35,8 +35,8 @@ async def test_builder_pages_and_links(hermetic_wiki):
     from lifecycle.wiki_graph_builder import build_from_wiki
 
     wm, tmp = hermetic_wiki
-    a = await wm.add(wiki_type="work_notes", title="alpha page", content="Alpha body")
-    b = await wm.add(wiki_type="work_notes", title="beta page", content="Beta body follows [[alpha_page]]")
+    await wm.add(wiki_type="work_notes", title="alpha page", content="Alpha body")
+    await wm.add(wiki_type="work_notes", title="beta page", content="Beta body follows [[alpha_page]]")
 
     res = await build_from_wiki(user_id="default", layer="user")
     assert res["pages"] >= 2
@@ -71,7 +71,7 @@ async def test_builder_idempotent(hermetic_wiki):
 
 
 async def test_wiki_query_bfs(hermetic_wiki):
-    wm, tmp = hermetic_wiki
+    wm, _tmp = hermetic_wiki
     a = await wm.add(wiki_type="work_notes", title="root page", content="Root")
     b = await wm.add(wiki_type="work_notes", title="mid page", content="Mid")
     c = await wm.add(wiki_type="work_notes", title="leaf page", content="Leaf")
@@ -90,13 +90,12 @@ async def test_wiki_query_bfs(hermetic_wiki):
 
 
 async def test_wiki_reflect(hermetic_wiki):
-    wm, tmp = hermetic_wiki
+    wm, _tmp = hermetic_wiki
     for i in range(6):
         await wm.add(wiki_type="work_notes", title=f"page {i}", content=f"content {i}", importance=0.4 + i * 0.1)
     await wm.add(wiki_type="work_notes", title="retire me", content="old stuff")
     path = await wm.read_path_of("retire me") if hasattr(wm, "read_path_of") else None
     # mark one stale via frontmatter
-    from wiki.models import WikiEntry
 
     pages = await wm.list_by_type("work_notes", status=None)
     stale = next(p for p in pages if p.title == "retire me")
@@ -132,7 +131,7 @@ async def test_communities_cluster_linked_pages(hermetic_wiki):
     from lifecycle.wiki_communities import detect_communities
     from lifecycle.wiki_graph_builder import build_from_wiki
 
-    wm, tmp = hermetic_wiki
+    wm, _tmp = hermetic_wiki
     a = await wm.add(wiki_type="work_notes", title="hub page", content="Hub")
     b = await wm.add(wiki_type="work_notes", title="linked page", content="Linked")
     await wm.add(wiki_type="work_notes", title="loner page", content="Loner")

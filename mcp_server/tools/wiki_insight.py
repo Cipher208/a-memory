@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from mcp_server.registry import _get_ctx
-from mcp_server.tools.base import _validate_layer
-from shared.metrics import metrics
+from mcp.server.mcpserver import Context  # noqa: TC002
 
-from mcp_server.tools.base import _get_ctx as _get_app_ctx
-from mcp_server.tools.base import _get_wiki
+from mcp_server.registry import _get_ctx
+from mcp_server.tools.base import _get_wiki, _validate_layer
+from shared.metrics import metrics
 
 
 async def wiki_reflect(
@@ -18,7 +17,7 @@ async def wiki_reflect(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Wiki outcome digest (A1.3): status/type counts, top pages, staleness signal."""
-    app = _get_ctx(ctx)
+    _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
     metrics.inc("tool_wiki_reflect")
@@ -37,7 +36,7 @@ async def wiki_query(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """BFS traversal over typed wiki links (A1.4): relationship context for a page."""
-    app = _get_app_ctx(ctx)
+    app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     _get_wiki(app, layer)  # validate wiki availability for the layer
     metrics.inc("tool_calls")

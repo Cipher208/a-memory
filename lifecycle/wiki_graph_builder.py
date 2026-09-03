@@ -55,8 +55,7 @@ async def build_from_wiki(
             if dst_id is None:
                 continue
             cur = await conn.execute(
-                "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
-                " VALUES (?, ?, ?, 0.6, ?, '[]')",
+                "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, 0.6, ?, '[]')",
                 (src_id, dst_id, str(link["link_type"]), time.time()),
             )
             links += cur.rowcount

@@ -11,8 +11,6 @@ import time
 from collections import Counter
 from typing import Any
 
-from shared.connection import connection_manager
-
 
 async def wiki_reflect(layer: str = "user", limit: int = 50) -> dict[str, Any]:
     from wiki.manager import WikiManager

@@ -25,7 +25,7 @@ async def detect_communities(
     spirit: they appear as 1-page communities (caller may filter).
     """
     try:
-        import networkx as nx
+        import networkx as nx  # type: ignore[import-untyped]
     except ImportError as exc:  # pragma: no cover — networkx rides the lockfile
         raise RuntimeError("networkx is required for community detection") from exc
 
@@ -54,7 +54,7 @@ async def detect_communities(
     for src, dst, _rel in rows:
         graph.add_edge(int(src), int(dst))
 
-    communities: list[list[str]] = []
+    communities: list[dict[str, Any]] = []
     if graph.number_of_nodes():
         for cluster in nx.community.louvain_communities(graph, seed=42):
             members = sorted(node_path.get(n, f"?{n}") for n in cluster)
