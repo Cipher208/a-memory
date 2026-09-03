@@ -30,9 +30,7 @@ def hermetic_core(tmp_path, monkeypatch):
 def _intervals(db_path, key):
     conn = sqlite3.connect(db_path / "memory.db")
     conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT * FROM core_memory_temporal WHERE key=? ORDER BY valid_from", (key,)
-    ).fetchall()
+    rows = conn.execute("SELECT * FROM core_memory_temporal WHERE key=? ORDER BY valid_from", (key,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -51,7 +49,7 @@ async def test_save_opens_interval_and_rewrite_chains(hermetic_core):
 
     cm = CoreMemory(cm=connection_manager, layer="user")
     await cm.save("u1", "pref", "dark mode", importance=0.5)
-    time.sleep(0.02)
+    await asyncio.sleep(0.02)
     await cm.save("u1", "pref", "light mode", importance=0.5)
 
     intervals = _intervals(hermetic_core, "pref")
@@ -67,11 +65,11 @@ async def test_get_at_time(hermetic_core):
 
     cm = CoreMemory(cm=connection_manager, layer="user")
     await cm.save("u1", "pref", "dark mode", importance=0.5)
-    time.sleep(0.05)
+    await asyncio.sleep(0.05)
     t_between = time.time()
-    time.sleep(0.05)
+    await asyncio.sleep(0.05)
     await cm.save("u1", "pref", "light mode", importance=0.5)
-    time.sleep(0.05)
+    await asyncio.sleep(0.05)
 
     at_old = await cm.get_at_time("u1", "pref", t_between)
     at_now = await cm.get_at_time("u1", "pref", time.time())

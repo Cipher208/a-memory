@@ -1,7 +1,5 @@
 """A1.7: docs → markdown → wiki pipeline (conversion + collection logic)."""
 
-from pathlib import Path
-
 import pytest
 
 from scripts.docs_to_wiki import collect, html_to_md, to_markdown

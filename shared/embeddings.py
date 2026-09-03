@@ -37,7 +37,7 @@ def _encode_int8(vec: list[float]) -> bytes:
     Round-trip error bounded by scale/127.
     """
     scale = max(abs(v) for v in vec) or 1.0
-    qs = [max(-127, min(127, int(round(v / scale * 127)))) for v in vec]
+    qs = [max(-127, min(127, round(v / scale * 127))) for v in vec]
     return struct.pack("<Hf", 0x00A9, scale) + struct.pack(f"<{len(qs)}b", *qs)
 
 
@@ -164,10 +164,7 @@ class EmbeddingCache:
         await self.ensure()
         text_hash = self._hash_text(text)
         # A3.2: store INT8 (75% smaller) when enabled; legacy float32 otherwise.
-        if _int8_enabled():
-            blob = _encode_int8(embedding)
-        else:
-            blob = struct.pack(f"{len(embedding)}f", *embedding)
+        blob = _encode_int8(embedding) if _int8_enabled() else struct.pack(f"{len(embedding)}f", *embedding)
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",

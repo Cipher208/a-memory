@@ -76,13 +76,11 @@ class WikiIndex:
         )
         # A1.2: lifecycle status column (feature-private table — lazy ALTER,
         # no alembic; existing DBs get the column on first use).
-        try:
+        with contextlib.suppress(Exception):
             await self._cm.execute_script(
                 DB_NAME,
                 "ALTER TABLE wiki_index ADD COLUMN status TEXT NOT NULL DEFAULT 'active';",
             )
-        except Exception:
-            pass  # column already exists
         # Layer-scoped path uniqueness. Created separately and guarded:
         # a legacy DB holding the same file_path in both layers would make
         # the new UNIQUE index fail, and init must not die on that.

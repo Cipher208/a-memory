@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 from shared.connection import connection_manager
-from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +75,7 @@ def load_standing(name: str) -> dict[str, Any]:
     except Exception as exc:
         raise ValueError(f"standing query {name!r} is not valid yaml: {exc}") from exc
     if not isinstance(data, dict):
-        raise ValueError(f"standing query {name!r} must be a yaml mapping")
+        raise TypeError(f"standing query {name!r} must be a yaml mapping")
     unknown = set(data) - set(_ALLOWED_FILTERS) - {"description"}
     if unknown:
         raise ValueError(f"standing query {name!r} has unknown filters: {sorted(unknown)}")

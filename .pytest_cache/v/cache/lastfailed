@@ -1,4 +1,8 @@
 {
   "tests/test_mcp/test_primitives_upgrades.py::test_forget_shadow_bin": true,
-  "tests/test_hooks/test_dispatch_log.py::test_auto_save_text_writes_dispatch_log_row": true
+  "tests/test_hooks/test_dispatch_log.py::test_auto_save_text_writes_dispatch_log_row": true,
+  "tests/test_mcp/test_diagnostics.py::test_diagnose_missing_db_degraded": true,
+  "tests/test_mcp/test_diagnostics.py::test_tool_count_62": true,
+  "tests/test_rag/test_synonyms.py::test_case_insensitive_lookup_keeps_original_token": true,
+  "tests/test_shared/test_shared.py::test_archived_memories": true
 }

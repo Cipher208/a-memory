@@ -210,8 +210,10 @@ class EpistemicGraph:
         return node_id
 
     async def add_edge(self, source_id: int, target_id: int, relation: str, weight: float = 0.8, tags: list[str] | None = None) -> None:
-        """Create/replace an edge. A2.4: optional `tags` (JSON list on the edge —
-        traversal filters like `_inverse:blocked_by` or `_value_regex:deploy.*`).
+        """Create/replace an edge, optionally tagged.
+
+        A2.4: `tags` is a JSON list on the edge — traversal filters like
+        `_inverse:blocked_by` or `_value_regex:deploy.*`.
         """
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
@@ -238,8 +240,10 @@ class EpistemicGraph:
         return [self._row_to_node(dict(r)) for r in rows]
 
     async def get_neighbors(self, node_id: int, depth: int = 1, relation: str | None = None, tag: str | None = None) -> list[dict[str, Any]]:
-        """Neighbors via recursive CTE. A2.4: optional `relation` and edge-`tag`
-        (substring match on the edge's JSON tags — `_inverse`/`_value_regex`).
+        """Neighbors via recursive CTE.
+
+        A2.4: optional `relation` and edge-`tag` (substring match on the
+        edge's JSON tags — `_inverse`/`_value_regex`).
         """
         conn = await self._cm.get(DB_NAME)
         edge_filter = "WHERE e.source_id = ?"

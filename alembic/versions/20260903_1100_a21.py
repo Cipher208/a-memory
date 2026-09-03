@@ -1,4 +1,4 @@
-"""A2.1 — core_memory_temporal: bi-temporal interval history
+"""A2.1 — core_memory_temporal: bi-temporal interval history.
 
 Revision ID: 20260903_1100_a21
 Revises: 20260903_1000_a12
@@ -33,9 +33,7 @@ def upgrade() -> None:
         )
         """
     )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_core_temporal_key ON core_memory_temporal(layer, user_id, key, valid_from)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_core_temporal_key ON core_memory_temporal(layer, user_id, key, valid_from)")
 
 
 def downgrade() -> None:

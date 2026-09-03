@@ -1,7 +1,5 @@
 """A3.2: INT8 scalar quantization for the embedding cache (75% smaller blobs)."""
 
-import pytest
-
 import shared.embeddings as emb
 
 

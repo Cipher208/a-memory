@@ -2,7 +2,6 @@
 
 import asyncio
 import sqlite3
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -53,7 +52,7 @@ async def test_add_without_rag_unchanged(hermetic_wiki):
 
 async def test_rag_failure_is_soft(hermetic_wiki):
     """A broken engine never breaks the wiki write."""
-    wm, tmp = hermetic_wiki
+    wm, _tmp = hermetic_wiki
 
     class _Broken:
         async def ingest_text(self, *a, **k):

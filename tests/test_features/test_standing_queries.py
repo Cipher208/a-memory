@@ -34,7 +34,7 @@ async def test_save_run_delete_roundtrip(hermetic_base):
     assert path.is_file()
 
     listed = sq.list_standing()
-    assert [l["name"] for l in listed] == ["commitments"]
+    assert [li["name"] for li in listed] == ["commitments"]
 
     res = await sq.run_standing("commitments", "default")
     assert res["count"] == 1 and res["rows"][0]["key"] == "commitment:ship"
