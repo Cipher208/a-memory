@@ -156,7 +156,19 @@ class WikiIndex:
             """INSERT INTO wiki_index
                (layer, wiki_type, title, file_path, tags, importance, content, content_hash, status, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (self.layer, entry.wiki_type, entry.title, entry.file_path, tags_json, entry.importance, entry.content, content_hash, entry.status, now, now),
+            (
+                self.layer,
+                entry.wiki_type,
+                entry.title,
+                entry.file_path,
+                tags_json,
+                entry.importance,
+                entry.content,
+                content_hash,
+                entry.status,
+                now,
+                now,
+            ),
         )
         entry_id = cur.lastrowid
         await conn.execute(
@@ -182,17 +194,17 @@ class WikiIndex:
         conn = await self._cm.get(DB_NAME)
         try:
             status_sql = "AND wi.status = ?" if status else ""
-            params: list[Any] = [query, self.layer]
+            params_list: list[Any] = [query, self.layer]
             if status:
-                params.append(status)
-            params.append(limit)
+                params_list.append(status)
+            params_list.append(limit)
             cur = await conn.execute(
                 f"""SELECT wi.*, fts.rank
                     FROM wiki_fts fts
                     JOIN wiki_index wi ON fts.rowid = wi.entry_id
                     WHERE wiki_fts MATCH ? AND wi.layer = ? {status_sql}
                     ORDER BY fts.rank LIMIT ?""",
-                params,
+                tuple(params_list),
             )
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
@@ -204,13 +216,13 @@ class WikiIndex:
         """List entries of a specific type (A1.2: default active only)."""
         conn = await self._cm.get(DB_NAME)
         status_sql = "AND status = ?" if status else ""
-        params: list[Any] = [self.layer, wiki_type]
+        params_list: list[Any] = [self.layer, wiki_type]
         if status:
-            params.append(status)
-        params.append(limit)
+            params_list.append(status)
+        params_list.append(limit)
         cur = await conn.execute(
             f"SELECT * FROM wiki_index WHERE layer=? AND wiki_type=? {status_sql} ORDER BY updated_at DESC LIMIT ?",
-            params,
+            tuple(params_list),
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -219,13 +231,13 @@ class WikiIndex:
         """List all entries in the current layer (A1.2: default active only)."""
         conn = await self._cm.get(DB_NAME)
         status_sql = "AND status = ?" if status else ""
-        params: list[Any] = [self.layer]
+        params_list: list[Any] = [self.layer]
         if status:
-            params.append(status)
-        params.append(limit)
+            params_list.append(status)
+        params_list.append(limit)
         cur = await conn.execute(
             f"SELECT * FROM wiki_index WHERE layer=? {status_sql} ORDER BY updated_at DESC LIMIT ?",
-            params,
+            tuple(params_list),
         )
         rows = await cur.fetchall()
         return [dict(r) for r in rows]

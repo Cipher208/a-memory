@@ -211,7 +211,8 @@ class EpistemicGraph:
 
     async def add_edge(self, source_id: int, target_id: int, relation: str, weight: float = 0.8, tags: list[str] | None = None) -> None:
         """Create/replace an edge. A2.4: optional `tags` (JSON list on the edge —
-        traversal filters like `_inverse:blocked_by` or `_value_regex:deploy.*`)."""
+        traversal filters like `_inverse:blocked_by` or `_value_regex:deploy.*`).
+        """
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT OR REPLACE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)",
@@ -238,13 +239,14 @@ class EpistemicGraph:
 
     async def get_neighbors(self, node_id: int, depth: int = 1, relation: str | None = None, tag: str | None = None) -> list[dict[str, Any]]:
         """Neighbors via recursive CTE. A2.4: optional `relation` and edge-`tag`
-        (substring match on the edge's JSON tags — `_inverse`/`_value_regex`)."""
+        (substring match on the edge's JSON tags — `_inverse`/`_value_regex`).
+        """
         conn = await self._cm.get(DB_NAME)
         edge_filter = "WHERE e.source_id = ?"
-        params: list[Any] = [node_id]
+        params_list: list[Any] = [node_id]
         if relation:
             edge_filter += " AND e.relation = ?"
-            params.append(relation)
+            params_list.append(relation)
         sql = f"""
         WITH RECURSIVE graph AS (
             SELECT e.source_id, e.target_id, e.relation, e.weight, e.tags as etags, 1 as d
@@ -258,9 +260,9 @@ class EpistemicGraph:
         FROM graph g JOIN epi_nodes n ON g.target_id = n.node_id
         WHERE n.layer = ?
         """
-        params.append(depth)
-        params.append(self.layer)
-        cur = await conn.execute(sql, params)
+        params_list.append(depth)
+        params_list.append(self.layer)
+        cur = await conn.execute(sql, tuple(params_list))
         rows = await cur.fetchall()
         out = [
             {
