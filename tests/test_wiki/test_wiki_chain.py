@@ -94,7 +94,6 @@ async def test_wiki_reflect(hermetic_wiki):
     for i in range(6):
         await wm.add(wiki_type="work_notes", title=f"page {i}", content=f"content {i}", importance=0.4 + i * 0.1)
     await wm.add(wiki_type="work_notes", title="retire me", content="old stuff")
-    path = await wm.read_path_of("retire me") if hasattr(wm, "read_path_of") else None
     # mark one stale via frontmatter
 
     pages = await wm.list_by_type("work_notes", status=None)
