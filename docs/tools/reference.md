@@ -9,13 +9,13 @@ a-memory exposes three tool surfaces:
 | **Primitives** (default) | 6 | What every MCP client sees out of the box: `think` / `dream` / `forget` / `evolve` / `project` / `memory_hook` |
 | **+ wiki** | +7 | `ARIEL_EXPOSE=primitives,wiki` — `wiki_add`/`wiki_search`/`wiki_list`/`wiki_read`/`wiki_delete`/`wiki_summarize`/`wiki_link` |
 | **+ brief** | +1 | adds `daily_brief` (one-call status report) |
-| **+ review** | +2 | adds `memory_proposals`, `memory_report_card` — staged-mutation review surface (C1.11/C1.14) |
+| **+ review** | +3 | adds `memory_proposals`, `memory_report_card` — staged-mutation review surface (C1.11/C1.14) — and `memory_watch` (C1.10 operator CRUD over watch_rules) |
 | **+ context** | +7 | build/recover context: `memory_recall_protocol` (D1.1), `memory_recap` (D1.2), `memory_get_smart_context` (D1.10), `memory_context`, `memory_context_inject`, `memory_steering` (D1.3), `memory_compress` (D1.4) |
-| **+ insight** | +16 | read-side analytics: `memory_query` (D1.7), `memory_fact_blame` (D1.6), `memory_history` (D1.14, dual-tier), `memory_quality` (D1.19), `memory_reflect` (D1.16), `memory_stats`, `memory_search`, `memory_recall`, `memory_episode_recall/list/get`, `memory_session_list`, `memory_graph_query/nodes/edges`, `memory_diagnose` (E3) |
-| **+ write** | +15 | shape memory: `memory_remember`, `memory_save_typed` (D1.8), `memory_load_rules` (D1.9), `memory_scratchpad` (D1.15), `memory_counterfactual` (D1.20), `memory_branch` (D1.11), `memory_history` (D1.14, dual-tier), `memory_stash` (D1.12), `memory_procedure` (D2.5), `memory_episode_save`, `memory_graph_add` (E17a causal action), `memory_session_start`, `memory_session_end`, `memory_heal` (E3), `memory_disclose` (E11) |
-| **Full surface** | 63 | `ARIEL_EXPOSE=all` — everything, incl. admin ops (backup, api_key, cleanup, watch, saga, data, forget) |
+| **+ insight** | +17 | read-side analytics: `memory_query` (D1.7), `memory_fact_blame` (D1.6), `memory_history` (D1.14, dual-tier), `memory_quality` (D1.19), `memory_reflect` (D1.16), `memory_stats`, `memory_search`, `memory_recall`, `memory_episode_recall/list/get`, `memory_session_list`, `memory_graph_query/nodes/edges`, `memory_diagnose` (E3), `memory_standing` (A2.5, dual-tier) |
+| **+ write** | +16 | shape memory: `memory_remember`, `memory_save_typed` (D1.8), `memory_load_rules` (D1.9), `memory_scratchpad` (D1.15), `memory_counterfactual` (D1.20), `memory_branch` (D1.11), `memory_history` (D1.14, dual-tier), `memory_stash` (D1.12), `memory_procedure` (D2.5), `memory_episode_save`, `memory_graph_add` (E17a causal action), `memory_session_start`, `memory_session_end`, `memory_heal` (E3), `memory_disclose` (E11), `memory_standing` (A2.5, dual-tier) |
+| **Full surface** | 66 | `ARIEL_EXPOSE=all` — everything, incl. admin ops (backup, api_key, cleanup, saga, data, forget) |
 
-Recommended live-agent value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` → 46 tools; admin surfaces stay hidden unless `all`.
+Recommended live-agent value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` → 66 tools; the remaining admin tools stay hidden unless `all`.
 
 `think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
 wiki save with an explicit page name instead of the automatic Thought_<ts>
@@ -283,6 +283,7 @@ Returns a dict with `perspective`, `layer`, `wiki_type`, `pages` (list of `{titl
 | `memory_data` | Per-user export/import of memory data. |
 | `memory_sync_replica` | Sync the read-only replica used by the dashboard/metrics. |
 | `memory_api_key` | API-key management for HTTP transport: `list` \| `create` \| `revoke`. |
+| `memory_standing` | Standing queries (A2.5): named `.meta/*.yaml` query_dsl invocations — "surface commitments", "decisions this week". `action="save"` (`name` + `spec_json`: whitelisted filters + `description`), `"list"` (payload-free), `"run"` (executes through the D1.7 DSL; `limit` clamped), `"delete"`. Hostile names (traversal, >100 chars, non-alnum) and unknown filter keys raise before any fs/SQL access. Dual tier: insight (list/run) + write (save/delete). Tool count 65 → 66. |
 
 ---
 

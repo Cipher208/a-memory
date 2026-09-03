@@ -47,6 +47,7 @@ def test_insight_tier_exact_set():
         "memory_graph_nodes",
         "memory_graph_edges",
         "memory_diagnose",  # Phase E E3
+        "memory_standing",  # A2.5
     }
 
 
@@ -68,16 +69,16 @@ def test_write_tier_exact_set():
         "memory_session_end",
         "memory_heal",  # Phase E E3
         "memory_disclose",  # Phase E E11
+        "memory_standing",  # A2.5
     }
 
 
 def test_full_agent_exposure_combo():
     """The live-agent combo: primitives + all six tiers."""
     exposed = resolve_exposure("primitives,context,insight,write,wiki,brief,review", _all_names())
-    # admin surfaces stay hidden
+    # admin surfaces stay hidden (memory_watch moved to the review tier)
     hidden = {
         "memory_forget",
-        "memory_watch",
         "memory_api_key",
         "memory_backup",
         "memory_saga",
@@ -90,6 +91,7 @@ def test_full_agent_exposure_combo():
     assert exposed >= PRIMITIVE_TOOLS
     assert "memory_recall_protocol" in exposed and "memory_remember" in exposed
     assert "wiki_read" in exposed and "daily_brief" in exposed and "memory_proposals" in exposed
+    assert "memory_watch" in exposed  # review tier (was admin-hidden)
 
 
 def test_unknown_tier_ignored_and_tiers_cover_no_overlaps_with_primitives():

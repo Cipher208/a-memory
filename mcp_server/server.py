@@ -37,7 +37,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
     "wiki": lambda name, names: {n for n in names if n.startswith("wiki_")},
     "brief": lambda name, names: {n for n in names if n.startswith("daily_")},
     # review: staged-mutation review surface (C1.11/C1.13/C1.14) — opt-in per instance
-    "review": lambda name, names: names & {"memory_proposals", "memory_report_card"},
+    "review": lambda name, names: names & {"memory_proposals", "memory_report_card", "memory_watch"},
     # Phase D coherent groups:
     # context = build/recover context (recall protocol, recap, budgets, steering, compression)
     "context": lambda name, names: (
@@ -72,6 +72,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_graph_nodes",
             "memory_graph_edges",
             "memory_diagnose",  # Phase E E3
+            "memory_standing",  # A2.5 — standing query list/run
         }
     ),
     # write = shape memory (typed saves, rules, scratchpad, counterfactuals, episodes, graph, sessions, branches, versioning, stash, procedures)
@@ -93,6 +94,7 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_session_end",
             "memory_heal",  # Phase E E3 — mutating operator surface
             "memory_disclose",  # Phase E E11 — disclosure rule CRUD
+            "memory_standing",  # A2.5 — standing query save/delete
         }
     ),
 }

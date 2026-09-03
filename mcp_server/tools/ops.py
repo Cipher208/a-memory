@@ -1480,3 +1480,54 @@ async def memory_procedure(
             raise ValueError("delete requires name")
         return {"action": "delete", **pr.proc_delete(user_id, layer, name)}
     raise ValueError(f"unknown action: {action!r}")
+
+
+# ─── memory_standing (A2.5 surface) ─────────────────────────────────────────
+
+
+async def memory_standing(
+    action: str,
+    *,
+    name: str = "",
+    spec_json: str = "",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Standing queries (A2.5): named .meta/*.yaml query_dsl invocations.
+
+    A standing query is a saved, whitelisted memory_query spec — "surface
+    commitments", "decisions this week". Files live under <data_dir>/.meta/.
+    action: "list" | "run" | "save" | "delete". `save` takes spec_json —
+    a JSON mapping of whitelisted query_dsl filters (+ description).
+    """
+    if ctx is not None:
+        _get_ctx(ctx)
+    from features import standing_queries as sq
+
+    metrics.inc(METRIC_TOOL_CALLS)
+    if action == "list":
+        return {"action": "list", "queries": sq.list_standing()}
+    if action == "run":
+        if not name:
+            raise ValueError("run requires name")
+        return {"action": "run", **await sq.run_standing(name, user_id)}
+    if action == "save":
+        if not name:
+            raise ValueError("save requires name")
+        if not spec_json:
+            raise ValueError("save requires spec_json")
+        import json as _sj
+
+        try:
+            spec = _sj.loads(spec_json)
+        except _sj.JSONDecodeError as e:
+            raise ValueError(f"spec_json is not valid JSON: {e}") from e
+        if not isinstance(spec, dict):
+            raise TypeError("spec_json must be a JSON mapping")
+        path = sq.save_standing(name, spec)
+        return {"action": "save", "path": str(path)}
+    if action == "delete":
+        if not name:
+            raise ValueError("delete requires name")
+        return {"action": "delete", "deleted": sq.delete_standing(name)}
+    raise ValueError(f"unknown action: {action!r}")
