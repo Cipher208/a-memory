@@ -63,9 +63,9 @@ def html_to_md(raw: str) -> str:
             text,
             flags=re.DOTALL | re.IGNORECASE,
         )
-    # links and images
-    text = re.sub(r'<a[^>]*href="([^"]*)"[^>]*>(.*?)</a>', r"[\2](\1)", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<img[^>]*src="([^"]*)"[^>]*>', r"![img](\1)", text, flags=re.IGNORECASE)
+    # links and images (both quote styles)
+    text = re.sub(r'<a[^>]*href=[\"\x27]([^\"\x27]*)[\"\x27][^>]*>(.*?)</a>', r"[\2](\1)", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<img[^>]*src=[\"\x27]([^\"\x27]*)[\"\x27][^>]*>', r"![img](\1)", text, flags=re.IGNORECASE)
     # emphasis + code (word boundary: `<b>` must not match `<body>`)
     text = re.sub(r"<(strong|b)\b[^>]*>(.*?)</\1>", r"**\2**", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<(em|i)\b[^>]*>(.*?)</\1>", r"*\2*", text, flags=re.DOTALL | re.IGNORECASE)
