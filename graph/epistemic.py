@@ -102,6 +102,7 @@ class EpistemicGraph:
                 relation TEXT NOT NULL,
                 weight REAL DEFAULT 0.8,
                 created_at REAL NOT NULL,
+                tags TEXT NOT NULL DEFAULT '[]',
                 PRIMARY KEY (source_id, target_id, relation)
             );
             CREATE INDEX IF NOT EXISTS idx_epi_layer ON epi_nodes(layer);
@@ -124,6 +125,11 @@ class EpistemicGraph:
         except Exception:
             # Table already has column or other harmless migration error
             logger.debug("Layer column migration skipped (likely already exists)")
+        # A2.4: edge tags column for pre-existing DBs
+        try:
+            await self._cm.execute_script(DB_NAME, "ALTER TABLE epi_edges ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+        except Exception:
+            logger.debug("epi_edges tags column skipped (likely already exists)")
 
     async def find_or_add_entity(
         self,
