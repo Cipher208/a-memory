@@ -3,24 +3,27 @@
 import asyncio
 
 from lifecycle.graph_builder import build_from_episodes, discover_entities, extract_links
-from shared.connection import AsyncConnectionManager
+from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
 
 def _make(tmp_path):
-    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    """Migrated global singleton on tmp (same pattern as the phase-E fixtures).
+
+    Returns the global manager — tests must monkeypatch `.base_dir`, never
+    swap the singleton object itself (from-imports in wiki.manager et al.
+    would capture the impostor permanently).
+    """
+    connection_manager.base_dir = tmp_path
 
     async def init():
-        from core.episodic import EpisodicMemory
-        from features.audit_trail import AuditTrail
-        from graph.epistemic import EpistemicGraph
+        from shared.migrations import MigrationManager
 
-        await EpistemicGraph(cm=cm, layer="user").init_db()
-        await EpisodicMemory(cm=cm, layer="user")._init_db()
-        await AuditTrail(cm=cm)._init_db()
+        await MigrationManager(cm=connection_manager).migrate()
 
     asyncio.run(init())
-    return cm
+    connection_manager._conns.clear()
+    return connection_manager
 
 
 def test_extract_links_en():
@@ -82,13 +85,24 @@ def test_nightly_runs_graph_build(tmp_path, monkeypatch):
     """_nightly includes a graph_build phase (non-fatal)."""
     from hooks.user_hooks import UserHooks
 
-    cm = _make(tmp_path)
-    monkeypatch.setattr("shared.connection.connection_manager", cm)
+    # Migrate the GLOBAL singleton onto tmp — do NOT swap the object out:
+    # modules that already did `from shared.connection import
+    # connection_manager` (wiki.manager, ...) would capture the impostor at
+    # their first import inside this test and keep it forever.
+    monkeypatch.setattr(connection_manager, "base_dir", tmp_path)
+    connection_manager._conns.clear()
 
     async def t():
+        from shared.migrations import MigrationManager
+
+        await MigrationManager(cm=connection_manager).migrate()
         result = await UserHooks("u1")._nightly({"layer": "user"})
         assert result["action"] == "create_diary"
         assert "graph_build" in result
         assert result["graph_build"]["episodes"] == 0
+        # A1.5: the wiki sibling runs right next to it (same night)
+        assert "wiki_graph_build" in result
+        assert set(result["wiki_graph_build"]) == {"pages", "links"}
 
     asyncio.run(t())
+    connection_manager._conns.clear()

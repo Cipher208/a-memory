@@ -95,6 +95,10 @@ class UserHooks:
 
             result["graph_build"] = await build_from_episodes(connection_manager, self.user_id, layer="user")
         with contextlib.suppress(Exception):
+            from lifecycle.wiki_graph_builder import build_from_wiki
+
+            result["wiki_graph_build"] = await build_from_wiki(user_id=self.user_id, layer="user")
+        with contextlib.suppress(Exception):
             from features.skill_pipeline import auto_promote_fresh
 
             from wiki.manager import WikiManager
