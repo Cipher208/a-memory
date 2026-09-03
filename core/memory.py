@@ -87,10 +87,13 @@ class CoreMemory:
             entry_id = existing_id
             new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)
             await self._record_history(conn, layer, user_id, key, old, new_row, triggered_by or source, now)
+            # A2.1: close the old interval, open the new one (bi-temporal chain)
+            await self._record_temporal(conn, layer, user_id, key, value, importance, memory_kind, now)
         else:
             entry_id = await self._insert_entry(conn, layer, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now)
             new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)
             await self._record_history(conn, layer, user_id, key, None, new_row, triggered_by or source, now)
+            await self._record_temporal(conn, layer, user_id, key, value, importance, memory_kind, now)
 
         await conn.commit()
         return entry_id
@@ -212,6 +215,58 @@ class CoreMemory:
         row = await cursor.fetchone()
         return self._row_to_entry(row) if row else None
 
+    async def _record_temporal(
+        self, conn: Any, layer: str, user_id: str, key: str, value: str, importance: float, memory_kind: str, now: float
+    ) -> None:
+        """A2.1: maintain the bi-temporal interval chain (advisory, never fails a save).
+
+        Closes any open interval for the key and opens a new one at `now`.
+        """
+        try:
+            await conn.execute(
+                "UPDATE core_memory_temporal SET valid_to=? WHERE layer=? AND user_id=? AND key=? AND valid_to IS NULL",
+                (now, layer, user_id, key),
+            )
+            await conn.execute(
+                "INSERT INTO core_memory_temporal (layer, user_id, key, value, importance, memory_kind, valid_from) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (layer, user_id, key, value, importance, memory_kind, now),
+            )
+        except Exception as exc:
+            logger.warning("core_memory_temporal write failed: %s", exc)
+
+    async def _record_temporal_close(self, conn: Any, layer: str, user_id: str, key: str, now: float) -> None:
+        """A2.1: close the open interval on deletion (advisory)."""
+        try:
+            await conn.execute(
+                "UPDATE core_memory_temporal SET valid_to=? WHERE layer=? AND user_id=? AND key=? AND valid_to IS NULL",
+                (now, layer, user_id, key),
+            )
+        except Exception as exc:
+            logger.warning("core_memory_temporal close failed: %s", exc)
+
+    async def get_at_time(self, user_id: str, key: str, at: float) -> dict[str, Any] | None:
+        """A2.1: the value of `key` that was true at time `at` (None if never)."""
+        conn = await self._cm.get(DB_NAME)
+        cursor = await conn.execute(
+            "SELECT value, importance, memory_kind, valid_from, valid_to FROM core_memory_temporal"
+            " WHERE layer=? AND user_id=? AND key=? AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
+            " ORDER BY valid_from DESC LIMIT 1",
+            (self.layer, user_id, key, at, at),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_intervals(self, user_id: str, key: str) -> list[dict[str, Any]]:
+        """A2.1: the full value interval chain for a key (oldest first)."""
+        conn = await self._cm.get(DB_NAME)
+        cursor = await conn.execute(
+            "SELECT value, importance, memory_kind, valid_from, valid_to FROM core_memory_temporal"
+            " WHERE layer=? AND user_id=? AND key=? ORDER BY valid_from",
+            (self.layer, user_id, key),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     async def get_or_default(self, user_id: str, key: str, default: str = "") -> str:
         """Get value or return default (never returns None)."""
         entry = await self.get(user_id, key)
@@ -236,6 +291,8 @@ class CoreMemory:
         if not row:
             return False
         await self._record_history(conn, self.layer, user_id, key, dict(row), None, triggered_by or "delete", time.time())
+        # A2.1: deletion closes the interval (the fact stopped being true)
+        await self._record_temporal_close(conn, self.layer, user_id, key, time.time())
         cursor = await conn.execute("DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
         await conn.commit()
         return cursor.rowcount > 0
