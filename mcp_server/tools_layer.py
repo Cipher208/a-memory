@@ -18,6 +18,7 @@ from .tools.wiki import wiki_add, wiki_search, wiki_list, wiki_read, wiki_delete
 from .tools.skills import memory_skill_promote
 from .tools.wiki_summarize import wiki_summarize
 from .tools.wiki_link import wiki_link
+from .tools.wiki_insight import wiki_reflect, wiki_query
 from .tools.brief import daily_brief
 from .tools.ops import (
     memory_stats,
@@ -124,6 +125,8 @@ _register_tools: dict[str, Any] = {
     "wiki_delete": wiki_delete,
     "wiki_summarize": wiki_summarize,
     "wiki_link": wiki_link,
+    "wiki_reflect": wiki_reflect,
+    "wiki_query": wiki_query,
     "daily_brief": daily_brief,
 }
 
