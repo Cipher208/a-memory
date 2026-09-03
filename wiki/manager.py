@@ -177,10 +177,35 @@ class WikiManager:
         except Exception as exc:
             logger.warning("wiki autolink failed for %s: %s", file_path, exc)
 
+        # A1.1: regenerate the type's MOC hub (non-fatal)
+        try:
+            await self._write_moc(wiki_type)
+        except Exception as exc:
+            logger.warning("wiki MOC regeneration failed for %s: %s", wiki_type, exc)
+
         # A2.3: doc → searchable sections (fail-soft)
         await self._ingest_into_rag(entry)
 
         return str(file_path)
+
+    async def _write_moc(self, wiki_type: str) -> None:
+        """A1.1: auto index hub per wiki type — regenerated on every add/update.
+
+        Lists active pages (title → relative wikilink), newest first. Skipped
+        entirely when fewer than 3 pages exist (no hub value).
+        """
+        rows = await self.index.list_by_type(wiki_type, limit=200, status=None)
+        active = [r for r in rows if r.get("status", "active") == "active"]
+        if len(active) < 3:
+            return
+        moc_dir = self._type_dir(wiki_type)
+        moc_path = moc_dir / f"MOC_{wiki_type}.md"
+        lines = [f"# MOC: {wiki_type}", "", "Auto-generated index hub (A1.1). Do not edit by hand.", ""]
+        for r in sorted(active, key=lambda x: -float(x.get("updated_at") or 0)):
+            title = str(r["title"])
+            stem = Path(str(r["file_path"])).stem
+            lines.append(f"- {title} → [[{stem}]]")
+        await asyncio.to_thread(moc_path.write_text, "\n".join(lines) + "\n", encoding="utf-8")
 
     async def update(
         self,
@@ -215,7 +240,9 @@ class WikiManager:
         md_content = self.parser.to_markdown(entry)
         await asyncio.to_thread(p.write_text, md_content, encoding="utf-8")
 
-        content_hash = hashlib.sha256(entry.content.encode()).hexdigest()
+        # hash the FULL rendered page (content + frontmatter incl. status) so
+        # a status-only change still reaches the index (A1.2 bug fix: it didn't)
+        content_hash = hashlib.sha256(md_content.encode()).hexdigest()
         await self.index.save(entry, content_hash)
 
         # Auto-link any new [[wikilinks]] (non-fatal)
