@@ -203,11 +203,13 @@ class EpistemicGraph:
         await conn.commit()
         return node_id
 
-    async def add_edge(self, source_id: int, target_id: int, relation: str, weight: float = 0.8) -> None:
+    async def add_edge(self, source_id: int, target_id: int, relation: str, weight: float = 0.8, tags: list[str] | None = None) -> None:
+        """Create/replace an edge. A2.4: optional `tags` (JSON list on the edge —
+        traversal filters like `_inverse:blocked_by` or `_value_regex:deploy.*`)."""
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
-            "INSERT OR REPLACE INTO epi_edges (source_id, target_id, relation, weight, created_at) VALUES (?, ?, ?, ?, ?)",
-            (source_id, target_id, relation, weight, time.time()),
+            "INSERT OR REPLACE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)",
+            (source_id, target_id, relation, weight, time.time(), json.dumps(tags or [])),
         )
         await conn.commit()
 
@@ -228,24 +230,33 @@ class EpistemicGraph:
         rows = await cur.fetchall()
         return [self._row_to_node(dict(r)) for r in rows]
 
-    async def get_neighbors(self, node_id: int, depth: int = 1) -> list[dict[str, Any]]:
+    async def get_neighbors(self, node_id: int, depth: int = 1, relation: str | None = None, tag: str | None = None) -> list[dict[str, Any]]:
+        """Neighbors via recursive CTE. A2.4: optional `relation` and edge-`tag`
+        (substring match on the edge's JSON tags — `_inverse`/`_value_regex`)."""
         conn = await self._cm.get(DB_NAME)
-        sql = """
+        edge_filter = "WHERE e.source_id = ?"
+        params: list[Any] = [node_id]
+        if relation:
+            edge_filter += " AND e.relation = ?"
+            params.append(relation)
+        sql = f"""
         WITH RECURSIVE graph AS (
-            SELECT e.source_id, e.target_id, e.relation, e.weight, 1 as d
-            FROM epi_edges e WHERE e.source_id = ?
+            SELECT e.source_id, e.target_id, e.relation, e.weight, e.tags as etags, 1 as d
+            FROM epi_edges e {edge_filter}
             UNION ALL
-            SELECT e.source_id, e.target_id, e.relation, e.weight, g.d + 1
+            SELECT e.source_id, e.target_id, e.relation, e.weight, e.tags as etags, g.d + 1
             FROM epi_edges e JOIN graph g ON e.source_id = g.target_id
             WHERE g.d < ?
         )
-        SELECT n.node_id, n.content, n.node_type, n.tags, g.relation, g.weight
+        SELECT n.node_id, n.content, n.node_type, n.tags, g.relation, g.weight, g.etags
         FROM graph g JOIN epi_nodes n ON g.target_id = n.node_id
         WHERE n.layer = ?
         """
-        cur = await conn.execute(sql, (node_id, depth, self.layer))
+        params.append(depth)
+        params.append(self.layer)
+        cur = await conn.execute(sql, params)
         rows = await cur.fetchall()
-        return [
+        out = [
             {
                 "id": r[0],
                 "content": r[1],
@@ -253,9 +264,13 @@ class EpistemicGraph:
                 "tags": json.loads(r[3]) if r[3] else [],
                 "relation": r[4],
                 "weight": r[5],
+                "edge_tags": json.loads(r[6]) if r[6] else [],
             }
             for r in rows
         ]
+        if tag:
+            out = [n for n in out if any(tag in et for et in n["edge_tags"])]
+        return out
 
     async def find_path(self, source_id: int, target_id: int, max_depth: int | None = None) -> list[dict[str, Any]]:
         if max_depth is None:
