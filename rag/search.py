@@ -20,16 +20,23 @@ except ImportError:
 async def search_fts5(
     cm: AsyncConnectionManager, query: str, user_id: str, limit: int, fts_available: bool, layer: str = "user"
 ) -> list[dict[str, Any]]:
-    """FTS5 search with LIKE fallback. Layer-scoped: never returns other layers' pages."""
+    """FTS5 search with LIKE fallback. Layer-scoped: never returns other layers' pages.
+
+    A3.1: FTS MATCH gets synonym-expanded (rag/synonyms) — the LIKE fallback
+    keeps the ORIGINAL query (substring semantics differ).
+    """
     conn = await cm.get(DB_NAME)
     if fts_available:
         try:
+            from rag.synonyms import expand_fts_query
+
+            match_expr = expand_fts_query(query)
             cur = await conn.execute(
                 """SELECT wp.id, wp.title, wp.content, wp.wiki_type, fts.rank
                    FROM rag_fts fts JOIN rag_pages wp ON fts.rowid = wp.id
                    WHERE rag_fts MATCH ? AND wp.user_id = ? AND wp.layer = ?
                    ORDER BY fts.rank DESC LIMIT ?""",
-                (query, user_id, layer, limit),
+                (match_expr, user_id, layer, limit),
             )
             rows = await cur.fetchall()
             return [
