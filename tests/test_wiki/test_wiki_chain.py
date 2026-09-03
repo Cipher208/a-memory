@@ -123,3 +123,24 @@ async def test_moc_generated_on_add(hermetic_wiki):
     assert moc_path.exists(), "MOC hub must auto-generate on category writes (>=3 pages)"
     body = moc_path.read_text()
     assert "first topic" in body and "second_topic" in body
+
+
+# ─── A1.6: community detection ─────────────────────────────────────────────────
+
+
+async def test_communities_cluster_linked_pages(hermetic_wiki):
+    from lifecycle.wiki_communities import detect_communities
+    from lifecycle.wiki_graph_builder import build_from_wiki
+
+    wm, tmp = hermetic_wiki
+    a = await wm.add(wiki_type="work_notes", title="hub page", content="Hub")
+    b = await wm.add(wiki_type="work_notes", title="linked page", content="Linked")
+    await wm.add(wiki_type="work_notes", title="loner page", content="Loner")
+    await wm.index.add_link(a, b, "follows")
+    await build_from_wiki(user_id="default", layer="user")
+
+    res = await detect_communities(user_id="default", layer="user")
+    assert res["node_count"] >= 3
+    assert any(c["size"] >= 2 for c in res["communities"]), "the linked pair must land in one community"
+    all_pages = {p for c in res["communities"] for p in c["pages"]}
+    assert any("hub_page" in p for p in all_pages) and any("loner_page" in p for p in all_pages)
