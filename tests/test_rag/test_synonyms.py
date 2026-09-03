@@ -24,9 +24,11 @@ def test_punctuation_stripped_for_lookup():
     assert "(postgres OR postgresql OR psql)" in out
 
 
-def test_case_insensitive_lookup_keeps_original_token():
+def test_case_insensitive_lookup_normalizes_token():
+    """Lookup is case-insensitive; the group uses the normalized key (FTS is
+    case-insensitive by default, so lowercase is the canonical form)."""
     out = expand_fts_query("Postgres tuning")
-    assert out == "(Postgres OR postgresql OR psql) tuning"
+    assert out == "(postgres OR postgresql OR psql) tuning"
 
 
 def test_config_override_merges(monkeypatch):
