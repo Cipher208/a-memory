@@ -26,6 +26,10 @@ class AppContext:
         self.agent_wiki = WikiManager(layer="agent")
         self.user_rag = RAGEngine(layer="user")
         self.agent_rag = RAGEngine(layer="agent")
+        # A2.3: wiki pages chunk into rag_pages/rag_chunks on write —
+        # doc → searchable sections without a manual ingest step.
+        self.user_wiki.rag = self.user_rag
+        self.agent_wiki.rag = self.agent_rag
         self.user_multi = MultiSourceRAG(self.user_rag, self.user_wiki)
         self.agent_multi = MultiSourceRAG(self.agent_rag, self.agent_wiki)
         self.user_graph = EpistemicGraph(layer="user")

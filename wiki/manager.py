@@ -67,6 +67,29 @@ class WikiManager:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index = WikiIndex(self._cm, layer)
         self.parser = WikiParser()
+        # A2.3: optional RAG engine — when set, page writes also chunk into
+        # rag_chunks (doc → searchable sections). AppContext wires its own.
+        self.rag: Any | None = None
+
+    async def _ingest_into_rag(self, entry: WikiEntry) -> None:
+        """A2.3: chunk a wiki page into rag_pages/rag_chunks (fail-soft).
+
+        sha256-deduped by the ingestor — rewrites with unchanged content are
+        no-ops; changed content creates a NEW page (the old one is orphaned
+        until rag cleanup — accepted ceiling, documented).
+        """
+        if self.rag is None:
+            return
+        try:
+            await self.rag.ingest_text(
+                title=entry.title,
+                text=entry.content,
+                user_id="default",
+                wiki_type=entry.wiki_type,
+                path=entry.file_path,
+            )
+        except Exception as exc:
+            logger.debug("rag ingest skipped for %s: %s", entry.file_path, exc)
 
     async def init_db(self) -> None:
         """Delegate to index layer."""
@@ -154,6 +177,9 @@ class WikiManager:
         except Exception as exc:
             logger.warning("wiki autolink failed for %s: %s", file_path, exc)
 
+        # A2.3: doc → searchable sections (fail-soft)
+        await self._ingest_into_rag(entry)
+
         return str(file_path)
 
     async def update(
@@ -197,6 +223,9 @@ class WikiManager:
             await self._autolink(entry)
         except Exception as exc:
             logger.warning("wiki autolink failed for %s: %s", p, exc)
+
+        # A2.3: doc → searchable sections (fail-soft)
+        await self._ingest_into_rag(entry)
 
     async def get(self, file_path: str) -> WikiEntry | None:
         """Fetch entry from disk, validated by existence."""
