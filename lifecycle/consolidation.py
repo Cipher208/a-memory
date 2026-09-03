@@ -7,6 +7,8 @@ Type-aware promotion with memory_kind support.
 
 import contextlib
 import json
+import logging
+import re
 from typing import Any
 
 from lifecycle.transitions import record_transition
@@ -14,9 +16,29 @@ from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.memory_types import MemoryKind, get_policy, validate_kind
 
+logger = logging.getLogger(__name__)
+
 # B1.4: provenance of derived summaries. A promoted fact stores its source
 # references in core_memory.metadata["parents"] as "<kind>:<id>" strings —
 # a DAG (a fact may merge several parents), no schema change required.
+
+# Transcript-shaped summaries (raw harness dumps that leaked into the episodes
+# table) must never become L4 "facts" — they once produced keys like
+# `ep_[{"type":_"text"...` in prod. A real summary is a prose phrase: no
+# structural markup at the head, no newlines.
+_TRANSCRIPT_HEAD = re.compile(r"^\s*(\[|\{|\]|\"|`|<|\||\\|#|!|~|=|\*)")
+
+
+def _looks_like_transcript(summary: str) -> bool:
+    if "\n" in summary[:80]:
+        return True
+    return bool(_TRANSCRIPT_HEAD.match(summary))
+
+
+def _slug(text: str) -> str:
+    """Filename-safe key suffix: alnum/_/-/CJK survive, punctuation collapses."""
+    cleaned = re.sub(r"[^\w-]+", "_", text, flags=re.UNICODE).strip("_")
+    return cleaned.lower() or "ep"
 
 
 def _parent_refs(*refs: str | None) -> dict[str, Any] | None:
@@ -106,7 +128,13 @@ class ConsolidationEngine:
         for row in rows:
             summary = row["summary"]
             weight = row["emotional_weight"]
-            key = "ep_{}".format(summary[:30].replace(" ", "_").lower())
+            if _looks_like_transcript(summary):
+                logger.warning(
+                    "skipping transcript-shaped episode %s from L4 promotion",
+                    row["episode_id"],
+                )
+                continue
+            key = f"ep_{_slug(summary[:30])}"
             entry_id = await cm.save(
                 user_id,
                 key,
