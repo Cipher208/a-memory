@@ -22,6 +22,34 @@ from shared.constants import DB_NAME
 _embedding_breaker = breaker_registry.get("embedding_model", threshold=3, recovery_timeout=30.0)
 
 
+def _int8_enabled() -> bool:
+    """A3.2: INT8 cache storage toggle (rag.int8_cache, default off)."""
+    from config import config
+
+    return bool(config.get("rag", "int8_cache", default=False))
+
+
+def _encode_int8(vec: list[float]) -> bytes:
+    """Symmetric per-vector INT8: magic uint16 + float32 scale + signed-byte dims.
+
+    384 dims: 2 (magic) + 4 (scale) + 384 = 390 bytes vs 1536 float32 — 75% smaller.
+    Magic (0x00A9) distinguishes INT8 blobs from legacy float32 (len%4==0).
+    Round-trip error bounded by scale/127.
+    """
+    scale = max(abs(v) for v in vec) or 1.0
+    qs = [max(-127, min(127, int(round(v / scale * 127)))) for v in vec]
+    return struct.pack("<Hf", 0x00A9, scale) + struct.pack(f"<{len(qs)}b", *qs)
+
+
+def _decode_int8(blob: bytes) -> list[float]:
+    (_, scale) = struct.unpack("<Hf", blob[:6])
+    dims = len(blob) - 6
+    qs = struct.unpack(f"<{dims}b", blob[6:])
+    if scale == 0 or scale != scale:  # zero or NaN guard
+        return [0.0] * dims
+    return [q / 127 * scale for q in qs]
+
+
 def _configured_model() -> str:
     from config import config
 
@@ -119,17 +147,27 @@ class EmbeddingCache:
         )
         row = await cursor.fetchone()
         if row:
-            blob: bytes = row[0]
-            raw = list(struct.unpack(f"{len(blob) // 4}f", blob))
             import math
 
-            return [v if math.isfinite(v) else 0.0 for v in raw]
+            blob: bytes = row[0]
+            # A3.2: INT8 blobs start with a magic uint16 (0x00A9) + float32 scale;
+            # legacy float32 blobs unpack as before (len % 4 == 0).
+            if len(blob) >= 6 and blob[0] == 0xA9 and blob[1] == 0x00:
+                return _decode_int8(blob)
+            if len(blob) % 4 == 0:
+                raw = list(struct.unpack(f"{len(blob) // 4}f", blob))
+                return [v if math.isfinite(v) else 0.0 for v in raw]
+            return _decode_int8(blob)
         return None
 
     async def _cache(self, text: str, embedding: list[float], cache_tag: str) -> None:
         await self.ensure()
         text_hash = self._hash_text(text)
-        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        # A3.2: store INT8 (75% smaller) when enabled; legacy float32 otherwise.
+        if _int8_enabled():
+            blob = _encode_int8(embedding)
+        else:
+            blob = struct.pack(f"{len(embedding)}f", *embedding)
         conn = await self._cm.get(DB_NAME)
         await conn.execute(
             "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",
