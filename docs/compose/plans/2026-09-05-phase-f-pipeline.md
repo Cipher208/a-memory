@@ -453,6 +453,49 @@ async def distill_and_route(mem, graph, user_id: str, text: str, score: float, *
 
 ---
 
+### Task 9: Единый вход — убрать обходные пути в граф/L4
+
+**Covers:** S6a-принцип 1 (один вход), S6a (карта входов)
+
+**Files:**
+- Modify: `mcp_server/tools/memory.py::memory_remember` — убрать `graph.add_node` (только L4; граф наполняет дистиллятор/минеры)
+- Modify: `hooks/agent_hooks.py` — error_occurred/decision_made/self_correction/personality_shift: вместо прямого `add_node` → `l0.capture` + валидированный маршрут (kind/confidence/provenance обязательны)
+- Modify: `mcp_server/tools/graph.py::memory_graph_add` — валидация: node_type/weight/provenance обязательны (иначе ValueError)
+- Test: `tests/test_mcp/test_single_entry.py`
+
+**Interfaces:**
+- Consumes: `shared/l0.py::capture` (T1), `lifecycle/distiller.py::distill_and_route` (T3)
+- Produces: инвариант «нет прямых add_node вне graph.py-валидатора и минеров» — проверяется тестом.
+
+- [ ] **Step 1: Failing test**
+
+```python
+import pytest
+from unittest.mock import MagicMock
+
+@pytest.mark.asyncio
+async def test_remember_does_not_write_graph(app):
+    ctx = _make_ctx(app)
+    spy = MagicMock(wraps=app.user_graph.add_node)
+    app.user_graph.add_node = spy
+    await memory_remember(layer="user", user_id="se", key="k", value="value", ctx=ctx)
+    spy.assert_not_called()  # L4-запись не дублирует контент в граф
+
+@pytest.mark.asyncio
+async def test_graph_add_requires_provenance(app):
+    ctx = _make_ctx(app)
+    with pytest.raises(ValueError, match="provenance"):
+        await memory_graph_add(user_id="gp", content="x", node_type="fact", ctx=ctx)  # без source
+```
+
+- [ ] **Step 2: Реализация**: memory_remember — удалить блок `graph.add_node` (hooks/post_remember сохраняют провенанс-ссылку); memory_graph_add — `if not source: raise ValueError("graph_add requires provenance (source)"); if confidence is None: raise ValueError("graph_add requires confidence")`; agent_hooks — hook-хендлеры вызывают `capture()` + distill-маршрут вместо add_node.
+
+- [ ] **Step 3: Греп-инвариант** — `rg 'add_node' --type py -g '!tests/*' -g '!*pycache*'` возвращает только: graph/epistemic.py (определение), lifecycle минеры, mcp_server/tools/graph.py (валидированный вход). Добавить в CI-скрипт или тест-ассерт.
+
+- [ ] **Step 4: Коммит** `feat(F-T9): single entry — no bypass writes to graph/L4`.
+
+---
+
 ## Self-Review checklist (заполняется при написании)
 
 - Spec coverage: S1→T1, S2(G0)→T2, S2(G1)→T3, S2(compact/priority)→T4, S6(B4/B5)→T5, S4→T6, S2(session-close/E6)+S3→T7, S4(CLI)/S12(NOTICE)→T8. S5 (wiki) — сознательно НЕ в этом плане: wiki-механики (rewrite-not-append, redirect-stubs) идут отдельным планом после F (зависимость от [[fact:]] планирования). S0/S6a/S6b — principles/классификатор внутри T1/T2. S7-S10 (граф) — Phase G plan. S11-S14 (eval/infra) — Phase H plan. S15 — волновой порядок соблюдён.
