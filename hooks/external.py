@@ -170,10 +170,17 @@ async def auto_save_text(
         result["rules"] = rule_out["matched"]
     if score < threshold:
         return result
-    await mem.l3.save(user_id, text[:500], score, ["auto_save", *rule_out["tags"]])
-    result["saved_l3"] = True
-    await graph.add_node(user_id, text[:500], "fact", [], score)
-    result["saved_graph"] = True
+
+    # G1 distiller: atomize → canonical key → kind-routing (инварианты→L4,
+    # события→L3 через mem.l3.save). Граф не пишем напрямую — наполняют минеры.
+    from lifecycle.distiller import distill_and_route
+
+    route_stats = await distill_and_route(mem, graph, user_id, text, score, event=event, extra_tags=rule_out["tags"])
+    result["saved_l3"] = route_stats["l3_saved"] > 0
+    result["saved_graph"] = route_stats["l3_saved"] > 0
+    result["routes"] = route_stats
+    if route_stats["l4_saved"] > 0:
+        result["saved_l4"] = True
     if score >= 0.8:
         if _staging_enabled():
             try:

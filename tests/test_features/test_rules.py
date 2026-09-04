@@ -122,9 +122,10 @@ async def test_auto_save_text_applies_rules(rules_dir):
     text = "Изменил архитектуру памяти?\nТеперь это поэтапный план, который надо сделать!\nСначала прототип, потом тесты, иначе всё сломается — ты же помнишь, как я решил?"
     res = await auto_save_text(mem, _FakeGraph(), user_id="u1", text=text, event="new_message")
     assert res["rules"] == ["architecture"]
-    _summary, weight, tags = mem.l3.saved[0]
-    assert weight >= 0.5
-    assert tags == ["auto_save"]  # architecture rule has no tags
+    assert res["score"] >= 0.5  # D1.9: importance_boost применился к гейту
+    # F-G1: «как я решил» типизируется как decision → инвариант → L4, не L3
+    assert res["routes"]["l4_saved"] == 1 and res["routes"]["l3_saved"] == 0
+    assert mem.l3.saved == []
     # release rule adds its tag:
     res2 = await auto_save_text(
         mem,
@@ -134,5 +135,6 @@ async def test_auto_save_text_applies_rules(rules_dir):
         event="new_message",
     )
     assert res2["rules"] == ["release-facts"]
+    # F-G1: атомы → L3 с тегами [rule_tags..., event, kind] — rule-теги сохранены
     _, _, tags2 = mem.l3.saved[-1]
-    assert "release" in tags2 and "auto_save" in tags2
+    assert "release" in tags2 and "new_message" in tags2

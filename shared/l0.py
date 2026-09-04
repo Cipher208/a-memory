@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
@@ -17,7 +18,7 @@ async def capture(
     *,
     source_msg_id: int | None = None,
     raw_type: str | None = None,
-    decisions: list[dict] | None = None,
+    decisions: list[dict[str, Any]] | None = None,
 ) -> int | None:
     """Append-only intake. Никогда не бросает — сбой L0 не блокирует поток."""
     try:

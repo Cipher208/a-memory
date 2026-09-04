@@ -105,7 +105,8 @@ async def test_auto_save_text_mid_score_saves_l3_and_graph() -> None:
     assert result["saved_l3"] is True
     assert result["saved_graph"] is True
     assert result["saved_l4"] is False
-    assert mem.saved and graph.nodes
+    # F-G1: граф больше не пишется напрямую из auto_save — наполняют минеры
+    assert mem.saved and not graph.nodes
 
 
 @pytest.mark.asyncio
