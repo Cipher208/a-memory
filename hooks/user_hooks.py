@@ -99,6 +99,10 @@ class UserHooks:
 
             result["wiki_graph_build"] = await build_from_wiki(user_id=self.user_id, layer="user")
         with contextlib.suppress(Exception):
+            from lifecycle.graph_enrich import graph_enrich
+
+            result["graph_enrich"] = await graph_enrich(layer="user")
+        with contextlib.suppress(Exception):
             from features.skill_pipeline import auto_promote_fresh
 
             from wiki.manager import WikiManager
