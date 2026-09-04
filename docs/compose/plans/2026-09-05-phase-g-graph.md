@@ -103,6 +103,26 @@ async def miner_tags(cm, layer: str) -> dict:
 - [ ] **Step 2: Реализация**: embedding-минер — кодировать content+tags+aliases (A-MEM rich embedding), попарный Jaccard (O(n²) на 236 узлах — копейки), top-k=15; entity-минер — словарь (Лили/Люси/Hermes/SQLite...) + spaCy NER для латиницы.
 - [ ] **Step 3: Коммит** `feat(G3): embedding + entity miners, incremental mode`.
 
+### Task 4b: Минеры #6 маркеры led_to + #8 структурные инварианты
+
+**Covers:** S8 (минеры 6, 8 — план-чейнджер: пропущены в v1 плана, поймано ревью 04.09)
+
+**Files:**
+- Modify: `lifecycle/graph_miners.py` — `miner_markers` (led_to), `miner_structural` (co-citation + louvain-расширение + belief propagation)
+- Test: расширить test_graph_miners.py
+
+**Interfaces:**
+- Consumes: минеры #1/#2 уже наплели рёбер (для #8 co-citation нужны существующие связи); louvain из A1.6 (wiki_communities).
+- Produces: рёбра `led_to` (вес 0.3, тег `heuristic:marker`), `co_cited` (вес = число общих цитирующих), буст importance целевых узлов (belief propagation).
+
+- [ ] **Step 1: Тест #6 (маркеры)**: узел A про X (ts=T), узел B про X с маркером «починила/теперь работает/сломалось/переделали» (ts=T+N, N в [5мин, 30д]) → ребро A→B `led_to` weight=0.3, tags=['heuristic:marker']; без временной близости → ребра нет.
+- [ ] **Step 2: Тест #8a (co-citation)**: узлы A и B, оба упомянуты в узле C → ребро A↔B `co_cited` weight=0.3; **Step 2b (belief propagation)**: confidence(A)=0.9, ребро A→B (weight 0.5) → UPDATE epi_nodes SET confidence = conf(B) + 0.1·conf(A)·w для B (одноразовый буст, не рекурсивный).
+- [ ] **Step 3: Тест #8b (louvain-расширение)**: сообщества уже посчитаны A1.6 → внутри сообщества пары узлов БЕЗ рёбер, но с общим тегом, получают слабое ребро weight=0.2 `heuristic:community_bridge`.
+- [ ] **Step 4: Реализация miner_markers**: SELECT пар узлов с общим токеном/сущностью, ts-дельта в [5мин, 30д], второй содержит маркер-словарь (починила|исправила|теперь работает|сломалось|переделали|решено|закрыто) → led_to.
+- [ ] **Step 5: Реализация miner_structural**: co-citation (SELECT пар из общих third-party рёбер) + louvain-мосты (SELECT пар внутри сообщества без прямого ребра с общим тегом) + belief propagation (UPDATE confidence по входящим высоко-конфидентным рёбрам).
+- [ ] **Step 6: Прогон GREEN + регресс test_graph_miners.py.**
+- [ ] **Step 7: Коммит** `feat(G3): miner #6 led_to markers, #8 structural invariants`.
+
 ---
 
 ### Task 5: Санитария — inhibition, validity windows, MAD, valence, hub exclusion
