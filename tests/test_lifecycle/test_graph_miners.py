@@ -91,7 +91,8 @@ async def test_miner_tags_shared_tag_creates_weighted_edge(db):
     assert len(rows) == 3
     by_pair = {(r["source_id"], r["target_id"]): r for r in rows}
     assert by_pair[(min(n1, n3), max(n1, n3))]["weight"] == pytest.approx(0.5)  # 2 общих тега
-    assert by_pair[(min(n1, n2), max(n1, n2))]["weight"] == pytest.approx(0.4)  # 1 общий тег
+    # 1 общий тег; G5 lateral inhibition: 0.4 → 0.385 (сосед 0.5 сильнее) → 0.38275 (сосед (2,3) 0.4 > 0.385)
+    assert by_pair[(min(n1, n2), max(n1, n2))]["weight"] == pytest.approx(0.38275)
     for r in rows:
         assert "heuristic:tags" in r["tags"]
 

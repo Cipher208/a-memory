@@ -31,13 +31,24 @@ _BIND_SHARED = 2  # или ≥2 общих канон-токенов с текс
 
 
 async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, heuristic: str) -> int:
-    """INSERT OR IGNORE into epi_edges; returns rows actually written (re-run → 0)."""
+    """INSERT OR IGNORE into epi_edges; returns rows actually written (re-run → 0).
+
+    После вставки heuristic-ребра применяется lateral inhibition (G5,
+    SYNAPSE): слабое ребро гасится кластером более сильных соседей узла.
+    """
     cur = await conn.execute(
         "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
         " VALUES (?, ?, ?, ?, ?, ?)",
         (a, b, relation, weight, time.time(), json.dumps([f"heuristic:{heuristic}"])),
     )
-    return int(cur.rowcount or 0)
+    written = int(cur.rowcount or 0)
+    if written:
+        from lifecycle.graph_sanitation import lateral_inhibition
+
+        with contextlib.suppress(Exception):  # ингибиция не должна ронять минер
+            await lateral_inhibition(conn, a)
+            await lateral_inhibition(conn, b)
+    return written
 
 
 def _canon(w: str, syn: dict[str, list[str]]) -> str:
@@ -483,11 +494,17 @@ async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, 
 
 
 async def _node_communities(conn: Any, layer: str) -> list[set[int]]:
-    """louvain-сообщества узлов слоя по их рёбрам (A1.6, networkx); [] при пустом графе."""
+    """louvain-сообщества узлов слоя по их рёбрам (A1.6, networkx); [] при пустом графе.
+
+    G5 hub exclusion: MOC-хабы/auto-indexes исключены из графа сообществ —
+    иначе один MOC склеивает всё в одно сообщество.
+    """
     try:
         import networkx as nx  # type: ignore[import-untyped]
     except ImportError:
         return []
+    from lifecycle.graph_sanitation import HUB_EXCLUSION_PARAMS
+
     rows = await (
         await conn.execute(
             "SELECT e.source_id, e.target_id FROM epi_edges e"
@@ -496,12 +513,25 @@ async def _node_communities(conn: Any, layer: str) -> list[set[int]]:
             (layer, layer),
         )
     ).fetchall()
+    excluded = {
+        int(r["node_id"])
+        for r in await (
+            await conn.execute(
+                f"SELECT node_id FROM epi_nodes WHERE layer=? AND node_type IN ({', '.join('?' * len(HUB_EXCLUSION_PARAMS))})",
+                (layer, *HUB_EXCLUSION_PARAMS),
+            )
+        ).fetchall()
+    }
     graph = nx.Graph()
     graph.add_nodes_from(
-        int(r["node_id"]) for r in await (await conn.execute("SELECT node_id FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
+        int(r["node_id"])
+        for r in await (await conn.execute("SELECT node_id FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
+        if int(r["node_id"]) not in excluded
     )
     for r in rows:
-        graph.add_edge(int(r["source_id"]), int(r["target_id"]))
+        s, t = int(r["source_id"]), int(r["target_id"])
+        if s not in excluded and t not in excluded:
+            graph.add_edge(s, t)
     return [set(c) for c in nx.community.louvain_communities(graph, seed=42) if len(c) >= 2]
 
 

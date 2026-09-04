@@ -52,4 +52,9 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
         except Exception:
             miners[name] = {"edges": 0}
 
-    return {"nodes_cleaned": cleaned, "miners": miners}
+    # G5 sanitation: validity recheck (рёбра вне окна → status='expired').
+    from lifecycle.graph_sanitation import validate_edges
+
+    expired = await validate_edges(conn)
+
+    return {"nodes_cleaned": cleaned, "miners": miners, "sanitation": {"expired": expired}}

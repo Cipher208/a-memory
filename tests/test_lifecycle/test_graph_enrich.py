@@ -89,4 +89,4 @@ async def test_graph_enrich_noop_layer_keeps_stats_shape(graph):
 
     result = await graph_enrich(layer="agent")
 
-    assert result == {"nodes_cleaned": 0, "miners": {k: {"edges": 0} for k in result["miners"]}}
+    assert result == {"nodes_cleaned": 0, "miners": {k: {"edges": 0} for k in result["miners"]}, "sanitation": {"expired": 0}}

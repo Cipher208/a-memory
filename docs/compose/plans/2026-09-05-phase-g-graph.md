@@ -115,13 +115,13 @@ async def miner_tags(cm, layer: str) -> dict:
 - Consumes: минеры #1/#2 уже наплели рёбер (для #8 co-citation нужны существующие связи); louvain из A1.6 (wiki_communities).
 - Produces: рёбра `led_to` (вес 0.3, тег `heuristic:marker`), `co_cited` (вес = число общих цитирующих), буст importance целевых узлов (belief propagation).
 
-- [ ] **Step 1: Тест #6 (маркеры)**: узел A про X (ts=T), узел B про X с маркером «починила/теперь работает/сломалось/переделали» (ts=T+N, N в [5мин, 30д]) → ребро A→B `led_to` weight=0.3, tags=['heuristic:marker']; без временной близости → ребра нет.
-- [ ] **Step 2: Тест #8a (co-citation)**: узлы A и B, оба упомянуты в узле C → ребро A↔B `co_cited` weight=0.3; **Step 2b (belief propagation)**: confidence(A)=0.9, ребро A→B (weight 0.5) → UPDATE epi_nodes SET confidence = conf(B) + 0.1·conf(A)·w для B (одноразовый буст, не рекурсивный).
-- [ ] **Step 3: Тест #8b (louvain-расширение)**: сообщества уже посчитаны A1.6 → внутри сообщества пары узлов БЕЗ рёбер, но с общим тегом, получают слабое ребро weight=0.2 `heuristic:community_bridge`.
-- [ ] **Step 4: Реализация miner_markers**: SELECT пар узлов с общим токеном/сущностью, ts-дельта в [5мин, 30д], второй содержит маркер-словарь (починила|исправила|теперь работает|сломалось|переделали|решено|закрыто) → led_to.
-- [ ] **Step 5: Реализация miner_structural**: co-citation (SELECT пар из общих third-party рёбер) + louvain-мосты (SELECT пар внутри сообщества без прямого ребра с общим тегом) + belief propagation (UPDATE confidence по входящим высоко-конфидентным рёбрам).
-- [ ] **Step 6: Прогон GREEN + регресс test_graph_miners.py.**
-- [ ] **Step 7: Коммит** `feat(G3): miner #6 led_to markers, #8 structural invariants`.
+- [x] **Step 1: Тест #6 (маркеры)**: узел A про X (ts=T), узел B про X с маркером «починила/теперь работает/сломалось/переделали» (ts=T+N, N в [5мин, 30д]) → ребро A→B `led_to` weight=0.3, tags=['heuristic:marker']; без временной близости → ребра нет.
+- [x] **Step 2: Тест #8a (co-citation)**: узлы A и B, оба упомянуты в узле C → ребро A↔B `co_cited` weight=0.3; **Step 2b (belief propagation)**: confidence(A)=0.9, ребро A→B (weight 0.5) → UPDATE epi_nodes SET confidence = conf(B) + 0.1·conf(A)·w для B (одноразовый буст, не рекурсивный).
+- [x] **Step 3: Тест #8b (louvain-расширение)**: сообщества уже посчитаны A1.6 → внутри сообщества пары узлов БЕЗ рёбер, но с общим тегом, получают слабое ребро weight=0.2 `heuristic:community_bridge`.
+- [x] **Step 4: Реализация miner_markers**: SELECT пар узлов с общим токеном/сущностью, ts-дельта в [5мин, 30д], второй содержит маркер-словарь (починила|исправила|теперь работает|сломалось|переделали|решено|закрыто) → led_to.
+- [x] **Step 5: Реализация miner_structural**: co-citation (SELECT пар из общих third-party рёбер) + louvain-мосты (SELECT пар внутри сообщества без прямого ребра с общим тегом) + belief propagation (UPDATE confidence по входящим высоко-конфидентным рёбрам).
+- [x] **Step 6: Прогон GREEN + регресс test_graph_miners.py.**
+- [x] **Step 7: Коммит** `feat(G3): miner #6 led_to markers, #8 structural invariants`.
 
 ---
 
@@ -133,12 +133,12 @@ async def miner_tags(cm, layer: str) -> dict:
 - Create: `lifecycle/graph_sanitation.py`
 - Test: `tests/test_lifecycle/test_graph_sanitation.py`
 
-- [ ] **Step 1: Lateral inhibition** (SYNAPSE формула): û_i = max(0, u_i − β·Σ(u_k−u_i)·𝕀[u_k>u_i]), β=0.15, M=7 — поверх весов рёбер минеров.
-- [ ] **Step 2: Validity windows**: колонки valid_from/valid_to на epi_edges (alembic) + derived_from/coupled_with typed edges + O(|E|) recheck propagation (StateMem).
-- [ ] **Step 3: MAD-пороги**: τ = median − κ·MAD per-miner вместо fixed.
-- [ ] **Step 4: Valence-typed** (prism 10 типов) + volatility-классы (RoMem: predicate-type таблица).
-- [ ] **Step 5: Hub exclusion**: WHERE node_type NOT IN ('moc','auto_index') в centrality/louvain.
-- [ ] **Step 6: Коммит** `feat(G): graph sanitation — inhibition, validity, MAD, valence, hub exclusion`.
+- [x] **Step 1: Lateral inhibition** (SYNAPSE формула): û_i = max(0, u_i − β·Σ(u_k−u_i)·𝕀[u_k>u_i]), β=0.15, M=7 — поверх весов рёбер минеров.
+- [x] **Step 2: Validity windows**: колонки valid_from/valid_to на epi_edges (alembic) + derived_from/coupled_with typed edges + O(|E|) recheck propagation (StateMem).
+- [x] **Step 3: MAD-пороги**: τ = median − κ·MAD per-miner вместо fixed.
+- [x] **Step 4: Valence-typed** (prism 10 типов) + volatility-классы (RoMem: predicate-type таблица).
+- [x] **Step 5: Hub exclusion**: WHERE node_type NOT IN ('moc','auto_index') в centrality/louvain.
+- [x] **Step 6: Коммит** `feat(G): graph sanitation — inhibition, validity, MAD, valence, hub exclusion`.
 
 ---
 
