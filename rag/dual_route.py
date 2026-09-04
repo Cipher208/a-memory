@@ -1,0 +1,151 @@
+"""Dual-route retrieval (Phase G Task 6): question-type router + S2 exhaustive + D-Mem escalation.
+
+Маршруты (classify_query по маркерам и длине):
+- factual    → RRF/EDM без graph-expand (HippoRAG2: graph-augmented проигрывает
+               dense на single-hop) + ITS gating;
+- enumerative («все/список/перечисли/list all») → S2-exhaustive (Mnemis):
+               категория (wiki_type / node_type) → полный сбор детей БЕЗ top-k;
+- multi-hop  → RRF/EDM; при низком dense-confidence (< 0.3) — D-Mem escalation:
+               второй проход с включённым graph-источником (graph-rerank).
+
+RRF — recall-first генератор; EDM/ITS — post-процессор (rag/edm.py).
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import Any
+
+from rag.edm import DMEM_MIN_CONFIDENCE, dense_confidence, edm_rerank, make_s2_hit
+
+logger = logging.getLogger(__name__)
+
+_ENUMERATIVE_RE = re.compile(r"(?:\bвсе(?:х|м|е|ё)?\b|\bсписок\b|перечисл\w*|list\s+all|\benumerate\b)", re.IGNORECASE)
+_MULTIHOP_RE = re.compile(r"(почему|из-за|привело|влияет|цепочк|поэтому|следств)", re.IGNORECASE)
+
+_S2_CATEGORY_RE = re.compile(r"(?:все(?:\s+|х)|список\s+(?:все\w*\s+)?|list\s+all\s+|перечисл\w*\s+(?:все\w*\s+)?)([а-яёa-z0-9_]+)")
+
+
+def classify_query(query: str) -> str:
+    """Question-type router: factual | enumerative | multi-hop.
+
+    enumerative — маркеры полноты («все/список/перечисли/list all»);
+    multi-hop — каузальные маркеры или длинный составной вопрос (≥ 10 слов);
+    иначе factual.
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return "factual"
+    if _ENUMERATIVE_RE.search(q):
+        return "enumerative"
+    if _MULTIHOP_RE.search(q) or len(q.split()) >= 10:
+        return "multi-hop"
+    return "factual"
+
+
+async def s2_exhaustive(
+    wiki: Any | None,
+    cm: Any | None,
+    query: str,
+    *,
+    user_id: str = "default",
+    layer: str = "user",
+) -> list[dict[str, Any]]:
+    """S2-exhaustive (Mnemis): категория → полный сбор детей БЕЗ top-k.
+
+    Иерархический спуск: wiki.list_all → фильтр по категории (wiki_type или
+    заголовок); эпи-граф — полный сбор узлов совпавшего node_type. Категория —
+    слово после маркера полноты («перечисли все правила» → rules); без
+    совпадений — весь активный каталог (exhaustive fallback).
+    """
+    category = ""
+    m = _S2_CATEGORY_RE.search((query or "").lower())
+    if m:
+        category = m.group(1).rstrip(".,?!:;")
+    hits: list[dict[str, Any]] = []
+
+    if wiki is not None and hasattr(wiki, "list_all"):
+        try:
+            rows = await wiki.list_all(limit=100000)
+        except Exception:
+            rows = []
+        for r in rows:
+            wt = str(r.get("wiki_type") or "")
+            if category and category not in wt and category not in str(r.get("title") or "").lower():
+                continue
+            hits.append(make_s2_hit(int(r.get("entry_id") or 0), str(r.get("title") or ""), str(r.get("content") or ""), wt, 0.5))
+
+    if cm is not None and category:
+        try:
+            from shared.constants import DB_NAME
+
+            conn = await cm.get(DB_NAME)
+            cur = await conn.execute(
+                "SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=?",
+                (layer, user_id, category),
+            )
+            for r in await cur.fetchall():
+                hits.append(
+                    {
+                        "id": -int(r["node_id"]) - 3_000_000,
+                        "title": f"Graph Node {r['node_id']} ({r['node_type']})",
+                        "content": r["content"],
+                        "score": float(r["confidence"]),
+                        "source": "s2_exhaustive",
+                        "wiki_type": r["node_type"],
+                    }
+                )
+        except Exception:
+            logger.debug("s2_exhaustive: graph branch skipped", exc_info=True)
+
+    if not hits:
+        logger.debug("s2_exhaustive: no children for category %r", category)
+    return hits
+
+
+def _graph_cm(rag: Any, cm: Any | None) -> Any | None:
+    """Cm для G-члена: явный аргумент, иначе cm рага (если у него есть .get)."""
+    if cm is not None:
+        return cm
+    candidate = getattr(rag, "cm", None)
+    if candidate is not None and hasattr(candidate, "get"):
+        return candidate
+    return None
+
+
+async def route_query(
+    rag: Any,
+    query: str,
+    *,
+    user_id: str = "default",
+    limit: int = 10,
+    layer: str = "user",
+    cm: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Router dispatch: classify_query → маршрут → EDM/ITS post-процессор.
+
+    rag — MultiSourceRAG (5-source RRF) или совместимый: search(query, ...,
+    include_graph=bool). factual: graph-expand OFF; multi-hop: эскалация при
+    low dense-confidence; enumerative: S2 с откатом на factual-путь.
+    """
+    qtype = classify_query(query)
+    if qtype == "enumerative":
+        hits = await s2_exhaustive(getattr(rag, "wiki", None), _graph_cm(rag, cm), query, user_id=user_id, layer=layer)
+        if hits:
+            return hits
+        # категория не опознана → откат на dense/EDM (recall-first)
+
+    # D-Mem: dense-first для factual И multi-hop (graph-augmented проигрывает
+    # dense); эскалация — только gated: низкий dense-confidence → graph-rerank.
+    pool = await rag.search(query, user_id=user_id, limit=100, include_graph=False)
+    graph_cm = _graph_cm(rag, cm)
+    hits = await edm_rerank(pool, query, cm=graph_cm, user_id=user_id, layer=layer)
+
+    if qtype == "multi-hop" and await dense_confidence(pool, query) < DMEM_MIN_CONFIDENCE:
+        pool2 = await rag.search(query, user_id=user_id, limit=100, include_graph=True)
+        esc = await edm_rerank(pool2, query, cm=graph_cm, user_id=user_id, layer=layer)
+        seen = {h.get("id") for h in hits}
+        hits = [*hits, *(e for e in esc if e.get("id") not in seen)]
+
+    return [{**h, "kind": str(h.get("source") or "relevant")} for h in hits[:limit]]

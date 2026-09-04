@@ -198,7 +198,7 @@ async def test_facets_and_disclosure_pipeline(e2e):
 # ─── E13: live-shape compaction payload (no query) produces the audit ─────────
 
 
-async def test_semantic_audit_pipeline_live_payload(e2e):
+async def test_semantic_audit_pipeline_live_payload(e2e, monkeypatch):
     from hooks.external import dispatch_event
     import hooks.user_hooks  # noqa: F401 — registration
     from hooks.registry import hook_registry
@@ -221,7 +221,9 @@ async def test_semantic_audit_pipeline_live_payload(e2e):
     async def _det(texts, prefix=""):
         return [[1.0] if "topic x" in t.lower() else [0.0] for t in texts]
 
-    emb.embed_texts = _det  # deterministic; hash-embedding quality is a documented ceiling
+    # monkeypatch (не сырое присваивание): модульная утечка глобального emb.embed_texts
+    # ломала последующие тесты (test_dual_route K-член получал [1.0]-векторы)
+    monkeypatch.setattr(emb, "embed_texts", _det)
 
     # the REAL live payload shape: Hermes/cow/MiMoCode send no query
     result = await dispatch_event(

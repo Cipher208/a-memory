@@ -27,6 +27,47 @@ async def _pending_proposals(user_id: str = "default", limit: int = 5) -> list[A
         return []
 
 
+def _apply_kind_policy(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-kind caps + precedence (G6, отложено из F).
+
+    Config `inject.kind_caps` — {kind: max_blocks} (важные ≤N, разрыв ≤M);
+    `inject.kind_order` — явный порядок kind'ов: стабильные (rehydrate/important)
+    остаются до маркера, динамика после, в заданном порядке. Без конфига —
+    поведение без изменений. Caps применяются ПОСЛЕ budget-учёта: вытесненные
+    блоки не возвращают токены в бюджет (верхняя граница бюджета соблюдена).
+    """
+    from config import config
+
+    caps = dict(config.get("inject", "kind_caps", default=None) or {})
+    order = list(config.get("inject", "kind_order", default=None) or [])
+    if caps:
+        counts: dict[str, int] = {}
+        kept: list[dict[str, Any]] = []
+        for b in blocks:
+            kind = str(b.get("kind", ""))
+            cap = caps.get(kind)
+            if cap is not None and counts.get(kind, 0) >= int(cap):
+                continue
+            counts[kind] = counts.get(kind, 0) + 1
+            kept.append(b)
+        blocks = kept
+    if not order:
+        return blocks
+    rank = {k: i for i, k in enumerate(order)}
+
+    def _rank(b: dict[str, Any]) -> int:
+        return rank.get(str(b.get("kind", "")), len(rank))
+
+    # E9-маркер уже вставлен вызывающим кодом — сохраняем его позицию
+    # (между стабильными и динамическими), пересортировывая каждую группу.
+    stable = [b for b in blocks if b["kind"] in ("rehydrate", "important")]
+    dynamic = [b for b in blocks if b["kind"] not in ("rehydrate", "important", "cache_break")]
+    markers = [b for b in blocks if b["kind"] == "cache_break"]
+    if stable and dynamic and markers:
+        return sorted(stable, key=_rank) + markers[:1] + sorted(dynamic, key=_rank)
+    return sorted(blocks, key=_rank)
+
+
 async def build_inject_blocks(
     mem: Any,
     rag: Any,
@@ -168,5 +209,5 @@ async def build_inject_blocks(
     dynamic = [b for b in blocks if b["kind"] not in ("rehydrate", "important")]
     if stable and dynamic:
         marker = {"kind": "cache_break", "content": "<cache:break>", "score": 0.0}
-        return [*stable, marker, *dynamic]
-    return blocks
+        blocks = [*stable, marker, *dynamic]
+    return _apply_kind_policy(blocks)
