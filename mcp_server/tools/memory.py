@@ -35,9 +35,10 @@ async def memory_remember(
     value: str = "",
     importance: float = 0.5,
     session_id: str = "",
+    ttl_minutes: int = 0,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Save a fact to long-term memory (L4 CoreMemory)."""
+    """Save a fact to long-term memory (L4 CoreMemory). ttl_minutes > 0 sets expires_at."""
     value = strip_secrets(value)
     if session_id and _dedup_cache.is_duplicate(session_id, key, value):
         logger.info("Dedup: skipping identical remember key=%s user=%s", key, user_id)
@@ -62,7 +63,7 @@ async def memory_remember(
 
     if layer == "agent":
         entry_id, node_id = await asyncio.gather(
-            mem.remember(key, value, importance),
+            mem.remember(key, value, importance, ttl_minutes=ttl_minutes),
             graph.add_node(
                 user_id,
                 value,
@@ -73,7 +74,7 @@ async def memory_remember(
         )
         await _fire_post_remember_hooks(layer, user_id, key, value, mem, graph)
     else:
-        entry_id = await mem.remember(key, value, importance)
+        entry_id = await mem.remember(key, value, importance, ttl_minutes=ttl_minutes)
         node_id = await graph.add_node(user_id, value, "fact", [], importance)
         await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem, graph=graph)
         await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem, graph=graph)

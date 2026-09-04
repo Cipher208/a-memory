@@ -135,6 +135,11 @@ class BackupCron:
 
             for layer in ["user", "agent"]:
                 self._await_on_main_loop(compact_under_budget("default", layer))
+        # B5: TTL-expiry sweep with mass-delete guards (after compact).
+        with contextlib.suppress(Exception):
+            from lifecycle.l0_sweep import sweep_expired
+
+            self._await_on_main_loop(sweep_expired())
 
     def _do_backup(self) -> str:
         import shutil
