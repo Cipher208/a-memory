@@ -10,8 +10,8 @@ from shared.migrations import MigrationManager
 
 JUNK = [
     '{"type": "tool_result", "tool_use_id": "t1", "content": "raw tool output"}',
-    'деплой упал: tool_use_id=abc-123, повторить шаг 3',
-    '[ariel recall] дамп результатов поиска по запросу «память»',
+    "деплой упал: tool_use_id=abc-123, повторить шаг 3",
+    "[ariel recall] дамп результатов поиска по запросу «память»",
 ]
 CLEAN = [
     "Борис работает в Google",
@@ -63,9 +63,7 @@ async def test_graph_enrich_captures_junk_to_l0_and_cleans_nodes(graph):
     assert all(nid not in remaining for nid in ids["junk"].values())
 
     # мусор захвачен в L0 (восстановимо), по одному capture на узел
-    l0 = await (
-        await conn.execute("SELECT text FROM l0_journal WHERE event='graph_cleanup' ORDER BY id")
-    ).fetchall()
+    l0 = await (await conn.execute("SELECT text FROM l0_journal WHERE event='graph_cleanup' ORDER BY id")).fetchall()
     assert [r["text"] for r in l0] == JUNK
 
     # каскад: ребро мусор→чистое удалено, новых рёбер минеры не навели

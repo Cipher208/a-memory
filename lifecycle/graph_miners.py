@@ -37,8 +37,7 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
     SYNAPSE): слабое ребро гасится кластером более сильных соседей узла.
     """
     cur = await conn.execute(
-        "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)",
         (a, b, relation, weight, time.time(), json.dumps([f"heuristic:{heuristic}"])),
     )
     written = int(cur.rowcount or 0)
@@ -69,8 +68,7 @@ async def _layer_nodes(conn: Any, layer: str) -> list[tuple[int, str]]:
     """Узлы слоя без мусорного JSON/tool_use_id-контента (фильтр как в graph_enrich)."""
     rows = await (
         await conn.execute(
-            "SELECT node_id, content FROM epi_nodes WHERE layer=?"
-            " AND content NOT LIKE '[{%' AND content NOT LIKE '%tool_use_id%'",
+            "SELECT node_id, content FROM epi_nodes WHERE layer=? AND content NOT LIKE '[{%' AND content NOT LIKE '%tool_use_id%'",
             (layer,),
         )
     ).fetchall()
@@ -164,9 +162,7 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
         else:
             merged.append(c)
 
-    nodes = await (
-        await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))
-    ).fetchall()
+    nodes = await (await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
     assigned: dict[int, set[int]] = {}  # node_id → индексы кластеров
     for idx, c in enumerate(merged):
         for r in nodes:
@@ -349,20 +345,14 @@ async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str
     conn = await cm.get(DB_NAME)
     rows = await (
         await conn.execute(
-            "SELECT node_a, node_b, COUNT(*) AS c FROM recall_co_pairs"
-            " WHERE node_a LIKE ? AND node_b LIKE ?"
-            " GROUP BY node_a, node_b HAVING c >= 2",
+            "SELECT node_a, node_b, COUNT(*) AS c FROM recall_co_pairs WHERE node_a LIKE ? AND node_b LIKE ? GROUP BY node_a, node_b HAVING c >= 2",
             (f"{_G_PREFIX}%", f"{_G_PREFIX}%"),
         )
     ).fetchall()
     edges = 0
     for a, b, c in rows:
         na, nb = int(str(a)[2:]), int(str(b)[2:])
-        existing = await (
-            await conn.execute(
-                "SELECT 1 FROM epi_nodes WHERE node_id IN (?, ?) AND layer=?", (na, nb, layer)
-            )
-        ).fetchall()
+        existing = await (await conn.execute("SELECT 1 FROM epi_nodes WHERE node_id IN (?, ?) AND layer=?", (na, nb, layer))).fetchall()
         if len(existing) < 2:  # узлы не из этого слоя/удалены — ребро не строим
             continue
         edges += await _insert_edge(conn, min(na, nb), max(na, nb), "co_recalled", min(0.3 + 0.1 * int(c), 0.6), "co_retrieval")
@@ -389,13 +379,8 @@ async def miner_markers(cm: AsyncConnectionManager, layer: str) -> dict[str, int
     from rag.synonyms import load_synonyms
 
     syn = load_synonyms()
-    nodes = await (
-        await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))
-    ).fetchall()
-    parsed = [
-        (int(r["node_id"]), _canon_tokens(str(r["content"]), syn), _MARKERS.search(str(r["content"])), float(r["created_at"]))
-        for r in nodes
-    ]
+    nodes = await (await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
+    parsed = [(int(r["node_id"]), _canon_tokens(str(r["content"]), syn), _MARKERS.search(str(r["content"])), float(r["created_at"])) for r in nodes]
     edges = 0
     for i, (a, ta, _, ta_ts) in enumerate(parsed):
         if not ta:
@@ -603,9 +588,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     return {"edges": edges}
 
 
-async def wire_new_node(
-    cm: AsyncConnectionManager, layer: str, node_id: int, content: str, tags: list[str] | None = None
-) -> int:
+async def wire_new_node(cm: AsyncConnectionManager, layer: str, node_id: int, content: str, tags: list[str] | None = None) -> int:
     """Инкрементальный режим (G4): рёбра НОВОГО узла vs существующие — сразу при записи.
 
     Лёгкие сигналы: общие теги (tagged), ≥2 общих канон-токенов + Jaccard ≥0.3

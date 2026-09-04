@@ -32,8 +32,7 @@ async def _node(content: str, ts: float, tags: list[str] | None = None, conf: fl
     """Факт-узел с контролем created_at/confidence + прямая запись в epi_tags."""
     conn = await connection_manager.get(DB_NAME)
     cur = await conn.execute(
-        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at)"
-        " VALUES ('user', 'gu', ?, 'fact', ?, ?, ?)",
+        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES ('user', 'gu', ?, 'fact', ?, ?, ?)",
         (content, json.dumps(tags or []), conf, ts),
     )
     nid = int(cur.lastrowid or 0)
@@ -56,17 +55,14 @@ async def _l0(text: str, ts: float, source_msg_id: int | None = None) -> int:
 
 async def _edges(relation: str) -> list[Any]:
     conn = await connection_manager.get(DB_NAME)
-    return await (
-        await conn.execute("SELECT * FROM epi_edges WHERE relation=? ORDER BY source_id, target_id", (relation,))
-    ).fetchall()
+    return await (await conn.execute("SELECT * FROM epi_edges WHERE relation=? ORDER BY source_id, target_id", (relation,))).fetchall()
 
 
 async def _edge(a: int, b: int, relation: str = "mentions", weight: float = 0.8) -> None:
     """Ручное (не эвристическое) ребро — как их создаёт EpistemicGraph.add_edge."""
     conn = await connection_manager.get(DB_NAME)
     await conn.execute(
-        "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
-        " VALUES (?, ?, ?, ?, ?, '[]')",
+        "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, '[]')",
         (a, b, relation, weight, T),
     )
     await conn.commit()
@@ -341,6 +337,7 @@ async def test_provenance_and_co_retrieval_idempotent(db):
 
 # --- (g) Task G4: минер #9 embedding, #3 entities (spaCy), инкрементальный режим ---
 
+
 async def _seed_vector(text: str, vec: list[float]) -> None:
     """Положить контролируемый вектор в embedding_cache (hash-fallback tag).
 
@@ -482,9 +479,7 @@ async def test_incremental_wiring_edges_immediately_on_distill(db):
     assert stats["l4_saved"] + stats["l3_saved"] >= 1
     conn = await connection_manager.get(DB_NAME)
     new_nodes = await (
-        await conn.execute(
-            "SELECT node_id FROM epi_nodes WHERE content=? AND node_id != ?", ("Лили обновила postgres индексы", existing)
-        )
+        await conn.execute("SELECT node_id FROM epi_nodes WHERE content=? AND node_id != ?", ("Лили обновила postgres индексы", existing))
     ).fetchall()
     assert len(new_nodes) == 1  # атом попал в граф узлом при записи
     edges = await (

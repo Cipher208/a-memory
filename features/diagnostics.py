@@ -1,13 +1,124 @@
-"""E3: operator diagnostics — health checks + safe auto-fixes. No LLM."""
+"""E3: operator diagnostics — health checks + safe auto-fixes + content audit. No LLM."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
+import time
 from pathlib import Path
 from typing import Any
 
 HEAL_ACTIONS = ("remigrate", "reset_breakers", "purge_invalid_l1")
+
+
+STALE_DAYS = 90  # mirrors shared.memory_types.can_archive default
+
+# content-audit severities: contradiction = data-integrity fail; rest advisory warn
+
+
+async def audit_content(user_id: str = "default") -> list[dict[str, Any]]:
+    """H2 memory_audit: content-level checks over stored memory (read-only).
+
+    Reads the memory_conflicts table (first reader — the ConflictResolver only
+    wrote it), plus duplicate/stale/dead-link scans over core_memory and wiki.
+    Returns [{severity: 'warn'|'fail', type, items, suggestion}, ...].
+    """
+    from rag.conflict import smart_similarity
+    from shared.connection import connection_manager
+    from shared.constants import DB_NAME
+
+    conn = await connection_manager.get(DB_NAME)
+    out: list[dict[str, Any]] = []
+
+    # (a) unresolved contradictions — ConflictResolver marks originals is_conflict=1
+    rows = await (await conn.execute("SELECT id, user_id, conflict_group_id, content FROM memory_conflicts WHERE is_conflict=1 LIMIT 100")).fetchall()
+    if rows:
+        out.append(
+            {
+                "severity": "fail",
+                "type": "contradiction",
+                "items": [{"id": r["id"], "user_id": r["user_id"], "group_id": r["conflict_group_id"], "content": r["content"][:200]} for r in rows],
+                "suggestion": "Resolve via ConflictResolver.resolve(conflict_group_id, keep_id) — one keeper per group.",
+            }
+        )
+
+    # (b) duplicates: pairwise same-kind, different keys, smart_similarity > 0.85
+    # ponytail: O(n²) pairwise scan — fine at audit scale (<10k facts); blocking or
+    # FTS prefilter if user memories grow past that.
+    rows = await (
+        await conn.execute(
+            "SELECT entry_id, memory_kind, key, value FROM core_memory WHERE user_id=? AND memory_kind IS NOT NULL ORDER BY memory_kind",
+            (user_id,),
+        )
+    ).fetchall()
+    by_kind: dict[str, list[Any]] = {}
+    for r in rows:
+        by_kind.setdefault(str(r["memory_kind"]), []).append(r)
+    dup_items: list[dict[str, Any]] = []
+    for group in by_kind.values():
+        for i, a in enumerate(group):
+            for b in group[i + 1 :]:
+                if a["key"] == b["key"]:
+                    continue
+                sim = smart_similarity(str(a["value"]), str(b["value"]))
+                if sim > 0.85:
+                    dup_items.append({"a_key": a["key"], "b_key": b["key"], "kind": str(a["memory_kind"]), "similarity": round(sim, 3)})
+    if dup_items:
+        out.append(
+            {
+                "severity": "warn",
+                "type": "duplicate",
+                "items": dup_items[:100],
+                "suggestion": "Merge near-identical same-kind facts — keep one key, delete the twin.",
+            }
+        )
+
+    # (c) stale: updated_at older than STALE_DAYS, archivable kind, never recalled.
+    # Recall signal = audit_log action='recall_useful' (features/replay.py record_recall_useful);
+    # recall_events has no per-entry linkage, so it cannot serve here.
+    from shared.memory_types import MemoryKind, get_policy
+
+    never_archive = tuple(k.value for k in MemoryKind if get_policy(k).never_archive)
+    cutoff = time.time() - STALE_DAYS * 86400
+    rows = await (
+        await conn.execute(
+            "SELECT entry_id, key, memory_kind, updated_at FROM core_memory"
+            f" WHERE user_id=? AND updated_at < ? AND (memory_kind IS NULL OR memory_kind NOT IN ({','.join('?' * len(never_archive))}))"
+            " AND entry_id NOT IN (SELECT DISTINCT CAST(target_id AS INTEGER) FROM audit_log WHERE action='recall_useful')"
+            " LIMIT 100",
+            (user_id, cutoff, *never_archive),
+        )
+    ).fetchall()
+    if rows:
+        out.append(
+            {
+                "severity": "warn",
+                "type": "stale",
+                "items": [{"key": r["key"], "kind": r["memory_kind"], "days_old": int((time.time() - r["updated_at"]) / 86400)} for r in rows],
+                "suggestion": f"Not recalled in any audit trail and untouched for {STALE_DAYS}d — archive via lifecycle sweep or bump importance.",
+            }
+        )
+
+    # (d) dead links: [[fact:key]] in wiki content pointing to a non-existent core key
+    keys = {str(r["key"]) for r in await (await conn.execute("SELECT key FROM core_memory")).fetchall()}
+    wiki_rows = await (await conn.execute("SELECT title, content FROM wiki_index WHERE content LIKE '%[[fact:%' LIMIT 200")).fetchall()
+    dead: list[dict[str, Any]] = []
+    for r in wiki_rows:
+        for ref in re.findall(r"\[\[fact:([^\]]+)\]\]", str(r["content"])):
+            if ref not in keys:
+                dead.append({"title": r["title"], "key": ref})
+    if dead:
+        out.append(
+            {
+                "severity": "warn",
+                "type": "dead_link",
+                "items": dead[:100],
+                "suggestion": "Wiki references a fact key that no longer exists — fix or remove the [[fact:…]] link.",
+            }
+        )
+
+    return out
 
 
 async def run_diagnose(user_id: str = "default") -> dict[str, Any]:
@@ -70,7 +181,21 @@ async def run_diagnose(user_id: str = "default") -> dict[str, Any]:
         check("circuit_breakers", False, str(exc))
 
     failed = [c for c in checks if c["status"] == "fail"]
-    return {"status": "ok" if not failed else "degraded", "checks": checks, "failed": len(failed)}
+
+    # H2 memory_audit: content-level checks (separate from infra status)
+    content_checks: list[dict[str, Any]] = []
+    if db_path.exists():
+        try:
+            content_checks = await audit_content(user_id)
+        except Exception as exc:  # missing tables on unmigrated DB — audit is advisory
+            content_checks = [{"severity": "warn", "type": "audit_error", "items": [str(exc)], "suggestion": "Run migrations."}]
+
+    return {
+        "status": "ok" if not failed else "degraded",
+        "checks": checks,
+        "failed": len(failed),
+        "content_checks": content_checks,
+    }
 
 
 async def run_heal(user_id: str = "default", actions: list[str] | None = None) -> dict[str, Any]:
