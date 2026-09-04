@@ -1,0 +1,19 @@
+NOTICE
+
+This project uses the following third-party components:
+
+spaCy
+  Copyright (C) Explosion AI
+  License: MIT
+  https://github.com/explosion/spaCy
+  Used for named-entity recognition (NER) in the G0 privacy gate
+  (mcp_server/utils/privacy.py).
+
+en_core_web_sm (English pipeline model)
+  Copyright (C) Explosion AI
+  License: Creative Commons Attribution-ShareAlike 4.0 International
+  (CC BY-SA 4.0) — https://creativecommons.org/licenses/by-sa/4.0/
+  The model is optional: if not installed, the privacy gate falls back
+  to the regex-only tier. If you distribute this software together with
+  the model, you must comply with CC BY-SA 4.0 (attribution and
+  share-alike applies to the model weights).
