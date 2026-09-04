@@ -9,6 +9,10 @@
                второй проход с включённым graph-источником (graph-rerank).
 
 RRF — recall-first генератор; EDM/ITS — post-процессор (rag/edm.py).
+
+Phase G Task 7: RETRIEVAL_MODE (env) / retrieval.mode (config.yaml) переключает
+arm абляции (rag/ablation.py): 'rrf' | 'dense_per_kind' | 'gated' | 'full'.
+Дефолт 'full' — существующее поведение не меняется.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import logging
 import re
 from typing import Any
 
+from rag.ablation import dense_per_kind_search, gated_search, retrieval_mode
 from rag.edm import DMEM_MIN_CONFIDENCE, dense_confidence, edm_rerank, make_s2_hit
 
 logger = logging.getLogger(__name__)
@@ -129,6 +134,20 @@ async def route_query(
     include_graph=bool). factual: graph-expand OFF; multi-hop: эскалация при
     low dense-confidence; enumerative: S2 с откатом на factual-путь.
     """
+    # Task 7 ablation arms: 'full' (дефолт) — текущий dual-route ниже;
+    # 'rrf'/'dense_per_kind'/'gated' — альтернативные армы для №11-eval.
+    mode = retrieval_mode()
+    if mode == "rrf":
+        pool = await rag.search(query, user_id=user_id, limit=limit, include_graph=True)
+        return [{**h, "kind": str(h.get("source") or "relevant")} for h in pool]
+    if mode == "gated":
+        return await gated_search(rag, query, user_id=user_id, limit=limit)
+    if mode == "dense_per_kind":
+        graph_cm = _graph_cm(rag, cm)
+        if graph_cm is not None:
+            return await dense_per_kind_search(graph_cm, query, user_id=user_id, layer=layer, limit=limit)
+        # нет cm (двойники без БД) → деградация к полному пути ниже
+
     qtype = classify_query(query)
     if qtype == "enumerative":
         hits = await s2_exhaustive(getattr(rag, "wiki", None), _graph_cm(rag, cm), query, user_id=user_id, layer=layer)

@@ -166,8 +166,8 @@ async def miner_tags(cm, layer: str) -> dict:
 - Create: `rag/ablation.py` — конфиг-переключатели: `RETRIEVAL_MODE = 'rrf' | 'dense_per_kind' | 'gated'`
 - Test: параметры читаются, arms переключаются
 
-- [ ] **Step 1: Реализация**: env/config флаг → multi_source включает/выключает источники; dense-per-kind arm = search по kind_поля без фьюжена.
-- [ ] **Step 2: Коммит** `feat(H-prep): retrieval ablation arms`.
+- [x] **Step 1: Реализация**: env/config флаг → multi_source включает/выключает источники; dense-per-kind arm = search по kind_поля без фьюжена.
+- [x] **Step 2: Коммит** `feat(G7): retrieval ablation arms — rrf/dense_per_kind/gated/full` (план предполагал `feat(H-prep)`; фактическое имя по ТЗ).
 
 ---
 

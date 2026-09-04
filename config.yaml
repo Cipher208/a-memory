@@ -70,6 +70,11 @@ rag:
   chunk_overlap: 100       # overlap between consecutive chunks
   search_limit: 10         # default result count when caller omits limit
 
+# === Retrieval ablation arms (Phase G Task 7, для №11-eval) ===
+# env RETRIEVAL_MODE перекрывает yaml; невалидное значение → 'full'.
+retrieval:
+  mode: "full"             # full (dual-route, дефолт) | rrf | dense_per_kind | gated
+
 # === Embeddings ===
 # Multilingual (100+ languages incl. Russian). If sentence-transformers is not
 # installed the system falls back to deterministic hash embeddings ("hash").
