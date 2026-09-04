@@ -104,6 +104,13 @@ async def auto_save_text(
     if _looks_like_dump(text):
         return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "transcript"}
 
+    # L0 intake (F): append-only raw journal BEFORE sanitize — the journal is
+    # the raw door of the pipeline. Best-effort (capture never raises); the id
+    # drives the status watermark after distillation.
+    from shared.l0 import capture
+
+    l0_id: int | None = await capture(event, "user", user_id, text, source_msg_id=source_msg_id)
+
     # G0 privacy: secrets/PII → typed placeholders (reverse map не персистится).
     # NER недоступен/упал → regex-тир внутри sanitize всё равно отработал.
     from mcp_server.utils.privacy import sanitize
@@ -181,6 +188,16 @@ async def auto_save_text(
     result["routes"] = route_stats
     if route_stats["l4_saved"] > 0:
         result["saved_l4"] = True
+    # L0 watermark (F): close the captured row — replay skips 'saved_l3'/
+    # 'promoted_l4'. Neither of the two write paths fires → stays 'received'.
+    if l0_id is not None:
+        new_status = "promoted_l4" if route_stats["l4_saved"] else "saved_l3"
+        try:
+            conn = await connection_manager.get("memory.db")
+            await conn.execute("UPDATE l0_journal SET status=?, processed_at=? WHERE id=?", (new_status, _time.time(), l0_id))
+            await conn.commit()
+        except Exception as _e:
+            logger.debug("l0_journal watermark update failed: %s", _e)
     if score >= 0.8:
         if _staging_enabled():
             try:
