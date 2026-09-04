@@ -104,6 +104,12 @@ async def auto_save_text(
     if _looks_like_dump(text):
         return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "transcript"}
 
+    # G0 privacy: secrets/PII → typed placeholders (reverse map не персистится).
+    # NER недоступен/упал → regex-тир внутри sanitize всё равно отработал.
+    from mcp_server.utils.privacy import sanitize
+
+    text, _priv_map = sanitize(text)
+
     score = evaluate_importance(text)
     result: dict[str, Any] = {"score": score, "saved_l3": False, "saved_l4": False, "saved_graph": False}
 
