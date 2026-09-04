@@ -8,6 +8,7 @@ epi_edges PK — re-runs are no-ops. No LLM calls anywhere.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import re
@@ -51,6 +52,18 @@ def _canon_tokens(text: str, syn: dict[str, list[str]] | None = None) -> set[str
 
         syn = load_synonyms()
     return {_canon(w, syn) for w in _TOKEN_RE.findall(text.lower()) if len(w) >= 4 and w not in _STOP_TOKENS}
+
+
+async def _layer_nodes(conn: Any, layer: str) -> list[tuple[int, str]]:
+    """Узлы слоя без мусорного JSON/tool_use_id-контента (фильтр как в graph_enrich)."""
+    rows = await (
+        await conn.execute(
+            "SELECT node_id, content FROM epi_nodes WHERE layer=?"
+            " AND content NOT LIKE '[{%' AND content NOT LIKE '%tool_use_id%'",
+            (layer,),
+        )
+    ).fetchall()
+    return [(int(r["node_id"]), str(r["content"])) for r in rows]
 
 
 async def miner_tags(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
@@ -162,8 +175,56 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
 
 
 async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#3: NER co-mentions → `co_mentions` edges."""
-    return {"edges": 0}
+    """#3: словарь синонимов (канон-классы, обе стороны) + spaCy NER (латиница ORG/GPE) → `co_mentions` 0.4."""
+    conn = await cm.get(DB_NAME)
+    nodes = await _layer_nodes(conn, layer)
+    if len(nodes) < 2:
+        return {"edges": 0}
+    from rag.synonyms import load_synonyms
+
+    syn = load_synonyms()
+    nlp = _get_ner()
+    ents = [_entities(str(c), syn, nlp) for _, c in nodes]
+    edges = 0
+    for i in range(len(nodes)):
+        if not ents[i]:
+            continue
+        for j in range(i + 1, len(nodes)):
+            if ents[i] & ents[j]:
+                edges += await _insert_edge(conn, nodes[i][0], nodes[j][0], "co_mentions", 0.4, "entities")
+    await conn.commit()
+    return {"edges": edges}
+
+
+def _entities(text: str, syn: dict[str, list[str]], nlp: Any = None) -> set[str]:
+    """Сущности текста: канон-классы словаря синонимов + spaCy ORG/GPE (латиница).
+
+    Канонизация через _canon — полный класс в обе стороны: «Лили»/«Lily»/
+    «лисёныш» схлопываются в одну сущность.
+    """
+    vocab = set(syn) | {v for vs in syn.values() for v in vs}
+    found = {_canon(w, syn) for w in _TOKEN_RE.findall(text.lower()) if w in vocab}
+    if nlp is not None:
+        with contextlib.suppress(Exception):
+            found |= {ent.text.lower() for ent in nlp(text).ents if ent.label_ in _NER_LABELS}
+    return found
+
+
+_NER_LABELS = {"ORG", "GPE"}
+_ner = None
+
+
+def _get_ner() -> Any:
+    """Lazy spaCy NER; None если модель не установлена — словарного слоя достаточно."""
+    global _ner
+    if _ner is None:
+        try:
+            from mcp_server.utils.privacy import _get_nlp
+
+            _ner = _get_nlp()
+        except Exception:
+            _ner = False
+    return _ner or None
 
 
 # Задача G3: журнал co-retrieval. hits из FTS5 — это rag_pages.id, из графа —
@@ -298,9 +359,117 @@ async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str
     return {"edges": edges}
 
 
+_EMBED_JACCARD = 0.7
+_EMBED_TOPK = 15  # не более 15 рёбер semantic_overlap на узел от этого минера
+_SEMANTIC_WEIGHT = 0.5
+
+
+def _bits_int(b: bytes) -> int:
+    return int.from_bytes(b, "big")
+
+
+def _bit_jaccard(a: int, b: int) -> float:
+    inter = (a & b).bit_count()
+    if inter == 0:
+        return 0.0
+    return inter / (a | b).bit_count()
+
+
 async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#9: embedding similarity >= 0.7 → `semantic_overlap` edges."""
-    return {"edges": 0}
+    """#9: rich embedding (content+tags) → MIB-биты → попарный Jaccard ≥0.7 → `semantic_overlap`.
+
+    A-MEM rich embedding: кодируется «content + теги из epi_tags» с
+    синоним-канонизацией токенов (_canon из T2). Мусорный фильтр — как в
+    graph_enrich ([{…-JSON / tool_use_id). O(n²) на текущих масштабах ок
+    (~200 узлов = 20k пар); top-k=15 на узел.
+    """
+    conn = await cm.get(DB_NAME)
+    nodes = await _layer_nodes(conn, layer)
+    if len(nodes) < 2:
+        return {"edges": 0}
+    from rag.quantize import embed_to_binary
+    from rag.synonyms import load_synonyms
+    from shared.embeddings import embed_texts
+
+    syn = load_synonyms()
+    tag_rows = await (
+        await conn.execute(
+            f"SELECT node_id, tag FROM epi_tags WHERE node_id IN ({','.join('?' * len(nodes))})",
+            tuple(nid for nid, _ in nodes),
+        )
+    ).fetchall()
+    tags: dict[int, list[str]] = {}
+    for r in tag_rows:
+        tags.setdefault(int(r["node_id"]), []).append(_canon(str(r["tag"]), syn))
+
+    try:
+        # A-MEM rich embedding: f"{content} {tags}"; канонизация (_canon из T2) —
+        # на тегах, чтобы варианты имени/технологии попадали в один кэш-ключ смысла.
+        # Ключ кэша = raw content — переиспользует векторы, посеянные ingestor'ом.
+        vecs = await embed_texts([f"{c} {' '.join(sorted(tags.get(nid, [])))}" for nid, c in nodes])
+        bits = [_bits_int(embed_to_binary(v, dim=len(v))) for v in vecs]
+    except Exception:
+        return {"edges": 0}  # эмбеддинг-бэкенд недоступен (нет numpy/модели) — минер пропускается
+
+    cands: list[tuple[float, int, int]] = []
+    for i in range(len(nodes)):
+        if not bits[i]:
+            continue
+        for j in range(i + 1, len(nodes)):
+            jacc = _bit_jaccard(bits[i], bits[j])
+            if jacc >= _EMBED_JACCARD:
+                cands.append((jacc, i, j))
+    edges = 0
+    degree: dict[int, int] = {}
+    for _, i, j in sorted(cands, reverse=True):
+        a, b = nodes[i][0], nodes[j][0]
+        if degree.get(a, 0) >= _EMBED_TOPK or degree.get(b, 0) >= _EMBED_TOPK:
+            continue  # top-k=15 на узел
+        edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_WEIGHT, "embedding")
+        degree[a] = degree.get(a, 0) + 1
+        degree[b] = degree.get(b, 0) + 1
+    await conn.commit()
+    return {"edges": edges}
+
+
+async def wire_new_node(
+    cm: AsyncConnectionManager, layer: str, node_id: int, content: str, tags: list[str] | None = None
+) -> int:
+    """Инкрементальный режим (G4): рёбра НОВОГО узла vs существующие — сразу при записи.
+
+    Лёгкие сигналы: общие теги (tagged), ≥2 общих канон-токенов + Jaccard ≥0.3
+    (topic_overlap), общая сущность словаря/NER (co_mentions). Тяжёлое
+    (embedding/sessions) остаётся ночному graph_enrich. Возвращает число рёбер.
+    """
+    conn = await cm.get(DB_NAME)
+    from rag.synonyms import load_synonyms
+
+    syn = load_synonyms()
+    my_toks = _canon_tokens(content, syn)
+    my_ents = _entities(content, syn)
+    my_tags = set(tags or [])
+    if not my_toks and not my_ents and not my_tags:
+        return 0
+    others = await _layer_nodes(conn, layer)
+    other_tags: dict[int, set[str]] = {}
+    for r in await (await conn.execute("SELECT node_id, tag FROM epi_tags WHERE node_id != ?", (node_id,))).fetchall():
+        other_tags.setdefault(int(r["node_id"]), set()).add(str(r["tag"]))
+    nlp = _get_ner()
+    edges = 0
+    for oid, ocontent in others:
+        if oid == node_id:
+            continue
+        otoks = _canon_tokens(ocontent, syn)
+        union = my_toks | otoks
+        if len(my_toks & otoks) >= 2 and union and len(my_toks & otoks) / len(union) >= 0.3:
+            edges += await _insert_edge(conn, min(node_id, oid), max(node_id, oid), "topic_overlap", len(my_toks & otoks) / len(union), "tokens")
+        if my_ents and my_ents & _entities(ocontent, syn, nlp):
+            edges += await _insert_edge(conn, min(node_id, oid), max(node_id, oid), "co_mentions", 0.4, "entities")
+        shared = my_tags & other_tags.get(oid, set())
+        if shared:
+            edges += await _insert_edge(conn, min(node_id, oid), max(node_id, oid), "tagged", min(0.3 + 0.1 * len(shared), 0.6), "tags")
+    await conn.commit()
+    return edges
 
 
 MINERS: dict[str, Miner] = {

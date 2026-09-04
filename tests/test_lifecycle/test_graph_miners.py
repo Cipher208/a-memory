@@ -6,6 +6,7 @@
 """
 
 import json
+import struct
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -324,6 +325,163 @@ async def test_provenance_and_co_retrieval_idempotent(db):
     assert all(r["edges"] == 0 for r in second)
     count2 = (await (await conn.execute("SELECT COUNT(*) FROM epi_edges")).fetchone())[0]
     assert count2 == count1
+
+
+# --- (g) Task G4: минер #9 embedding, #3 entities (spaCy), инкрементальный режим ---
+
+async def _seed_vector(text: str, vec: list[float]) -> None:
+    """Положить контролируемый вектор в embedding_cache (hash-fallback tag).
+
+    Хэш-fallback даёт случайные векторы — для детерминированного порога
+    Jaccard тест сеет свои векторы под тем же cache-tag, который miner прочитает.
+    """
+    from shared.embeddings import EmbeddingCache, _get_model
+
+    cache = EmbeddingCache()
+    await cache.ensure()
+    tag = cache._cache_model_tag(_get_model())
+    conn = await connection_manager.get(DB_NAME)
+    await conn.execute(
+        "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",
+        (cache._hash_text(text), struct.pack(f"{len(vec)}f", *vec), tag),
+    )
+    await conn.commit()
+
+
+_V_ALL_ON = [0.5] * 384  # все 384 бита = 1
+_V_NEAR = [(-0.5 if i < 30 else 0.5) for i in range(384)]  # 354 общих бита с _V_ALL_ON, J≈0.92
+_V_HALF = [(0.5 if i % 2 == 0 else -0.5) for i in range(384)]  # J≈0.5 со всеми — ниже порога
+
+
+@pytest.mark.asyncio
+async def test_miner_embedding_jaccard_threshold_creates_semantic_overlap(db):
+    # разный текст, близкие векторы (одна тема) → semantic_overlap; дальний — нет
+    t_near, t_far = "очередь событий починки воркера", "очередь событий воркера починена"
+    await _seed_vector(t_near, _V_ALL_ON)
+    await _seed_vector(t_far, _V_NEAR)
+    await _seed_vector("совершенно посторонний сюжет про ужин", _V_HALF)
+    n1 = await _node(t_near, T)
+    n2 = await _node(t_far, T)
+    await _node("совершенно посторонний сюжет про ужин", T)
+
+    from lifecycle.graph_miners import miner_embedding
+
+    result = await miner_embedding(db, "user")
+
+    assert result["edges"] == 1
+    rows = await _edges("semantic_overlap")
+    assert (rows[0]["source_id"], rows[0]["target_id"]) == (min(n1, n2), max(n1, n2))
+    assert rows[0]["weight"] == pytest.approx(0.5)
+    assert "heuristic:embedding" in rows[0]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_miner_embedding_topk_cap_fifteen_per_node(db):
+    from collections import Counter
+
+    for _ in range(20):
+        await _node("однотипный индикатор синхронизации очередей", T)
+    await _seed_vector("однотипный индикатор синхронизации очередей", _V_ALL_ON)
+
+    from lifecycle.graph_miners import miner_embedding
+
+    result = await miner_embedding(db, "user")
+
+    rows = await _edges("semantic_overlap")
+    assert result["edges"] == len(rows)
+    degree: Counter[int] = Counter()
+    for r in rows:
+        degree[r["source_id"]] += 1
+        degree[r["target_id"]] += 1
+    assert max(degree.values()) <= 15  # top-k=15 на узел
+    assert len(rows) <= 20 * 15 // 2
+
+
+@pytest.mark.asyncio
+async def test_miner_embedding_skips_tool_junk(db):
+    await _node('{"type": "tool_result", "tool_use_id": "t1", "content": "raw"}', T)
+    await _node("обычный текст про деплой сервиса", T)
+
+    from lifecycle.graph_miners import miner_embedding
+
+    assert (await miner_embedding(db, "user"))["edges"] == 0
+    assert await _edges("semantic_overlap") == []
+
+
+@pytest.mark.asyncio
+async def test_miner_entities_synonym_canon_creates_co_mentions(db):
+    # «Лили» и «Lily» — один канон-класс сущности (словарь rag.synonyms, обе стороны)
+    n1 = await _node("Лили принесла отчёт по проекту", T)
+    n2 = await _node("Lily обновила документацию", T)
+    await _node("деплой прошёл успешно", T)  # другое слово из словаря — не общая сущность
+
+    from lifecycle.graph_miners import miner_entities
+
+    result = await miner_entities(db, "user")
+
+    assert result["edges"] == 1
+    rows = await _edges("co_mentions")
+    assert (rows[0]["source_id"], rows[0]["target_id"]) == (min(n1, n2), max(n1, n2))
+    assert rows[0]["weight"] == pytest.approx(0.4)
+    assert "heuristic:entities" in rows[0]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_miner_entities_spacy_org_shared_mention(db):
+    try:
+        from mcp_server.utils.privacy import _get_nlp
+
+        _get_nlp()
+    except Exception:
+        pytest.skip("en_core_web_sm не установлена")
+    n1 = await _node("Борис работает в Acme Corp", T)
+    n2 = await _node("офис Acme Corp открыт давно", T)
+
+    from lifecycle.graph_miners import miner_entities
+
+    await miner_entities(db, "user")
+
+    rows = await _edges("co_mentions")
+    assert (min(n1, n2), max(n1, n2)) in {(r["source_id"], r["target_id"]) for r in rows}
+
+
+class _FakeL3:
+    async def save(self, user_id: str, summary: str, weight: float, tags: list[str]) -> int:
+        return 1
+
+
+class _DistillMem:
+    """Ровно то, что distill_and_route читает: _cm (для CoreMemory/wire) + l3."""
+
+    def __init__(self, cm: Any) -> None:
+        self._cm = cm
+        self.l3 = _FakeL3()
+
+
+@pytest.mark.asyncio
+async def test_incremental_wiring_edges_immediately_on_distill(db):
+    """(c) запись нового узла через distill_and_route → рёбра сразу, не в ночи."""
+    existing = await _node("Лили настроила postgres backup", T)
+
+    from lifecycle.distiller import distill_and_route
+
+    stats = await distill_and_route(_DistillMem(db), object(), "gu", "Лили обновила postgres индексы", 0.8)
+
+    assert stats["l4_saved"] + stats["l3_saved"] >= 1
+    conn = await connection_manager.get(DB_NAME)
+    new_nodes = await (
+        await conn.execute(
+            "SELECT node_id FROM epi_nodes WHERE content=? AND node_id != ?", ("Лили обновила postgres индексы", existing)
+        )
+    ).fetchall()
+    assert len(new_nodes) == 1  # атом попал в граф узлом при записи
+    edges = await (
+        await conn.execute(
+            "SELECT relation, tags FROM epi_edges WHERE source_id=? OR target_id=?", (new_nodes[0]["node_id"], new_nodes[0]["node_id"])
+        )
+    ).fetchall()
+    assert len(edges) >= 1  # ребро появилось сразу, ночной batch не нужен
+    assert all("heuristic:" in e["tags"] for e in edges)
 
 
 # --- (d)+(e) теги источника на каждом ребре + идемпотентность ---

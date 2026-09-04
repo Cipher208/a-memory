@@ -9,11 +9,14 @@ L4 core_memory, события → L3 episodic. Противоречия лов�
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
 
 from shared.memory_types import MemoryKind, get_policy, kind_for_text
+
+logger = logging.getLogger(__name__)
 
 _CLAUSE_SPLIT = re.compile(r"[,;]?\s+(?:и|но|причём|а|хотя)\s+|\.\s+")
 
@@ -64,8 +67,9 @@ async def distill_and_route(
 ) -> dict[str, int]:
     """Разложить text на атомы и развести по слоям.
 
-    graph не пишется напрямую (граф наполняют минеры, F-T9); mem.l3.save —
-    единственная дверь для событий, CoreMemory(cm из mem._cm) — для инвариантов.
+    G4: после сохранения каждый атом попадает в граф узлом (find_or_add fact)
+    и сразу обвязывается лёгкими минерами — инкрементальный режим, ночной
+    batch не ждём. mem.l3.save — дверь для событий, CoreMemory — для инвариантов.
     Ошибки не глушатся: auto_save_text уже стоит за fire-контрактом registry.
     """
     from core.memory import CoreMemory
@@ -75,6 +79,7 @@ async def distill_and_route(
     await cmem._init_db()  # self-healing schema, как ConflictResolver.check — fixture может быть без миграций
     stats = {"l4_saved": 0, "l3_saved": 0, "conflicts": 0}
     resolver = ConflictResolver()
+    saved: list[str] = []
     for clause in atomize(text):
         kind = kind_for_text(clause)
         key = _canonical_key(clause, kind)
@@ -92,12 +97,41 @@ async def distill_and_route(
                     source=f"{event}:contradiction",
                     metadata={"contradiction": True},
                 )
+                saved.append(clause)
                 continue
             await cmem.save(user_id, key, clause, importance=score, memory_kind=kind.value, source=event)
             stats["l4_saved"] += 1
+            saved.append(clause)
         else:
             await mem.l3.save(user_id, clause[:500], score, [*extra_tags, event, kind.value])
             stats["l3_saved"] += 1
+            saved.append(clause)
             if has_conflict:
                 stats["conflicts"] += 1
+    stats["wired_edges"] = await _wire_atoms(cmem._cm, user_id, saved)
     return stats
+
+
+async def _wire_atoms(cm: Any, user_id: str, clauses: list[str]) -> int:
+    """Инкрементальный режим (G4): узел графа для каждого сохранённого атома + рёбра vs существующие.
+
+    Лёгкие минеры (tags/entities/tokens) по НОВОМУ узлу срабатывают сразу при
+    записи — ночной batch (graph_enrich) не нужен для свежих соседей.
+    Best-effort: distill_and_route стоит в prod-пути — сбой минеров не глушит
+    сохранение памяти, скатывается в ночной batch.
+    """
+    if not clauses:
+        return 0
+    try:
+        from graph.epistemic import EpistemicGraph
+        from lifecycle.graph_miners import wire_new_node
+
+        g = EpistemicGraph(cm=cm, layer="user")
+        edges = 0
+        for clause in clauses:
+            node_id, _created = await g.find_or_add_entity(user_id, clause[:500], "fact")
+            edges += await wire_new_node(cm, "user", node_id, clause[:500])
+        return edges
+    except Exception:
+        logger.debug("incremental graph wiring failed", exc_info=True)
+        return 0
