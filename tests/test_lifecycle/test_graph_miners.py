@@ -165,6 +165,167 @@ async def test_miner_sessions_binds_nodes_via_ts_and_synonyms(db):
         assert "heuristic:sessions" in r["tags"]
 
 
+# --- (f) Task G3: журнал co-retrieval + минеры #5 provenance, #7 co_recalled ---
+
+
+async def _core_fact(value: str, parents: list[str]) -> int:
+    conn = await connection_manager.get(DB_NAME)
+    cur = await conn.execute(
+        "INSERT INTO core_memory (layer, user_id, key, value, importance, source, metadata, created_at, updated_at)"
+        " VALUES ('user', 'gu', ?, ?, 0.7, 'episode_promotion', ?, ?, ?)",
+        (f"ep_{value[:12]}", value, json.dumps({"parents": parents}), T, T),
+    )
+    await conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+@pytest.mark.asyncio
+async def test_log_co_pairs_writes_prefixed_pairs(db):
+    from lifecycle.graph_miners import log_co_pairs
+    from rag.multi_source import _ID_OFFSET_GRAPH
+
+    n1 = await _node("postgres wal", T)
+    n2 = await _node("postgres индексы", T)
+    hits = [
+        {"id": -n1 - _ID_OFFSET_GRAPH, "source": "graph", "content": "a", "score": 0.5},
+        {"id": 77, "source": "fts", "content": "b", "score": 0.9},
+        {"id": -n2 - _ID_OFFSET_GRAPH, "source": "graph_expand", "content": "c", "score": 0.4},
+        {"content": "хит без id не журналируется", "score": 0.1},
+    ]
+
+    written = await log_co_pairs(db, "postgres wal", hits)
+
+    assert written == 3
+    conn = await connection_manager.get(DB_NAME)
+    rows = await (await conn.execute("SELECT node_a, node_b FROM recall_co_pairs")).fetchall()
+    pairs = {(r["node_a"], r["node_b"]) for r in rows}
+    a, b = sorted((f"g:{n1}", f"g:{n2}"))
+    expected = {tuple(sorted((a, b))), tuple(sorted((a, "f:77"))), tuple(sorted((b, "f:77")))}
+    assert pairs == expected
+
+
+@pytest.mark.asyncio
+async def test_log_co_pairs_fewer_than_two_refs_writes_nothing(db):
+    from lifecycle.graph_miners import log_co_pairs
+    from rag.multi_source import _ID_OFFSET_GRAPH
+
+    hits = [{"id": -5 - _ID_OFFSET_GRAPH, "source": "graph"}]
+    assert await log_co_pairs(db, "q", hits) == 0
+    conn = await connection_manager.get(DB_NAME)
+    assert (await (await conn.execute("SELECT COUNT(*) FROM recall_co_pairs")).fetchone())[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_miner_co_retrieval_creates_edge_at_count_two(db):
+    from lifecycle.graph_miners import log_co_pairs, miner_co_retrieval
+    from rag.multi_source import _ID_OFFSET_GRAPH
+
+    n1 = await _node("совместный хит один", T)
+    n2 = await _node("совместный хит два", T)
+    hits = [
+        {"id": -n1 - _ID_OFFSET_GRAPH, "source": "graph", "content": "a", "score": 0.5},
+        {"id": -n2 - _ID_OFFSET_GRAPH, "source": "graph_expand", "content": "b", "score": 0.4},
+        {"id": 77, "source": "fts", "content": "c", "score": 0.9},
+    ]
+    await log_co_pairs(db, "запрос", hits)
+    await log_co_pairs(db, "запрос", hits)  # второй совместный recall
+
+    result = await miner_co_retrieval(db, "user")
+
+    assert result["edges"] == 1  # только g:-пара набрала count=2; f:77-пары отфильтрованы
+    rows = await _edges("co_recalled")
+    assert len(rows) == 1
+    assert (rows[0]["source_id"], rows[0]["target_id"]) == (min(n1, n2), max(n1, n2))
+    assert rows[0]["weight"] == pytest.approx(0.5)  # 0.3 + 0.1*2
+    assert "heuristic:co_retrieval" in rows[0]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_miner_co_retrieval_single_occurrence_no_edge(db):
+    from lifecycle.graph_miners import log_co_pairs, miner_co_retrieval
+    from rag.multi_source import _ID_OFFSET_GRAPH
+
+    n1 = await _node("одиночный хит", T)
+    n2 = await _node("второй одиночный", T)
+    hits = [{"id": -n1 - _ID_OFFSET_GRAPH, "source": "graph"}, {"id": -n2 - _ID_OFFSET_GRAPH, "source": "graph"}]
+    await log_co_pairs(db, "q", hits)
+
+    assert (await miner_co_retrieval(db, "user"))["edges"] == 0
+    assert await _edges("co_recalled") == []
+
+
+@pytest.mark.asyncio
+async def test_miner_provenance_episode_parent_creates_sourced_from(db):
+    from lifecycle.graph_miners import miner_provenance
+
+    fact_node = await _node("ключевое решение зафиксировано", T)
+    await _core_fact("ключевое решение зафиксировано", ["episode:42"])
+    await _core_fact("факт без графового узла — пропущен", ["episode:43"])
+
+    result = await miner_provenance(db, "user")
+
+    assert result["edges"] == 1
+    rows = await _edges("sourced_from")
+    assert len(rows) == 1
+    assert rows[0]["target_id"] == fact_node
+    assert rows[0]["weight"] == pytest.approx(0.5)
+    assert "heuristic:provenance" in rows[0]["tags"]
+    conn = await connection_manager.get(DB_NAME)
+    ep = await (await conn.execute("SELECT * FROM epi_nodes WHERE node_id=?", (rows[0]["source_id"],))).fetchone()
+    assert ep["node_type"] == "episode"
+    assert ep["content"] == "episode:42"  # узел эпизода создан по parents-ссылке
+
+
+@pytest.mark.asyncio
+async def test_miner_provenance_reuses_existing_episode_node_and_no_parents_no_edge(db):
+    from lifecycle.graph_miners import miner_provenance
+
+    await _node("вторичное наблюдение", T)
+    await _core_fact("вторичное наблюдение", ["episode:9", "event:3"])  # только episode:-ссылки
+    conn = await connection_manager.get(DB_NAME)
+    cur = await conn.execute(
+        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at)"
+        " VALUES ('user', 'gu', 'episode:9', 'episode', '[]', 0.5, ?)",
+        (T,),
+    )
+    await conn.commit()
+    ep_id = int(cur.lastrowid or 0)
+
+    result = await miner_provenance(db, "user")
+
+    assert result["edges"] == 1
+    rows = await _edges("sourced_from")
+    assert (rows[0]["source_id"], rows[0]["target_id"]) == (ep_id, rows[0]["target_id"])
+    dupes = await (await conn.execute("SELECT COUNT(*) FROM epi_nodes WHERE content='episode:9'")).fetchone()
+    assert dupes[0] == 1  # find_or_add: существующий узел переиспользован
+
+
+@pytest.mark.asyncio
+async def test_provenance_and_co_retrieval_idempotent(db):
+    from lifecycle.graph_miners import log_co_pairs, miner_co_retrieval, miner_provenance
+    from rag.multi_source import _ID_OFFSET_GRAPH
+
+    fact_node = await _node("решение про дежурство", T)
+    await _core_fact("решение про дежурство", ["episode:7"])
+    other = await _node("второй графовый хит", T)
+    hits = [
+        {"id": -fact_node - _ID_OFFSET_GRAPH, "source": "graph"},
+        {"id": -other - _ID_OFFSET_GRAPH, "source": "graph"},
+    ]
+    await log_co_pairs(db, "q", hits)
+    await log_co_pairs(db, "q", hits)
+
+    first = [await miner_provenance(db, "user"), await miner_co_retrieval(db, "user")]
+    assert first[0]["edges"] == 1 and first[1]["edges"] == 1
+    conn = await connection_manager.get(DB_NAME)
+    count1 = (await (await conn.execute("SELECT COUNT(*) FROM epi_edges")).fetchone())[0]
+
+    second = [await miner_provenance(db, "user"), await miner_co_retrieval(db, "user")]
+    assert all(r["edges"] == 0 for r in second)
+    count2 = (await (await conn.execute("SELECT COUNT(*) FROM epi_edges")).fetchone())[0]
+    assert count2 == count1
+
+
 # --- (d)+(e) теги источника на каждом ребре + идемпотентность ---
 
 

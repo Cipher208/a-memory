@@ -136,6 +136,16 @@ async def recall_protocol(
     if rag is not None:
         try:
             hits = await rag.search(query, user_id=user_id, limit=8)
+            # G3: журнал co-retrieval — пары hit-id ('g:12'/'f:5') для минера #7.
+            # Компромисс: пары любых hit-id с префиксом типа, минер отбирает
+            # только графовые g:-пары (epi_nodes.node_id).
+            try:
+                from lifecycle.graph_miners import log_co_pairs
+                from shared.connection import connection_manager
+
+                await log_co_pairs(connection_manager, query, hits)
+            except Exception as exc:
+                logger.debug("co-pairs journal skipped: %s", exc)
             # D1.5 verification: a semantic hit with zero meaningful-token
             # overlap with the query is retrieval noise → dropped. Expand hits
             # are exempt — their relevance is structural (1-hop), not lexical.

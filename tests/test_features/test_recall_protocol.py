@@ -135,3 +135,45 @@ async def test_stale_day_episodes_excluded(compaction_free):
     blocks = await recall_protocol(mem, _FakeRag([]), "u1", query="")
     day = next(b for b in blocks if b["axis"] == "day")
     assert "fresh" in day["content"] and "old" not in day["content"]
+
+
+@pytest.mark.asyncio
+async def test_recall_journals_graph_co_pairs(compaction_free):
+    """G3: каждый успешный recall пишет пары hit-id ('g:'/'f:') в recall_co_pairs."""
+    connection_manager._conns.clear()
+    from features.recall import recall_protocol
+    from rag.multi_source import _ID_OFFSET_GRAPH
+    from shared.constants import DB_NAME
+
+    mem = _FakeMem(l4=[SimpleNamespace(key="dream_memory_1", value="durable intent", importance=0.95)])
+    rag = _FakeRag(
+        [
+            {"id": -7 - _ID_OFFSET_GRAPH, "content": "durable intent discussion", "score": 0.8, "source": "graph"},
+            {"id": -9 - _ID_OFFSET_GRAPH, "content": "graph neighbor", "score": 0.4, "source": "graph_expand"},
+            {"id": 33, "content": "fts page hit", "score": 0.6, "source": "fts"},
+        ]
+    )
+    await recall_protocol(mem, rag, "u1", query="find durable intent")
+
+    conn = await connection_manager.get(DB_NAME)
+    rows = await (await conn.execute("SELECT node_a, node_b FROM recall_co_pairs")).fetchall()
+    pairs = {(r["node_a"], r["node_b"]) for r in rows}
+    assert ("g:7", "g:9") in pairs
+    assert ("g:7", "f:33") in pairs or ("f:33", "g:7") in pairs  # компромисс: пары любых hit-id, минер отберёт g:-пары
+
+
+@pytest.mark.asyncio
+async def test_recall_without_hit_ids_does_not_touch_journal(compaction_free):
+    """Хиты без id (legacy-формат) не журналируются и не ломают recall."""
+    connection_manager._conns.clear()
+    from features.recall import recall_protocol
+    from shared.constants import DB_NAME
+
+    mem = _FakeMem(l4=[SimpleNamespace(key="dream_memory_1", value="durable intent", importance=0.95)])
+    rag = _FakeRag([{"content": "durable intent discussion", "score": 0.8, "source": "fts"}])
+    blocks = await recall_protocol(mem, rag, "u1", query="find durable intent")
+    assert any(b["axis"] == "semantic" for b in blocks)
+
+    conn = await connection_manager.get(DB_NAME)
+    count = (await (await conn.execute("SELECT COUNT(*) FROM recall_co_pairs")).fetchone())[0]
+    assert count == 0

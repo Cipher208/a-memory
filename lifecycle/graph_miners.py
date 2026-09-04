@@ -8,6 +8,7 @@ epi_edges PK — re-runs are no-ops. No LLM calls anywhere.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -165,14 +166,136 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
     return {"edges": 0}
 
 
+# Задача G3: журнал co-retrieval. hits из FTS5 — это rag_pages.id, из графа —
+# epi_nodes.node_id: разные пространства. Компромисс — пишем пары ЛЮБЫХ hit-id
+# с префиксом типа ('f:5', 'g:12'); минер #7 отбирает только g:-пары.
+_G_PREFIX = "g:"
+_F_PREFIX = "f:"
+
+
+async def ensure_co_pairs(cm: AsyncConnectionManager) -> None:
+    """Idempotent schema for the co-retrieval journal (как ConflictResolver.ensure)."""
+    await cm.execute_script(
+        DB_NAME,
+        """
+        CREATE TABLE IF NOT EXISTS recall_co_pairs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            node_a TEXT NOT NULL,
+            node_b TEXT NOT NULL,
+            query_hash TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_co_pairs_ab ON recall_co_pairs(node_a, node_b);
+        """,
+    )
+
+
+def _hit_ref(hit: dict[str, Any]) -> str | None:
+    """hit-id → типизированная ссылка ('g:<node_id>' / 'f:<page_id>'); None → не журналируется."""
+    hid = hit.get("id")
+    if not isinstance(hid, int) or hid == 0:
+        return None
+    if hid < -3_000_000:  # rag.multi_source._ID_OFFSET_GRAPH: графовое пространство (отрицательные)
+        return f"{_G_PREFIX}{-hid - 3_000_000}"
+    return f"{_F_PREFIX}{hid}"
+
+
+async def log_co_pairs(cm: AsyncConnectionManager, query: str, hits: list[dict[str, Any]]) -> int:
+    """Записать пары (node_a, node_b) всех хитов успешного recall. Возвращает число пар."""
+    refs = [r for r in (_hit_ref(h) for h in hits) if r]
+    await ensure_co_pairs(cm)  # даже при <2 ref: recall_events-стиль ensure всегда
+    if len(refs) < 2:
+        return 0
+    conn = await cm.get(DB_NAME)
+    qhash = hashlib.sha1(query.encode("utf-8", "ignore")).hexdigest()[:16]
+    ts = time.time()
+    written = 0
+    for i, a in enumerate(refs):
+        for b in refs[i + 1 :]:
+            lo, hi = sorted((a, b))
+            cur = await conn.execute(
+                "INSERT INTO recall_co_pairs (ts, node_a, node_b, query_hash) VALUES (?, ?, ?, ?)",
+                (ts, lo, hi, qhash),
+            )
+            written += int(cur.rowcount or 0)
+    await conn.commit()
+    return written
+
+
 async def miner_provenance(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#5: core fact → episode → wiki metadata.parents → `sourced_from` edges."""
-    return {"edges": 0}
+    """#5: metadata.parents 'episode:N' → узел эпизода → `sourced_from` ребро на факт-узел.
+
+    Факт-узел ищется по точному content == core_memory.value (создаёт его
+    mcp fact-add); узел эпизода find_or_add по content 'episode:N'.
+    Wiki [[fact:]]-связей пока нет — только прямые parents.
+    """
+    conn = await cm.get(DB_NAME)
+    rows = await (await conn.execute("SELECT user_id, value, metadata FROM core_memory WHERE layer=?", (layer,))).fetchall()
+    edges = 0
+    for r in rows:
+        try:
+            meta = json.loads(r["metadata"]) if r["metadata"] else {}
+        except (TypeError, ValueError):
+            continue
+        parents = meta.get("parents", []) if isinstance(meta, dict) else []
+        ep_refs = [str(p) for p in parents if str(p).startswith("episode:")]
+        if not ep_refs:
+            continue
+        fact = await (
+            await conn.execute(
+                "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND node_type='fact' AND content=? LIMIT 1",
+                (layer, r["user_id"], r["value"]),
+            )
+        ).fetchone()
+        if fact is None:
+            continue
+        fact_id = int(fact["node_id"])
+        for ref in ep_refs:
+            ep = await (
+                await conn.execute(
+                    "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND node_type='episode' AND content=? LIMIT 1",
+                    (layer, r["user_id"], ref),
+                )
+            ).fetchone()
+            if ep is None:
+                cur = await conn.execute(
+                    "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at)"
+                    " VALUES (?, ?, ?, 'episode', '[]', 0.5, ?)",
+                    (layer, r["user_id"], ref, time.time()),
+                )
+                ep_id = int(cur.lastrowid or 0)
+            else:
+                ep_id = int(ep["node_id"])
+            edges += await _insert_edge(conn, ep_id, fact_id, "sourced_from", 0.5, "provenance")
+    await conn.commit()
+    return {"edges": edges}
 
 
 async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#7: co-retrieval journal, count>=2 → `co_recalled` edges."""
-    return {"edges": 0}
+    """#7: co-retrieval journal, count>=2 → `co_recalled` edges (только g:-пары)."""
+    await ensure_co_pairs(cm)
+    conn = await cm.get(DB_NAME)
+    rows = await (
+        await conn.execute(
+            "SELECT node_a, node_b, COUNT(*) AS c FROM recall_co_pairs"
+            " WHERE node_a LIKE ? AND node_b LIKE ?"
+            " GROUP BY node_a, node_b HAVING c >= 2",
+            (f"{_G_PREFIX}%", f"{_G_PREFIX}%"),
+        )
+    ).fetchall()
+    edges = 0
+    for a, b, c in rows:
+        na, nb = int(str(a)[2:]), int(str(b)[2:])
+        existing = await (
+            await conn.execute(
+                "SELECT 1 FROM epi_nodes WHERE node_id IN (?, ?) AND layer=?", (na, nb, layer)
+            )
+        ).fetchall()
+        if len(existing) < 2:  # узлы не из этого слоя/удалены — ребро не строим
+            continue
+        edges += await _insert_edge(conn, min(na, nb), max(na, nb), "co_recalled", min(0.3 + 0.1 * int(c), 0.6), "co_retrieval")
+    await conn.commit()
+    return {"edges": edges}
 
 
 async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
