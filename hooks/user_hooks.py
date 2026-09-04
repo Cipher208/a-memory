@@ -203,12 +203,29 @@ class UserHooks:
 
     @hook_registry.mark("session_ended", layer="user")
     async def _session_ended(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
-        """Harness sends the session summary; ariel persists it to L3."""
+        """Harness sends the session summary; ariel persists it to L3.
+
+        F-T7: also stages A5 preference/experience/lesson patterns
+        (best-effort, staging proposals only).
+        """
+        user_id = ctx.get("user_id", self.user_id)
+        result: dict[str, Any] = {}
+        if mem is not None:
+            texts = list(ctx.get("session_texts") or [])
+            if not texts:
+                l1 = getattr(mem, "l1", None)
+                if l1 is not None and hasattr(l1, "get_full"):
+                    texts = [e.content for e in l1.get_full()]
+            if texts:
+                with contextlib.suppress(Exception):
+                    from features.session_close import extract_and_stage
+
+                    result["extracted"] = await extract_and_stage(mem, user_id, texts)
         summary = (ctx.get("summary") or "").strip()
         if not summary or mem is None:
-            return {"saved": False}
-        await mem.l3.save(ctx.get("user_id", self.user_id), summary[:500], 0.6, ["session_summary"])
-        return {"saved": True}
+            return {"saved": False, **result}
+        await mem.l3.save(user_id, summary[:500], 0.6, ["session_summary"])
+        return {"saved": True, **result}
 
     @hook_registry.mark("post_session_diff", layer="user")
     async def _post_session_diff(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
