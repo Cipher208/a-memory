@@ -156,3 +156,29 @@ async def test_log_insert_failure_does_not_break_save(ensure_schema: Path) -> No
     result = await auto_save_text(mem, graph, user_id="u1", text=LONG_TEXT, event="new_message")
     assert result["saved_l3"] is True
     assert mem.l3.saved, "l3.save must have been called even when the log insert failed"
+
+
+async def test_transcript_dumps_skipped_before_any_save(ensure_schema: Path) -> None:
+    """Raw harness dumps (JSON message blocks, hook echoes, tool blobs) never
+    reach L3/graph/L4 — prod once filled 52% of the episodes table with them."""
+    from hooks.external import auto_save_text
+
+    dumps = [
+        '[{"type": "text", "text": "*я дочитываю план"}]',
+        '[{"type":"tool_result","tool_use_id":"call_00_ET"}]',
+        '"[ariel recall]\\n- [session] last session: audit"',
+        '{"type": "tool_use", "id": "call_1", "name": "x"}',
+    ]
+    for dump in dumps:
+        mem = _FakeMem()
+        graph = _FakeGraph()
+        result = await auto_save_text(mem, graph, user_id="u1", text=dump, event="new_message")
+        assert result.get("skipped") == "transcript", dump
+        assert result["saved_l3"] is False and result["saved_graph"] is False
+        assert not mem.l3.saved, dump
+
+    # legit multiline prose still saves (no newline rule in the dump guard)
+    mem = _FakeMem()
+    graph = _FakeGraph()
+    result = await auto_save_text(mem, graph, user_id="u1", text=LONG_TEXT, event="new_message")
+    assert result["saved_l3"] is True

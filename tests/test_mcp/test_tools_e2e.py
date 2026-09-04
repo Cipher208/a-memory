@@ -15,7 +15,6 @@ from mcp_server.tools_layer import (
     memory_episode_list,
     memory_episode_recall,
     memory_episode_save,
-    memory_forget,
     memory_graph_add,
     memory_graph_edges,
     memory_graph_nodes,
@@ -140,20 +139,8 @@ async def test_recall_empty_returns_empty(app):
     assert result["results"] == []
 
 
-# ═══════════════════════════════════════════════════════════════
-# memory_forget
-# ═══════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_forget_removes_data(app):
-    ctx = _make_ctx(app)
-    await memory_remember(layer="user", user_id="ef", key="e_tmp", value="temp", importance=0.5, ctx=ctx)
-    result = await memory_forget(layer="user", user_id="ef", key="e_tmp", ctx=ctx)
-    assert result.get("deleted_l4", 0) >= 1
-    mem = app.mm.user_memory("ef")
-    entry = await mem.l4.get("ef", "e_tmp")
-    assert entry is None
+# memory_forget removed — strict subset of the `forget` primitive (scope=exact
+# also cleans L3 + graph + shadow bin); use the primitive for exact deletion.
 
 
 # ═══════════════════════════════════════════════════════════════

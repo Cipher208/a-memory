@@ -13,9 +13,9 @@ a-memory exposes three tool surfaces:
 | **+ context** | +7 | build/recover context: `memory_recall_protocol` (D1.1), `memory_recap` (D1.2), `memory_get_smart_context` (D1.10), `memory_context`, `memory_context_inject`, `memory_steering` (D1.3), `memory_compress` (D1.4) |
 | **+ insight** | +17 | read-side analytics: `memory_query` (D1.7), `memory_fact_blame` (D1.6), `memory_history` (D1.14, dual-tier), `memory_quality` (D1.19), `memory_reflect` (D1.16), `memory_stats`, `memory_search`, `memory_recall`, `memory_episode_recall/list/get`, `memory_session_list`, `memory_graph_query/nodes/edges`, `memory_diagnose` (E3), `memory_standing` (A2.5, dual-tier) |
 | **+ write** | +16 | shape memory: `memory_remember`, `memory_save_typed` (D1.8), `memory_load_rules` (D1.9), `memory_scratchpad` (D1.15), `memory_counterfactual` (D1.20), `memory_branch` (D1.11), `memory_history` (D1.14, dual-tier), `memory_stash` (D1.12), `memory_procedure` (D2.5), `memory_episode_save`, `memory_graph_add` (E17a causal action), `memory_session_start`, `memory_session_end`, `memory_heal` (E3), `memory_disclose` (E11), `memory_standing` (A2.5, dual-tier) |
-| **Full surface** | 66 | `ARIEL_EXPOSE=all` — everything, incl. admin ops (backup, api_key, cleanup, saga, data, forget) |
+| **Full surface** | 65 | `ARIEL_EXPOSE=all` — everything, incl. admin ops (backup, api_key, cleanup, saga, data) |
 
-Recommended live-agent value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` → 66 tools; the remaining admin tools stay hidden unless `all`.
+Recommended live-agent value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` → 65 tools; the remaining admin tools stay hidden unless `all`.
 
 `think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
 wiki save with an explicit page name instead of the automatic Thought_<ts>
@@ -173,7 +173,10 @@ Legacy granular operations behind the primitives. Grouped by domain.
 |------|-------------|
 | `memory_remember` | Save a fact (key/value/importance). Strips secrets, deduplicates within a session TTL, runs the importance-gate hook. Also writes a graph node. |
 | `memory_recall` | Search across L3 + L4 with TTL-cached results. |
-| `memory_forget` | Delete one L4 fact by key. |
+
+`memory_forget` was removed (2026-09-03): a strict subset of the `forget`
+primitive — `scope="exact"` deletes the same L4 row and also cleans L3,
+graph nodes and the shadow bin. Use the primitive.
 
 ### Episodic memory (L3)
 

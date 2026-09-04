@@ -95,6 +95,15 @@ async def auto_save_text(
     from features.importance import evaluate_importance
     from shared.connection import connection_manager
 
+    # Transcript guard: raw harness dumps (JSON message blocks, tool_result
+    # blobs, hook echoes) are not memories — prod once filled 52% of the
+    # episodes table with them. Narrow variant: no newline rule (legit saved
+    # messages wrap freely); only structural heads and tool markers.
+    from lifecycle.consolidation import _looks_like_dump
+
+    if _looks_like_dump(text):
+        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "transcript"}
+
     score = evaluate_importance(text)
     result: dict[str, Any] = {"score": score, "saved_l3": False, "saved_l4": False, "saved_graph": False}
 

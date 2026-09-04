@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 import asyncio
 
-from mcp_server.models import RememberResult, RecallResult, ForgetResult
+from mcp_server.models import RememberResult, RecallResult
 from mcp_server.registry import _get_ctx
 from mcp_server.utils.privacy import strip_secrets
 from shared.metrics import metrics
@@ -123,22 +123,6 @@ async def memory_recall(
     return RecallResult(results=results, count=len(results)).dict()
 
 
-async def memory_forget(
-    layer: str = "user",
-    user_id: str = "default",
-    key: str = "",
-    ctx: Context[Any, Any] | None = None,
-) -> dict[str, Any]:
-    """Delete a fact from L4 memory."""
-    app = _get_ctx(ctx)
-    layer = _validate_layer(layer)
-    metrics.inc("tool_calls")
-    metrics.inc("tool_forget")
-
-    rate_limit = await _check_rate_limit(app, user_id)
-    if rate_limit:
-        return dict(rate_limit)
-
-    deleted = await _get_memory(app, layer, user_id).forget(key)
-    _invalidate_cache(layer, user_id)
-    return ForgetResult(deleted_l4=deleted).dict()
+# memory_forget was removed: a strict subset of the `forget` primitive
+# (scope="exact" deletes the same L4 row plus L3, graph nodes and shadow-bin
+# support). Exact-key deletion goes through the primitive.

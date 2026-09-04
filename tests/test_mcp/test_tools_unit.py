@@ -7,7 +7,6 @@ import pytest
 from mcp_server.tools_layer import (
     _fire_hook,
     memory_episode_save,
-    memory_forget,
     memory_graph_add,
     memory_recall,
     memory_remember,
@@ -89,15 +88,7 @@ async def test_recall():
     assert "results" in result
 
 
-# ── memory_forget ──
-
-
-@pytest.mark.asyncio
-async def test_forget():
-    ctx, app = _make_ctx()
-    app.mm.user_memory.return_value.forget = AsyncMock(return_value=True)
-    result = await memory_forget(layer="user", user_id="u1", key="k", ctx=ctx)
-    assert result.get("deleted_l4", 0) >= 1
+# memory_forget removed — use the `forget` primitive (scope=exact superset)
 
 
 # ── memory_session_start/end ──

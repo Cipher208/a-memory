@@ -103,4 +103,4 @@ def async_dummy(return_value):
 def test_tool_count_65():
     from mcp_server.tools_layer import _register_tools
 
-    assert len(_register_tools) == 66
+    assert len(_register_tools) == 65

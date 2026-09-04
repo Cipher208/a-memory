@@ -35,6 +35,18 @@ def _looks_like_transcript(summary: str) -> bool:
     return bool(_TRANSCRIPT_HEAD.match(summary))
 
 
+def _looks_like_dump(text: str) -> bool:
+    """Narrower sibling for the auto_save write gate: raw harness dumps only.
+
+    No newline rule — legit saved messages are freeform prose that may wrap;
+    the structural heads (`[{"`... message arrays, `"[ariel recall]` echoes)
+    and embedded tool_result markers are what never appears in a real memory.
+    """
+    if "tool_use_id" in text[:200]:
+        return True
+    return bool(_TRANSCRIPT_HEAD.match(text))
+
+
 def _slug(text: str) -> str:
     """Filename-safe key suffix: alnum/_/-/CJK survive, punctuation collapses."""
     cleaned = re.sub(r"[^\w-]+", "_", text, flags=re.UNICODE).strip("_")

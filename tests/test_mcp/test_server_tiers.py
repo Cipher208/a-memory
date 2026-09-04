@@ -76,9 +76,9 @@ def test_write_tier_exact_set():
 def test_full_agent_exposure_combo():
     """The live-agent combo: primitives + all six tiers."""
     exposed = resolve_exposure("primitives,context,insight,write,wiki,brief,review", _all_names())
-    # admin surfaces stay hidden (memory_watch moved to the review tier)
+    # admin surfaces stay hidden (memory_watch moved to the review tier;
+    # memory_forget was deleted — subset of the forget primitive)
     hidden = {
-        "memory_forget",
         "memory_api_key",
         "memory_backup",
         "memory_saga",

@@ -8,7 +8,7 @@ Refactored into modular tool categories.
 from typing import Any
 from mcp_server.registry import register_tool
 
-from .tools.memory import memory_remember, memory_recall, memory_forget
+from .tools.memory import memory_remember, memory_recall
 from .tools.primitives import think, dream, forget, evolve, project
 from .tools.session import memory_session_start, memory_session_end, memory_session_list
 from .tools.episodic import memory_episode_save, memory_episode_recall, memory_episode_list, memory_episode_get
@@ -66,7 +66,6 @@ from .tools.base import _fire_hook  # noqa: F401
 _register_tools: dict[str, Any] = {
     "memory_remember": memory_remember,
     "memory_recall": memory_recall,
-    "memory_forget": memory_forget,
     "memory_session_start": memory_session_start,
     "memory_session_end": memory_session_end,
     "memory_episode_save": memory_episode_save,
