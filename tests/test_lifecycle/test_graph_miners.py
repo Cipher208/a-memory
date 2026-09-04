@@ -28,13 +28,13 @@ async def db(tmp_path) -> AsyncIterator[Any]:
     connection_manager._conns.clear()
 
 
-async def _node(content: str, ts: float, tags: list[str] | None = None) -> int:
-    """Факт-узел с контролем created_at + прямая запись в epi_tags."""
+async def _node(content: str, ts: float, tags: list[str] | None = None, conf: float = 0.5) -> int:
+    """Факт-узел с контролем created_at/confidence + прямая запись в epi_tags."""
     conn = await connection_manager.get(DB_NAME)
     cur = await conn.execute(
         "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at)"
-        " VALUES ('user', 'gu', ?, 'fact', ?, 0.5, ?)",
-        (content, json.dumps(tags or []), ts),
+        " VALUES ('user', 'gu', ?, 'fact', ?, ?, ?)",
+        (content, json.dumps(tags or []), conf, ts),
     )
     nid = int(cur.lastrowid or 0)
     for tag in tags or []:
@@ -59,6 +59,17 @@ async def _edges(relation: str) -> list[Any]:
     return await (
         await conn.execute("SELECT * FROM epi_edges WHERE relation=? ORDER BY source_id, target_id", (relation,))
     ).fetchall()
+
+
+async def _edge(a: int, b: int, relation: str = "mentions", weight: float = 0.8) -> None:
+    """Ручное (не эвристическое) ребро — как их создаёт EpistemicGraph.add_edge."""
+    conn = await connection_manager.get(DB_NAME)
+    await conn.execute(
+        "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
+        " VALUES (?, ?, ?, ?, ?, '[]')",
+        (a, b, relation, weight, T),
+    )
+    await conn.commit()
 
 
 # --- (a) miner_tags: общий тег → tagged, weight = min(0.3+0.1*shared, 0.6) ---
@@ -509,3 +520,128 @@ async def test_miners_idempotent_rerun_does_not_duplicate(db):
     assert all(r["edges"] == 0 for r in second)
     rows = await (await conn.execute("SELECT tags FROM epi_edges")).fetchall()
     assert all("heuristic:" in r["tags"] for r in rows)  # (d) на каждом ребре
+
+
+# --- (i) Task G4b: минер #6 маркеры led_to + #8 структурные инварианты ---
+
+
+@pytest.mark.asyncio
+async def test_miner_markers_led_to_creates_edge_in_window(db):
+    # A про X (ts=T), B про X с маркером (ts=T+1ч): дельта в [5 мин, 30 дней] → led_to A→B
+    nA = await _node("сборка postgres падает с ошибкой", T)
+    nB = await _node("postgres починила конфигурацию, теперь работает", T + 3600)
+    await _node("полностью посторонний текст про ужин", T + 7200)
+
+    from lifecycle.graph_miners import miner_markers
+
+    result = await miner_markers(db, "user")
+
+    assert result["edges"] == 1
+    rows = await _edges("led_to")
+    assert (rows[0]["source_id"], rows[0]["target_id"]) == (nA, nB)
+    assert rows[0]["weight"] == pytest.approx(0.3)
+    assert "heuristic:marker" in rows[0]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_miner_markers_out_of_window_and_direction_no_edge(db):
+    from lifecycle.graph_miners import miner_markers
+
+    # дельта > 30 дней
+    await _node("сборка postgres падает с ошибкой", T)
+    await _node("postgres починила конфигурацию", T + 40 * 86400)
+    # дельта < 5 минут
+    await _node("очередь воркера зависла намертво", T + 100_000)
+    await _node("очередь заданий решено перезапустить", T + 100_060)
+    # маркер только в более раннем узле (направление: исход должен идти позже)
+    await _node("индексатор сломалось после релиза", T + 200_000)
+    await _node("индексатор пересобран заново", T + 203_600)
+    # нет общего токена («сборка» ≠ «сборку» — без стемминга)
+    await _node("сборка упала с ошибкой", T + 300_000)
+    await _node("релиз починила сборку к вечеру", T + 303_600)
+
+    result = await miner_markers(db, "user")
+
+    assert result["edges"] == 0
+    assert await _edges("led_to") == []
+
+
+@pytest.mark.asyncio
+async def test_miner_structural_co_citation_creates_edge(db):
+    nA = await _node("узел про индексы postgres", T)
+    nB = await _node("узел про wal postgres", T)
+    nC = await _node("обзорный узел, упомянул обоих", T)
+    nE = await _node("узел, упомянул только первого", T)
+    await _edge(nC, nA)
+    await _edge(nC, nB)  # C цитирует A и B → пара (A,B) co_cited
+    await _edge(nE, nA)  # E цитирует только A — новой пары не даёт
+
+    from lifecycle.graph_miners import miner_structural
+
+    result = await miner_structural(db, "user")
+
+    assert result["edges"] == 1
+    rows = await _edges("co_cited")
+    assert (rows[0]["source_id"], rows[0]["target_id"]) == (min(nA, nB), max(nA, nB))
+    assert rows[0]["weight"] == pytest.approx(0.3)  # один общий цитирующий
+    assert "heuristic:co_citation" in rows[0]["tags"]
+    assert result["boosted"] == 0  # у всех источников дефолтный confidence 0.5
+
+    again = await miner_structural(db, "user")
+    assert again["edges"] == 0  # идемпотентно: эвристические рёбра не цитируются повторно
+
+
+@pytest.mark.asyncio
+async def test_miner_structural_belief_propagation_one_shot(db):
+    nA = await _node("высококонфидентный источник", T, conf=0.9)
+    nB = await _node("цель буста", T)
+    nC = await _node("слабый источник", T, conf=0.5)
+    nD = await _node("цель без буста", T)
+    await _edge(nA, nB, weight=0.5)
+    await _edge(nC, nD, weight=0.8)
+
+    from lifecycle.graph_miners import miner_structural
+
+    result = await miner_structural(db, "user")
+
+    assert result["edges"] == 0
+    assert result["boosted"] == 1
+    conn = await connection_manager.get(DB_NAME)
+
+    async def _confs() -> dict[int, float]:
+        rows = await (await conn.execute("SELECT node_id, confidence FROM epi_nodes")).fetchall()
+        return {int(r["node_id"]): float(r["confidence"]) for r in rows}
+
+    confs = await _confs()
+    assert confs[nB] == pytest.approx(0.5 + 0.1 * 0.9 * 0.5)  # += 0.1·conf(A)·w
+    assert confs[nD] == pytest.approx(0.5)  # источник слабже порога 0.8 — не бустит
+
+    again = await miner_structural(db, "user")
+    assert again["boosted"] == 0  # одноразовый буст, не рекурсивный
+    assert (await _confs())[nB] == pytest.approx(0.545)
+
+
+@pytest.mark.asyncio
+async def test_miner_structural_community_bridge_inside_community(db):
+    # звезда: центр nB, листья nA/nC/nD — louvain (seed=42) держит компоненту целиком
+    nA = await _node("моста один", T, tags=["postgres"])
+    nB = await _node("центр сообщества", T)
+    nC = await _node("моста два", T, tags=["postgres"])
+    nD = await _node("моста три", T, tags=["linux"])
+    await _edge(nA, nB)
+    await _edge(nC, nB)
+    await _edge(nD, nB)  # источники все разные → co-citation не срабатывает
+
+    from lifecycle.graph_miners import miner_structural
+
+    result = await miner_structural(db, "user")
+
+    assert result["edges"] == 1
+    rows = await _edges("community_bridge")
+    assert (rows[0]["source_id"], rows[0]["target_id"]) == (min(nA, nC), max(nA, nC))
+    assert rows[0]["weight"] == pytest.approx(0.2)
+    assert "heuristic:community_bridge" in rows[0]["tags"]
+    # пара (A,D) в том же сообществе без прямого ребра, но без общего тега — моста нет
+
+    again = await miner_structural(db, "user")
+    assert again["edges"] == 0  # (A,C) уже соединены — повторного моста нет

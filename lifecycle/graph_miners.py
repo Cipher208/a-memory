@@ -363,6 +363,147 @@ _EMBED_JACCARD = 0.7
 _EMBED_TOPK = 15  # не более 15 рёбер semantic_overlap на узел от этого минера
 _SEMANTIC_WEIGHT = 0.5
 
+# #6: маркер-словарь причинно-следственного перехода (план G4b, Step 4).
+_MARKERS = re.compile(r"починила|исправила|теперь работает|сломалось|переделали|решено|закрыто")
+_MARKER_MIN, _MARKER_MAX = 300.0, 30 * 86400.0  # дельта ts в [5 мин, 30 дней]
+
+
+async def miner_markers(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
+    """#6: пары узлов с общим канон-токеном, ts-дельта в окне, в позднем — маркер → `led_to` 0.3.
+
+    Направление A→B (A раньше, B с маркером «починила/сломалось/…»): ранний узел
+    про X, поздний — исход по X. Без общего токена или вне окна ребра нет.
+    """
+    conn = await cm.get(DB_NAME)
+    from rag.synonyms import load_synonyms
+
+    syn = load_synonyms()
+    nodes = await (
+        await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))
+    ).fetchall()
+    parsed = [
+        (int(r["node_id"]), _canon_tokens(str(r["content"]), syn), _MARKERS.search(str(r["content"])), float(r["created_at"]))
+        for r in nodes
+    ]
+    edges = 0
+    for i, (a, ta, _, ta_ts) in enumerate(parsed):
+        if not ta:
+            continue
+        for b, tb, m, tb_ts in parsed[i + 1 :]:
+            if not m or not ta & tb:
+                continue
+            lo, hi = (a, b) if ta_ts <= tb_ts else (b, a)  # ребро из раннего в поздний (маркерный)
+            delta = abs(tb_ts - ta_ts)
+            if _MARKER_MIN <= delta <= _MARKER_MAX:
+                edges += await _insert_edge(conn, lo, hi, "led_to", 0.3, "marker")
+    await conn.commit()
+    return {"edges": edges}
+
+
+async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
+    """#8: структурные инварианты — co-citation, belief propagation, louvain-мосты.
+
+    - co-citation: два узла слоя цитируются третьим (не-эвристические рёбра) →
+      `co_cited` 0.3 (эвристические рёбра-цитаты исключены: график не замыкается сам на себя).
+    - belief propagation: confidence(B) += 0.1·conf(A)·w для входящих рёбер с
+      conf(A) ≥ 0.8 — одноразовый буст (только узлы с дефолтной 0.5, не рекурсивный).
+    - community bridge: пары внутри louvain-сообщества БЕЗ прямого ребра, но с
+      общим epi_tag → `community_bridge` 0.2.
+    """
+    conn = await cm.get(DB_NAME)
+    edges = 0
+
+    # --- co-citation ---
+    rows = await (
+        await conn.execute(
+            """
+            SELECT e1.target_id AS a, e2.target_id AS b, COUNT(DISTINCT e1.source_id) AS c
+            FROM epi_edges e1
+            JOIN epi_edges e2 ON e1.source_id = e2.source_id AND e1.target_id < e2.target_id
+            JOIN epi_nodes n1 ON n1.node_id = e1.target_id AND n1.layer = ?
+            JOIN epi_nodes n2 ON n2.node_id = e2.target_id AND n2.layer = ?
+            WHERE e1.tags = '[]' AND e2.tags = '[]'
+            GROUP BY e1.target_id, e2.target_id HAVING c > 0
+            """,
+            (layer, layer),
+        )
+    ).fetchall()
+    for a, b, c in rows:
+        edges += await _insert_edge(conn, int(a), int(b), "co_cited", min(0.3 + 0.05 * (int(c) - 1), 0.6), "co_citation")
+
+    # --- belief propagation: одноразовый буст целей рёбер от conf(A) >= 0.8 ---
+    boosted = 0
+    rows = await (
+        await conn.execute(
+            """
+            SELECT DISTINCT e.target_id
+            FROM epi_edges e
+            JOIN epi_nodes s ON s.node_id = e.source_id AND s.layer = ?
+            JOIN epi_nodes t ON t.node_id = e.target_id AND t.layer = ?
+            WHERE s.confidence >= 0.8 AND t.confidence = 0.5
+            """,
+            (layer, layer),
+        )
+    ).fetchall()
+    for (target,) in rows:
+        gains = await (
+            await conn.execute(
+                "SELECT MAX(s.confidence * e.weight) FROM epi_edges e"
+                " JOIN epi_nodes s ON s.node_id = e.source_id AND s.layer = ?"
+                " WHERE e.target_id = ? AND s.confidence >= 0.8",
+                (layer, target),
+            )
+        ).fetchone()
+        gain = 0.1 * float(gains[0] if gains is not None and gains[0] is not None else 0.0)
+        if gain > 0:
+            await conn.execute("UPDATE epi_nodes SET confidence = confidence + ? WHERE node_id = ?", (gain, int(target)))
+            boosted += 1
+
+    # --- louvain-мосты: пары в одном сообществе, без прямого ребра, с общим тегом ---
+    communities = await _node_communities(conn, layer)
+    if communities:
+        tagged: dict[int, set[str]] = {}
+        for r in await (await conn.execute("SELECT node_id, tag FROM epi_tags")).fetchall():
+            tagged.setdefault(int(r["node_id"]), set()).add(str(r["tag"]))
+        linked: set[tuple[int, int]] = {
+            (int(r["source_id"]), int(r["target_id"])) for r in await (await conn.execute("SELECT source_id, target_id FROM epi_edges")).fetchall()
+        }
+        for members in communities:
+            ms = sorted(members)
+            for i, a in enumerate(ms):
+                for b in ms[i + 1 :]:
+                    if (a, b) in linked or (b, a) in linked or not tagged.get(a, set()) & tagged.get(b, set()):
+                        continue
+                    if await _insert_edge(conn, a, b, "community_bridge", 0.2, "community_bridge"):
+                        edges += 1
+                        linked.add((a, b))
+
+    await conn.commit()
+    return {"edges": edges, "boosted": boosted}
+
+
+async def _node_communities(conn: Any, layer: str) -> list[set[int]]:
+    """louvain-сообщества узлов слоя по их рёбрам (A1.6, networkx); [] при пустом графе."""
+    try:
+        import networkx as nx  # type: ignore[import-untyped]
+    except ImportError:
+        return []
+    rows = await (
+        await conn.execute(
+            "SELECT e.source_id, e.target_id FROM epi_edges e"
+            " JOIN epi_nodes s ON s.node_id = e.source_id AND s.layer = ?"
+            " JOIN epi_nodes t ON t.node_id = e.target_id AND t.layer = ?",
+            (layer, layer),
+        )
+    ).fetchall()
+    graph = nx.Graph()
+    graph.add_nodes_from(
+        int(r["node_id"]) for r in await (await conn.execute("SELECT node_id FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
+    )
+    for r in rows:
+        graph.add_edge(int(r["source_id"]), int(r["target_id"]))
+    return [set(c) for c in nx.community.louvain_communities(graph, seed=42) if len(c) >= 2]
+
 
 def _bits_int(b: bytes) -> int:
     return int.from_bytes(b, "big")
@@ -480,4 +621,6 @@ MINERS: dict[str, Miner] = {
     "provenance": miner_provenance,
     "co_retrieval": miner_co_retrieval,
     "embedding": miner_embedding,
+    "markers": miner_markers,
+    "structural": miner_structural,
 }

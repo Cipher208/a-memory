@@ -99,9 +99,9 @@ async def miner_tags(cm, layer: str) -> dict:
 - Modify: `lifecycle/distiller.py` — после роутинга лёгкие проверки (tags/entities/synonyms) — инкрементальный вызов минеров
 - Test: расширить test_graph_miners.py
 
-- [ ] **Step 1: Тест**: 2 узла с embedding-сходством ≥0.7 → semantic_overlap; текст с «Лили» в двух узлах → co_mentions после канонизации.
-- [ ] **Step 2: Реализация**: embedding-минер — кодировать content+tags+aliases (A-MEM rich embedding), попарный Jaccard (O(n²) на 236 узлах — копейки), top-k=15; entity-минер — словарь (Лили/Люси/Hermes/SQLite...) + spaCy NER для латиницы.
-- [ ] **Step 3: Коммит** `feat(G3): embedding + entity miners, incremental mode`.
+- [x] **Step 1: Тест**: 2 узла с embedding-сходством ≥0.7 → semantic_overlap; текст с «Лили» в двух узлах → co_mentions после канонизации.
+- [x] **Step 2: Реализация**: embedding-минер — кодировать content+tags+aliases (A-MEM rich embedding), попарный Jaccard (O(n²) на 236 узлах — копейки), top-k=15; entity-минер — словарь (Лили/Люси/Hermes/SQLite...) + spaCy NER для латиницы.
+- [x] **Step 3: Коммит** `feat(G3): embedding + entity miners, incremental mode` (фактически `feat(G4)`, 8e6a7c3).
 
 ### Task 4b: Минеры #6 маркеры led_to + #8 структурные инварианты
 
