@@ -43,6 +43,7 @@ class TypePolicy:
     requires_expires_at: bool
     boost_on_keywords: tuple[str, ...]
     description: str
+    retrieval_priority: float = 0.5
 
 
 _REGISTRY: dict[MemoryKind, TypePolicy] = {
@@ -54,6 +55,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("обязательно", "важно", "critical", "never forget", "rule", "инструкция"),
         "Правило/инструкция, не подлежит забыванию",
+        0.85,
     ),
     MemoryKind.FACT: TypePolicy(
         MemoryKind.FACT,
@@ -63,6 +65,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("факт", "fact", "имя", "возраст", "день рождения"),
         "Атомарный факт",
+        0.9,
     ),
     MemoryKind.DECISION: TypePolicy(
         MemoryKind.DECISION,
@@ -72,6 +75,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("решение", "decided", "chose", "decision"),
         "Принятое решение с обоснованием",
+        0.9,
     ),
     MemoryKind.GOAL: TypePolicy(
         MemoryKind.GOAL,
@@ -81,6 +85,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         True,
         ("цель", "goal", "plan", "к концу"),
         "Цель с дедлайном",
+        0.8,
     ),
     MemoryKind.PREFERENCE: TypePolicy(
         MemoryKind.PREFERENCE,
@@ -90,6 +95,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("предпочитаю", "prefer", "like", "нравится", "не люблю"),
         "Предпочтение",
+        0.6,
     ),
     MemoryKind.COMMITMENT: TypePolicy(
         MemoryKind.COMMITMENT,
@@ -99,6 +105,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         True,
         ("обещаю", "обязуюсь", "commit", "promise", "согласен"),
         "Обязательство с дедлайном",
+        0.8,
     ),
     MemoryKind.RELATIONSHIP: TypePolicy(
         MemoryKind.RELATIONSHIP,
@@ -108,6 +115,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("знаком", "друг", "коллега", "knows", "friend"),
         "Связь",
+        0.7,
     ),
     MemoryKind.OBSERVATION: TypePolicy(
         MemoryKind.OBSERVATION,
@@ -117,6 +125,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("видел", "заметил", "noticed", "observed"),
         "Наблюдение",
+        0.3,
     ),
     MemoryKind.RULE: TypePolicy(
         MemoryKind.RULE,
@@ -126,6 +135,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("запрещено", "нельзя", "do not", "forbidden"),
         "Жёсткое правило",
+        0.9,
     ),
     MemoryKind.TODO: TypePolicy(
         MemoryKind.TODO,
@@ -135,6 +145,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         True,
         ("todo", "сделать", "do later", "remind"),
         "Задача с дедлайном",
+        0.6,
     ),
     MemoryKind.QUESTION: TypePolicy(
         MemoryKind.QUESTION,
@@ -144,6 +155,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("вопрос", "уточнить", "ask later", "?"),
         "Открытый вопрос",
+        0.3,
     ),
     MemoryKind.HYPOTHESIS: TypePolicy(
         MemoryKind.HYPOTHESIS,
@@ -153,6 +165,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("возможно", "наверное", "probably", "hypothesis"),
         "Гипотеза",
+        0.4,
     ),
     MemoryKind.CONTEXT: TypePolicy(
         MemoryKind.CONTEXT,
@@ -162,6 +175,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         False,
         ("контекст", "background", "context"),
         "Фоновый контекст",
+        0.1,
     ),
 }
 

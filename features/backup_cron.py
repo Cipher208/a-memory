@@ -128,6 +128,13 @@ class BackupCron:
                 self._await_on_main_loop(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
         except Exception:
             logger.exception("Nightly hook error")
+        # Compact-to-budget after nightly builds (graph_build runs inside the
+        # "nightly" hook above): evict lowest-activation L4 facts to archive.
+        with contextlib.suppress(Exception):
+            from lifecycle.compact import compact_under_budget
+
+            for layer in ["user", "agent"]:
+                self._await_on_main_loop(compact_under_budget("default", layer))
 
     def _do_backup(self) -> str:
         import shutil
