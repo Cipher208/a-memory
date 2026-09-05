@@ -159,3 +159,66 @@ async def test_s6a_conflict_path_keeps_source_rid(cm) -> None:
     metas = [json.loads(r["metadata"]) for r in rows]
     assert metas[0]["source_raw_id"] == 7
     assert metas[1]["scope"] == "later" and metas[1]["source_raw_id"] == 9
+
+
+@pytest.mark.asyncio
+async def test_all_distill_call_sites_pass_source_rid(cm, tmp_path, monkeypatch) -> None:
+    """Аудит 05.09 (P0): replay/import/bridge передают source_rid — каждый
+    L4-факт знает свою строку L0 (drill-down до сырья со всех входов)."""
+    from features.bridge import ingest_drain
+    from features.replay import replay
+    from scripts.import_chat import import_records
+    from shared.l0 import capture
+
+    # 1) replay: строка L0 → дистилляция с source_rid
+    rid = await capture("new_message", "user", "rp", "решила кэш чистить по расписанию еженощно")
+    assert rid is not None
+    res = await replay(since_days=1)
+    assert res["processed"] >= 1
+    conn = await cm.get("memory.db")
+    rows = await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='rp'")).fetchall()
+    assert rows and json.loads(rows[0]["metadata"]).get("source_raw_id") == rid
+
+    # 2) import: ts → L0 → distill с source_rid
+    p = tmp_path / "conv.json"
+    p.write_text(
+        json.dumps(
+            [
+                {
+                    "uuid": "c1",
+                    "name": "conv",
+                    "messages": [{"role": "user", "content": "решила бэкапы шифровать ключом", "created_at": "2024-01-15T10:30:00Z"}],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    res_i = await import_records("claude", str(p), "imp")
+    assert res_i["captured"] == 1
+    rows_i = await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='imp'")).fetchall()
+    assert rows_i and json.loads(rows_i[0]["metadata"]).get("source_raw_id") is not None, "import-факт несёт source_raw_id"
+
+    # 3) bridge: drain → capture → distill с source_rid
+    bpath = tmp_path / "ingest.md"
+    bpath.write_text("notes\n# === AUTO-DRAIN BELOW ===\nрешила мониторинг усилить позже\n", encoding="utf-8")
+    monkeypatch.setattr(connection_manager, "base_dir", tmp_path)  # bridge пишет/читает файл относительно data-dir
+    res_b = await ingest_drain("br", "user", base_path=str(bpath))
+    assert res_b["ingested"] >= 1
+    rows_b = await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='br'")).fetchall()
+    assert rows_b and json.loads(rows_b[0]["metadata"]).get("source_raw_id") is not None, "bridge-факт несёт source_raw_id"
+
+
+@pytest.mark.asyncio
+async def test_skip_distill_rows_routed_direct(cm) -> None:
+    """S6a-1 единый вход: строки с skip_distill (remember/think) replay
+    помечает routed_direct и НЕ дистиллирует повторно."""
+    from features.replay import replay
+    from shared.l0 import capture
+
+    rid = await capture("remember", "user", "sk", "вручную сохранённый факт для проверки", decisions=[{"gate": "mcp_remember", "skip_distill": True}])
+    assert rid is not None
+    res = await replay(since_days=1)
+    assert res["processed"] == 0
+    conn = await cm.get("memory.db")
+    row = await (await conn.execute("SELECT status FROM l0_journal WHERE id=?", (rid,))).fetchone()
+    assert row[0] == "routed_direct"

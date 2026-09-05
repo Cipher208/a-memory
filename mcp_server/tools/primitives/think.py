@@ -67,6 +67,14 @@ async def think(
 
     tasks = []
 
+    # Аудит 05.09 (P0): единый вход — think-контент фиксируется в L0 для
+    # провенанса, но с skip_distill: think сам маршрутизирует (L4/L3/wiki),
+    # replay не должен дистиллировать это повторно.
+    from shared.l0 import capture as _l0_capture
+
+    tasks.append(_l0_capture(event="think", layer=resolved_layer, user_id=user_id, text=text, decisions=[{"gate": "think", "skip_distill": True}]))
+    actions.append({"type": "L0_captured", "event": "think"})
+
     forced_wiki = bool(wiki_type or wiki_title)
     large_text = len(text) > 2000
 
@@ -110,13 +118,9 @@ async def think(
     has_relation = any(re.search(p, text, re.IGNORECASE) for p in relation_patterns)
 
     if has_relation:
-        # F-T9 single-entry: прямой add_node убран — текст с отношением попадает
-        # в L0 (capture) и в дистиллятор через message_received-хук; узел графа
-        # создаёт _wire_atoms, а не обходной путь из тул-слоя.
-        from shared.l0 import capture
-
-        tasks.append(capture(event="think_relation", layer=resolved_layer, user_id=user_id, text=text))
-        actions.append({"type": "L0_captured", "event": "think_relation"})
+        # F-T9: прямой add_node убран; текст уже в L0 (capture выше) — узел
+        # графа создаёт дистиллятор/минеры, не тул-слой.
+        actions.append({"type": "L0_captured", "event": "think"})
 
     # 5. Hooks
     hook_tasks = [_fire_hook("message_received", resolved_layer, {"text": text, "user_id": user_id}, mem=mem)]

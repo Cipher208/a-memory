@@ -145,7 +145,7 @@ async def _capture_and_distill(user_id: str, text: str, ts: float | None = None)
     conn = await connection_manager.get(DB_NAME)
     mem = MemoryManager(cm=connection_manager).get_layer("user", user_id)
     graph = EpistemicGraph(cm=connection_manager, layer="user")
-    route = await distill_and_route(mem, graph, user_id, text, 0.6, event="import")
+    route = await distill_and_route(mem, graph, user_id, text, 0.6, event="import", source_rid=rid)
     # condition-splitting (C4): ConflictResolver hit сохраняет ОБЕ записи
     # (scope=earlier/later) и учитывается в l4_saved — routed, не gated out.
     # C8: novelty_skipped = дубликат уже в L4 — идемпотентный успех.

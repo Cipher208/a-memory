@@ -125,9 +125,15 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
         if any(d.get("gate") == gate and d.get("config_hash") == chash for d in decisions):
             skipped += 1
             continue
+        # S6a-1 единый вход: строки с skip_distill (remember/think) уже
+        # записаны адресно своим входом — replay их не дистиллирует.
+        if any(d.get("skip_distill") for d in decisions):
+            await conn.execute("UPDATE l0_journal SET status='routed_direct', processed_at=? WHERE id=?", (time.time(), row["id"]))
+            skipped += 1
+            continue
         mem = MemoryManager(cm=connection_manager).get_layer(row["layer"] or "user", row["user_id"])
         graph = EpistemicGraph(cm=connection_manager, layer=row["layer"] or "user")
-        route = await distill_and_route(mem, graph, row["user_id"], row["text"], 0.6, event=gate)
+        route = await distill_and_route(mem, graph, row["user_id"], row["text"], 0.6, event=gate, source_rid=int(row["id"]))
         conflicts += route["conflicts"]
         # C8: novelty_skipped = факт уже в L4 (повторный прогон той же строки) —
         # это идемпотентный успех, не gated_out.

@@ -92,9 +92,15 @@ async def ingest_drain(user_id: str, layer: str = "agent", base_path: str | None
         from lifecycle.distiller import distill_and_route
         from shared.l0 import capture
 
-        await capture("bridge_drain", layer, user_id, drain, raw_type="user-message")
+        bridge_rid = await capture("bridge_drain", layer, user_id, drain, raw_type="user-message")
+        # Аудит 05.09 (P1): capture успешен → контент уже в L0 (сортировочная
+        # станция). Маркер чистим ДО дистилляции: падение distill больше не
+        # плодит дубли при повторном ingest — недодистиллированное добирает
+        # replay (строка остаётся 'received').
+        _atomic_write(path, top + _tail(""))
         mem = MemoryManager(cm=connection_manager).get_layer(layer, user_id)
         graph = EpistemicGraph(cm=connection_manager, layer=layer)
-        routes = await distill_and_route(mem, graph, user_id, drain, 0.6, event="bridge_drain")
-    _atomic_write(path, top + _tail(""))
+        routes = await distill_and_route(mem, graph, user_id, drain, 0.6, event="bridge_drain", source_rid=bridge_rid)
+    else:
+        _atomic_write(path, top + _tail(""))
     return {"ingested": len(lines), "routes": routes}

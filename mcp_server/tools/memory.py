@@ -58,6 +58,15 @@ async def memory_remember(
 
     mem = _get_memory(app, layer, user_id)
 
+    # S6a-1 единый вход: explicit MCP-remember журналируется в L0 для провенанса;
+    # skip_distill — значение уже легло в L4 адресно (key), replay не должен
+    # перегонять его через дистиллятор повторно.
+    from shared.l0 import capture as _l0_capture
+
+    await _l0_capture(
+        event="remember", layer=layer, user_id=user_id, text=value, decisions=[{"gate": "mcp_remember", "skip_distill": True, "key": key}]
+    )
+
     if layer == "agent":
         # F-T9 single-entry: только L4 — граф наполняет дистиллятор/минеры
         # (dual-write здесь дублировал бы каждый факт в epi_nodes).
