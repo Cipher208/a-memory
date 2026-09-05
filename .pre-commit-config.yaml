@@ -25,3 +25,29 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+
+      # F-gate: full test suite on commit (code changed)
+      - id: pytest-gate
+        name: pytest gate (full suite)
+        entry: uv run --with-editable . --extra dev pytest tests/ -q --junitxml=/tmp/precommit_gate.xml
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+        always_run: true
+
+      # F-gate: full push gate (ruff --isolated + mypy 10 dirs + pytest)
+      - id: prepush-gate
+        name: pre-push gate (ruff isolated + mypy 10 dirs)
+        entry: bash -c 'uv run --isolated --with ruff python -m ruff check . && uv run --isolated --with ruff python -m ruff format --check . && uv run --with-editable . --extra dev --extra embeddings mypy features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/ autohooks/ eval/'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true
+
+      - id: prepush-pytest
+        name: pre-push pytest gate
+        entry: bash -c 'ARIEL_HASH_EMBEDDINGS=1 uv run --with-editable . --extra dev pytest tests/ -q --junitxml=/tmp/prepush_gate.xml'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true
