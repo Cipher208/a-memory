@@ -588,6 +588,52 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     return {"edges": edges}
 
 
+async def _find_or_add_node(conn: Any, layer: str, user_id: str, node_type: str, content: str) -> int:
+    """find_or_add по (layer, user_id, node_type, content) — как record_causal._node."""
+    row = await (
+        await conn.execute(
+            "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=? AND content=? LIMIT 1",
+            (layer, user_id, node_type, content),
+        )
+    ).fetchone()
+    if row:
+        return int(row["node_id"])
+    cur = await conn.execute(
+        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, ?, '[]', 0.5, ?)",
+        (layer, user_id, content, node_type, time.time()),
+    )
+    return int(cur.lastrowid or 0)
+
+
+async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
+    """#10: l0_journal tool_use+tool_result пары (по tool_use_id) → триплеты query→tool→outcome.
+
+    Узлы: query (текст из tool_use.input), action 'tool:<name>', outcome — сводка
+    результата; is_error у tool_result → outcome узел node_type='error_outcome'.
+    Рёбра query_tool / tool_outcome, weight=0.5, tags heuristic:triplets
+    (idempotent: INSERT OR IGNORE + find_or_add). Висячие/битые блоки скипаются.
+    """
+    from lifecycle.tool_stats import _SNIP, scan_tool_pairs, tool_query_text, tool_result_text
+
+    conn = await cm.get(DB_NAME)
+    pairs, _ = await scan_tool_pairs(conn, 0.0, layer=layer)
+    edges = 0
+    for use, result in pairs:
+        query = tool_query_text(use.get("input"))
+        outcome = tool_result_text(result.get("content"))[:_SNIP]
+        if not query or not outcome:
+            continue
+        uid = str(use.get("_uid"))
+        q_id = await _find_or_add_node(conn, layer, uid, "query", query)
+        a_id = await _find_or_add_node(conn, layer, uid, "action", f"tool:{use.get('name') or 'unknown'}")
+        o_type = "error_outcome" if result.get("is_error") else "outcome"
+        o_id = await _find_or_add_node(conn, layer, uid, o_type, outcome)
+        edges += await _insert_edge(conn, q_id, a_id, "query_tool", 0.5, "triplets")
+        edges += await _insert_edge(conn, a_id, o_id, "tool_outcome", 0.5, "triplets")
+    await conn.commit()
+    return {"edges": edges}
+
+
 async def wire_new_node(cm: AsyncConnectionManager, layer: str, node_id: int, content: str, tags: list[str] | None = None) -> int:
     """Инкрементальный режим (G4): рёбра НОВОГО узла vs существующие — сразу при записи.
 
@@ -636,4 +682,5 @@ MINERS: dict[str, Miner] = {
     "embedding": miner_embedding,
     "markers": miner_markers,
     "structural": miner_structural,
+    "triplets": miner_tool_triplets,
 }

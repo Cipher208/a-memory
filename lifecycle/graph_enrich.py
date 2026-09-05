@@ -9,6 +9,7 @@ contribute no edges yet.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from shared.connection import connection_manager
@@ -57,4 +58,11 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
 
     expired = await validate_edges(conn)
 
-    return {"nodes_cleaned": cleaned, "miners": miners, "sanitation": {"expired": expired}}
+    # S6b behavior-аннотации: per-tool статистика в отчёте (Stage 2 hints).
+    from lifecycle.tool_stats import tool_behavior_stats
+
+    behavior: dict[str, dict[str, float]] = {}
+    with contextlib.suppress(Exception):
+        behavior = await tool_behavior_stats()
+
+    return {"nodes_cleaned": cleaned, "miners": miners, "sanitation": {"expired": expired}, "behavior": behavior}
