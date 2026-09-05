@@ -31,12 +31,16 @@ INSIGHT_MAX = 10  # абстракций за один сон
 
 
 async def _rows(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
-    return await (await conn.execute(sql, params)).fetchall()
+    rows: list[Any] = await (await conn.execute(sql, params)).fetchall()
+    return rows
 
 
 async def _dream_nrem(conn: Any, now: float) -> dict[str, int]:
-    """NREM: spreading activation — свежие со-сработавшие heuristic-рёбра
-    +0.05, старые неактивные −0.01; weight < floor — prune."""
+    """NREM spreading activation pass.
+
+    Свежие со-сработавшие heuristic-рёбра +0.05, старые неактивные −0.01;
+    weight < floor — prune.
+    """
     decayed = pruned = boosted = 0
     for r in await _rows(conn, "SELECT source_id, target_id, relation, weight, created_at FROM epi_edges WHERE tags LIKE '%heuristic:%'"):
         w = float(r["weight"])
@@ -61,18 +65,24 @@ async def _dream_rem(conn: Any, layer: str, now: float) -> int:
 
     Similarity — token Jaccard (len ≥ 3, rag.edm.tokens): детерминирован и не
     зависит от hash-фолбэка эмбеддингов (случайные векторы ≠ поhash — модельные
-    косинусы на near-dup непредсказуемы)."""
+    косинусы на near-dup непредсказуемы).
+    """
     from rag.edm import tokens
 
-    isolated = [(int(r["node_id"]), tokens(str(r["content"]))) for r in await _rows(
-        conn,
-        "SELECT node_id, content FROM epi_nodes n WHERE n.layer=? AND node_type NOT IN ('moc','auto_index')"
-        " AND NOT EXISTS (SELECT 1 FROM epi_edges e WHERE e.source_id=n.node_id OR e.target_id=n.node_id)",
-        (layer,),
-    )]
+    isolated = [
+        (int(r["node_id"]), tokens(str(r["content"])))
+        for r in await _rows(
+            conn,
+            "SELECT node_id, content FROM epi_nodes n WHERE n.layer=? AND node_type NOT IN ('moc','auto_index')"
+            " AND NOT EXISTS (SELECT 1 FROM epi_edges e WHERE e.source_id=n.node_id OR e.target_id=n.node_id)",
+            (layer,),
+        )
+    ]
     if not isolated:
         return 0
-    others = [(int(r["node_id"]), tokens(str(r["content"]))) for r in await _rows(conn, "SELECT node_id, content FROM epi_nodes WHERE layer=?", (layer,))]
+    others = [
+        (int(r["node_id"]), tokens(str(r["content"]))) for r in await _rows(conn, "SELECT node_id, content FROM epi_nodes WHERE layer=?", (layer,))
+    ]
     bridged = 0
     seen: set[tuple[int, int]] = set()
     for nid, nt in isolated:
@@ -97,16 +107,21 @@ async def _dream_rem(conn: Any, layer: str, now: float) -> int:
 
 
 async def _dream_insight(conn: Any, layer: str) -> int:
-    """Insight: BFS-комьюнити (связные компоненты) → материализованные
-    абстракции — узлы node_type='insight' с частотным топ-токенами summary,
-    связанные с членами ребром 'insight_of'."""
+    """Insight-абстракции из BFS-комьюнити.
+
+    Связные компоненты → узлы node_type='insight' с частотным топ-токенами
+    summary, связанные с членами ребром 'insight_of'.
+    """
     from collections import Counter
 
     from rag.edm import tokens
 
-    nodes = [(int(r["node_id"]), str(r["user_id"]), str(r["content"])) for r in await _rows(
-        conn, "SELECT node_id, user_id, content FROM epi_nodes WHERE layer=? AND node_type NOT IN ('moc','auto_index','insight')", (layer,)
-    )]
+    nodes = [
+        (int(r["node_id"]), str(r["user_id"]), str(r["content"]))
+        for r in await _rows(
+            conn, "SELECT node_id, user_id, content FROM epi_nodes WHERE layer=? AND node_type NOT IN ('moc','auto_index','insight')", (layer,)
+        )
+    ]
     member_ids = {nid for nid, _, _ in nodes}
     adj: dict[int, set[int]] = {}
     for r in await _rows(conn, "SELECT source_id, target_id FROM epi_edges"):
@@ -139,9 +154,9 @@ async def _dream_insight(conn: Any, layer: str) -> int:
             freq.update(tokens(contents[nid]))
         top = ", ".join(t for t, _ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:3])
         summary = f"insight ({len(members)} узлов): {top}"
-        dup = await (await conn.execute(
-            "SELECT node_id FROM epi_nodes WHERE layer=? AND node_type='insight' AND content=? LIMIT 1", (layer, summary)
-        )).fetchone()
+        dup = await (
+            await conn.execute("SELECT node_id FROM epi_nodes WHERE layer=? AND node_type='insight' AND content=? LIMIT 1", (layer, summary))
+        ).fetchone()
         if dup:
             continue
         user_id = next(u for nid, u, _ in nodes if nid == members[0])
@@ -164,8 +179,11 @@ import time
 
 
 async def _dream(conn: Any, layer: str) -> dict[str, int]:
-    """Трёхфазный dream: NREM (spreading activation) → REM (мосты) → Insight
-    (материализованные абстракции)."""
+    """Трёхфазный сон: NREM → REM → Insight.
+
+    NREM — spreading activation, REM — мосты, Insight — материализованные
+    абстракции.
+    """
     nrem = await _dream_nrem(conn, time.time())
     rem = await _dream_rem(conn, layer, time.time())
     insights = await _dream_insight(conn, layer)

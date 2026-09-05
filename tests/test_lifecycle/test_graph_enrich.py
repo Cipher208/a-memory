@@ -176,7 +176,7 @@ async def test_dream_rem_bridges_isolated_duplicates(graph, no_miners):
 
 @pytest.mark.asyncio
 async def test_dream_insight_materializes_abstraction(graph, no_miners):
-    ids = await _dream_graph(graph)
+    await _dream_graph(graph)
     conn = await connection_manager.get("memory.db")
 
     from lifecycle.graph_enrich import graph_enrich

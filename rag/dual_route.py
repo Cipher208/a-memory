@@ -184,7 +184,9 @@ async def route_query(
     # minmax) — minmax на дегенеративном пуле даёт слабому 1.0; если
     # raw_activation нет (легаси), fallback на score.
     top = hits[0] if hits else {}
-    activation = float(top.get("raw_activation") if top.get("raw_activation") is not None else top.get("score") or 0.0)
+    raw_val = top.get("raw_activation")
+    score_val = top.get("score")
+    activation = float(raw_val if raw_val is not None else (score_val if score_val is not None else 0.0))
     if hits and activation < FOK_TAU:
         logger.debug("route_query: FOK-gate reject (raw activation %.3f < τ=%.2f)", activation, FOK_TAU)
         return []
