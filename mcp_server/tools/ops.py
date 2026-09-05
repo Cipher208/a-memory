@@ -40,6 +40,8 @@ from .base import (
     _invalidate_cache,
     DEFAULT_TOKEN_BUDGET,
 )
+from rag.ablation import retrieval_mode
+from shared.connection import connection_manager
 
 
 async def memory_stats(
@@ -471,14 +473,23 @@ async def memory_search(
     include_rag = sources in ("all", "rag")
     include_wiki = sources in ("all", "wiki")
 
-    results = await app.user_multi.search(
-        query,
-        user_id=user_id,
-        strategy=strategy,
-        limit=limit,
-        include_rag=include_rag,
-        include_wiki=include_wiki,
-    )
+    if sources == "all" and retrieval_mode() != "rrf":
+        # Phase H C1: dual-route в prod-recall. route_query — пре-дверь,
+        # 5-source RRF внутри multi_source — генератор кандидатов, EDM/ITS —
+        # re-rank. 'rrf' — статус-кво, сырой путь; фильтр sources — тоже
+        # (route_query не выражает include-флаги).
+        from rag.dual_route import route_query
+
+        results = await route_query(app.user_multi, query, user_id=user_id, limit=limit, cm=connection_manager)
+    else:
+        results = await app.user_multi.search(
+            query,
+            user_id=user_id,
+            strategy=strategy,
+            limit=limit,
+            include_rag=include_rag,
+            include_wiki=include_wiki,
+        )
     return SearchResult(results=results, count=len(results), method=strategy).dict()
 
 

@@ -1,5 +1,6 @@
 """Agent Layer Hooks - 12 hooks for agent identity events."""
 
+import contextlib
 import logging
 from typing import Any
 
@@ -24,6 +25,37 @@ class AgentHooks:
     def __init__(self, user_id: str = DEFAULT_USER):
         self.user_id = user_id
         self.graph = EpistemicGraph(layer=AGENT_LAYER)
+
+    @hook_registry.mark("nightly", layer=AGENT_LAYER)
+    async def _nightly(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        """Agent-layer nightly maintenance (mirror user_hooks._nightly).
+
+        graph_enrich + wiki-graph на agent-слое; compact/sweep/bridge делает
+        backup_cron для обоих слоёв — здесь agent-специфика.
+        """
+        result: dict[str, Any] = {"action": "agent_nightly"}
+        with contextlib.suppress(Exception):
+            from lifecycle.graph_enrich import graph_enrich
+
+            result["graph_enrich"] = await graph_enrich(layer=AGENT_LAYER)
+        with contextlib.suppress(Exception):
+            from lifecycle.wiki_graph_builder import build_from_wiki
+
+            result["wiki_graph_build"] = await build_from_wiki(layer=AGENT_LAYER)
+        with contextlib.suppress(Exception):
+            from lifecycle.compact import compact_under_budget
+
+            result["compact"] = await compact_under_budget(self.user_id, AGENT_LAYER)
+        with contextlib.suppress(Exception):
+            from lifecycle.l0_sweep import sweep_expired
+
+            result["sweep"] = await sweep_expired()
+        with contextlib.suppress(Exception):
+            from features.bridge import ingest_drain, regenerate_bridge
+
+            result["bridge"] = str(await regenerate_bridge(self.user_id, AGENT_LAYER))
+            result["ingest_drain"] = await ingest_drain(self.user_id, AGENT_LAYER)
+        return result
 
     @hook_registry.mark("importance_gate", layer=AGENT_LAYER)
     async def _importance_gate(self, ctx: dict[str, Any]) -> dict[str, Any]:

@@ -140,6 +140,11 @@ class BackupCron:
             from lifecycle.l0_sweep import sweep_expired
 
             self._await_on_main_loop(sweep_expired())
+        # F-T7 (S3): rebuild session summaries from L0 texts (was dead code).
+        with contextlib.suppress(Exception):
+            from features.l2_enrich import enrich_sessions
+
+            self._await_on_main_loop(enrich_sessions(days=1))
         # A8: MEMORY.md bridge — refresh top-facts file, then drain user notes.
         with contextlib.suppress(Exception):
             from features.bridge import ingest_drain, regenerate_bridge
