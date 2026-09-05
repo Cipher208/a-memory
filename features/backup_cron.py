@@ -140,6 +140,12 @@ class BackupCron:
             from lifecycle.l0_sweep import sweep_expired
 
             self._await_on_main_loop(sweep_expired())
+        # A8: MEMORY.md bridge — refresh top-facts file, then drain user notes.
+        with contextlib.suppress(Exception):
+            from features.bridge import ingest_drain, regenerate_bridge
+
+            self._await_on_main_loop(regenerate_bridge("default", "agent"))
+            self._await_on_main_loop(ingest_drain("default", "agent"))
 
     def _do_backup(self) -> str:
         import shutil
