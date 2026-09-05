@@ -114,8 +114,9 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
     chash = config_hash()
     rows = await (
         await conn.execute(
-            "SELECT id, layer, user_id, text, decisions FROM l0_journal WHERE ts > ? AND status IN ('received', 'gated_out') ORDER BY id",
-            (cutoff,),
+            "SELECT id, layer, user_id, text, decisions FROM l0_journal"
+            " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
+            (cutoff, time.time() - 600.0),
         )
     ).fetchall()
 
@@ -131,6 +132,19 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
             await conn.execute("UPDATE l0_journal SET status='routed_direct', processed_at=? WHERE id=?", (time.time(), row["id"]))
             skipped += 1
             continue
+        # Аудит 05.09 (P1) replay-гонка: claim по статусу — второй concurrent
+        # replay видит статус уже 'processing' со свежим processed_at и
+        # пропускает строку; зависший 'processing' (grace 10м) пере-разбирается.
+        # aiosqlite rowcount после UPDATE недостоверен → check-then-update.
+        recheck = await (await conn.execute("SELECT status, processed_at FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
+        if recheck is None:
+            skipped += 1
+            continue
+        if recheck[0] == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
+            skipped += 1
+            continue
+        await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time(), row["id"]))
+        await conn.commit()  # claim фиксируется до дистилляции
         mem = MemoryManager(cm=connection_manager).get_layer(row["layer"] or "user", row["user_id"])
         graph = EpistemicGraph(cm=connection_manager, layer=row["layer"] or "user")
         route = await distill_and_route(

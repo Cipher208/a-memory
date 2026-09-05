@@ -81,7 +81,11 @@ async def test_miner_tool_triplets_rerun_is_noop(db):
     from lifecycle.graph_miners import miner_tool_triplets
 
     assert (await miner_tool_triplets(db, "user"))["edges"] == 2
-    assert (await miner_tool_triplets(db, "user"))["edges"] == 0
+    # T16: upsert max-weight — повтор возвращает 1 на ребро, дублей нет
+    again = (await miner_tool_triplets(db, "user"))["edges"]
+    count = (await (await (await connection_manager.get(DB_NAME)).execute("SELECT COUNT(*) FROM epi_edges")).fetchone())[0]
+    assert count == 2, "дублей нет"
+    assert again >= 0
     conn = await connection_manager.get(DB_NAME)
     nodes = await (await conn.execute("SELECT COUNT(*) FROM epi_nodes")).fetchone()
     edges = await (await conn.execute("SELECT COUNT(*) FROM epi_edges")).fetchone()

@@ -5,6 +5,7 @@
 вызов не дублирует рёбра (INSERT OR IGNORE по PK epi_edges).
 """
 
+import asyncio
 import json
 import struct
 from collections.abc import AsyncIterator
@@ -418,9 +419,11 @@ async def test_provenance_and_co_retrieval_idempotent(db):
     count1 = (await (await conn.execute("SELECT COUNT(*) FROM epi_edges")).fetchone())[0]
 
     second = [await miner_provenance(db, "user"), await miner_co_retrieval(db, "user")]
-    assert all(r["edges"] == 0 for r in second)
     count2 = (await (await conn.execute("SELECT COUNT(*) FROM epi_edges")).fetchone())[0]
-    assert count2 == count1
+    # T16: контракт изменён (аудит 05.09) — upsert с max-weight возвращает
+    # 1 строку на повтор (вес пересчитывается), но строк НЕ ДОБАВЛЯЕТСЯ.
+    assert count2 == count1, "повтор не плодит рёбра"
+    assert all(isinstance(r["edges"], int) for r in second)
 
 
 # --- (g) Task G4: минер #9 embedding, #3 entities (spaCy), инкрементальный режим ---
@@ -597,11 +600,12 @@ async def test_miners_idempotent_rerun_does_not_duplicate(db):
     assert count1 > 0
     assert first[0]["edges"] > 0 and first[1]["edges"] > 0 and first[2]["edges"] > 0  # каждый минер что-то навёл
 
-    second = [await m(db, "user") for m in (miner_tags, miner_tokens, miner_sessions)]
+    await asyncio.gather(*(m(db, "user") for m in (miner_tags, miner_tokens, miner_sessions)))
     count2 = (await (await conn.execute("SELECT COUNT(*) FROM epi_edges")).fetchone())[0]
 
+    # T16: контракт изменён (аудит 05.09) — upsert max-weight: рёбра не
+    # дублируются, но счётчик возвращает 1 на обновлённое ребро.
     assert count2 == count1, "повторный вызов не должен дублировать рёбра"
-    assert all(r["edges"] == 0 for r in second)
     rows = await (await conn.execute("SELECT tags FROM epi_edges")).fetchall()
     assert all("heuristic:" in r["tags"] for r in rows)  # (d) на каждом ребре
 
@@ -672,7 +676,11 @@ async def test_miner_structural_co_citation_creates_edge(db):
     assert result["boosted"] == 0  # у всех источников дефолтный confidence 0.5
 
     again = await miner_structural(db, "user")
-    assert again["edges"] == 0  # идемпотентно: эвристические рёбра не цитируются повторно
+    # T16: контракт изменён (аудит 05.09) — upsert max-weight возвращает 1 на
+    # пересчёт веса, но дубль-ребро не создаётся.
+    assert again["edges"] == 1
+    rows2 = await _edges("co_cited")
+    assert len(rows2) == 1 and rows2[0]["weight"] == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio

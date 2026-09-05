@@ -95,7 +95,9 @@ async def test_session_ended_without_summary_skips() -> None:
 async def test_new_message_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     import hooks.external as ext
 
-    async def fake_auto_save(mem: Any, graph: Any, user_id: str, text: str) -> dict[str, Any]:
+    async def fake_auto_save(
+        mem: Any, graph: Any, user_id: str, text: str, *, event: str = "new_message", source_msg_id: int | None = None
+    ) -> dict[str, Any]:
         return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}
 
     monkeypatch.setattr(ext, "auto_save_text", fake_auto_save)

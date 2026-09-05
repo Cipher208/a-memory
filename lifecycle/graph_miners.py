@@ -31,13 +31,18 @@ _BIND_SHARED = 2  # или ≥2 общих канон-токенов с текс
 
 
 async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, heuristic: str) -> int:
-    """INSERT OR IGNORE into epi_edges; returns rows actually written (re-run → 0).
+    """UPSERT into epi_edges; returns rows actually written (re-run → 0).
 
-    После вставки heuristic-ребра применяется lateral inhibition (G5,
-    SYNAPSE): слабое ребро гасится кластером более сильных соседей узла.
+    Аудит 05.09 (P1): INSERT OR IGNORE замораживал вес — повторный прогон
+    минера не усиливал связь. Теперь upsert берёт max(weight) (сильнейшее
+    свидетельство живёт), created_at обновляется. После вставки heuristic-ребра
+    применяется lateral inhibition (G5, SYNAPSE): слабое ребро гасится
+    кластером более сильных соседей узла.
     """
     cur = await conn.execute(
-        "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)",
+        """INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (source_id, target_id, relation)
+           DO UPDATE SET weight = MAX(weight, excluded.weight), created_at = excluded.created_at""",
         (a, b, relation, weight, time.time(), json.dumps([f"heuristic:{heuristic}"])),
     )
     written = int(cur.rowcount or 0)
@@ -351,6 +356,71 @@ async def miner_provenance(cm: AsyncConnectionManager, layer: str) -> dict[str, 
             else:
                 ep_id = int(ep["node_id"])
             edges += await _insert_edge(conn, ep_id, fact_id, "sourced_from", 0.5, "provenance")
+    await conn.commit()
+    return {"edges": edges}
+
+
+async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
+    """Ночные провенанс-мосты wiki↔L4 (S5, аудит 05.09).
+
+    [[fact:key]] в wiki_index.content → ребро между wiki_page-узлом и
+    fact-узлом записи.
+
+    fact-узел ищется как в miner_provenance: node_type='fact', content == value.
+    Запись без узла или страница без wiki-узла пропускаются.
+    """
+    conn = await cm.get(DB_NAME)
+    import re as _re
+
+    links = await (
+        await conn.execute(
+            "SELECT w.file_path, w.content FROM wiki_index w WHERE w.layer=? AND w.content LIKE '%[[fact:%'",
+            (layer,),
+        )
+    ).fetchall()
+    if not links:
+        return {"edges": 0}
+
+    def _keys(text: str) -> list[str]:
+        return _re.findall(r"\[\[fact:([^\]]+)\]\]", text)
+
+    edges = 0
+    for file_path, content in links:
+        keys = _keys(str(content))
+        if not keys:
+            continue
+        page = await (
+            await conn.execute(
+                "SELECT n.node_id FROM epi_nodes n WHERE n.layer=? AND n.node_type='wiki_page' AND n.content=? LIMIT 1",
+                (layer, file_path),
+            )
+        ).fetchone()
+        if page is None:
+            continue
+        for key in keys:
+            # [[fact:backup_enc]] → ключ может быть с kind-префиксом
+            # (fact:backup_enc) или без — пробуем оба, как пишут в wiki.
+            fact_row = None
+            for cand in (key, f"fact:{key}"):
+                fact_row = await (
+                    await conn.execute(
+                        "SELECT value FROM core_memory WHERE layer=? AND key=? LIMIT 1",
+                        (layer, cand),
+                    )
+                ).fetchone()
+                if fact_row is not None:
+                    break
+            if fact_row is None:
+                continue
+            fact = await (
+                await conn.execute(
+                    "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=(SELECT user_id FROM epi_nodes WHERE node_id=?) AND node_type='fact' AND content=? LIMIT 1",
+                    (layer, int(page["node_id"]), str(fact_row["value"])),
+                )
+            ).fetchone()
+            if fact is None:
+                continue
+            edges += await _insert_edge(conn, int(page["node_id"]), int(fact["node_id"]), "wiki_fact_link", 0.5, "provenance")
     await conn.commit()
     return {"edges": edges}
 
@@ -744,4 +814,5 @@ MINERS: dict[str, Miner] = {
     "markers": miner_markers,
     "structural": miner_structural,
     "triplets": miner_tool_triplets,
+    "wiki_fact_links": miner_wiki_fact_links,
 }

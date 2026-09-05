@@ -256,13 +256,35 @@ class UserHooks:
 
     @hook_registry.mark("new_message", layer="user")
     async def _new_message(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
-        """Evaluate importance of incoming text; threshold-gated auto-save."""
+        """Evaluate importance of incoming text; threshold-gated auto-save.
+
+        Аудит 05.09 (P1): new_message/auto_save_candidate/on_turn_end сходятся
+        сюда — без дедупа по source_msg_id харнесс, шлющий несколько событий
+        для одного сообщения, плодил дубли L3/L4. Дедуп по memory_dispatch_log
+        (таблица C1.10, source_msg_id уже пишется в external.py).
+        """
         from hooks.external import auto_save_text
 
         text = ctx.get("text", "")
         if not text or mem is None or graph is None:
             return {"auto_save": {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}, "skipped": "no_text_or_mem"}
-        result = await auto_save_text(mem, graph, ctx.get("user_id", self.user_id), text)
+        smid = ctx.get("source_msg_id")
+        if smid is not None:
+            from shared.connection import connection_manager
+            from shared.constants import DB_NAME
+
+            conn = await connection_manager.get(DB_NAME)
+            dup = await (
+                await conn.execute(
+                    "SELECT 1 FROM memory_dispatch_log WHERE source_msg_id=? AND user_id=? LIMIT 1", (smid, ctx.get("user_id", self.user_id))
+                )
+            ).fetchone()
+            if dup is not None:
+                return {
+                    "auto_save": {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False},
+                    "skipped": f"duplicate_source_msg_id={smid}",
+                }
+        result = await auto_save_text(mem, graph, ctx.get("user_id", self.user_id), text, source_msg_id=smid)
         return {"auto_save": result}
 
     @hook_registry.mark("auto_save_candidate", layer="user")
