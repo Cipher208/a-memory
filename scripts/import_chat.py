@@ -10,7 +10,10 @@ Supported sources:
 Every normalized record goes through shared.l0.capture(event='import',
 raw_type='import' — import lines are not deterministic, classify_raw would
 misread them) and is distilled immediately (direct distill_and_route, score
-0.6 fixed — real importance is decided by the kind gates). The g1 decision
+0.6 fixed — real importance is decided by the kind gates). Original message
+timestamps are preserved: parsers extract orig ts (claude: created_at ISO,
+chatgpt: create_time epoch, memory-json/jsonl: ts) → capture(ts_override=...);
+missing ts → now. The g1 decision
 with config_hash is recorded on the row, so the watermark replay never
 re-processes imported lines.
 
@@ -26,12 +29,27 @@ import asyncio
 import json
 import sys
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-Rec = dict[str, Any]  # {"role": str | None, "text": str, "ts": float}
+Rec = dict[str, Any]  # {"role": str | None, "text": str, "ts": float | None} — ts=None → now при capture
+
+
+def _to_ts(value: Any) -> float | None:
+    """Export timestamp → epoch seconds; None если ts в записи нет."""
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
 
 
 def _content_text(content: Any) -> str:
@@ -48,7 +66,7 @@ def parse_claude(data: list[dict[str, Any]]) -> list[Rec]:
     recs: list[Rec] = []
     for conv in data:
         for m in conv.get("messages", []):
-            recs.append({"role": m.get("role"), "text": _content_text(m.get("content")), "ts": time.time()})
+            recs.append({"role": m.get("role"), "text": _content_text(m.get("content")), "ts": _to_ts(m.get("created_at"))})
     return recs
 
 
@@ -65,7 +83,7 @@ def parse_chatgpt(data: list[dict[str, Any]]) -> list[Rec]:
                 continue
             parts = (msg.get("content") or {}).get("parts") or []
             text = " ".join(p if isinstance(p, str) else _content_text(p) for p in parts).strip()
-            recs.append({"role": role, "text": text, "ts": time.time()})
+            recs.append({"role": role, "text": text, "ts": _to_ts(msg.get("create_time"))})
     return recs
 
 
@@ -74,7 +92,7 @@ def parse_memory_json(data: list[dict[str, Any]]) -> list[Rec]:
         {
             "role": None,
             "text": f"{r.get('key')}: {r.get('value')}",
-            "ts": float(r["ts"]) if r.get("ts") else time.time(),
+            "ts": _to_ts(r.get("ts")),
         }
         for r in data
     ]
@@ -88,7 +106,7 @@ def parse_jsonl(lines: list[str]) -> list[Rec]:
             continue
         obj = json.loads(line)
         text = obj.get("text") or obj.get("message") or obj.get("content") or ""
-        recs.append({"role": obj.get("role"), "text": str(text), "ts": time.time()})
+        recs.append({"role": obj.get("role"), "text": str(text), "ts": _to_ts(obj.get("ts"))})
     return recs
 
 
@@ -110,7 +128,7 @@ def load_records(source: str, path: str) -> list[Rec]:
         return PARSERS[source](json.load(f))
 
 
-async def _capture_and_distill(user_id: str, text: str) -> dict[str, int]:
+async def _capture_and_distill(user_id: str, text: str, ts: float | None = None) -> dict[str, int]:
     """Capture → direct distill → watermark-mark the row so replay skips it."""
     import json as _json
 
@@ -122,7 +140,7 @@ async def _capture_and_distill(user_id: str, text: str) -> dict[str, int]:
     from shared.constants import DB_NAME
     from shared.l0 import capture
 
-    rid = await capture("import", "user", user_id, text, raw_type="import", decisions=[{"gate": "import"}])
+    rid = await capture("import", "user", user_id, text, raw_type="import", decisions=[{"gate": "import"}], ts_override=ts)
     assert rid is not None  # capture never raises; None only on infra failure
     conn = await connection_manager.get(DB_NAME)
     mem = MemoryManager(cm=connection_manager).get_layer("user", user_id)
@@ -154,7 +172,7 @@ async def import_records(source: str, path: str, user_id: str, *, dry_run: bool 
         }
     l4 = l3 = 0
     for r in recs:
-        route = await _capture_and_distill(user_id, r["text"])
+        route = await _capture_and_distill(user_id, r["text"], r["ts"])
         l4 += route["l4_saved"]
         l3 += route["l3_saved"]
     return {"source": source, "file": path, "user_id": user_id, "captured": len(recs), "l4_saved": l4, "l3_saved": l3}
