@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="4" time="0.776" timestamp="2026-09-05T02:01:11.115848+02:00" hostname="vm1282045.cloud.nuxt.network"><testcase classname="tests.test_features.test_import_chat" name="test_import_all_four_formats_end_to_end" time="0.187"><failure message="ModuleNotFoundError: No module named 'scripts.import_chat'">import_db = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_import_all_four_formats_e0')
+tmp_path = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_import_all_four_formats_e0')
+
+    async def test_import_all_four_formats_end_to_end(import_db, tmp_path) -&gt; None:
+        from features.replay import replay
+&gt;       from scripts.import_chat import import_records
+E       ModuleNotFoundError: No module named 'scripts.import_chat'
+
+tests/test_features/test_import_chat.py:108: ModuleNotFoundError</failure></testcase><testcase classname="tests.test_features.test_import_chat" name="test_chatgpt_memory_json_normalization" time="0.042"><failure message="ModuleNotFoundError: No module named 'scripts.import_chat'">import_db = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_chatgpt_memory_json_norma0')
+tmp_path = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_chatgpt_memory_json_norma0')
+
+    async def test_chatgpt_memory_json_normalization(import_db, tmp_path) -&gt; None:
+&gt;       from scripts.import_chat import parse_chatgpt, parse_memory_json
+E       ModuleNotFoundError: No module named 'scripts.import_chat'
+
+tests/test_features/test_import_chat.py:138: ModuleNotFoundError</failure></testcase><testcase classname="tests.test_features.test_import_chat" name="test_dry_run_writes_nothing" time="0.041"><failure message="ModuleNotFoundError: No module named 'scripts.import_chat'">import_db = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_dry_run_writes_nothing0')
+tmp_path = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_dry_run_writes_nothing0')
+
+    async def test_dry_run_writes_nothing(import_db, tmp_path) -&gt; None:
+&gt;       from scripts.import_chat import import_records
+E       ModuleNotFoundError: No module named 'scripts.import_chat'
+
+tests/test_features/test_import_chat.py:152: ModuleNotFoundError</failure></testcase><testcase classname="tests.test_features.test_import_chat" name="test_unknown_source_rejected" time="0.085"><failure message="ModuleNotFoundError: No module named 'scripts.import_chat'">import_db = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_unknown_source_rejected0')
+tmp_path = PosixPath('/tmp/pytest-of-murat/pytest-1296/test_unknown_source_rejected0')
+
+    async def test_unknown_source_rejected(import_db, tmp_path) -&gt; None:
+&gt;       from scripts.import_chat import import_records
+E       ModuleNotFoundError: No module named 'scripts.import_chat'
+
+tests/test_features/test_import_chat.py:163: ModuleNotFoundError</failure></testcase></testsuite></testsuites>
