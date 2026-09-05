@@ -88,3 +88,29 @@ async def test_conflict_condition_splitting_keeps_both(cm) -> None:
     assert meta_l["contradicts"] == earlier["key"]
     assert earlier["importance"] == pytest.approx(0.8 * 0.9)  # конфликт снижает уверенность
     assert later["importance"] == pytest.approx(0.8 * 0.9)
+
+
+@pytest.mark.asyncio
+async def test_conflict_same_canon_key_no_self_overwrite(cm) -> None:
+    """Аудит 05.09 (P0): save — upsert по UNIQUE(layer,user,key); канон-ключ
+    lossy (kind + первые 4 токена) — конфликтующие клаузы, различающиеся
+    ПОСЛЕ 4-го токена, получают ОДИН ключ, и later-запись молча затирала
+    earlier. Теперь later версонируется ::vN — обе строки живут."""
+    import json as _json
+
+    from lifecycle.distiller import distill_and_route
+
+    fake_mem, fake_graph = FakeMem(), MagicMock()
+    # различие только после 4-го канон-токена ("ночью"/"утром") → ключ идентичен;
+    # "решила" → DECISION (decay 0) → L4-роутинг
+    r1 = await distill_and_route(fake_mem, fake_graph, "u3", "решила деплой бэкенда проводить ночью по расписанию", 0.8)
+    assert r1["l4_saved"] >= 1
+    r2 = await distill_and_route(fake_mem, fake_graph, "u3", "решила деплой бэкенда проводить утром по расписанию", 0.8)
+    assert r2["conflicts"] >= 1
+
+    conn = await cm.get("memory.db")
+    rows = await (await conn.execute("SELECT key, value, metadata FROM core_memory WHERE user_id='u3' ORDER BY entry_id")).fetchall()
+    assert len(rows) == 2, f"обе записи живы (no self-overwrite): {[(r['key'], r['value'][:40]) for r in rows]}"
+    metas = sorted(_json.loads(r["metadata"])["scope"] for r in rows)
+    assert metas == ["earlier", "later"]
+    assert rows[0]["value"] != rows[1]["value"], "значения не перезаписаны"

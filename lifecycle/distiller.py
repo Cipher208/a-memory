@@ -170,9 +170,22 @@ async def distill_and_route(
                 meta_new["contradiction"] = True
                 if first_key:
                     meta_new["contradicts"] = first_key
+                # Аудит 05.09 (P0): save — upsert по UNIQUE(layer,user,key);
+                # запись later под тем же канон-ключом молча затёрла бы
+                # существующую строку (и earlier, и любую same-key). Ключ
+                # занят → версонируем ::vN, чтобы обе записи жили.
+                later_key = key
+                if rows:
+                    vcur = await (
+                        await conn.execute(
+                            "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND (key=? OR key LIKE ?)",
+                            (cmem.layer, user_id, key, key + "::v%"),
+                        )
+                    ).fetchone()
+                    later_key = f"{key}::v{int(vcur[0]) + 1}"
                 await cmem.save(
                     user_id,
-                    key,
+                    later_key,
                     clause,
                     importance=score * 0.9,
                     memory_kind=kind.value,
