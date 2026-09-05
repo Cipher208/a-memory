@@ -200,7 +200,7 @@ async def distill_and_route(
                             (cmem.layer, user_id, key, key + "::v%"),
                         )
                     ).fetchone()
-                    later_key = f"{key}::v{int(vcur[0]) + 1}"
+                    later_key = f"{key}::v{int((vcur[0] if vcur else 0) or 0) + 1}"
                 await cmem.save(
                     user_id,
                     later_key,

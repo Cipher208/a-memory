@@ -229,7 +229,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     if ids:
         cleaned = await EpistemicGraph(cm=cm, layer=layer).delete_nodes(ids)
 
-    miners: dict[str, dict[str, int]] = {}
+    miners: dict[str, dict[str, Any]] = {}
     for name, miner in MINERS.items():
         try:
             res = await miner(cm, layer)
@@ -238,7 +238,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
             # Аудит 05.09 (P0): молчаливый сбой минера = граф тихо недополучает
             # рёбра. Логируем и отражаем в отчёте, чтобы diagnose это видел.
             logger.warning("miner %s failed: %s", name, exc)
-            miners[name] = {"edges": 0, "error": str(exc)[:200]}
+            miners[name] = {"edges": -1, "error": str(exc)[:200]}  # -1 = сбой (edges не отрицательные)
 
     # G5 sanitation: validity recheck (рёбра вне окна → status='expired').
     from lifecycle.graph_sanitation import validate_edges

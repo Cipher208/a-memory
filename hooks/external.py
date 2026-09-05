@@ -80,7 +80,7 @@ async def dispatch_event(
     result = await default_pipeline.execute(mw_ctx, _fire)
     if mw_ctx.blocked:
         return {"skipped": True, "reason": mw_ctx.block_reason}
-    return result
+    return dict(result) if isinstance(result, dict) else {"results": result}
 
 
 async def auto_save_text(
