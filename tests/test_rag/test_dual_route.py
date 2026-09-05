@@ -221,6 +221,69 @@ async def test_s2_route_graph_node_type(db) -> None:
     assert all(r["source"] == "s2_exhaustive" for r in out)
 
 
+# --- C6: FOK-gate (SYNAPSE τ=0.12): слабый топ-кандидат → отказ до LLM ---
+
+
+async def test_fok_gate_rejects_weak_activation_pool() -> None:
+    from rag.dual_route import route_query
+
+    # пул есть, но активация топ-кандидата ниже порога — отвечать нечем
+    rag = FakeRoutedRAG([_cand(1, "weather report today", 0.05), _cand(2, "cat video compilation", 0.06)])
+    out = await route_query(rag, "квантовый фазовый переход сверхпроводника", user_id="u1", limit=5)
+    assert out == [], f"FOK-gate должен отклонить пул с активацией < τ, out={out!r}"
+
+
+async def test_fok_gate_passes_strong_pool() -> None:
+    from rag.dual_route import route_query
+
+    rag = FakeRoutedRAG([_cand(1, "настройка бэкапа postgres cron", 0.9), _cand(2, "weather report today", 0.2)])
+    out = await route_query(rag, "настройка бэкапа postgres", user_id="u1", limit=5)
+    assert out and out[0]["id"] == 1, f"сильный пул проходит FOK-gate, out={out!r}"
+
+
+# --- C6: CAMA max-presence + N_eff (Hill diversity) → abstention ---
+
+
+async def test_cama_neff_abstains_on_correlated_pool() -> None:
+    # коррелированные записи (один контент ×3) не накачивают evidence:
+    # max-presence → 1 эффективный источник → abstain
+    cands = [_cand(i, "postgres backup cron настройка", 0.9 - i * 0.05, f"dup-{i}") for i in range(3)]
+    out = await edm_rerank(cands, "postgres backup настройка")
+    assert out, "коррелированный пул не пуст — но данных недостаточно"
+    assert out[0]["abstain"] is True, f"низкий N_eff → abstention-флаг, out={out!r}"
+    assert out[0]["n_eff"] == pytest.approx(1.0), f"один max-presence источник → N_eff=1, out={out!r}"
+
+
+async def test_cama_neff_no_abstain_on_distinct_evidence() -> None:
+    cands = [
+        _cand(1, "postgres backup cron настройка расписания", 0.9, "hit-a"),
+        _cand(2, "postgres restore verify backup archive", 0.85, "hit-b"),
+        _cand(3, "настройка redis sentinel кэша replication", 0.8, "hit-c"),
+    ]
+    out = await edm_rerank(cands, "postgres backup настройка")
+    assert len(out) >= 2, f"различимые источники должны пройти, out={out!r}"
+    assert all(not h["abstain"] for h in out), f"достаточно разных источников — без abstain, out={out!r}"
+
+
+# --- C6: S2 compression constraint — категория с <2 детьми терминируется ---
+
+
+async def test_s2_constraint_terminates_sparse_category() -> None:
+    from rag.dual_route import s2_exhaustive
+
+    rows = [{"entry_id": 1, "title": "diary-solo", "content": "одна запись", "wiki_type": "diary"}]
+    out = await s2_exhaustive(FakeWiki(rows), None, "list all diary entries", user_id="u1")
+    assert out == [], f"категория с 1 ребёнком не проходит (терминирование слоя), out={out!r}"
+
+
+async def test_s2_constraint_allows_dense_category() -> None:
+    from rag.dual_route import s2_exhaustive
+
+    rows = [{"entry_id": i, "title": f"diary-{i}", "content": f"запись {i}", "wiki_type": "diary"} for i in range(3)]
+    out = await s2_exhaustive(FakeWiki(rows), None, "list all diary entries", user_id="u1")
+    assert len(out) == 3, f"категория с ≥2 детьми проходит целиком, out={out!r}"
+
+
 # --- D-Mem escalation + router dispatch ---
 
 

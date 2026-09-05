@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="8" skipped="0" tests="37" time="5.546" timestamp="2026-09-05T11:23:16.697546+02:00" hostname="vm1282045.cloud.nuxt.network"><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[\u043a\u0430\u043a \u043d\u0430\u0441\u0442\u0440\u043e\u0438\u0442\u044c \u0431\u044d\u043a\u0430\u043f postgres-factual]" time="0.009" /><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[\u043f\u043e\u0447\u0438\u043d\u0438\u043b\u0430 \u043a\u044d\u0448, \u0442\u0435\u043f\u0435\u0440\u044c \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442?-factual]" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[\u043f\u0435\u0440\u0435\u0447\u0438\u0441\u043b\u0438 \u0432\u0441\u0435 \u043f\u0440\u0430\u0432\u0438\u043b\u0430 \u043a\u044d\u0448\u0430-enumerative]" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[list all diary entries-enumerative]" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[\u0441\u043f\u0438\u0441\u043e\u043a \u0432\u0441\u0435\u0445 \u0440\u0435\u0448\u0435\u043d\u0438\u0439-enumerative]" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[\u043f\u043e\u0447\u0435\u043c\u0443 \u0441\u0431\u043e\u0440\u043a\u0430 \u043f\u0430\u0434\u0430\u0435\u0442 \u0438\u0437-\u0437\u0430 \u043a\u044d\u0448\u0430-multi-hop]" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[\u043a\u0430\u043a \u044d\u0442\u043e \u0432\u043b\u0438\u044f\u0435\u0442 \u043d\u0430 \u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0438\u0439 \u0440\u0435\u043b\u0438\u0437 \u0438 \u0447\u0442\u043e \u043f\u0440\u0438\u0432\u0435\u043b\u043e \u043a \u0441\u0431\u043e\u044e-multi-hop]" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_classify_query[word w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11-multi-hop]" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_inhibit_scores_suppresses_weak_by_strong_cluster" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_inhibit_scores_no_stronger_neighbours_unchanged" time="0.000" /><testcase classname="tests.test_rag.test_dual_route" name="test_minmax_degenerate_keeps_all" time="0.000" /><testcase classname="tests.test_rag.test_dual_route" name="test_edm_lowers_duplicate" time="0.008" /><testcase classname="tests.test_rag.test_dual_route" name="test_edm_boosts_replenishing_block" time="0.004" /><testcase classname="tests.test_rag.test_dual_route" name="test_edm_chain_completer_boosted" time="0.064" /><testcase classname="tests.test_rag.test_dual_route" name="test_its_gating_trims_garbage" time="0.005" /><testcase classname="tests.test_rag.test_dual_route" name="test_its_cap_respects_limit" time="0.006" /><testcase classname="tests.test_rag.test_dual_route" name="test_s2_route_list_all_wiki" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_s2_route_graph_node_type" time="0.052" /><testcase classname="tests.test_rag.test_dual_route" name="test_fok_gate_rejects_weak_activation_pool" time="0.005"><failure message="AssertionError: FOK-gate должен отклонить пул с активацией &lt; τ, out=[{'id': 2, 'title': 'hit', 'content': 'cat video compilation', 'score': 1.0, 'source': 'fts5', 'kind': 'fts5'}]&#10;assert [{'id': 2, 't...e': 1.0, ...}] == []&#10;  &#10;  Left contains one more item: {'id': 2, 'title': 'hit', 'content': 'cat video compilation', 'score': 1.0, ...}&#10;  Use -v to get more diff">async def test_fok_gate_rejects_weak_activation_pool() -&gt; None:
+        from rag.dual_route import route_query
+    
+        # пул есть, но активация топ-кандидата ниже порога — отвечать нечем
+        rag = FakeRoutedRAG([_cand(1, "weather report today", 0.05), _cand(2, "cat video compilation", 0.06)])
+        out = await route_query(rag, "квантовый фазовый переход сверхпроводника", user_id="u1", limit=5)
+&gt;       assert out == [], f"FOK-gate должен отклонить пул с активацией &lt; τ, out={out!r}"
+E       AssertionError: FOK-gate должен отклонить пул с активацией &lt; τ, out=[{'id': 2, 'title': 'hit', 'content': 'cat video compilation', 'score': 1.0, 'source': 'fts5', 'kind': 'fts5'}]
+E       assert [{'id': 2, 't...e': 1.0, ...}] == []
+E         
+E         Left contains one more item: {'id': 2, 'title': 'hit', 'content': 'cat video compilation', 'score': 1.0, ...}
+E         Use -v to get more diff
+
+tests/test_rag/test_dual_route.py:233: AssertionError</failure></testcase><testcase classname="tests.test_rag.test_dual_route" name="test_fok_gate_passes_strong_pool" time="0.007" /><testcase classname="tests.test_rag.test_dual_route" name="test_cama_neff_abstains_on_correlated_pool" time="0.003"><failure message="KeyError: 'abstain'">async def test_cama_neff_abstains_on_correlated_pool() -&gt; None:
+        # коррелированные записи (один контент ×3) не накачивают evidence:
+        # max-presence → 1 эффективный источник → abstain
+        cands = [_cand(i, "postgres backup cron настройка", 0.9 - i * 0.05, f"dup-{i}") for i in range(3)]
+        out = await edm_rerank(cands, "postgres backup настройка")
+        assert out, "коррелированный пул не пуст — но данных недостаточно"
+&gt;       assert out[0]["abstain"] is True, f"низкий N_eff → abstention-флаг, out={out!r}"
+               ^^^^^^^^^^^^^^^^^
+E       KeyError: 'abstain'
+
+tests/test_rag/test_dual_route.py:253: KeyError</failure></testcase><testcase classname="tests.test_rag.test_dual_route" name="test_cama_neff_no_abstain_on_distinct_evidence" time="0.004"><failure message="KeyError: 'abstain'">async def test_cama_neff_no_abstain_on_distinct_evidence() -&gt; None:
+        cands = [
+            _cand(1, "postgres backup cron настройка расписания", 0.9, "hit-a"),
+            _cand(2, "postgres restore verify backup archive", 0.85, "hit-b"),
+            _cand(3, "настройка redis sentinel кэша replication", 0.8, "hit-c"),
+        ]
+        out = await edm_rerank(cands, "postgres backup настройка")
+        assert len(out) &gt;= 2, f"различимые источники должны пройти, out={out!r}"
+&gt;       assert all(not h["abstain"] for h in out), f"достаточно разных источников — без abstain, out={out!r}"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_rag/test_dual_route.py:265: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+.0 = &lt;list_iterator object at 0x70cad6ab6e60&gt;
+
+&gt;   assert all(not h["abstain"] for h in out), f"достаточно разных источников — без abstain, out={out!r}"
+                   ^^^^^^^^^^^^
+E   KeyError: 'abstain'
+
+tests/test_rag/test_dual_route.py:265: KeyError</failure></testcase><testcase classname="tests.test_rag.test_dual_route" name="test_s2_constraint_terminates_sparse_category" time="0.001"><failure message="AssertionError: категория с 1 ребёнком не проходит (терминирование слоя), out=[{'id': -1000001, 'title': 'diary-solo', 'content': 'одна запись', 'wiki_type': 'wiki:diary', 'score': 0.5, 'source': 's2_exhaustive'}]&#10;assert [{'id': -1000...:diary', ...}] == []&#10;  &#10;  Left contains one more item: {'id': -1000001, 'title': 'diary-solo', 'content': 'одна запись', 'wiki_type': 'wiki:diary', ...}&#10;  Use -v to get more diff">async def test_s2_constraint_terminates_sparse_category() -&gt; None:
+        from rag.dual_route import s2_exhaustive
+    
+        rows = [{"entry_id": 1, "title": "diary-solo", "content": "одна запись", "wiki_type": "diary"}]
+        out = await s2_exhaustive(FakeWiki(rows), None, "list all diary entries", user_id="u1")
+&gt;       assert out == [], f"категория с 1 ребёнком не проходит (терминирование слоя), out={out!r}"
+E       AssertionError: категория с 1 ребёнком не проходит (терминирование слоя), out=[{'id': -1000001, 'title': 'diary-solo', 'content': 'одна запись', 'wiki_type': 'wiki:diary', 'score': 0.5, 'source': 's2_exhaustive'}]
+E       assert [{'id': -1000...:diary', ...}] == []
+E         
+E         Left contains one more item: {'id': -1000001, 'title': 'diary-solo', 'content': 'одна запись', 'wiki_type': 'wiki:diary', ...}
+E         Use -v to get more diff
+
+tests/test_rag/test_dual_route.py:276: AssertionError</failure></testcase><testcase classname="tests.test_rag.test_dual_route" name="test_s2_constraint_allows_dense_category" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_route_factual_no_graph_expand" time="0.003" /><testcase classname="tests.test_rag.test_dual_route" name="test_route_dmem_escalation_on_low_dense_confidence" time="0.002" /><testcase classname="tests.test_rag.test_dual_route" name="test_route_no_escalation_when_dense_confident" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_route_enumerative_uses_s2_without_dense_search" time="0.001" /><testcase classname="tests.test_rag.test_dual_route" name="test_precision_tenure_style_scope_isolation" time="0.052" /><testcase classname="tests.test_rag.test_dual_route" name="test_inject_kind_caps" time="0.009" /><testcase classname="tests.test_rag.test_dual_route" name="test_inject_kind_order" time="0.003" /><testcase classname="tests.test_lifecycle.test_graph_enrich" name="test_graph_enrich_captures_junk_to_l0_and_cleans_nodes" time="4.164" /><testcase classname="tests.test_lifecycle.test_graph_enrich" name="test_graph_enrich_miner_stubs_report_zero_edges" time="0.046" /><testcase classname="tests.test_lifecycle.test_graph_enrich" name="test_graph_enrich_noop_layer_keeps_stats_shape" time="0.051"><failure message="AssertionError: assert {'nodes_clean...behavior': {}} == {'nodes_clean...ior': {}, ...}&#10;  &#10;  Omitting 4 identical items, use -vv to show&#10;  Right contains 1 more item:&#10;  {'dream': {'insights': 0,&#10;             'nrem_decayed': 0,&#10;             'nrem_pruned': 0,&#10;             'rem_bridged': 0}}&#10;  Use -v to get more diff">graph = &lt;graph.epistemic.EpistemicGraph object at 0x70ca0501a4d0&gt;
+
+    @pytest.mark.asyncio
+    async def test_graph_enrich_noop_layer_keeps_stats_shape(graph):
+        from lifecycle.graph_enrich import graph_enrich
+    
+        result = await graph_enrich(layer="agent")
+    
+        # Адаптировано под C3/S6b + C6: dream-фаза добавляет блок статистики (нулевой на noop-слое).
+&gt;       assert result == {
+            "nodes_cleaned": 0,
+            "miners": {k: {"edges": 0} for k in result["miners"]},
+            "sanitation": {"expired": 0},
+            "behavior": {},
+            "dream": {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0},
+        }
+E       AssertionError: assert {'nodes_clean...behavior': {}} == {'nodes_clean...ior': {}, ...}
+E         
+E         Omitting 4 identical items, use -vv to show
+E         Right contains 1 more item:
+E         {'dream': {'insights': 0,
+E                    'nrem_decayed': 0,
+E                    'nrem_pruned': 0,
+E                    'rem_bridged': 0}}
+E         Use -v to get more diff
+
+tests/test_lifecycle/test_graph_enrich.py:91: AssertionError</failure></testcase><testcase classname="tests.test_lifecycle.test_graph_enrich" name="test_dream_nrem_decays_and_prunes_weak_edges" time="0.048"><failure message="KeyError: 'dream'">graph = &lt;graph.epistemic.EpistemicGraph object at 0x70ca04eb66d0&gt;
+no_miners = None
+
+    @pytest.mark.asyncio
+    async def test_dream_nrem_decays_and_prunes_weak_edges(graph, no_miners):
+        ids = await _dream_graph(graph)
+        conn = await connection_manager.get("memory.db")
+        # a-b: старое слабое (0.05 → 0.04) → prune; b-c: старое крепкое → −0.01; свежее ребро d-e → +0.05
+        d = await graph.add_node("gu", "деплой прошёл без инцидентов", "fact")
+        e = await graph.add_node("gu", "мониторинг не заметил деградацию", "fact")
+        await graph.add_edge(d, e, "mentions", 0.6, tags=["heuristic:cofire"])
+        _age_edge(conn, ids["a"], ids["b"], days=40, weight=0.05)
+        _age_edge(conn, ids["b"], ids["c"], days=40)
+        await conn.commit()
+    
+        from lifecycle.graph_enrich import graph_enrich
+    
+        result = await graph_enrich(layer="user")
+&gt;       dream = result["dream"]
+                ^^^^^^^^^^^^^^^
+E       KeyError: 'dream'
+
+tests/test_lifecycle/test_graph_enrich.py:147: KeyError</failure></testcase><testcase classname="tests.test_lifecycle.test_graph_enrich" name="test_dream_rem_bridges_isolated_duplicates" time="0.046"><failure message="KeyError: 'dream'">graph = &lt;graph.epistemic.EpistemicGraph object at 0x70ca04f39d90&gt;
+no_miners = None
+
+    @pytest.mark.asyncio
+    async def test_dream_rem_bridges_isolated_duplicates(graph, no_miners):
+        ids = await _dream_graph(graph)
+        conn = await connection_manager.get("memory.db")
+    
+        from lifecycle.graph_enrich import graph_enrich
+    
+        result = await graph_enrich(layer="user")
+&gt;       dream = result["dream"]
+                ^^^^^^^^^^^^^^^
+E       KeyError: 'dream'
+
+tests/test_lifecycle/test_graph_enrich.py:165: KeyError</failure></testcase><testcase classname="tests.test_lifecycle.test_graph_enrich" name="test_dream_insight_materializes_abstraction" time="0.256"><failure message="KeyError: 'dream'">graph = &lt;graph.epistemic.EpistemicGraph object at 0x70ca04f18350&gt;
+no_miners = None
+
+    @pytest.mark.asyncio
+    async def test_dream_insight_materializes_abstraction(graph, no_miners):
+        ids = await _dream_graph(graph)
+        conn = await connection_manager.get("memory.db")
+    
+        from lifecycle.graph_enrich import graph_enrich
+    
+        result = await graph_enrich(layer="user")
+&gt;       dream = result["dream"]
+                ^^^^^^^^^^^^^^^
+E       KeyError: 'dream'
+
+tests/test_lifecycle/test_graph_enrich.py:184: KeyError</failure></testcase></testsuite></testsuites>

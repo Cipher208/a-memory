@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="0" skipped="0" tests="1" time="0.520" timestamp="2026-09-05T02:22:13.321923+02:00" hostname="vm1282045.cloud.nuxt.network"><testcase classname="" name="tests.test_features.test_bridge" time="0.000"><error message="collection failure">ImportError while importing test module '/home/murat/mcp-ariel-memory/tests/test_features/test_bridge.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_features/test_bridge.py:8: in &lt;module&gt;
+    from features.bridge import BRIDGE_MARKER, DRAIN_COMMENT
+E   ModuleNotFoundError: No module named 'features.bridge'</error></testcase></testsuite></testsuites>

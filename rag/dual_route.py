@@ -22,7 +22,7 @@ import re
 from typing import Any
 
 from rag.ablation import dense_per_kind_search, gated_search, retrieval_mode
-from rag.edm import DMEM_MIN_CONFIDENCE, dense_confidence, edm_rerank, make_s2_hit
+from rag.edm import DMEM_MIN_CONFIDENCE, FOK_TAU, dense_confidence, edm_rerank, make_s2_hit
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,11 @@ _ENUMERATIVE_RE = re.compile(r"(?:\bвсе(?:х|м|е|ё)?\b|\bсписок\b|п
 _MULTIHOP_RE = re.compile(r"(почему|из-за|привело|влияет|цепочк|поэтому|следств)", re.IGNORECASE)
 
 _S2_CATEGORY_RE = re.compile(r"(?:все(?:\s+|х)|список\s+(?:все\w*\s+)?|list\s+all\s+|перечисл\w*\s+(?:все\w*\s+)?)([а-яёa-z0-9_]+)")
+
+# S2 compression constraint (Task C6, Mnemis): категория с < n детьми не
+# проходит — ветка терминируется (|слой i+1| ≤ |слой i| соблюдён структурно:
+# дети всегда подмножество родительского каталога).
+S2_MIN_CHILDREN = 2
 
 
 def classify_query(query: str) -> str:
@@ -63,6 +68,10 @@ async def s2_exhaustive(
     заголовок); эпи-граф — полный сбор узлов совпавшего node_type. Категория —
     слово после маркера полноты («перечисли все правила» → rules); без
     совпадений — весь активный каталог (exhaustive fallback).
+
+    C6 compression constraint: собранная категория с < S2_MIN_CHILDREN детьми
+    терминируется (возвращается пусто) — вырожденные ветки не всплывают как
+    «списки», потомку доверять не на чем.
     """
     category = ""
     m = _S2_CATEGORY_RE.search((query or "").lower())
@@ -106,6 +115,10 @@ async def s2_exhaustive(
 
     if not hits:
         logger.debug("s2_exhaustive: no children for category %r", category)
+    if category and 0 < len(hits) < S2_MIN_CHILDREN:
+        # Mnemis: категория с < n детьми не проходит — терминирование слоя.
+        logger.debug("s2_exhaustive: category %r degenerate (%d < %d children) — terminated", category, len(hits), S2_MIN_CHILDREN)
+        return []
     return hits
 
 
@@ -166,5 +179,12 @@ async def route_query(
         esc = await edm_rerank(pool2, query, cm=graph_cm, user_id=user_id, layer=layer)
         seen = {h.get("id") for h in hits}
         hits = [*hits, *(e for e in esc if e.get("id") not in seen)]
+
+    # FOK-gate (Task C6, SYNAPSE τ=FOK_TAU): after ITS gating — если топ-кандидат
+    # ниже порога знакомости, ответа, в котором можно быть уверенным, нет →
+    # отказ до LLM (возврат пусто; цель FRR < 2.5%).
+    if hits and float(hits[0].get("score") or 0.0) < FOK_TAU:
+        logger.debug("route_query: FOK-gate reject (top %.3f < τ=%.2f)", float(hits[0].get("score") or 0.0), FOK_TAU)
+        return []
 
     return [{**h, "kind": str(h.get("source") or "relevant")} for h in hits[:limit]]

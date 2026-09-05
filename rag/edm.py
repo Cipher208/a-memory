@@ -17,6 +17,7 @@ EDM(m|q,S) = α·R(m,q) + β·N(m,S) + γ·G(m,q,S) − δ·K(m,S)
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -31,6 +32,8 @@ ITS_THRESHOLD = 0.05
 ITS_K_CAP = 100
 CHAIN_BONUS = 0.3
 DMEM_MIN_CONFIDENCE = 0.3
+FOK_TAU = 0.12  # SYNAPSE FOK-gate (C6): топ-кандидат ниже τ — отказ до LLM (цель FRR < 2.5%)
+CAMA_NEFF_MIN = 1.5  # CAMA (C6): ниже — evidence фактически из одного источника → abstain
 
 _TOKEN_RE = re.compile(r"[а-яёa-z0-9]+")
 
@@ -144,6 +147,20 @@ async def _embed(texts: list[str]) -> list[list[float]]:
         return []  # embeddings недоступны → K-член выключен (dedup degrade)
 
 
+def neff_hill(finals: list[float], alpha: float = 2.0) -> float:
+    """CAMA N_eff (Task C6): N_eff = exp(log(Σ p_j^α)/(1−α)) — Hill diversity.
+
+    p_j = final_j / Σ final (final ≥ 0 после zero-floor). α=2 → N_eff = 1/Σp²
+    (обратный индекс Симпсона): монокультура → 1.0, k равных источников → k.
+    α=1 — вырожденный случай формулы → 0.0 (abstain).
+    """
+    total = sum(f for f in finals if f > 0)
+    if total <= 0 or abs(alpha - 1.0) < 1e-9:
+        return 0.0
+    p = [max(0.0, f) / total for f in finals]
+    return math.exp(math.log(sum(pj**alpha for pj in p)) / (1 - alpha))
+
+
 async def edm_rerank(
     cands: list[dict[str, Any]],
     query: str,
@@ -185,6 +202,9 @@ async def edm_rerank(
     selected_nodes: set[int] = set()
     covered: set[str] = set()
     edm_scores = [0.0] * len(pool)
+    # CAMA max-presence (Task C6): e_j = max_i z_ij — коррелированные записи
+    # (общий контент/chain-узел) не накачивают evidence, засчитан один.
+    presence: dict[int, int] = {i: i for i in range(len(pool))}
     while remaining:
         best_i, best_s = remaining[0], -1e18
         for i in remaining:
@@ -212,16 +232,37 @@ async def edm_rerank(
         if nid is not None:
             selected_nodes.add(nid)
 
+    # CAMA max-presence: e_j = max_i z_ij → записи с идентичным контентом
+    # коррелированы, их evidence мержится в лидера группы (не суммируется).
+    if vecs:
+        from shared.embeddings import similarity
+
+        for i in range(len(pool)):
+            for j in range(i):
+                if similarity(vecs[i], vecs[j]) >= 1.0 - 1e-6:
+                    presence[i] = presence[j]
+                    break
+
     # zero-floor: отрицательные хвосты (K-штраф перевесил) клампятся в 0 и
     # не сжимают масштаб min-max — первый блок остаётся 1.0
     pos = [s for s in edm_scores if s > 0]
     final = [max(0.0, s) for s in _minmax_floor(edm_scores, pos)] if pos else [0.0] * len(edm_scores)
+
+    # CAMA N_eff: эффективное число различимых источников (max-presence поле).
+    presence_finals = [0.0] * len(pool)
+    for i, f in enumerate(final):
+        presence_finals[presence[i]] = max(presence_finals[presence[i]], f)
+    n_eff = neff_hill(presence_finals)
+    abstain = len(pos) > 0 and n_eff < CAMA_NEFF_MIN
+
     out: list[dict[str, Any]] = []
     for i in sorted(range(len(pool)), key=lambda i: -final[i]):
         if final[i] < threshold:
             continue
         hit = dict(pool[i])
         hit["score"] = final[i]
+        hit["abstain"] = abstain
+        hit["n_eff"] = round(n_eff, 3)
         out.append(hit)
         if len(out) >= k_cap:
             break

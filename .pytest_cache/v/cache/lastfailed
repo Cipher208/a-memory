@@ -5,5 +5,7 @@
   "tests/test_mcp/test_diagnostics.py::test_tool_count_62": true,
   "tests/test_rag/test_synonyms.py::test_case_insensitive_lookup_keeps_original_token": true,
   "tests/test_features/test_disclosure.py::test_tool_count_63": true,
-  "tests/test_mcp/test_diagnostics.py::test_tool_count_63": true
+  "tests/test_mcp/test_diagnostics.py::test_tool_count_63": true,
+  "tests/test_rag/test_dual_route.py::test_fok_gate_rejects_weak_activation_pool": true,
+  "tests/test_lifecycle/test_graph_enrich.py::test_dream_nrem_decays_and_prunes_weak_edges": true
 }

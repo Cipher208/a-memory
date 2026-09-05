@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="5" time="2.182" timestamp="2026-09-05T08:55:42.967876+02:00" hostname="vm1282045.cloud.nuxt.network"><testcase classname="tests.test_rag.test_prod_wire" name="test_memory_search_routes_via_dual_route" time="1.477"><failure message="AssertionError: memory_search должен идти через route_query при mode=full&#10;assert [] == ['как настрои...кап postgres']&#10;  &#10;  Right contains one more item: 'как настроить бэкап postgres'&#10;  Use -v to get more diff">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x78529c7c7110&gt;
+
+    async def test_memory_search_routes_via_dual_route(monkeypatch) -&gt; None:
+        """Prod memory_search (mode=full, дефолт) должен вызывать route_query."""
+        from mcp_server.tools.ops import memory_search
+    
+        monkeypatch.delenv("RETRIEVAL_MODE", raising=False)
+        queries: list[str] = []
+    
+        async def spy_route(rag: Any, query: str, **kw: Any) -&gt; list[dict[str, Any]]:
+            queries.append(query)
+            return [{"id": 1, "title": "t", "content": "c", "score": 1.0, "source": "core"}]
+    
+        monkeypatch.setattr("rag.dual_route.route_query", spy_route)
+        ctx = _make_ctx(MultiSourceRAG(rag=None, wiki=None, cm=None))
+        res = await memory_search("как настроить бэкап postgres", ctx=ctx)
+&gt;       assert queries == ["как настроить бэкап postgres"], "memory_search должен идти через route_query при mode=full"
+E       AssertionError: memory_search должен идти через route_query при mode=full
+E       assert [] == ['как настрои...кап postgres']
+E         
+E         Right contains one more item: 'как настроить бэкап postgres'
+E         Use -v to get more diff
+
+tests/test_rag/test_prod_wire.py:60: AssertionError</failure></testcase><testcase classname="tests.test_rag.test_prod_wire" name="test_memory_search_rrf_mode_keeps_legacy_path" time="0.003" /><testcase classname="tests.test_rag.test_prod_wire" name="test_memory_search_full_edm_reorders" time="0.057"><failure message="AssertionError: EDM должен переранживать сырой RRF: raw=[1, 3, 2], full=[1, 3, 2]&#10;assert [1, 3, 2] != [1, 3, 2]">db = &lt;shared.connection.AsyncConnectionManager object at 0x7852b42fcb10&gt;
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x78529abb8250&gt;
+
+    async def test_memory_search_full_edm_reorders(db, monkeypatch) -&gt; None:
+        """RETRIEVAL_MODE='full' в prod memory_search: EDM-порядок ≠ сырой RRF-порядок.
+    
+        id1 — высший RRF-score, но покрывает 1/4 токенов запроса; id3 покрывает
+        все 4 → novelty (β=0.8) выводит его на первое место в full-режиме.
+        """
+        from mcp_server.tools.ops import memory_search
+    
+        monkeypatch.delenv("RETRIEVAL_MODE", raising=False)
+        hits = [
+            {"id": 1, "title": "a", "content": "postgres советы по производительности", "score": 0.9, "source": "rag"},
+            {"id": 2, "title": "b", "content": "recipes for apple pie dessert", "score": 0.5, "source": "rag"},
+            {"id": 3, "title": "c", "content": "postgres backup cron settings", "score": 0.85, "source": "rag"},
+        ]
+        multi = MultiSourceRAG(rag=_FakeSource(hits), wiki=None, cm=connection_manager)
+        raw = await multi.search("postgres backup cron settings", user_id="u1", limit=3)
+        raw_ids = [h["id"] for h in raw]
+        assert raw_ids[0] == 1, f"сырой RRF-путь: порядок по score, raw={raw_ids}"
+    
+        ctx = _make_ctx(multi)
+        res = await memory_search("postgres backup cron settings", ctx=ctx)
+        out_ids = [h["id"] for h in res["results"]]
+&gt;       assert out_ids != raw_ids, f"EDM должен переранживать сырой RRF: raw={raw_ids}, full={out_ids}"
+E       AssertionError: EDM должен переранживать сырой RRF: raw=[1, 3, 2], full=[1, 3, 2]
+E       assert [1, 3, 2] != [1, 3, 2]
+
+tests/test_rag/test_prod_wire.py:103: AssertionError</failure></testcase><testcase classname="tests.test_rag.test_prod_wire" name="test_backup_cron_fires_enrich_sessions" time="0.007"><failure message="AssertionError: Expected mock to have been awaited once. Awaited 0 times.">tmp_path = PosixPath('/tmp/pytest-of-murat/pytest-1315/test_backup_cron_fires_enrich_0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x78529abd1bd0&gt;
+
+    def test_backup_cron_fires_enrich_sessions(tmp_path, monkeypatch) -&gt; None:
+        """backup_cron._fire_nightly_hooks вызывает enrich_sessions(days=1) после sweep."""
+        from features.backup_cron import BackupCron
+        from hooks.registry import hook_registry
+    
+        spy = AsyncMock(return_value={"rebuilt": 0})
+        monkeypatch.setattr("features.l2_enrich.enrich_sessions", spy)
+        fire_mock = AsyncMock(return_value={"results": []})
+        monkeypatch.setattr(hook_registry, "fire", fire_mock)
+        monkeypatch.setattr(connection_manager, "base_dir", tmp_path)
+        connection_manager._conns.clear()
+    
+        bc = BackupCron(base_dir=str(tmp_path))
+        bc._fire_nightly_hooks()
+    
+&gt;       spy.assert_awaited_once_with(days=1)
+
+tests/test_rag/test_prod_wire.py:122: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = &lt;AsyncMock id='132296178633488'&gt;, args = (), kwargs = {'days': 1}
+
+    def assert_awaited_once_with(self, /, *args, **kwargs):
+        """
+        Assert that the mock was awaited exactly once and with the specified
+        arguments.
+        """
+        if not self.await_count == 1:
+            msg = (f"Expected {self._mock_name or 'mock'} to have been awaited once."
+                   f" Awaited {self.await_count} times.")
+&gt;           raise AssertionError(msg)
+E           AssertionError: Expected mock to have been awaited once. Awaited 0 times.
+
+../.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/unittest/mock.py:2311: AssertionError</failure></testcase><testcase classname="tests.test_rag.test_prod_wire" name="test_agent_nightly_hook_runs_on_empty_graph" time="0.115"><failure message="AttributeError: 'AgentHooks' object has no attribute '_nightly'">db = &lt;shared.connection.AsyncConnectionManager object at 0x7852b42fcb10&gt;
+
+    async def test_agent_nightly_hook_runs_on_empty_graph(db) -&gt; None:
+        """AgentHooks._nightly существует, регистрируется и не падает на пустом графе."""
+        from hooks.agent_hooks import AgentHooks
+        from hooks.registry import hook_registry
+    
+        hooks = AgentHooks()
+&gt;       res = await hooks._nightly({"trigger": "backup_cron"})
+                    ^^^^^^^^^^^^^^
+E       AttributeError: 'AgentHooks' object has no attribute '_nightly'
+
+tests/test_rag/test_prod_wire.py:133: AttributeError</failure></testcase></testsuite></testsuites>
