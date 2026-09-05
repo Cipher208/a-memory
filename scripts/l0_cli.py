@@ -65,6 +65,17 @@ def _cmd_stats(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_verify(_args: argparse.Namespace) -> int:
+    from shared.l0 import verify_chain
+
+    broken = asyncio.run(_with_db(verify_chain))
+    if not broken:
+        print('{"broken": 0, "status": "ok"}')
+        return 0
+    print(json.dumps({"broken": len(broken), "first": broken[0]}, ensure_ascii=False))
+    return 1
+
+
 async def _with_db(op):
     """Run op with the connection_manager, then close connections.
 
@@ -94,6 +105,9 @@ def main() -> int:
 
     p_stats = sub.add_parser("stats", help="L0 status counts + age distribution")
     p_stats.set_defaults(fn=_cmd_stats)
+
+    p_verify = sub.add_parser("verify", help="recompute L0 hash-chain, report broken rows (exit 1 on tamper)")
+    p_verify.set_defaults(fn=_cmd_verify)
 
     args = ap.parse_args()
     try:

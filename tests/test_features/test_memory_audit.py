@@ -111,3 +111,23 @@ async def test_diagnose_includes_content_checks(audit_db):
     assert "content_checks" in res
     types = {c["type"] for c in res["content_checks"]}
     assert "duplicate" in types
+
+
+async def test_diagnose_checks_l0_hash_chain(audit_db):
+    """T12 (аудит 05.09): verify_chain ожил в diagnose — цепь целая → ok,
+    подмена текста → fail."""
+    from features.diagnostics import run_diagnose
+    from shared.l0 import capture
+
+    assert await capture("new_message", "user", "u1", "первая запись цепи") is not None
+    res = await run_diagnose("u1")
+    names = {c["name"]: c for c in res["checks"]}
+    assert names["l0_hash_chain"]["status"] == "ok"
+
+    conn = sqlite3.connect(str(audit_db / "memory.db"))
+    conn.execute("UPDATE l0_journal SET text='подмена' ")
+    conn.commit()
+    conn.close()
+    res2 = await run_diagnose("u1")
+    names2 = {c["name"]: c for c in res2["checks"]}
+    assert names2["l0_hash_chain"]["status"] == "fail"

@@ -234,8 +234,11 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
         try:
             res = await miner(cm, layer)
             miners[name] = {"edges": int(res.get("edges", 0))}
-        except Exception:
-            miners[name] = {"edges": 0}
+        except Exception as exc:
+            # Аудит 05.09 (P0): молчаливый сбой минера = граф тихо недополучает
+            # рёбра. Логируем и отражаем в отчёте, чтобы diagnose это видел.
+            logger.warning("miner %s failed: %s", name, exc)
+            miners[name] = {"edges": 0, "error": str(exc)[:200]}
 
     # G5 sanitation: validity recheck (рёбра вне окна → status='expired').
     from lifecycle.graph_sanitation import validate_edges

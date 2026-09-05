@@ -276,6 +276,15 @@ async def run_diagnose(user_id: str = "default") -> dict[str, Any]:
     except Exception as exc:
         check("pending_proposals", False, str(exc))
 
+    # S1 tamper-evidence: L0 hash-chain recheck (verify_chain; v1/v2 форматы).
+    try:
+        from shared.l0 import verify_chain
+
+        broken = await verify_chain()
+        check("l0_hash_chain", not broken, f"{len(broken)} broken" if broken else "chain intact", warn=False)
+    except Exception as exc:
+        check("l0_hash_chain", False, str(exc))
+
     # circuit breakers (E2)
     try:
         from shared.circuit_breaker import breaker_registry
