@@ -303,6 +303,17 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     except Exception as exc:
         logger.debug("segment map skipped: %s", exc)
 
+    # A1.6 wiki-комьюнити (louvain по wiki_page-узлам) — в ночной отчёт
+    # для MOC-подсказок. networkx отсутствует → деградирует тихо.
+    communities: list[dict[str, Any]] = []
+    try:
+        from lifecycle.wiki_communities import detect_communities
+
+        res_c = await detect_communities(cm, layer=layer)
+        communities = res_c["communities"][:5]
+    except Exception as exc:
+        logger.debug("wiki communities skipped: %s", exc)
+
     return {
         "nodes_cleaned": cleaned,
         "miners": miners,
@@ -310,4 +321,5 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
         "behavior": behavior,
         "dream": dream,
         "segments": segment_map,
+        "wiki_communities": communities,
     }

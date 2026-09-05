@@ -53,7 +53,11 @@ async def dispatch_event(
     graph: Any,
     rag: Any = None,
 ) -> dict[str, Any]:
-    """Validate + fire one external event. Raises ValueError on unknown event."""
+    """Validate + fire one external event. Raises ValueError on unknown event.
+
+    Вход защищён middleware-пайплайном (S13): rate-limit/дедуп/аудит на
+    внешних событиях — единственном пути без собственных защит тул-слоя.
+    """
     if event not in KNOWN_EVENTS:
         raise ValueError(f"unknown event: {event!r}. Must be one of {sorted(KNOWN_EVENTS)}")
     from shared.metrics import metrics
@@ -63,9 +67,20 @@ async def dispatch_event(
     if layer not in ("user", "agent"):
         raise ValueError(f"invalid layer: {layer!r}")
     context: dict[str, Any] = {"user_id": user_id, "_rag": rag, **payload}
-    from hooks.registry import hook_registry
 
-    return await hook_registry.fire(event, layer, context, mem=mem, graph=graph)
+    from shared.middleware import MiddlewareContext, default_pipeline
+
+    mw_ctx = MiddlewareContext(tool_name=event, user_id=user_id or "default", args={"layer": layer, **payload})
+
+    async def _fire(c: MiddlewareContext) -> dict[str, Any]:
+        from hooks.registry import hook_registry
+
+        return await hook_registry.fire(event, layer, context, mem=mem, graph=graph)
+
+    result = await default_pipeline.execute(mw_ctx, _fire)
+    if mw_ctx.blocked:
+        return {"skipped": True, "reason": mw_ctx.block_reason}
+    return result
 
 
 async def auto_save_text(

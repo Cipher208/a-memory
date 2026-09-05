@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import random
+from pathlib import Path
 import threading
 import time
 from pathlib import Path
@@ -121,11 +122,31 @@ class BackupCron:
 
     def _fire_nightly_hooks(self) -> None:
         """Trigger nightly maintenance hooks for both layers."""
+        # C7 cycles-daemon gate: cycle_due (персистентный last_run) + triple
+        # cost-cap. Ночной проход гоняется только когда цикл созрел и бюджет
+        # не в блоке — планировщик из дизайн-дока S13.
+        state_path: Path | None = None
+        try:
+            from features.cycles import nightly_gate
+            from shared.connection import connection_manager as _cm
+
+            state_path = Path(str(_cm.base_dir)) / "cycles_state.json"
+            gate = nightly_gate(state_path)
+            if gate["action"] != "run":
+                logger.info("Nightly skipped by cycles gate: %s", gate)
+                return
+        except Exception:
+            logger.exception("Cycles gate error — running nightly unguarded")
         try:
             from hooks.registry import hook_registry
 
             for layer in ["user", "agent"]:
                 self._await_on_main_loop(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
+            if state_path is not None:
+                with contextlib.suppress(Exception):
+                    from features.cycles import record_nightly_done
+
+                    record_nightly_done(state_path)  # успешный проход фиксируем
         except Exception:
             logger.exception("Nightly hook error")
         # Compact-to-budget after nightly builds (graph_build runs inside the

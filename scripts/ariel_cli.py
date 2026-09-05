@@ -190,6 +190,15 @@ def _cmd_trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export_typed(args: argparse.Namespace) -> int:
+    """S13: typed_export wired into the main CLI (was python -m self-only)."""
+    from features.typed_export import do_export
+
+    path = asyncio.run(_with_db(lambda: do_export(args.user, args.kind)))
+    print(str(path))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="ariel-cli — read-only memory introspection (Phase H Task 4)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -227,6 +236,11 @@ def main(argv: list[str] | None = None) -> int:
     p_trace.add_argument("--user", default="default", help="user_id (default 'default')")
     p_trace.add_argument("--depth", type=int, default=5, help="max BFS depth (default 5)")
     p_trace.set_defaults(fn=_cmd_trace)
+
+    p_export = sub.add_parser("export-typed", help="export typed core_memory rows to JSON (S13 wired typed_export)")
+    p_export.add_argument("--user", default="default", help="user_id (default 'default')")
+    p_export.add_argument("--kind", default=None, help="filter by memory_kind (e.g. fact)")
+    p_export.set_defaults(fn=_cmd_export_typed)
 
     args = ap.parse_args(argv)
     try:
