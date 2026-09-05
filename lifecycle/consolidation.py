@@ -84,6 +84,13 @@ class ConsolidationEngine:
             kind = MemoryKind(kind_str) if validate_kind(kind_str) else MemoryKind.FACT
             pol = get_policy(kind)
 
+            # Аудит 05.09 (P1): transcript-фильтр как в consolidate_episodes —
+            # raw-переписки не должны становиться L4-фактами.
+            if _looks_like_transcript(content):
+                logger.warning("skipping transcript-shaped staging item from L4 promotion")
+                skipped += 1
+                continue
+
             # Type-aware threshold: instruction/rule/commitment pass at 0.3+
             effective_threshold = (
                 min_importance
@@ -94,7 +101,11 @@ class ConsolidationEngine:
                 skipped += 1
                 continue
 
-            key = "staging_{}".format(content[:30].replace(" ", "_").lower())
+            # Аудит 05.09: канон-ключ через дистиллятор (синонимы схлопываются,
+            # kind-префикс) вместо ключей-обрубков staging_{content[:30]}.
+            from lifecycle.distiller import _canonical_key
+
+            key = _canonical_key(content, kind)
             entry_id = await cm.save(
                 user_id,
                 key,
@@ -146,13 +157,24 @@ class ConsolidationEngine:
                     row["episode_id"],
                 )
                 continue
-            key = f"ep_{_slug(summary[:30])}"
+            # Аудит 05.09 (P1): событие с живым decay (question/hypothesis/
+            # context) не должно становиться вечным L4-фактом. Факты с околону-
+            # левым decay (fact/decision/preference/relationship + never_archive)
+            # промотируются как раньше — kind-роутинг согласован с дистиллятором.
+            from lifecycle.distiller import _canonical_key
+            from shared.memory_types import kind_for_text
+
+            kind = kind_for_text(summary)
+            if get_policy(kind).decay_rate > 0.01:
+                logger.debug("episode %s is event-kind (%s), stays in L3", row["episode_id"], kind.value)
+                continue
+            key = _canonical_key(summary, kind)
             entry_id = await cm.save(
                 user_id,
                 key,
                 summary[:200],
                 importance=weight,
-                memory_kind="fact",
+                memory_kind=kind.value,
                 source="episode_promotion",
                 metadata=_parent_refs(f"episode:{row['episode_id']}"),
             )

@@ -89,7 +89,7 @@ async def ingest_drain(user_id: str, layer: str = "agent", base_path: str | None
     if drain:
         from core import MemoryManager
         from graph.epistemic import EpistemicGraph
-        from lifecycle.distiller import distill_and_route
+        from lifecycle.distiller import distill_and_route, score_text
         from shared.l0 import capture
 
         bridge_rid = await capture("bridge_drain", layer, user_id, drain, raw_type="user-message")
@@ -100,7 +100,9 @@ async def ingest_drain(user_id: str, layer: str = "agent", base_path: str | None
         _atomic_write(path, top + _tail(""))
         mem = MemoryManager(cm=connection_manager).get_layer(layer, user_id)
         graph = EpistemicGraph(cm=connection_manager, layer=layer)
-        routes = await distill_and_route(mem, graph, user_id, drain, 0.6, event="bridge_drain", source_rid=bridge_rid)
+        routes = await distill_and_route(
+            mem, graph, user_id, drain, score_text(drain, event="bridge_drain"), event="bridge_drain", source_rid=bridge_rid
+        )
     else:
         _atomic_write(path, top + _tail(""))
     return {"ingested": len(lines), "routes": routes}

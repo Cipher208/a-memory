@@ -110,6 +110,24 @@ def route_kind(kind: MemoryKind) -> str:
     return "l4" if get_policy(kind).decay_rate <= 0.005 else "l3"
 
 
+def score_text(text: str, event: str = "new_message") -> float:
+    """Важность текста через ImportanceScorer (8 сигналов) — вместо хардкода 0.6.
+
+    Аудит 05.09: replay/bridge/import дистиллируют с константой — скоринг не
+    вызывался нигде, где сырьё реально дистиллируется. Здесь — единая точка.
+    Ошибка скорера не глушит сохранение: деградация к 0.6 (историческое
+    значение).
+    """
+    try:
+        from shared.importance import ImportanceScorer
+
+        result = ImportanceScorer().score(text=text, event=event)
+        return max(0.0, min(1.0, float(result.total())))
+    except Exception as exc:
+        logger.debug("importance scorer degraded to 0.6: %s", exc)
+        return 0.6
+
+
 async def distill_and_route(
     mem: Any,
     graph: Any,

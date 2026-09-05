@@ -107,7 +107,7 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
     """
     from core import MemoryManager
     from graph.epistemic import EpistemicGraph
-    from lifecycle.distiller import distill_and_route
+    from lifecycle.distiller import distill_and_route, score_text
 
     conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - since_days * 86400
@@ -133,7 +133,9 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
             continue
         mem = MemoryManager(cm=connection_manager).get_layer(row["layer"] or "user", row["user_id"])
         graph = EpistemicGraph(cm=connection_manager, layer=row["layer"] or "user")
-        route = await distill_and_route(mem, graph, row["user_id"], row["text"], 0.6, event=gate, source_rid=int(row["id"]))
+        route = await distill_and_route(
+            mem, graph, row["user_id"], row["text"], score_text(row["text"], event=gate), event=gate, source_rid=int(row["id"])
+        )
         conflicts += route["conflicts"]
         # C8: novelty_skipped = факт уже в L4 (повторный прогон той же строки) —
         # это идемпотентный успех, не gated_out.
