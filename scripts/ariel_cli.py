@@ -7,6 +7,7 @@ Subcommands:
     find QUERY       query_dsl content search over core_memory/episodes (top 20)
     grep PATTERN     LIKE search over core_memory values + wiki content → file/key
     stats            per-table counts: l0 statuses, core, episodes, wiki, epi graph
+    mermaid          epi_nodes/epi_edges → Mermaid `graph TD` (C7 canvas)
 
 MCP_MEMORY_DATA_DIR is read by shared.connection at import time (l0_cli
 pattern): set it in the environment BEFORE running. Without it the default
@@ -26,16 +27,18 @@ import argparse
 import asyncio
 import json
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+
+T = TypeVar("T")
 
 FIND_LIMIT = 20
 GREP_LIMIT = 50
 
 
-async def _with_db(op: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+async def _with_db(op: Callable[[], Awaitable[T]]) -> T:
     """Close aiosqlite connections so the CLI process exits (l0_cli pattern)."""
     try:
         return await op()
@@ -114,6 +117,15 @@ async def _stats() -> dict[str, Any]:
     }
 
 
+async def _mermaid(layer: str, limit: int) -> str:
+    from lifecycle.graph_mermaid import render_mermaid
+    from shared.connection import connection_manager
+    from shared.constants import DB_NAME
+
+    conn = await connection_manager.get(DB_NAME)
+    return await render_mermaid(conn, layer, limit)
+
+
 def _cmd_ls(args: argparse.Namespace) -> int:
     res = asyncio.run(_with_db(lambda: _ls(args.layer, args.limit)))
     for p in res["pages"]:
@@ -154,6 +166,11 @@ def _cmd_stats(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mermaid(args: argparse.Namespace) -> int:
+    print(asyncio.run(_with_db(lambda: _mermaid(args.layer, args.limit))))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="ariel-cli — read-only memory introspection (Phase H Task 4)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -180,6 +197,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_stats = sub.add_parser("stats", help="l0 statuses + core/episodes/wiki/epi-graph counts (JSON)")
     p_stats.set_defaults(fn=_cmd_stats)
+
+    p_mermaid = sub.add_parser("mermaid", help="render epi graph as Mermaid `graph TD` (default limit 50)")
+    p_mermaid.add_argument("--layer", choices=("user", "agent"), default="user", help="epi layer (default user)")
+    p_mermaid.add_argument("--limit", type=int, default=50, help="max nodes (default 50)")
+    p_mermaid.set_defaults(fn=_cmd_mermaid)
 
     args = ap.parse_args(argv)
     try:

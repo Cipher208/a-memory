@@ -16,6 +16,11 @@ STALE_DAYS = 90  # mirrors shared.memory_types.can_archive default
 
 # content-audit severities: contradiction = data-integrity fail; rest advisory warn
 
+# C7 gap-reader (S13): reader must SURFACE unknown, not just fuse
+QUESTION_STALE_DAYS = 7  # вопрос старше — open question, нужен ответ
+HIGH_IMPORTANCE = 0.8  # порог create_safety: важные факты требуют L0-подтверждения
+L0_SCAN_LIMIT = 2000  # ponytail: python-side substring scan — audit-scale ок
+
 
 async def audit_content(user_id: str = "default") -> list[dict[str, Any]]:
     """H2 memory_audit: content-level checks over stored memory (read-only).
@@ -117,6 +122,55 @@ async def audit_content(user_id: str = "default") -> list[dict[str, Any]]:
                 "suggestion": "Wiki references a fact key that no longer exists — fix or remove the [[fact:…]] link.",
             }
         )
+
+    # (e) gap-reader `unknown`: questions (kind='question') older than
+    # QUESTION_STALE_DAYS with no answer. Answers conventionally live as a
+    # sibling '<key>.answer' fact — no convention existed before C7, declared here.
+    q_rows = await (await conn.execute("SELECT key, updated_at FROM core_memory WHERE user_id=? AND memory_kind='question'", (user_id,))).fetchall()
+    open_questions = [
+        {"key": str(r["key"]), "age_days": int((time.time() - r["updated_at"]) / 86400)}
+        for r in q_rows
+        if time.time() - r["updated_at"] > QUESTION_STALE_DAYS * 86400 and f"{r['key']}.answer" not in keys
+    ]
+    if open_questions:
+        out.append(
+            {
+                "severity": "warn",
+                "type": "unknown",
+                "items": open_questions[:100],
+                "suggestion": f"Open question older than {QUESTION_STALE_DAYS}d — answer it (save the reply as '<key>.answer') or archive the question.",
+            }
+        )
+
+    # (f) gap-reader create_safety: facts with importance >= HIGH_IMPORTANCE get
+    # an evidence verdict from the L0 journal — exists (value verbatim in l0
+    # text), probable (significant token found), unknown (no L0 trace).
+    fact_rows = await (
+        await conn.execute(
+            "SELECT key, value, importance FROM core_memory WHERE user_id=? AND importance >= ?",
+            (user_id, HIGH_IMPORTANCE),
+        )
+    ).fetchall()
+    if fact_rows:
+        l0_texts = [str(r["text"]).lower() for r in (await (await conn.execute(f"SELECT text FROM l0_journal LIMIT {L0_SCAN_LIMIT}")).fetchall())]
+        safety_items: list[dict[str, Any]] = []
+        for r in fact_rows:
+            value = str(r["value"])
+            if any(value.lower() in t for t in l0_texts):
+                verdict = "exists"
+            else:
+                toks = re.findall(r"\w{4,}", value.lower())
+                verdict = "probable" if any(tok in t for t in l0_texts for tok in toks) else "unknown"
+            safety_items.append({"key": str(r["key"]), "importance": float(r["importance"]), "verdict": verdict})
+        if any(i["verdict"] != "exists" for i in safety_items):
+            out.append(
+                {
+                    "severity": "warn",
+                    "type": "create_safety",
+                    "items": safety_items[:100],
+                    "suggestion": "High-importance fact without L0 evidence — re-confirm with the user before asserting it downstream (verdict: exists/probable/unknown).",
+                }
+            )
 
     return out
 
