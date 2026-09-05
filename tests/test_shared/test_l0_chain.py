@@ -82,6 +82,22 @@ async def test_hash_chain_tamper_detected(cm) -> None:
     assert [b["id"] for b in broken] == [ids[1]]
 
 
+async def test_hash_chain_full_text_no_prefix_collision(cm) -> None:
+    """P0 (аудит 05.09): обрезка [:200] давала коллизии — записи с общим
+    началом (>150 симв) и разными концами получали одинаковый hash_self.
+    v2 хеширует ПОЛНЫЙ текст: разные хвосты → разные хеши, verify не врёт."""
+    from shared.l0 import capture
+
+    common = "Очень длинное общее начало записи, которое раньше обрезалось на двухстах символах. " * 3  # >200 симв
+    rid_a = await capture("new_message", "user", "u1", common + "ХВОСТ А", ts_override=200.0)
+    rid_b = await capture("new_message", "user", "u1", common + "ХВОСТ Б", ts_override=201.0)
+    assert rid_a is not None and rid_b is not None
+
+    conn = await cm.get("memory.db")
+    rows = list(await (await conn.execute("SELECT id, hash_self FROM l0_journal WHERE id IN (?, ?) ORDER BY id", (rid_a, rid_b))).fetchall())
+    assert rows[0][1] != rows[1][1], "разные хвосты (>200 симв) обязаны давать разные hash_self"
+
+
 async def test_import_preserves_orig_ts(import_db, tmp_path) -> None:
     from scripts.import_chat import import_records
 

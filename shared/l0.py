@@ -58,9 +58,11 @@ async def capture(
                 params,
             )
         rid = int(cur.lastrowid or 0)
-        # hash-chain (S1, tamper-evidence): сбой цепочки не блокирует запись
+        # hash-chain (S1, tamper-evidence): сбой цепочки не блокирует запись.
+        # v2: полный текст (обрезка [:200] позволяла коллизии записей с общим
+        # началом); v1 — исторический формат, verify_chain принимает оба.
         hash_prev = (prev[0] if prev is not None else "") or ""
-        digest = hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}"[:200].encode()).hexdigest()[:16]
+        digest = hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}".encode()).hexdigest()[:16]
         await conn.execute("UPDATE l0_journal SET hash_prev=?, hash_self=? WHERE id=?", (hash_prev, digest, rid))
         await conn.commit()
         return rid
@@ -68,11 +70,22 @@ async def capture(
         return None
 
 
+def _chain_digest(hash_prev: str, rt: str, ts: float, text: str) -> str:
+    """hash_self записи. v2 — полный текст; v1 — обрезка [:200] (исторический)."""
+    return hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}".encode()).hexdigest()[:16]
+
+
+def _chain_digest_v1(hash_prev: str, rt: str, ts: float, text: str) -> str:
+    return hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}"[:200].encode()).hexdigest()[:16]
+
+
 async def verify_chain() -> list[dict[str, Any]]:
     """Пересчитать hash-chain по всем записям l0_journal → битые записи.
 
     Тампер одной записи ломает пересчёт у неё и у всех последующих
-    (chain-природа), так что здесь обрезаем до первой битой.
+    (chain-природа), так что здесь обрезаем до первой битой. Принимаются
+    оба формата: v2 (полный текст, текущий) и v1 (обрезка [:200], записи
+    до устранения криптослабости).
     """
     try:
         conn = await connection_manager.get(DB_NAME)
@@ -82,8 +95,9 @@ async def verify_chain() -> list[dict[str, Any]]:
     broken: list[dict[str, Any]] = []
     expected_prev = ""
     for rid, hash_prev, hash_self, rt, ts, text in rows:
-        digest = hashlib.sha256(f"{expected_prev}|{rt}|{ts}|{text}"[:200].encode()).hexdigest()[:16]
-        if hash_prev != expected_prev or hash_self != digest:
+        digest = _chain_digest(expected_prev, rt, ts, text)
+        digest_v1 = _chain_digest_v1(expected_prev, rt, ts, text)
+        if hash_prev != expected_prev or (hash_self != digest and hash_self != digest_v1):
             broken.append({"id": rid, "hash_prev": hash_prev, "hash_self": hash_self, "expected": digest})
             break
         expected_prev = hash_self
