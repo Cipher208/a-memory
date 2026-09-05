@@ -1,7 +1,7 @@
 # a-memory
 
 > **Your AI agents forget. a-memory makes them remember.**
-> 4-tier agent memory with hybrid search, a real knowledge graph, and envelope encryption — all in plain SQLite files. Zero cloud. Zero external APIs.
+> 4-tier agent memory with hybrid search and a real knowledge graph — all in plain SQLite files. Zero cloud. Zero external APIs.
 
 [![CI](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/Cipher208/a-memory/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/codecov/c/github/Cipher208/a-memory?logo=codecov&logoColor=white)](https://codecov.io/gh/Cipher208/a-memory)

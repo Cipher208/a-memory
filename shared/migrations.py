@@ -45,6 +45,19 @@ class MigrationManager:
         except Exception:
             return None
 
+    async def get_head_version(self) -> str | None:
+        """Latest revision in the alembic script directory; None if unavailable."""
+
+        def _head() -> str | None:
+            from alembic.script import ScriptDirectory
+
+            return ScriptDirectory.from_config(self._get_alembic_config()).get_current_head()
+
+        try:
+            return await asyncio.to_thread(_head)
+        except Exception:
+            return None
+
     async def migrate(self) -> dict[str, Any]:
         """Run all pending migrations using Alembic."""
         current = await self.get_current_version()

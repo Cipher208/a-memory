@@ -39,12 +39,13 @@ class SystemEndpoints:
 
         try:
             current = await migration_manager.get_current_version()
-            ready = False
-            if isinstance(current, (int, float)):
-                ready = current >= 2
+            head = await migration_manager.get_head_version()
+            # head=None means alembic scripts unavailable -> fall back to "table non-empty"
+            ready = current is not None and head in (None, current)
         except Exception:
             ready = False
-        return JSONResponse({"ready": ready, "migration_version": current if isinstance(current, (int, float)) else 0})
+            current = None
+        return JSONResponse({"ready": ready, "migration_version": current or ""})
 
     async def alive_endpoint(self, request: Request) -> JSONResponse:
         return JSONResponse({"alive": True})

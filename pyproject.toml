@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "a-memory"
 version = "1.9.0"
-description = "a-memory — persistent, layer-isolated memory for AI agents: 5 primitives, hybrid search, knowledge graphs, envelope encryption"
+description = "a-memory — persistent, layer-isolated memory for AI agents: 5 primitives, hybrid search, knowledge graphs"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

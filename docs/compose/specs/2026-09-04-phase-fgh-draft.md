@@ -1066,3 +1066,24 @@ Cross-cutting v35-v36: **консолидационные пороги «выс�
 
 Это та же 2601.11557 «From HNSW to Information-Theoretic Binarization», что уже разобрана в v34 через транскрипт Aurelle (EDM.md в workspace — тот же разговор в другом формате). Ключевые факты v34 остаются в силе: формул MIB/EDM/ITS в статье нет (реконструкция Aurelle — модель для иллюстрации); **sign-бинаризация ≈ fancy MIB по их же данным** (наш quantize.py не хуже); конфаунды сравнения (Pinecone с Cohere rerank vs встроенный ITS, exhaustive vs HNSW); честные цифры MAIR (LegalQuAD 66.73% NDCG@10, distance-only 9.6ms, end-to-end 219ms vs 1449ms).
 - 2026-09-04: v37 — сверка чата Эли↔draft: 4 пробела дописаны (watermark-идемпотентность ингеста L0, L2-обогащение из L0 по временным окнам, behavior-аннотации тулов из триплетов, EVOLUTION-маркер классификатора) + сборка Principles-секции F-спеки из 6 принципов линии. EDM-статья с VPS = дубликат 2601.11557 (v34 уже покрыл).
+
+- 2026-09-04: v38 — G-T6 dual-route retrieval (general-36, feebd9e, полный регресс 1219/0/0).
+
+### Реализовано (все 7 пунктов)
+
+1. **EDM re-rank** (`rag/edm.py::edm_rerank` — отдельный post-процессор, multi_source не тронут): greedy MMR, EDM = α·R + β·N + γ·G − δ·K; R = minmax(SYNAPSE-inhibited RRF-score); N = marginal-покрытие токенов запроса; G = 0.3 за led_to-ребро к уже выбранному (active-рёбра G5); K = max cosine дедуп (chain-linked пары не глушатся); α/γ/δ=1.0, β=0.8.
+2. **ITS gating**: zero-floor min-max → [0,1], threshold 0.05, k≤100 (ITS_K_CAP).
+3. **Lateral inhibition pre-step**: inhibit_scores (SYNAPSE β=0.15, M=7) перед EDM.
+4. **S2 exhaustive** (`rag/dual_route.py::s2_exhaustive`): маркеры «все/список/перечисли/list all» → категория → полный сбор детей без top-k.
+5. **D-Mem escalation**: dense-confidence < 0.3 (лексический прокси) → второй проход с include_graph=True + graph-rerank.
+6. **Question-type router**: factual (graph-expand OFF)/enumerative→S2/multi-hop→escalation; `route_query` единая точка входа.
+7. **Per-kind caps + precedence** (отложенное из F): `features/inject.py::_apply_kind_policy`, config inject.kind_caps/kind_order, дефолты без изменения поведения.
+
+### Попутный фикс: предсуществующая утечка
+
+`emb.embed_texts = _det` сырым присваиванием в test_phase_e_e2e.py мутировала модуль глобально → order-dependent фейки для новых embedding-потребителей. Исправлено на monkeypatch.setattr + `db`-фикстура восстанавливает connection_manager.base_dir. **Урок: в тестах только monkeypatch.setattr, никогда сырая мутация модуля.**
+
+### Отклонения
+
+EDM/gating в новом rag/edm.py (предпочтение ТЗ); prod-проводка route_query в MCP — Task 7 (ablation arms RETRIEVAL_MODE); dense-confidence = лексический прокси (hash-embeddings шумный косинус; e5-апгрейд документирован). Zero-floor нормализация EDM обязательна (min-max с наблюдаемым минимумом пропускает мусор).
+- 2026-09-05: v38 — G-T6 dual-route (feebd9e, 1219/0/0): EDM re-rank в rag/edm.py (post-процессор, multi_source нетронут), ITS gating k≤100 threshold 0.05, inhibition pre-step, S2 exhaustive, D-Mem escalation, question-router, per-kind caps (отложенное из F реализовано). Попутный фикс: утечка emb.embed_texts в e2e (monkeypatch паттерн). Prod-проводка route_query — Task 7.
