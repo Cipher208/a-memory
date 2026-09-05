@@ -20,6 +20,9 @@ class EvalQuestion:
     expected_answer: str
     category: str  # multi_session / knowledge_update / temporal / abstention / enumerative
     evidence_session_ids: list[str] = field(default_factory=list)
+    # KU-pair: СТАРОЕ значение (до update). Для new-вопроса drift-детекция:
+    # ответ содержит старое значение, но не новое → устаревшее знание.
+    old_expected_answer: str = ""
 
 
 # Корпус сессий (evidence + distractors). Токены abstention-вопроса
@@ -39,8 +42,16 @@ MINI_EVIDENCE: dict[str, str] = {
 MINI_DATASET: list[EvalQuestion] = [
     EvalQuestion("mini-q1", "Кто отвечает за CI в проекте?", "Пётр", "multi_session", ["s_ci"]),
     EvalQuestion("mini-q2", "Когда Марина проводит отчёты?", "по пятницам", "multi_session", ["s_project"]),
-    # KU-пара old/new: правильный ответ — НОВОЕ значение; старая сессия — ловушка
-    EvalQuestion("mini-q3", "Каким трекером задач команда пользуется сейчас?", "Linear", "knowledge_update", ["s_linear_new"]),
+    # KU-пара old/new: правильный ответ — НОВОЕ значение; старая сессия — ловушка.
+    # old_expected_answer — старое значение для drift-детекции (Task C5).
+    EvalQuestion(
+        "mini-q3",
+        "Каким трекером задач команда пользуется сейчас?",
+        "Linear",
+        "knowledge_update",
+        ["s_linear_new"],
+        old_expected_answer="Jira",
+    ),
     EvalQuestion("mini-q4", "Какой инструмент для задач использовали до перехода на Linear?", "Jira", "knowledge_update", ["s_jira_old"]),
     EvalQuestion("mini-q5", "Когда проходит квартальное планирование?", "первая неделя января", "temporal", ["s_planning"]),
     EvalQuestion("mini-q6", "Перечисли все сервисы проекта", "gateway billing notifier", "enumerative", ["s_services"]),
