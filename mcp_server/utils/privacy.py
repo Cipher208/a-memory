@@ -54,6 +54,38 @@ def _get_nlp() -> Any:
     return _nlp
 
 
+def _ru_personas() -> frozenset[str]:
+    """Словарь персон проекта: config rag.ru_personas + классы rag.synonyms.
+
+    Каждая персона расширяется синонимами в ОБЕ стороны (тот же _canon-класс,
+    что в graph_miners: «Лили»/«Lily»/«лисёныш» → одна персона). Config —
+    единственный источник имён; в коде ничего не хардкодится.
+    """
+    from config import config
+    from rag.synonyms import load_synonyms
+
+    personas: set[str] = set(config.get("rag", "ru_personas", default=None) or [])
+    syn = load_synonyms()
+    for name in list(personas):
+        low = name.lower()
+        # обе стороны: собственные синонимы + все ключи, чьим синонимом является имя
+        personas |= set(syn.get(low, []))
+        personas |= {k for k, vs in syn.items() if low in (v.lower() for v in vs)}
+    return frozenset(personas)
+
+
+_ru_re_cache: tuple[frozenset[str], Pattern[str]] | None = None
+
+
+def _ru_persona_re(personas: frozenset[str]) -> Pattern[str]:
+    r"""Word-boundary regex по словарю (re.UNICODE — \b работает и на кириллице)."""
+    global _ru_re_cache
+    if _ru_re_cache is None or _ru_re_cache[0] != personas:
+        alts = "|".join(sorted((re.escape(p) for p in personas), key=len, reverse=True))
+        _ru_re_cache = (personas, re.compile(rf"\b(?:{alts})\b", re.IGNORECASE))
+    return _ru_re_cache[1]
+
+
 def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
     """Replace secrets/PII with stable typed placeholders. Reverse map не персистится."""
     if not text:
@@ -79,14 +111,39 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
 
         out = pattern.sub(_sub, out)
 
+    # ru-persona tier: структурный словарь ДЕШЕВЛЕ spaCy и ловит то, что
+    # en-NER пропускает (sentence-initial кириллические имена) — поэтому ДО NER.
+    # Работает и при use_ner=False (словарь не зависит от NER-доступности).
+    try:
+        personas = _ru_personas()
+        if personas:
+
+            def _sub_ru(match: re.Match[str]) -> str:
+                return _placeholder("PERSON_RU", match.group(0))
+
+            out = _ru_persona_re(personas).sub(_sub_ru, out)
+    except Exception:  # noqa: S110 — словарь недоступен: следующие тиры отработают
+        pass
+
     if use_ner:
         try:
             doc = _get_nlp()(out)
+            # span'ы уже вставленных ⟨...⟩ placeholder'ов — NER их не перезатирает
+            taken = [(m.start(), m.end()) for m in re.finditer("⟨[^⟩]*⟩", out)]
             # reversed: спаны справа не смещают офсеты слева
             for ent in reversed(doc.ents):
                 # Garbage guard: на ru/lorem-тексте en-модель выдаёт мусорные
                 # спаны (целая фраза, "D"*200) — маскируем только короткие.
-                if ent.label_ in _NER_LABELS and len(ent) <= 4 and len(ent.text) <= 40:
+                # Кириллический спан >1 токена — проза, за которую en-модель
+                # берётся после вставки placeholder'ов — тоже мусор.
+                has_cyr = any("\u0400" <= ch <= "\u04ff" for ch in ent.text)
+                if (
+                    ent.label_ in _NER_LABELS
+                    and len(ent) <= 4
+                    and len(ent.text) <= 40
+                    and not (has_cyr and len(ent) > 1)
+                    and not any(s < ent.end_char and ent.start_char < e for s, e in taken)
+                ):
                     key = _placeholder(ent.label_, ent.text)
                     out = out[: ent.start_char] + key + out[ent.end_char :]
         except Exception:  # noqa: S110 — NER недоступен: regex-тир уже отработал

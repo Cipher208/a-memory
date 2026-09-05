@@ -146,8 +146,8 @@ async def _capture_and_distill(user_id: str, text: str, ts: float | None = None)
     mem = MemoryManager(cm=connection_manager).get_layer("user", user_id)
     graph = EpistemicGraph(cm=connection_manager, layer="user")
     route = await distill_and_route(mem, graph, user_id, text, 0.6, event="import")
-    # contradiction-saves (ConflictResolver hit) record the atom but don't bump
-    # l4/l3 counters — treat them as routed, not gated out
+    # condition-splitting (C4): ConflictResolver hit сохраняет ОБЕ записи
+    # (scope=earlier/later) и теперь учитывается в l4_saved — routed, не gated out
     status = "promoted_l4" if route["l4_saved"] else ("saved_l3" if (route["l3_saved"] or route["conflicts"]) else "gated_out")
     decisions = [{"gate": "import"}, {"gate": "g1", "config_hash": config_hash(), "ts": time.time()}]
     await conn.execute(

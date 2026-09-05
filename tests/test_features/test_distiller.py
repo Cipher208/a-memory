@@ -57,3 +57,34 @@ async def test_conflict_not_silent_update(cm) -> None:
     await distill_and_route(fake_mem, fake_graph, "u1", "база проекта: PostgreSQL", 0.8)
     r2 = await distill_and_route(fake_mem, fake_graph, "u1", "база проекта: MySQL", 0.8)
     assert r2["conflicts"] >= 1  # второе противоречит первому — запись с флагом, не затирание
+
+
+@pytest.mark.asyncio
+async def test_conflict_condition_splitting_keeps_both(cm) -> None:
+    """C4: конфликт → ОБЕ записи в L4 с scope-метаданными и importance ×0.9.
+
+    Ранняя — {'scope': 'earlier'}, поздняя — {'scope': 'later',
+    'contradicts': first_key}; l4_saved учитывает обе (маршрут не молчит).
+    """
+    import json as _json
+
+    from lifecycle.distiller import distill_and_route
+
+    fake_mem, fake_graph = FakeMem(), MagicMock()
+    r1 = await distill_and_route(fake_mem, fake_graph, "u2", "я решила выбрать PostgreSQL", 0.8)
+    assert r1["l4_saved"] >= 1
+    r2 = await distill_and_route(fake_mem, fake_graph, "u2", "я решила выбрать MySQL", 0.8)
+    assert r2["conflicts"] >= 1
+    assert r2["l4_saved"] >= 2, "обе записи сохранены — конфликт не глушит счётчик маршрута"
+    conn = await cm.get("memory.db")
+    rows = await (await conn.execute("SELECT key, value, importance, metadata FROM core_memory WHERE user_id='u2' ORDER BY entry_id")).fetchall()
+    assert len(rows) == 2
+    earlier, later = rows
+    assert "PostgreSQL" in earlier["value"] and "MySQL" in later["value"]
+    meta_e = _json.loads(earlier["metadata"])
+    meta_l = _json.loads(later["metadata"])
+    assert meta_e["scope"] == "earlier"
+    assert meta_l["scope"] == "later"
+    assert meta_l["contradicts"] == earlier["key"]
+    assert earlier["importance"] == pytest.approx(0.8 * 0.9)  # конфликт снижает уверенность
+    assert later["importance"] == pytest.approx(0.8 * 0.9)

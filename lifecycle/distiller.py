@@ -9,6 +9,7 @@ L4 core_memory, события → L3 episodic. Противоречия лов�
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -87,16 +88,26 @@ async def distill_and_route(
         has_conflict = bool(conflict.get("is_conflict"))
         if route_kind(kind) == "l4":
             if has_conflict:
+                # C4 condition-splitting: противоречие — не затирание и не
+                # молчаливый contradiction-only, а ДВЕ условные записи.
+                # Ранняя помечается metadata {'scope': 'earlier'}, новая —
+                # {'scope': 'later', 'contradicts': first_key}; обе с
+                # importance ×0.9 (конфликт снижает уверенность).
                 stats["conflicts"] += 1
+                first_key = await _mark_earlier_scope(cmem, user_id, conflict)
+                meta_new: dict[str, Any] = {"scope": "later", "contradiction": True}
+                if first_key:
+                    meta_new["contradicts"] = first_key
                 await cmem.save(
                     user_id,
                     key,
                     clause,
-                    importance=score,
+                    importance=score * 0.9,
                     memory_kind=kind.value,
                     source=f"{event}:contradiction",
-                    metadata={"contradiction": True},
+                    metadata=meta_new,
                 )
+                stats["l4_saved"] += 2 if first_key else 1
                 saved.append(clause)
                 continue
             await cmem.save(user_id, key, clause, importance=score, memory_kind=kind.value, source=event)
@@ -110,6 +121,53 @@ async def distill_and_route(
                 stats["conflicts"] += 1
     stats["wired_edges"] = await _wire_atoms(cmem._cm, user_id, saved)
     return stats
+
+
+async def _mark_earlier_scope(cmem: Any, user_id: str, conflict: dict[str, Any]) -> str | None:
+    """C4: пометить раннюю сторону конфликта scope='earlier' (importance ×0.9).
+
+    ConflictResolver хранит content обеих сторон в memory_conflicts — по
+    conflicts_with_id достаём ранний текст, восстанавливаем его канонический
+    ключ (тот же _canonical_key, что при первой записи) и пере-сохраняем через
+    cmem.save (LEDGER + bi-temporal). Возврат ключа — для связи contradicts
+    у поздней записи; None, если ранняя сторона не найдена в L4.
+    """
+    from shared.constants import DB_NAME
+
+    prior_id = conflict.get("conflicts_with_id")
+    if not prior_id:
+        return None
+    conn = await cmem._cm.get(DB_NAME)
+    row = await (await conn.execute("SELECT content FROM memory_conflicts WHERE id=?", (int(prior_id),))).fetchone()
+    if row is None:
+        return None
+    prior_text = str(row["content"])
+    first_key = _canonical_key(prior_text, kind_for_text(prior_text))
+    prow = await (
+        await conn.execute(
+            "SELECT value, importance, memory_kind, source, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+            (cmem.layer, user_id, first_key),
+        )
+    ).fetchone()
+    if prow is None:
+        return None
+    try:
+        meta = json.loads(prow["metadata"] or "{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except Exception:
+        meta = {}
+    meta["scope"] = "earlier"
+    await cmem.save(
+        user_id,
+        first_key,
+        str(prow["value"]),
+        importance=float(prow["importance"]) * 0.9,
+        memory_kind=str(prow["memory_kind"]) if prow["memory_kind"] else None,
+        source=str(prow["source"]),
+        metadata=meta,
+    )
+    return first_key
 
 
 async def _wire_atoms(cm: Any, user_id: str, clauses: list[str]) -> int:

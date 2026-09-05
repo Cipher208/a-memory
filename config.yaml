@@ -69,6 +69,21 @@ rag:
   chunk_size: 500          # max chars per chunk (sliding window with overlap)
   chunk_overlap: 100       # overlap between consecutive chunks
   search_limit: 10         # default result count when caller omits limit
+  # Известные персоны проекта для privacy ru-тира (⟨PERSON_RU_N⟩).
+  # НЕ хардкодятся в коде; класс каждой персоны расширяется синонимами
+  # rag.synonyms в обе стороны (см. mcp_server/utils/privacy.py).
+  ru_personas:
+    - мамочка
+    - котёнок
+    - Лили
+    - Lily
+    - лисёныш
+    - лисёнок
+    - Люси
+    - Эли
+    - Eli
+    - Мурат
+    - Murat
 
 # === Retrieval ablation arms (Phase G Task 7, для №11-eval) ===
 # env RETRIEVAL_MODE перекрывает yaml; невалидное значение → 'full'.

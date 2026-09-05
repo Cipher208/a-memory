@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="7" time="4.753" timestamp="2026-09-05T10:07:05.189012+02:00" hostname="vm1282045.cloud.nuxt.network"><testcase classname="tests.test_hooks.test_privacy_ru" name="test_mamochka_masked" time="2.533"><failure message="AssertionError: assert 'Мамочка' not in 'Мамочка ска...и на ⟨GPE_1⟩'&#10;  &#10;  'Мамочка' is contained here:&#10;    Мамочка сказала перейти на ⟨GPE_1⟩&#10;  ? +++++++">def test_mamochka_masked() -&gt; None:
+        out, m = sanitize("Мамочка сказала перейти на PostgreSQL", use_ner=True)
+&gt;       assert "Мамочка" not in out
+E       AssertionError: assert 'Мамочка' not in 'Мамочка ска...и на ⟨GPE_1⟩'
+E         
+E         'Мамочка' is contained here:
+E           Мамочка сказала перейти на ⟨GPE_1⟩
+E         ? +++++++
+
+tests/test_hooks/test_privacy_ru.py:15: AssertionError</failure></testcase><testcase classname="tests.test_hooks.test_privacy_ru" name="test_lili_sentence_initial_masked" time="0.006"><failure message="AssertionError: assert 'Лили' not in 'Лили красива'&#10;  &#10;  'Лили' is contained here:&#10;    Лили красива&#10;  ? ++++">def test_lili_sentence_initial_masked() -&gt; None:
+        # sentence-initial: en-NER это пропускает, словарь — нет
+        out, _m = sanitize("Лили красива", use_ner=True)
+&gt;       assert "Лили" not in out
+E       AssertionError: assert 'Лили' not in 'Лили красива'
+E         
+E         'Лили' is contained here:
+E           Лили красива
+E         ? ++++
+
+tests/test_hooks/test_privacy_ru.py:23: AssertionError</failure></testcase><testcase classname="tests.test_hooks.test_privacy_ru" name="test_lisyonysh_masked" time="0.005"><failure message="AssertionError: assert '⟨PERSON_RU_1⟩ спит' in '⟨PERSON_1⟩ спит'">def test_lisyonysh_masked() -&gt; None:
+        out, _m = sanitize("Лисёныш спит", use_ner=True)
+        assert "Лисёныш" not in out
+&gt;       assert "⟨PERSON_RU_1⟩ спит" in out
+E       AssertionError: assert '⟨PERSON_RU_1⟩ спит' in '⟨PERSON_1⟩ спит'
+
+tests/test_hooks/test_privacy_ru.py:30: AssertionError</failure></testcase><testcase classname="tests.test_hooks.test_privacy_ru" name="test_placeholder_stability_russian" time="0.006"><failure message="AssertionError: assert 0 == 2&#10; +  where 0 = &lt;built-in method count of str object at 0x7feed695fa20&gt;('⟨PERSON_RU_1⟩')&#10; +    where &lt;built-in method count of str object at 0x7feed695fa20&gt; = 'Лили пришла, потом Лили ушла'.count">def test_placeholder_stability_russian() -&gt; None:
+        out, m = sanitize("Лили пришла, потом Лили ушла", use_ner=True)
+&gt;       assert out.count("⟨PERSON_RU_1⟩") == 2
+E       AssertionError: assert 0 == 2
+E        +  where 0 = &lt;built-in method count of str object at 0x7feed695fa20&gt;('⟨PERSON_RU_1⟩')
+E        +    where &lt;built-in method count of str object at 0x7feed695fa20&gt; = 'Лили пришла, потом Лили ушла'.count
+
+tests/test_hooks/test_privacy_ru.py:35: AssertionError</failure></testcase><testcase classname="tests.test_hooks.test_privacy_ru" name="test_config_override_adds_persona" time="0.001"><failure message="AssertionError: assert 'Зайка' not in 'Зайка прыгнула на стол'&#10;  &#10;  'Зайка' is contained here:&#10;    Зайка прыгнула на стол&#10;  ? +++++">monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x7fee06263110&gt;
+
+    def test_config_override_adds_persona(monkeypatch) -&gt; None:
+        # словарь НЕ хардкодится: новые персоны добавляются через config rag.ru_personas
+        from config import config
+    
+        monkeypatch.setattr(config, "_data", {"rag": {"ru_personas": ["зайка"]}}, raising=False)
+        out, _m = sanitize("Зайка прыгнула на стол", use_ner=False)
+&gt;       assert "Зайка" not in out
+E       AssertionError: assert 'Зайка' not in 'Зайка прыгнула на стол'
+E         
+E         'Зайка' is contained here:
+E           Зайка прыгнула на стол
+E         ? +++++
+
+tests/test_hooks/test_privacy_ru.py:45: AssertionError</failure></testcase><testcase classname="tests.test_features.test_distiller" name="test_invariant_routes_to_l4_event_to_l3" time="0.075" /><testcase classname="tests.test_features.test_distiller" name="test_conflict_not_silent_update" time="0.211" /></testsuite></testsuites>
