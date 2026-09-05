@@ -249,6 +249,9 @@ async def edm_rerank(
     final = [max(0.0, s) for s in _minmax_floor(edm_scores, pos)] if pos else [0.0] * len(edm_scores)
 
     # CAMA N_eff: эффективное число различимых источников (max-presence поле).
+    # РЕШЕНИЕ (аудит 05.09): abstain остаётся метаданными для eval-съезда —
+    # потребитель на уровне ответа (отказ отвечать) решается Stage 2 после
+    # ablation'а: форсировать abstention до числовой вердикта — преждевременно.
     presence_finals = [0.0] * len(pool)
     for i, f in enumerate(final):
         presence_finals[presence[i]] = max(presence_finals[presence[i]], f)
