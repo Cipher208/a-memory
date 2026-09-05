@@ -255,12 +255,17 @@ async def edm_rerank(
     n_eff = neff_hill(presence_finals)
     abstain = len(pos) > 0 and n_eff < CAMA_NEFF_MIN
 
+    # Сырая активация (ингибированный RRF ДО minmax): minmax на дегенеративном
+    # пуле даёт слабому 1.0 — FOK-гейт обязан смотреть сырой сигнал.
+    inhibited = inhibit_scores(raw)
+
     out: list[dict[str, Any]] = []
     for i in sorted(range(len(pool)), key=lambda i: -final[i]):
         if final[i] < threshold:
             continue
         hit = dict(pool[i])
         hit["score"] = final[i]
+        hit["raw_activation"] = round(inhibited[i], 4)
         hit["abstain"] = abstain
         hit["n_eff"] = round(n_eff, 3)
         out.append(hit)

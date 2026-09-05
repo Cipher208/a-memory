@@ -111,7 +111,7 @@ async def _dream_graph(g):
     return {"a": a, "b": b, "c": c, "iso": iso}
 
 
-def _age_edge(conn: Any, a: int, b: int, days: int, weight: float | None = None) -> None:
+async def _age_edge(conn: Any, a: int, b: int, days: int, weight: float | None = None) -> None:
     import time
 
     sql = "UPDATE epi_edges SET created_at=?"
@@ -120,7 +120,8 @@ def _age_edge(conn: Any, a: int, b: int, days: int, weight: float | None = None)
         sql += ", weight=?"
         params.append(weight)
     sql += " WHERE source_id=? AND target_id=?"
-    conn.execute(sql, (*params, a, b))
+    params.extend([a, b])
+    await conn.execute(sql, params)
 
 
 @pytest.fixture
@@ -137,8 +138,8 @@ async def test_dream_nrem_decays_and_prunes_weak_edges(graph, no_miners):
     d = await graph.add_node("gu", "деплой прошёл без инцидентов", "fact")
     e = await graph.add_node("gu", "мониторинг не заметил деградацию", "fact")
     await graph.add_edge(d, e, "mentions", 0.6, tags=["heuristic:cofire"])
-    _age_edge(conn, ids["a"], ids["b"], days=40, weight=0.05)
-    _age_edge(conn, ids["b"], ids["c"], days=40)
+    await _age_edge(conn, ids["a"], ids["b"], days=40, weight=0.05)
+    await _age_edge(conn, ids["b"], ids["c"], days=40)
     await conn.commit()
 
     from lifecycle.graph_enrich import graph_enrich

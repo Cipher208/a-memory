@@ -180,11 +180,13 @@ async def route_query(
         seen = {h.get("id") for h in hits}
         hits = [*hits, *(e for e in esc if e.get("id") not in seen)]
 
-    # FOK-gate (Task C6, SYNAPSE τ=FOK_TAU): after ITS gating — если топ-кандидат
-    # ниже порога знакомости, ответа, в котором можно быть уверенным, нет →
-    # отказ до LLM (возврат пусто; цель FRR < 2.5%).
-    if hits and float(hits[0].get("score") or 0.0) < FOK_TAU:
-        logger.debug("route_query: FOK-gate reject (top %.3f < τ=%.2f)", float(hits[0].get("score") or 0.0), FOK_TAU)
+    # FOK-gate (Task C6, SYNAPSE τ=FOK_TAU): гейт по СЫРОЙ активации (до
+    # minmax) — minmax на дегенеративном пуле даёт слабому 1.0; если
+    # raw_activation нет (легаси), fallback на score.
+    top = hits[0] if hits else {}
+    activation = float(top.get("raw_activation") if top.get("raw_activation") is not None else top.get("score") or 0.0)
+    if hits and activation < FOK_TAU:
+        logger.debug("route_query: FOK-gate reject (raw activation %.3f < τ=%.2f)", activation, FOK_TAU)
         return []
 
     return [{**h, "kind": str(h.get("source") or "relevant")} for h in hits[:limit]]
