@@ -222,6 +222,38 @@ class BackupCron:
                 removed += 1
         if removed:
             logger.info("Cleaned up %d old backups", removed)
+        self._cleanup_tmp()
+
+    # Тест-артефакты /tmp не убираются сами: conftest os._exit(0) обходит
+    # pytest-tmpdir pruning (pytest-of-<user> разросся до 2.3G), hermetic-фикстуры
+    # оставляют ariel-test-global-*, eval-харнесс — ariel-eval-*. Полный /tmp на
+    # tmpfs встал и локальный pre-push pytest-гейт (2026-09-06).
+    _TMP_CLEANUP_DAYS = 2
+
+    def _cleanup_tmp(self, tmp_root: Path | None = None) -> int:
+        """Снести протухшие тест-артефакты в /tmp. Строгие префиксы, best-effort."""
+        import getpass
+        import shutil as _shutil
+
+        root = tmp_root or Path("/tmp")
+        cutoff = time.time() - self._TMP_CLEANUP_DAYS * 86400
+        candidates: list[Path] = []
+        pytest_base = root / f"pytest-of-{getpass.getuser()}"
+        if pytest_base.is_dir() and not pytest_base.is_symlink():
+            candidates.extend(pytest_base.glob("pytest-*"))
+        candidates.extend(root.glob("ariel-test-global-*"))
+        candidates.extend(root.glob("ariel-eval-*"))
+        removed = 0
+        for d in candidates:
+            try:
+                if d.is_dir() and not d.is_symlink() and d.stat().st_mtime < cutoff:
+                    _shutil.rmtree(d)
+                    removed += 1
+            except OSError:
+                continue  # чужая/занятая директория — не наша забота
+        if removed:
+            logger.info("Tmp cleanup: removed %d stale test dirs (>%dd)", removed, self._TMP_CLEANUP_DAYS)
+        return removed
 
     def _sync_wiki(self) -> None:
         """Synchronize wiki files with disk."""
