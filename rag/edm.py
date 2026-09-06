@@ -174,25 +174,35 @@ async def edm_rerank(
     delta: float = EDM_DELTA,
     threshold: float = ITS_THRESHOLD,
     k_cap: int = ITS_K_CAP,
+    deterministic: bool | None = None,
 ) -> list[dict[str, Any]]:
     """EDM re-rank + ITS gating. Пул 5-source RRF подаётся как есть (recall-first).
 
     Greedy MMR: на каждом шаге выбирается argmax EDM(m | S) среди оставшихся —
     N и K пересчитываются против уже выбранных; итог per-query min-max → [0,1],
     блоки ниже threshold отрезаются, cap k_cap.
+
+    S17 deterministic_retrieval (default off, config retrieval.deterministic):
+    регламентированные сценарии получают порядок чистого min-max без ингибиции
+    и K-члена (эмбеддинги машинно-зависимы) — воспроизводимый результат при
+    том же пуле.
     """
     if not cands:
         return []
+    if deterministic is None:
+        from config import config
+
+        deterministic = bool(config.get("retrieval", "deterministic", default=False))
     pool = cands[:k_cap]
     raw = [float(c.get("score") or 0.0) for c in pool]
-    rrf = minmax(inhibit_scores(raw))
+    rrf = minmax(raw if deterministic else inhibit_scores(raw))
     qtok = tokens(query)
     texts = [f"{c.get('content') or ''} {c.get('title') or ''}" for c in pool]
     # K-член — semantic dedup по CONTENT (разные титулы не делают блоки разными)
     ktexts = [str(c.get("content") or "") for c in pool]
     node_ids = [graph_node_id(c) for c in pool]
     led = await _led_to_neighbors(cm, [n for n in node_ids if n is not None], layer, user_id)
-    vecs = await _embed(ktexts) if len(pool) > 1 else []
+    vecs = await _embed(ktexts) if (len(pool) > 1 and not deterministic) else []
 
     def _toks(i: int) -> set[str]:
         return tokens(texts[i])
@@ -260,7 +270,8 @@ async def edm_rerank(
 
     # Сырая активация (ингибированный RRF ДО minmax): minmax на дегенеративном
     # пуле даёт слабому 1.0 — FOK-гейт обязан смотреть сырой сигнал.
-    inhibited = inhibit_scores(raw)
+    # S17 deterministic-режим: ингибиция bypass-нута — активация = сырой RRF.
+    inhibited = raw if deterministic else inhibit_scores(raw)
 
     out: list[dict[str, Any]] = []
     for i in sorted(range(len(pool)), key=lambda i: -final[i]):

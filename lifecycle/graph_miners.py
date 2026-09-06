@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -18,6 +19,8 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
+
+logger = logging.getLogger(__name__)
 
 Miner = Callable[[AsyncConnectionManager, str], Awaitable[dict[str, int]]]
 
@@ -803,6 +806,70 @@ async def wire_new_node(cm: AsyncConnectionManager, layer: str, node_id: int, co
     return edges
 
 
+async def ensure_zero_result(cm: AsyncConnectionManager) -> None:
+    """S17 #6: idempotent schema журнала провальных запросов (open-index-минер)."""
+    await cm.execute_script(
+        DB_NAME,
+        """
+        CREATE TABLE IF NOT EXISTS recall_zero_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            layer TEXT NOT NULL DEFAULT 'user',
+            user_id TEXT NOT NULL DEFAULT 'default',
+            query TEXT NOT NULL,
+            query_hash TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zero_results_layer ON recall_zero_results(layer, user_id, ts);
+        """,
+    )
+
+
+async def log_zero_result(cm: AsyncConnectionManager, layer: str, user_id: str, query: str) -> None:
+    """Провальный запрос (0 хитов) → минер-сигнал «что смоделировать следующим»."""
+    await ensure_zero_result(cm)
+    conn = await cm.get(DB_NAME)
+    qhash = hashlib.sha1(query.encode("utf-8", "ignore")).hexdigest()[:16]
+    await conn.execute(
+        "INSERT INTO recall_zero_results (ts, layer, user_id, query, query_hash) VALUES (?, ?, ?, ?, ?)",
+        (time.time(), layer, user_id, query[:500], qhash),
+    )
+    await conn.commit()
+
+
+async def miner_zero_results(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
+    """#12 zero-result минер (S17 #6, open-index): повторные провальные запросы → вопрос-узлы.
+
+    Один и тот же запрос (query_hash, per-user) падал ≥2 раз → find_or_add
+    question-узла с текстом запроса: граф получает явный маркер зазора
+    «что смоделировать следующим» (open-index: +9.4% recall на аналогичном
+    сигнале). find_or_add идемпотентен — узел-гэп не плодится ночами.
+    Возвращаемый счётчик — question-узлы поверх журнала (MINERS-контракт —
+    единый ключ edges, graph_enrich reports как есть).
+    """
+    await ensure_zero_result(cm)
+    conn = await cm.get(DB_NAME)
+    rows = await (
+        await conn.execute(
+            "SELECT query, user_id, COUNT(*) c FROM recall_zero_results WHERE layer=? GROUP BY query_hash, user_id HAVING c >= 2 LIMIT 20",
+            (layer,),
+        )
+    ).fetchall()
+    if not rows:
+        return {"edges": 0}
+    surfaced = 0
+    try:
+        from graph.epistemic import EpistemicGraph
+
+        g = EpistemicGraph(cm=cm, layer=layer)
+        for r in rows:
+            await g.find_or_add_entity(str(r["user_id"]), str(r["query"])[:300], "question")
+            surfaced += 1
+    except Exception:
+        logger.debug("zero-result surfacing failed", exc_info=True)
+        return {"edges": 0}
+    return {"edges": surfaced}
+
+
 MINERS: dict[str, Miner] = {
     "tags": miner_tags,
     "tokens": miner_tokens,
@@ -815,4 +882,5 @@ MINERS: dict[str, Miner] = {
     "structural": miner_structural,
     "triplets": miner_tool_triplets,
     "wiki_fact_links": miner_wiki_fact_links,
+    "zero_results": miner_zero_results,
 }

@@ -136,6 +136,16 @@ async def recall_protocol(
     if rag is not None:
         try:
             hits = await rag.search(query, user_id=user_id, limit=8)
+            # S17 #6: провальный запрос (0 хитов) → минер-сигнал «что смоделировать
+            # следующим» (журнал recall_zero_results, потребитель — MINERS zero_results).
+            if not hits:
+                try:
+                    from lifecycle.graph_miners import log_zero_result
+                    from shared.connection import connection_manager
+
+                    await log_zero_result(connection_manager, "user", user_id, query)
+                except Exception as exc:
+                    logger.debug("zero-result journal skipped: %s", exc)
             # G3: журнал co-retrieval — пары hit-id ('g:12'/'f:5') для минера #7.
             # Пары любых hit-id с префиксом типа; минер #7 строит рёбра из g:-пар
             # (epi_nodes) и f:-пар через маппинг rag_pages.path → wiki-узел.

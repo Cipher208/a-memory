@@ -21,7 +21,7 @@ import logging
 import re
 from typing import Any
 
-from rag.ablation import dense_per_kind_search, gated_search, retrieval_mode
+from rag.ablation import dense_per_kind_search, gated_search, pre_gate_flags, retrieval_mode
 from rag.edm import DMEM_MIN_CONFIDENCE, FOK_TAU, dense_confidence, edm_rerank, make_s2_hit
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,40 @@ _S2_CATEGORY_RE = re.compile(r"(?:все(?:\s+|х)|список\s+(?:все\w*\s
 # проходит — ветка терминируется (|слой i+1| ≤ |слой i| соблюдён структурно:
 # дети всегда подмножество родительского каталога).
 S2_MIN_CHILDREN = 2
+
+# Tenure counter-signal aliases (S17 п.7): пессимизация хита, чей контент
+# содержит superseded-имя без текущего (переименование). Не дроп — хит
+# остаётся в выдаче с пониженным score.
+_COUNTER_FACTOR = 0.7
+
+
+def _apply_counter_signals(hits: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    """Пессимизировать хиты по superseded-именам (config rag.counter_signals).
+
+    Хит пессимизируется, если контент содержит старое имя и НЕ содержит
+    текущего; запрос, явно спрашивающий про старое имя, не штрафуется
+    (запрос-биекция релевантен старой записи).
+    """
+    try:
+        from rag.synonyms import load_counter_signals
+
+        signals = load_counter_signals()
+    except Exception:
+        return hits
+    if not signals:
+        return hits
+    ql = query.lower()
+    out = []
+    for h in hits:
+        content = str(h.get("content") or h.get("value") or "").lower()
+        factor = 1.0
+        for old, cur in signals.items():
+            if old in content and cur not in content and old not in ql:
+                factor *= _COUNTER_FACTOR
+        if factor < 1.0 and isinstance(h.get("score"), (int, float)):
+            h = {**h, "score": float(h["score"]) * factor, "counter_signal": True}
+        out.append(h)
+    return out
 
 
 def classify_query(query: str) -> str:
@@ -170,7 +204,9 @@ async def route_query(
 
     # D-Mem: dense-first для factual И multi-hop (graph-augmented проигрывает
     # dense); эскалация — только gated: низкий dense-confidence → graph-rerank.
-    pool = await rag.search(query, user_id=user_id, limit=100, include_graph=False)
+    # S17 pre-gate: {} когда retrieval.pregate off (статус-кво), иначе урезанный
+    # fan-out по фичам запроса — cost down + шум down, N_eff отражает урезание.
+    pool = await rag.search(query, user_id=user_id, limit=100, include_graph=False, **pre_gate_flags(query))
     graph_cm = _graph_cm(rag, cm)
     hits = await edm_rerank(pool, query, cm=graph_cm, user_id=user_id, layer=layer)
 
@@ -190,5 +226,9 @@ async def route_query(
     if hits and activation < FOK_TAU:
         logger.debug("route_query: FOK-gate reject (raw activation %.3f < τ=%.2f)", activation, FOK_TAU)
         return []
+
+    # Tenure counter-signal aliases (S17 п.7): superseded-имена с негативной
+    # ролью (пессимизация, не drop) — после ITS, перед выдачей.
+    hits = _apply_counter_signals(hits, query)
 
     return [{**h, "kind": str(h.get("source") or "relevant")} for h in hits[:limit]]

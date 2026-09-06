@@ -94,8 +94,9 @@ async def auto_save_text(
 ) -> dict[str, Any]:
     """evaluate_importance → threshold-gated saves + one memory_dispatch_log row.
 
-    score >= hooks.auto_save_threshold (default 0.5) → L3 episodic + graph node;
-    score >= 0.8 → also L4 core. Never raises past the caller (fire catches).
+    score >= EMA threshold (S17: adaptive_threshold, F2 — «EMA + rules») →
+    L3 episodic + graph node; score >= 0.8 → also L4 core. Never raises past
+    the caller (fire catches).
 
     The log row is the C1.10 substrate for compute_session_gaps and the
     memory_watch tool's hits_24h counter. `event` is the high-level lifecycle
@@ -106,7 +107,6 @@ async def auto_save_text(
     import time as _time
     import sqlite3 as _sqlite3
 
-    from config import config
     from features.importance import evaluate_importance
     from shared.connection import connection_manager
 
@@ -180,9 +180,11 @@ async def auto_save_text(
             logger.debug("memory_dispatch_log insert failed: %s", _e)
         return result
 
-    threshold = float(config.get("hooks", "auto_save_threshold", default=0.5))
+    # S17 (F2): EMA-гейт вернулся в auto_save — adaptive_threshold.gate читает
+    # порог и кормит EMA тем же контрактом, что и importance_gate-хендлеры.
     # D1.9 rules engine: declarative user rules adjust the write gate.
     from features.rules import apply_rules
+    from shared.adaptive import adaptive_threshold
 
     rule_out = apply_rules(text)
     if rule_out["importance_boost"]:
@@ -190,7 +192,8 @@ async def auto_save_text(
         result["score"] = score
     if rule_out["matched"]:
         result["rules"] = rule_out["matched"]
-    if score < threshold:
+    verdict = await adaptive_threshold.gate(score)
+    if verdict["bypass"]:
         return result
 
     # G1 distiller: atomize → canonical key → kind-routing (инварианты→L4,
@@ -203,6 +206,10 @@ async def auto_save_text(
     result["routes"] = route_stats
     if route_stats["l4_saved"] > 0:
         result["saved_l4"] = True
+    # S17 A2-advisory: near-dup/конфликт-ключи — агент сам решает переформулировать.
+    similar_to: list[str] = list(route_stats.get("similar_to") or [])
+    if similar_to:
+        result["similar_to"] = similar_to
     # L0 watermark (F): close the captured row — replay skips 'saved_l3'/
     # 'promoted_l4'. Neither of the two write paths fires → stays 'received'.
     if l0_id is not None:

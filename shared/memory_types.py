@@ -1,7 +1,9 @@
-"""Typed memory — 13 categories with per-type retention/decay/boost policy.
+"""Typed memory — 14 categories with per-type retention/decay/boost policy.
 
-13 types: instruction, fact, decision, goal, preference, commitment,
-relationship, observation, rule, todo, question, hypothesis, context.
+14 types: instruction, fact, decision, goal, preference, commitment,
+relationship, observation, rule, todo, question, hypothesis, context,
+procedural (S17, ENGRAM: «как сделать X» — data-фундамент behavior-аннотаций
+Stage 2).
 
 Each type has its own:
 - default_importance (auto-fill on save)
@@ -32,6 +34,7 @@ class MemoryKind(str, enum.Enum):
     QUESTION = "question"
     HYPOTHESIS = "hypothesis"
     CONTEXT = "context"
+    PROCEDURAL = "procedural"
 
 
 @dataclass(frozen=True)
@@ -177,10 +180,21 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         "Фоновый контекст",
         0.1,
     ),
+    MemoryKind.PROCEDURAL: TypePolicy(
+        MemoryKind.PROCEDURAL,
+        0.8,
+        0.0,
+        True,
+        False,
+        ("сделай так", "порядок действий", "инструкция по", "how to", "шаги"),
+        "Процедура/how-to (ENGRAM): как сделать X",
+        0.8,
+    ),
 }
 
 # Heuristic priority order (first match wins)
 _KEYWORD_MAP: list[tuple[MemoryKind, tuple[str, ...]]] = [
+    (MemoryKind.PROCEDURAL, ("сделай так", "порядок действий", "инструкция по", "how to", "пошагово", "step 1")),
     (MemoryKind.COMMITMENT, ("обещаю", "обязуюсь", "commit", "promise", "согласен")),
     (MemoryKind.INSTRUCTION, ("обязательно", "запомни", "никогда не", "remember to", "never forget")),
     (MemoryKind.RULE, ("запрещено", "нельзя", "do not", "forbidden", "никогда")),

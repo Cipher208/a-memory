@@ -32,6 +32,22 @@ def load_synonyms() -> dict[str, list[str]]:
     return {**_BUILTIN_SYNONYMS, **overrides}
 
 
+def load_counter_signals() -> dict[str, str]:
+    """Config `rag.counter_signals` {superseded_name: current_name} (S17 п.7).
+
+    Tenure counter-signal aliases: superseded-имена сущностей (переименования)
+    остаются валидными для поиска, но получают негативную роль в ранжировании —
+    хит, содержащий старое имя без текущего, пессимизируется (не дропается).
+    Дефолт {} — механика нейтральна, пока владелец не объявит пары.
+    """
+    from config import config
+
+    raw = config.get("rag", "counter_signals", default=None) or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k).lower(): str(v).lower() for k, v in raw.items()}
+
+
 def canonical_form(w: str, synonyms: dict[str, list[str]] | None = None) -> str:
     """Canonical form of a token: the synonym class unfolded in BOTH directions.
 

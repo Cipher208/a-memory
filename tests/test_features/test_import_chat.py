@@ -117,7 +117,10 @@ async def test_import_all_four_formats_end_to_end(import_db, tmp_path) -> None:
         assert res["captured"] == expected[source], source
 
     rows = await _l0_rows()
-    assert len(rows) == sum(expected.values())
+    # S17 #5 (SHA-256 L0 dedup): одна и та же фраза приходит в трёх форматах
+    # (claude/chatgpt/jsonl) и хранится ОДИН раз — capture-вызовов 7, уникальных
+    # блоков 4 (captured-счётчики выше считают вызовы, а не строки журнала).
+    assert len(rows) == 4
     assert all(r["event"] == "import" for r in rows)
     assert all(r["raw_type"] == "import" for r in rows)  # import не детерминирован — classify_raw не нужен
     assert all('"gate": "import"' in r["decisions"] for r in rows)

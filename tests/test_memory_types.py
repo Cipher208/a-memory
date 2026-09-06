@@ -1,4 +1,4 @@
-"""Tests for shared/memory_types.py — 13 typed memory categories."""
+"""Tests for shared/memory_types.py — 14 typed memory categories."""
 
 import math
 

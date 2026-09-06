@@ -62,21 +62,156 @@ def retrieval_mode() -> str:
 
 
 def query_features(query: str, synonyms: dict[str, list[str]] | None = None) -> dict[str, Any]:
-    """Query-features gated-арма (упрощённый Adaptive RAG вместо 27 фич).
+    """Полный query-feature вектор (S17 AdaptiveRAG pre-gate): 27 фич, 7 групп, LLM-free.
 
-    length — слов; is_question — «?»/вопросное слово; has_entity — токен из
-    словаря синонимов (канон сущностей); is_enumerative — маркеры «list all».
+    Группы (сверка v28 #5 — длина/тип/даты/вопросительная форма):
+      1. shape      (4): length, chars, is_short, is_long
+      2. question   (4): is_question, has_question_mark, is_imperative, is_negated
+      3. entity     (4): has_entity, n_capitalized, has_numbers, has_code
+      4. temporal   (4): has_date, has_year, has_relative_time, has_deadline
+      5. lexical    (3): unique_ratio, stopword_ratio, avg_word_len
+      6. intent     (4): is_enumerative, is_comparison, is_followup, is_greeting
+      7. hint       (4): has_url, has_quote, wants_wiki, wants_episodic
+
+    Первые 4 ключа (length/is_question/has_entity/is_enumerative) — исторический
+    контракт gated-арма, семантика не менялась. Питает gate_sources; в full-арме
+    пул после прегейта меньше → CAMA N_eff/abstention отражают урезанный fan-out.
     """
     q = (query or "").strip()
     tl = q.lower()
-    toks = {t for t in _TOKEN_RE.findall(tl) if len(t) >= 3}
+    raw_toks = _TOKEN_RE.findall(tl)
+    toks = {t for t in raw_toks if len(t) >= 3}
     syn = synonyms if synonyms is not None else load_synonyms()
     vocab = set(syn) | {v for vs in syn.values() for v in vs}
+    # 1. shape
+    length = len(q.split())
+    # 2. question-form
+    is_question = tl.endswith("?") or any(t in _QUESTION_WORDS for t in toks)
+    first = raw_toks[0] if raw_toks else ""
+    is_imperative = first in _IMPERATIVE_WORDS
+    is_negated = bool(toks & _NEGATION_WORDS)
+    # 3. entity
+    n_capitalized = sum(1 for t in re.findall(r"[A-Za-zА-Яа-яЁё0-9]+", q)[1:] if t[:1].isupper())
+    has_numbers = any(ch.isdigit() for ch in q)
+    has_code = any(m in q for m in _CODE_MARKERS)
+    # 4. temporal
+    has_date = bool(_DATE_RE.search(q))
+    has_year = bool(re.search(r"\b(19|20)\d{2}\b", q))
+    has_relative_time = any(m in tl for m in _RELATIVE_TIME_MARKERS)
+    has_deadline = any(m in tl for m in _DEADLINE_MARKERS)
+    # 5. lexical
+    unique_ratio = (len(toks) / len(raw_toks)) if raw_toks else 0.0
+    stopword_ratio = (sum(1 for t in raw_toks if t in _STOPWORDS) / len(raw_toks)) if raw_toks else 0.0
+    avg_word_len = (sum(len(t) for t in raw_toks) / len(raw_toks)) if raw_toks else 0.0
+    # 6. intent
+    is_comparison = any(m in tl for m in (" vs ", " или ", " сравн", "compare", "versus"))
+    is_followup = tl.startswith(("а ", "и ", "но ")) or bool(toks & {"тоже", "also"}) or "what about" in tl
+    is_greeting = any(tl.startswith(g) for g in ("привет", "здравствуй", "доброе утро", "hi", "hello", "hey"))
+    # 7. source-hints
+    has_url = "http" in tl or "www." in tl
+    has_quote = '"' in q or "«" in q
+    wants_wiki = any(m in tl for m in ("документаци", "справк", "официальн", "что такое", "как работает", "docs", "documentation"))
+    wants_episodic = any(m in tl for m in ("помнишь", "напомни", "в прошлый раз", "мы уже", "где мы", "did we", "remember when", "перестал работать"))
     return {
-        "length": len(q.split()),
-        "is_question": tl.endswith("?") or any(t in _QUESTION_WORDS for t in toks),
+        # 1. shape
+        "length": length,
+        "chars": len(q),
+        "is_short": length <= _SHORT_QUERY_WORDS,
+        "is_long": length >= 12,
+        # 2. question
+        "is_question": is_question,
+        "has_question_mark": "?" in q,
+        "is_imperative": is_imperative,
+        "is_negated": is_negated,
+        # 3. entity
         "has_entity": bool(toks & vocab),
+        "n_capitalized": n_capitalized,
+        "has_numbers": has_numbers,
+        "has_code": has_code,
+        # 4. temporal
+        "has_date": has_date,
+        "has_year": has_year,
+        "has_relative_time": has_relative_time,
+        "has_deadline": has_deadline,
+        # 5. lexical
+        "unique_ratio": round(unique_ratio, 3),
+        "stopword_ratio": round(stopword_ratio, 3),
+        "avg_word_len": round(avg_word_len, 2),
+        # 6. intent
         "is_enumerative": bool(_ENUMERATIVE_RE.search(tl)),
+        "is_comparison": is_comparison,
+        "is_followup": is_followup,
+        "is_greeting": is_greeting,
+        # 7. hints
+        "has_url": has_url,
+        "has_quote": has_quote,
+        "wants_wiki": wants_wiki,
+        "wants_episodic": wants_episodic,
+    }
+
+
+# S17 pre-gate лексиконы (LLM-free, token/substring-уровень)
+_IMPERATIVE_WORDS = frozenset(
+    {
+        "сделай",
+        "найди",
+        "покажи",
+        "расскажи",
+        "напиши",
+        "исправь",
+        "добавь",
+        "удали",
+        "проверь",
+        "show",
+        "find",
+        "list",
+        "fix",
+        "add",
+        "remove",
+        "write",
+        "check",
+        "run",
+    }
+)
+_NEGATION_WORDS = frozenset({"не", "нет", "no", "not", "never"})
+_CODE_MARKERS = ("```", "def ", "import ", "Traceback", "npm ", "git ", "SELECT ", ".py", ".json", ".yaml", ".ts", "()", "[]")
+_DATE_RE = re.compile(r"\d{1,2}[./-]\d{1,2}")
+_RELATIVE_TIME_MARKERS = (
+    "сегодня",
+    "вчера",
+    "завтра",
+    "неделю назад",
+    "месяц назад",
+    "прошлый",
+    "последний",
+    "today",
+    "yesterday",
+    "recently",
+    "last week",
+)
+_DEADLINE_MARKERS = ("дедлайн", "deadline", "к концу", "к пятнице", "к понедельнику", "до конца", "by friday", "by monday", "eod")
+_STOPWORDS = frozenset(
+    {"и", "в", "не", "на", "что", "с", "а", "по", "как", "это", "для", "из", "у", "же", "the", "a", "an", "of", "to", "in", "is", "and", "or", "it"}
+)
+
+
+def pre_gate_flags(query: str) -> dict[str, bool]:
+    """S17 pre-gate для full-арма: {} когда выключен, иначе include-флаги gate_sources.
+
+    Дешёвый skip-тир поверх RRF (cost down + шум down): гейт решает по фичам,
+    какие источники фаерить, ДО fan-out. Default off (config retrieval.pregate) —
+    включение в проде после №11-абляции; урезанный пул сам питает N_eff/abstention.
+    """
+    from config import config
+
+    if not bool(config.get("retrieval", "pregate", default=False)):
+        return {}
+    flags = gate_sources(query_features(query))
+    return {
+        "include_rag": flags["rag"],
+        "include_wiki": flags["wiki"],
+        "include_episodic": flags["episodic"],
+        "include_core": flags["core"],
     }
 
 
@@ -94,6 +229,13 @@ def gate_sources(feat: dict[str, Any]) -> dict[str, bool]:
         return {"rag": True, "wiki": False, "episodic": False, "core": True, "graph": False}
     if feat["has_entity"]:
         return {"rag": True, "wiki": True, "episodic": False, "core": True, "graph": True}
+    # S17-дополнения (после исторических правил — контракт матрицы стабилен):
+    if feat.get("has_code") or feat.get("has_url"):
+        # код/URL-запрос — FTS-корпус и документация, эпизоды/граф не релевантны
+        return {"rag": True, "wiki": True, "episodic": False, "core": True, "graph": False}
+    if feat.get("wants_episodic") or (feat.get("has_relative_time") and feat["is_question"]):
+        # «что мы делали / когда перестало работать» — биографический запрос
+        return {"rag": True, "wiki": False, "episodic": True, "core": True, "graph": False}
     return {"rag": True, "wiki": True, "episodic": True, "core": True, "graph": True}
 
 

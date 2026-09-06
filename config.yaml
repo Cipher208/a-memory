@@ -84,11 +84,21 @@ rag:
     - Eli
     - Мурат
     - Murat
+  # S17 п.7 Tenure counter-signal aliases: {superseded_имя: текущее_имя}.
+  # Хит, чей контент содержит старое имя без текущего (и запрос не спрашивает
+  # про старое), пессимизируется ×0.7 — негативная роль, не дроп.
+  counter_signals: {}   # пример: {"старое-название-проекта": "новое-название"}
 
 # === Retrieval ablation arms (Phase G Task 7, для №11-eval) ===
 # env RETRIEVAL_MODE перекрывает yaml; невалидное значение → 'full'.
 retrieval:
   mode: "full"             # full (dual-route, дефолт) | rrf | dense_per_kind | gated
+  # S17 п.1: детерминированный порядок (min-max без ингибиции/K-члена) для
+  # регламентированных сценариев. Default off — включается владельцем.
+  deterministic: false
+  # S17 п.3: AdaptiveRAG pre-gate (27 query-features, LLM-free) — дешёвый
+  # skip-тир источников поверх RRF в full-арме. Default off до №11-абляции.
+  pregate: false
 
 # === Embeddings ===
 # Multilingual (100+ languages incl. Russian). If sentence-transformers is not

@@ -18,7 +18,6 @@ from typing import Any
 from shared.memory_types import MemoryKind, get_policy, kind_for_text
 
 logger = logging.getLogger(__name__)
-
 _CLAUSE_SPLIT = re.compile(r"[,;]?\s+(?:и|но|причём|а|хотя)\s+|\.\s+")
 
 
@@ -138,7 +137,7 @@ async def distill_and_route(
     event: str = "new_message",
     extra_tags: tuple[str, ...] | list[str] = (),
     source_rid: int | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Разложить text на атомы и развести по слоям.
 
     G4: после сохранения каждый атом попадает в граф узлом (find_or_add fact)
@@ -154,23 +153,39 @@ async def distill_and_route(
 
     cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="user")
     await cmem._init_db()  # self-healing schema, как ConflictResolver.check — fixture может быть без миграций
-    stats: dict[str, Any] = {"l4_saved": 0, "l3_saved": 0, "conflicts": 0, "novelty_skipped": 0}
+    stats: dict[str, Any] = {
+        "l4_saved": 0,
+        "l3_saved": 0,
+        "conflicts": 0,
+        "novelty_skipped": 0,
+        "similar_to": [],  # S17 A2-advisory: ключи, с которыми клауза пересеклась (near-dup/конфликт)
+    }
+    # S17 ENGRAM: procedural («как сделать X») — agent-self track, L4 агентского слоя.
+    agent_cmem: CoreMemory | None = None
     resolver = ConflictResolver()
     saved: list[str] = []
     for clause in atomize(text):
         kind = kind_for_text(clause)
         key = _canonical_key(clause, kind)
+        # ENGRAM procedural: how-to живёт в L4-namespace агента, не юзера.
+        target: CoreMemory = cmem
+        if route_kind(kind) == "l4" and kind == MemoryKind.PROCEDURAL:
+            if agent_cmem is None:
+                agent_cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="agent")
+                await agent_cmem._init_db()
+            target = agent_cmem
         if route_kind(kind) == "l4":
             # C8 novelty-gate: парафраз уже сохранённых same-key фактов — skip.
             conn = await cmem._cm.get("memory.db")
             rows = await (
                 await conn.execute(
                     "SELECT value, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=? AND visibility != 'private'",
-                    (cmem.layer, user_id, key),
+                    (target.layer, user_id, key),
                 )
             ).fetchall()
             if not _is_novel(clause, [str(r["value"]) for r in rows]):
                 stats["novelty_skipped"] += 1
+                stats["similar_to"].append(key)  # A2-advisory: парафраз этого ключа уже хранится
                 continue
         conflict = await resolver.check(user_id, clause)
         has_conflict = bool(conflict.get("is_conflict"))
@@ -182,12 +197,14 @@ async def distill_and_route(
                 # {'scope': 'later', 'contradicts': first_key}; обе с
                 # importance ×0.9 (конфликт снижает уверенность).
                 stats["conflicts"] += 1
-                first_key = await _mark_earlier_scope(cmem, user_id, conflict)
+                first_key = await _mark_earlier_scope(target, user_id, conflict)
                 meta_new: dict[str, Any] = _merged_meta(rows[0]["metadata"] if rows else None, source_rid) if source_rid is not None else {}
                 meta_new["scope"] = "later"
                 meta_new["contradiction"] = True
                 if first_key:
                     meta_new["contradicts"] = first_key
+                # S17 A2-advisory: агент решает сам — переформулировать или осознанно дописать.
+                stats["similar_to"].append(first_key or key)
                 # Аудит 05.09 (P0): save — upsert по UNIQUE(layer,user,key);
                 # запись later под тем же канон-ключом молча затёрла бы
                 # существующую строку (и earlier, и любую same-key). Ключ
@@ -197,11 +214,11 @@ async def distill_and_route(
                     vcur = await (
                         await conn.execute(
                             "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND (key=? OR key LIKE ?)",
-                            (cmem.layer, user_id, key, key + "::v%"),
+                            (target.layer, user_id, key, key + "::v%"),
                         )
                     ).fetchone()
                     later_key = f"{key}::v{int((vcur[0] if vcur else 0) or 0) + 1}"
-                await cmem.save(
+                await target.save(
                     user_id,
                     later_key,
                     clause,
@@ -216,7 +233,7 @@ async def distill_and_route(
             l4_meta: dict[str, Any] | None = None
             if source_rid is not None:
                 l4_meta = _merged_meta(rows[0]["metadata"] if rows else None, source_rid)
-            await cmem.save(user_id, key, clause, importance=score, memory_kind=kind.value, source=event, metadata=l4_meta)
+            await target.save(user_id, key, clause, importance=score, memory_kind=kind.value, source=event, metadata=l4_meta)
             stats["l4_saved"] += 1
             saved.append(clause)
         else:
@@ -231,6 +248,8 @@ async def distill_and_route(
             if has_conflict:
                 stats["conflicts"] += 1
     stats["wired_edges"] = await _wire_atoms(cmem._cm, user_id, saved)
+    # A2-advisory: уникальные ключи в порядке встречи.
+    stats["similar_to"] = list(dict.fromkeys(stats["similar_to"]))
     return stats
 
 

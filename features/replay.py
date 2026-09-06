@@ -75,18 +75,21 @@ async def cls_replay(cm: Any, user_id: str, layer: str = "user", window_hours: i
 def config_hash() -> str:
     """Hash of the gate config that determines G1 routing decisions.
 
-    Covers the importance threshold (hooks.auto_save_threshold) and the
-    rules.yaml content (D1.9 boosts/tags). Replay skips rows already processed
-    under the same hash; a changed hash re-opens the window.
+    Covers the EMA importance threshold (S17 F2: adaptive gate in auto_save),
+    the static fallback (hooks.auto_save_threshold) and the rules.yaml content
+    (D1.9 boosts/tags). Replay skips rows already processed under the same
+    hash; a changed hash re-opens the window.
     """
     import hashlib
 
     from config import config
     from features.rules import load_rules
+    from shared.adaptive import adaptive_threshold
 
     payload = json.dumps(
         {
             "threshold": float(config.get("hooks", "auto_save_threshold", default=0.5)),
+            "ema_threshold": adaptive_threshold._current_value,
             "rules": load_rules(force=True),
         },
         sort_keys=True,

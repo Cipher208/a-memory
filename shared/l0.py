@@ -24,11 +24,32 @@ async def capture(
     decisions: list[dict[str, Any]] | None = None,
     ts_override: float | None = None,
 ) -> int | None:
-    """Append-only intake. Никогда не бросает — сбой L0 не блокирует поток."""
+    """Append-only intake. Никогда не бросает — сбой L0 не блокирует поток.
+
+    S17 #5: SHA-256 дедуп блоков — повторный вывод команды (тот же текст
+    layer/user, колонка content_hash) не создаёт строку, возвращается rid
+    первой записи. Hash-chain v2 ведётся для КАЖДОЙ попытки capture (в т.ч.
+    дедуп-хита), tamper-evidence не зависит от дедупа.
+    """
     try:
         conn = await connection_manager.get(DB_NAME)
         ts = ts_override or time.time()
         rt = raw_type or classify_raw(text)
+        content_hash = hashlib.sha256(f"{layer}|{user_id}|{text}".encode()).hexdigest()
+        # S17 #5: дедуп уже сохранённого блока — повтор не создаёт строку,
+        # возвращается rid первоисточника (ссылка на первую запись). Колонки
+        # content_hash нет (БД до миграции g23) → дедуп неактивен, пишем как есть.
+        try:
+            prior = await (
+                await conn.execute(
+                    "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
+                    (content_hash,),
+                )
+            ).fetchone()
+        except Exception:
+            prior = None
+        if prior is not None:
+            return int(prior["id"])
         # S1 order_key: fractional-индекс после последней записи. Колонки может
         # не быть в живых БД до миграции — тогда пишем без order_key.
         prev: Any | None = None
@@ -47,11 +68,11 @@ async def capture(
         params = (ts, event, source_msg_id, layer, user_id, text, rt, json.dumps(decisions or [], ensure_ascii=False))
         try:
             cur = await conn.execute(
-                "INSERT INTO l0_journal (ts, event, source_msg_id, layer, user_id, text, raw_type, status, decisions, order_key)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?)",
-                (*params, order_key),
+                "INSERT INTO l0_journal (ts, event, source_msg_id, layer, user_id, text, raw_type, status, decisions, order_key, content_hash)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?)",
+                (*params, order_key, content_hash),
             )
-        except Exception:  # колонки order_key ещё нет (БД до миграции) — пишем без неё
+        except Exception:  # колонки content_hash/order_key ещё нет (БД до миграции) — пишем без них
             cur = await conn.execute(
                 "INSERT INTO l0_journal (ts, event, source_msg_id, layer, user_id, text, raw_type, status, decisions)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?)",
