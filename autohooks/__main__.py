@@ -22,12 +22,15 @@ from autohooks.config import AgentConfig, load_config
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="autohooks", description="Universal autohooks runtime (C1.9)")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("daemon", "inject", "dispatch", "recall", "recap"):
+    for name in ("daemon", "inject", "dispatch", "recall", "recap", "context"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True, help="path to <agent>.yaml")
     sub.choices["inject"].add_argument("--text", default="", help="current message for relevance ranking")
     sub.choices["inject"].add_argument("--format", default="md", choices=["md", "json"])
     sub.choices["inject"].add_argument("--blocks", default="", help="comma-separated block kinds to keep (empty = all)")
+    sub.choices["context"].add_argument("--text", default="", help="current user message for relevance ranking")
+    sub.choices["context"].add_argument("--format", default="md", choices=["md", "json"])
+    sub.choices["context"].add_argument("--budget", default="2000", help="token budget")
     sub.choices["recall"].add_argument("--query", default="", help="recall query (empty = zero-state)")
     sub.choices["recall"].add_argument("--budget", default="2000", help="token budget")
     sub.choices["recall"].add_argument("--format", default="md", choices=["md", "json"])
@@ -133,6 +136,19 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"blocks": blocks}, ensure_ascii=False))
         else:
             print(_render_recall_md(blocks))
+        return 0
+
+    if ns.command == "context":
+        # S18-хвост context_assembly: pre-response сборка (top-5 релевантных +
+        # recent L1) — адаптер вызывает ДО ответа агента и вставляет вывод.
+        from autohooks.context import assemble_context, render_context_json, render_context_md
+
+        assembly = asyncio.run(assemble_context(mem, rag, cfg.user_id, text=ns.text, budget=int(ns.budget)))
+        _close_ariel()
+        if ns.format == "json":
+            print(render_context_json(assembly))
+        else:
+            print(render_context_md(assembly))
         return 0
 
     if ns.command == "recap":
