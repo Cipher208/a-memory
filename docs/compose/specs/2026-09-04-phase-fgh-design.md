@@ -216,7 +216,7 @@
 - B2 recall hygiene: is_current-view / superseded-флаги, чтобы recall не отдавал закрытые интервалы (bi-temporal читает old+new только для KU-запросов — остальное фильтрует).
 - 3-option конфликт-контракт агенту (supersede/retain/annotate): ConflictResolver.resolve есть, agent-facing surface нет — тул или расширение memory_recall.
 - Gap-registry (3M Find Gap): L3-questions → ночной registry → proactive acquisition.
-- **B6 UPDATE>MERGE>CREATE + лимит активных сущностей** (TencentDB): был в драфте как «Phase G после entity linking, needs eval-цифры» — в диздок не перенесён. Стадия: после №11 (heuristic размера, false-merge дороже разрастания).
+- **B6 UPDATE>MERGE>CREATE + лимит активных сущностей** (TencentDB): был в драфте как «Phase G после entity linking, needs eval-цифры» — в диздок не перенесён. Стадия: после №11 (heuristic размера, false-merge дороже разрастания). **→ POST-EVAL SHIPPED 2026-09-06 (`03ab2c8`), цифры с 3 живых инстансов: false-merge НЕ подтвердился (0 групп дублей person/org/entity) — UPDATE/MERGE не делаем, find_or_add_entity exact-dedup достаточен; разрастание ПОДТВЕРДИЛОСЬ — multi-topic dump собрал 109 co_mentions из 137 рёбер инстанса (hermes), один синоним-класс («memory») соединил его со всем подряд → degree-cap `_CO_MENTIONS_TOPK=12` на узел (паттерн _EMBED_TOPK минера #9).**
 - **Offload тяжёлых tool-логов в refs/*.md** (TencentDB v2): в контексте только Mermaid-канвас с node_id (Mermaid есть; offload-механика — Stage 2 мелочь).
 - **Circuit breaker на harness-адаптерах** (TencentDB v9: 5 fails → 60s pause): hermes-плагин breaker'а не имеет (проверено) — Stage 2 мелочь, адаптеры Hermes/cow/MiMo.
 
@@ -234,7 +234,7 @@
 - **Подтверждающий слой минера #9** [S17↑ доп. 9]: голосование keyword+embedding → weight 0.4→0.6.
 - **Anomalous-vector мусор-детектор** [S17↑ доп. 10].
 - **HDBSCAN-кластеризация** [S17↑ доп. 11].
-- **Стемминг в минере #2** (Эли: «стемминг уже есть» — по коду его нет; _TOKEN_RE голый regex → topic_overlap теряет RU-морфологию): Stage 2 — лёгкий стеммер ( Porter RU) в _canon_tokens.
+- **Стемминг в минере #2** (Эли: «стемминг уже есть» — по коду его нет; _TOKEN_RE голый regex → topic_overlap теряет RU-морфологию): Stage 2 — лёгкий стеммер ( Porter RU) в _canon_tokens. **→ SHIPPED 2026-09-06 (`f2b0487`): pymorphy3-леммы (не Porter) в `_canon_tokens` и канон-ключах за флагом `rag.lemmatize` default true; guard'ы: score <0.3 (заимствования вне словаря: «деплой»→«деплый») и общий префикс <4 → сырой токен; лемма <4 симв. отбрасывается; drift-риск ключей задокументирован в config.yaml (старые ключи не пере-хэшируются). Тест-фикстуры адаптированы: «сборка/сборку» больше не анти-кейс — это заявленный эффект.**
 - **Retrieval-фильтр по heuristic-тегам** («recall может фильтровать по источнику ребра»): фильтр рёбер по provenance при graph-expand — Stage 2 (низкий приоритет).
 
 **Из spacy-integration (4 варианта углубления, все вне диздока — фиксируются сюда):**
