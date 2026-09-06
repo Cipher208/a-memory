@@ -88,6 +88,10 @@ rag:
   # Хит, чей контент содержит старое имя без текущего (и запрос не спрашивает
   # про старое), пессимизируется ×0.7 — негативная роль, не дроп.
   counter_signals: {}   # пример: {"старое-название-проекта": "новое-название"}
+  # S19: ru_core_news_sm NER на кириллическом пути privacy-гейта (⟨PER_N⟩/⟨ORG_N⟩/
+  # ⟨LOC_N⟩). Model install: pip ru-core-news-sm; сбои → circuit breaker → en-NER/
+  # словарь/regex. false = только словарь ru_personas + en-NER.
+  ru_ner: true
 
 # === Retrieval ablation arms (Phase G Task 7, для №11-eval) ===
 # env RETRIEVAL_MODE перекрывает yaml; невалидное значение → 'full'.
