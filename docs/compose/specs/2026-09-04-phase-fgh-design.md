@@ -243,4 +243,15 @@
 3. **Лемматизация канон-ключей**: ru-леммы схлопывают формы («уволилась/увольнение» → одна основа) — меньше ручных синонимов.
 4. **Морфо-фичи для ImportanceScorer** (POS/модальность) — низкий приоритет.
 - **Паттерн интеграции** (инвариант): lazy-load + circuit-breaker (переиспользовать _embedding_breaker); fallback на правила при сбое; config-флаг; eval до/после.
+
+**Из EDM.md (транскрипт Aurelle, сверка 2026-09-05):** драфт v34 покрывает документ полностью — формул MIB/EDM/ITS в статье нет (реконструкция = модель), sign ≈ fancy MIB, конфаунды сравнения (Pinecone+Cohere vs встроенный ITS, exhaustive vs HNSW), цифры MAIR. Указатели раздела 7 доехали в драфт, но не в диздок — фиксируются:
+- **TOKI** (bitemporal operator algebra для contradiction resolution) — G-комплемент conflict-fusion;
+- **PROJECTMEM** (local-first event-sourced memory + judgment layer) — родня L0, референс;
+- **Reliable Post-Retrieval Assembly** (separating evidence extraction from policy execution) — валидация гейт-дизайна;
+- **Render Confound in Deprecation-Aware Memory Evaluation** — ловушка eval №11;
+- **Covariance Structure... Binary Quantization** — обоснование/границы sign-бинаризации quantize.py;
+- **REWA / Information Theory of Similarity (2512.00378)** — rate-distortion yardstick для «достаточно ли 128 bytes».
+
+**Из Автохуки.md (исходная спека автоматической памяти, сверка):** реализовано полностью — «триггеры не таймеры» (autohooks daemon poll = transport, saves server-side), хуки session_started/session_ended/new_message/memory_pressure/auto_context/post_session_diff, fire-async + mem-передача + хендлеры-исполнители (registry takes_mem/is_async), server-side importance-gate вместо эвристик демона. Единственный непокрытый пункт:
+- **`context_assembly` хук** (pre-response сборка контекста системой, «я не думаю об инжекте») — инъекция происходит harness-side; ariel-часть готова (memory_context_inject + session-start inject + auto_context post-recall). Доработка — контракт harness-адаптеров (Stage 2, cow/Hermes/MiMo).
 - **Минорный хвост осознанно-отложенного (distillate)**: B2 is_current-view; B4 ttl_minutes на тул-поверхности; B7 heat sum+1; B10 recurring→staging; C1 генератор сцен; C4 pinned; C5 private-флаг; C6 Layer Charter; C9 compact-render; D2 .abstract-тир; D3 MOC-first роутер; D4 retrieval-трейс в L0; D7 session-diversity; D12 BFS-upgrade `_from_graph`; E6-ретро skill-mine; changed-since модальность; Aeon lookaside buffer; Tenure hard-scope filter post-RRF; CWL dependency-aware инъекция; no-silent-fallback инвариант; reconstruction-check hot→warm; APEX fuse-then-summarize; Basic Memory observation-синтаксис. Каждый помечен в research draft с вердиктом; попадание в волны — на планировании.
