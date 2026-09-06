@@ -53,6 +53,20 @@ async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]
     conn = await cm.get(DB_NAME)
     written = 0
     cutoff = time.time() - _GAP_MAX_AGE_DAYS * 86400
+
+    async def _insert_gap(user_id: str, text: str, origin: str) -> None:
+        """Idempotent insert (check-then-write; rowcount/total_changes ненадёжны)."""
+        h = _gap_hash(text)
+        dup = await (await conn.execute("SELECT 1 FROM memory_gaps WHERE gap_hash=?", (h,))).fetchone()
+        if dup:
+            return
+        await conn.execute(
+            "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash) VALUES (?, ?, ?, ?, ?, ?)",
+            (time.time(), layer, user_id, text[:300], origin, h),
+        )
+        nonlocal written
+        written += 1
+
     try:
         # L3-вопросы: ночной срез по ВСЕМ пользователям (search_by_tag —
         # per-user API, registry — кросс-пользовательский агрегат).
@@ -66,16 +80,8 @@ async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]
         ).fetchall()
         for r in q_rows:
             text = str(r["summary"]).strip()
-            if not text:
-                continue
-            before = conn.total_changes
-            await conn.execute(
-                "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash)"
-                " SELECT ?, ?, ?, ?, 'question', ?"
-                " WHERE NOT EXISTS (SELECT 1 FROM memory_gaps WHERE gap_hash=?)",
-                (time.time(), layer, str(r["user_id"]), text[:300], _gap_hash(text), _gap_hash(text)),
-            )
-            written += conn.total_changes - before
+            if text:
+                await _insert_gap(str(r["user_id"]), text, "question")
     except Exception:
         logger.exception("gap registry question scan failed")
     try:
@@ -86,15 +92,9 @@ async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]
             )
         ).fetchall()
         for r in z_rows:
-            text = str(r["query"]).strip()[:300]
-            before = conn.total_changes
-            await conn.execute(
-                "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash)"
-                " SELECT ?, ?, ?, ?, 'zero_result', ?"
-                " WHERE NOT EXISTS (SELECT 1 FROM memory_gaps WHERE gap_hash=?)",
-                (time.time(), layer, str(r["user_id"]), text, _gap_hash(text), _gap_hash(text)),
-            )
-            written += conn.total_changes - before
+            text = str(r["query"]).strip()
+            if text:
+                await _insert_gap(str(r["user_id"]), text, "zero_result")
         await conn.commit()
     except Exception:
         # recall_zero_results — lazy-ensure таблица (минер S17); до первого
