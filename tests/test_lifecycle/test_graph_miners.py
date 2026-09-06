@@ -691,6 +691,11 @@ async def test_miner_markers_led_to_creates_edge_in_window(db):
 async def test_miner_markers_out_of_window_and_direction_no_edge(db):
     from lifecycle.graph_miners import miner_markers
 
+    # S19-хвост: rag.lemmatize=true (прод-конфиг) склеивает словоформы —
+    # «сборка/сборку» теперь общий токен, поэтому эта пара больше НЕ анти-кейс.
+    # Адаптировано: анти-кейсы только окно/направление (контракто-меняющая
+    # правка, диздок S19-хвосты «topic_overlap перестаёт терять морфологию»).
+
     # дельта > 30 дней
     await _node("сборка postgres падает с ошибкой", T)
     await _node("postgres починила конфигурацию", T + 40 * 86400)
@@ -700,9 +705,9 @@ async def test_miner_markers_out_of_window_and_direction_no_edge(db):
     # маркер только в более раннем узле (направление: исход должен идти позже)
     await _node("индексатор сломалось после релиза", T + 200_000)
     await _node("индексатор пересобран заново", T + 203_600)
-    # нет общего токена («сборка» ≠ «сборку» — без стемминга)
+    # нет НИ ОДНОГО общего канон-токена даже после лемматизации
     await _node("сборка упала с ошибкой", T + 300_000)
-    await _node("релиз починила сборку к вечеру", T + 303_600)
+    await _node("релиз катапультировался к вечеру", T + 303_600)
 
     result = await miner_markers(db, "user")
 

@@ -30,10 +30,14 @@ class Atom:
 
 
 def _canonical_key(clause: str, kind: MemoryKind) -> str:
+    from config import config
+
     from rag.synonyms import canonical_form, load_counter_signals, load_synonyms
+    from shared.morph import normal_form
 
     syn = load_synonyms()
     counters = load_counter_signals()
+    lemmatize = bool(config.get("rag", "lemmatize", default=False))
     words = re.findall(r"[а-яёa-z0-9]+", clause.lower())
     canon: list[str] = []
     for w in words:
@@ -43,6 +47,12 @@ def _canonical_key(clause: str, kind: MemoryKind) -> str:
         # переименование падает в тот же ключ, C4 строит superseded-цепочку сам.
         if w in counters:
             w = counters[w]
+        # S19-хвост: лемма схлопывает словоизменение («зарплаты» → «зарплата»);
+        # drift-риск задокументирован в config.yaml — старые ключи не пере-хэшируются.
+        if lemmatize and len(w) > 2:
+            lemma = normal_form(w)
+            if lemma and len(lemma) > 2:
+                w = lemma
         # синонимы → одна каноническая форма (алфавитно-первая), postgres/postgresql/psql → postgres
         canon.append(canonical_form(w, syn))
         if len(canon) == 4:

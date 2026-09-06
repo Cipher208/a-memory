@@ -66,12 +66,36 @@ def _canon(w: str, syn: dict[str, list[str]]) -> str:
 
 
 def _canon_tokens(text: str, syn: dict[str, list[str]] | None = None) -> set[str]:
-    """Редкие токены текста: [а-яёa-z0-9]+ lowercase, len>=4, не стоп-слова, канонизированные."""
+    """Редкие токены текста: [а-яёa-z0-9]+ lowercase, len>=4, не стоп-слова, канонизированные.
+
+    S19-хвост (Эли ошиблась — стемминга не было): `rag.lemmatize` → RU-леммы
+    pymorphy3 схлопывают словоизменение («зарплаты» → «зарплата»), topic_overlap
+    перестаёт терять морфологию. Кэш-ключ ингестора сеется по raw-content —
+    лемматизация здесь не смещает существующие векторы.
+    """
     if syn is None:
         from rag.synonyms import load_synonyms
 
         syn = load_synonyms()
-    return {_canon(w, syn) for w in _TOKEN_RE.findall(text.lower()) if len(w) >= 4 and w not in _STOP_TOKENS}
+    lemmatize = _lemmatize_enabled()
+    out: set[str] = set()
+    for w in _TOKEN_RE.findall(text.lower()):
+        if len(w) < 4 or w in _STOP_TOKENS:
+            continue
+        if lemmatize:
+            from shared.morph import normal_form
+
+            lemma = normal_form(w)
+            if lemma and len(lemma) >= 4:  # короткая лемма = смысл теряется, остаёмся на токене
+                w = lemma
+        out.add(_canon(w, syn))
+    return out
+
+
+def _lemmatize_enabled() -> bool:
+    from config import config
+
+    return bool(config.get("rag", "lemmatize", default=False))
 
 
 async def _layer_nodes(conn: Any, layer: str) -> list[tuple[int, str]]:

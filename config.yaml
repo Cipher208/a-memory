@@ -92,6 +92,11 @@ rag:
   # ⟨LOC_N⟩). Model install: pip ru-core-news-sm; сбои → circuit breaker → en-NER/
   # словарь/regex. false = только словарь ru_personas + en-NER.
   ru_ner: true
+  # S19-хвосты: RU-морфология через pymorphy3 (lazy, сбои → сырые токены).
+  # lemmatize: леммы в _canon_tokens (topic_overlap/wire_new_node) и канон-ключах
+  # дистиллера. Внимание ключам: смена деривации = новые факты о старых темах
+  # получат новые ключи (старые не пере-хэшируются) — переобучаться вручную.
+  lemmatize: true
 
 # === Retrieval ablation arms (Phase G Task 7, для №11-eval) ===
 # env RETRIEVAL_MODE перекрывает yaml; невалидное значение → 'full'.
