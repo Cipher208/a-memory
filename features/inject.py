@@ -80,6 +80,12 @@ async def build_inject_blocks(
 
     from shared.tokens import estimate_tokens
 
+    # S18 D6: per-block cap — один длинный факт/хит не съедает бюджет.
+    max_chars = int(config.get("inject", "max_chars", default=400))
+
+    def _cap(content: str) -> str:
+        return content[:max_chars] if len(content) > max_chars else content
+
     blocks: list[dict[str, Any]] = []
     remaining = budget
 
@@ -89,6 +95,7 @@ async def build_inject_blocks(
             content = str(h.get("content") or h.get("value") or h.get("summary") or h.get("title") or "")
             if not content:
                 continue
+            content = _cap(content)
             cost = estimate_tokens(content)
             if cost > remaining:
                 break
@@ -99,6 +106,7 @@ async def build_inject_blocks(
     recent = [r for r in mem.l1.get_recent(10) if r.timestamp >= cutoff]
     if recent:
         content = "; ".join(f"{r.role}: {r.content[:80]}" for r in recent)
+        content = _cap(content)
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "recent", "content": content, "score": 0.0})
@@ -116,6 +124,7 @@ async def build_inject_blocks(
     ]
     if gap_lines:
         content = " | ".join(gap_lines)[: max(0, remaining)]
+        content = _cap(content)
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "gap", "content": content, "score": 0.5})
@@ -129,6 +138,7 @@ async def build_inject_blocks(
         pad = read_entries(user_id, "user")
         if pad:
             content = "; ".join(f"{e['key']}: {e['content'][:80]}" for e in pad[:10])
+            content = _cap(content)
             cost = estimate_tokens(content)
             if cost <= remaining:
                 blocks.append({"kind": "scratchpad", "content": content, "score": 0.85})
@@ -155,6 +165,7 @@ async def build_inject_blocks(
             top = []
         if top:
             content = "; ".join(f"{f.key}={f.value[:80]}" for f in top)
+            content = _cap(content)
             cost = estimate_tokens(content)
             if cost <= remaining:
                 blocks.append({"kind": "rehydrate", "content": content, "score": 0.9})
@@ -174,6 +185,7 @@ async def build_inject_blocks(
             lines.append(f"#{p['id']} {p['kind']}: {gist} ({age_days:.0f}d)")
         header = f"{len(pending)} staged mutation(s) await review (expire in 7d). Decide: memory_proposals(action='decide', proposal_id=…, approve=true|false)"
         content = header + "\n" + "\n".join(lines)
+        content = _cap(content)
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "proposals", "content": content, "score": 0.6})
@@ -186,6 +198,7 @@ async def build_inject_blocks(
 
         for hit in evaluate_disclosures(user_id, text):
             content = f"{hit['name']}: {hit['content']}"
+            content = _cap(content)
             cost = estimate_tokens(content)
             if cost <= remaining:
                 blocks.append({"kind": "triggered", "content": content, "score": 0.95})
@@ -198,6 +211,7 @@ async def build_inject_blocks(
     important = [f for f in facts if f.importance >= important_min and getattr(f, "visibility", "visible") == "visible"]
     if important:
         content = "; ".join(f"{f.key}={f.value[:80]}" for f in important)
+        content = _cap(content)
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "important", "content": content, "score": max(f.importance for f in important)})
@@ -211,6 +225,7 @@ async def build_inject_blocks(
         pinned = []
     if pinned:
         content = "; ".join(f"📌 {f.key}={f.value[:80]}" for f in pinned)
+        content = _cap(content)
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "pinned", "content": content, "score": 1.0})

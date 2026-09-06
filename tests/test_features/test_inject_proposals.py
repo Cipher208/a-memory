@@ -70,3 +70,18 @@ async def test_inject_no_proposals_block_when_empty(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(inject_mod, "_pending_proposals", _empty)
     blocks = await inject_mod.build_inject_blocks(_FakeMem(), _FakeRag(), user_id="u1", text="", budget=2000)
     assert "proposals" not in [b["kind"] for b in blocks]
+
+
+async def test_inject_blocks_capped_per_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S18 D6: per-block max_chars cap — один длинный RAG-хит не съедает бюджет."""
+    from features import inject as inject_mod
+
+    class _LongRag:
+        async def search(self, query: str, user_id: str = "default", limit: int = 5, **kw) -> list:
+            return [{"content": "д" * 900, "score": 0.9}, {"content": "короткий хит", "score": 0.8}]
+
+    blocks = await inject_mod.build_inject_blocks(_FakeMem(), _LongRag(), user_id="u1", text="поиск", budget=3000)
+    relevant = [b for b in blocks if b["kind"] == "relevant"]
+    assert relevant, "RAG-хиты попали в inject"
+    assert all(len(b["content"]) <= 400 for b in relevant), f"cap не сработал: {[len(b['content']) for b in relevant]}"
+    assert any("короткий хит" in b["content"] for b in relevant), "короткий хит не потерялся"
