@@ -272,3 +272,15 @@
 - dense_per_kind 0.20 acc — ожидаемо: арм ищет только L4/rag по kind_for_text(query), wiki/episodic недоступны (это конструкция арма, не баг). ENGRAM-схема «+15 pts @ 1% токенов» не воспроизводится на многослойной памяти без dense-модели; наш hash-fallback эмбеддинг-тир не даёт dense-качества.
 - gated −8.5% construction_tokens при acc=1.0 — pre-gate кандидат на включение в проде ПОСЛЕ прогона на LongMemEval-S (HF сейчас недоступен оффлайн — прогон откладывается до сети; MINI-вердикт прелиминарный).
 - dense_per_kind остаётся армом №11-eval, НЕ прод-путём.
+
+**Прогон Plan A/C — as-shipped (2026-09-06, eb6f959..5c9a67d):**
+
+| пункт | план | commit | verdict |
+|---|---|---|---|
+| GA min-max ACT-R | A.1 | ead6b20 | per-query `_minmax_actr` [1.0,1.3] в multi_source: топ-факт ×1.3, худший нейтральный 1.0 (floor=нейтральный, не усреднение) |
+| maxChars per-block | A.2 | b95a8f1 | `_cap(400)` на всех 9 build-точках inject; `inject.max_chars` default-ON (единственное исключение из default-off) |
+| semantic dedup | A.3 | 99279e5 | cos>0.92 same-kind LIMIT 50, `memory.semantic_dedup` default-OFF; позиция — ДО conflict-check (иначе парафрай рождает конфликт-пару из дубликата — тест поймал) |
+| B2 is_current | C.1 | a0424be | глобальное скрытие earlier: C4-версионированный ключ `::vN` ИЛИ same-key scope=later (private-later не закрывает); `include_superseded=True` возвращает скрытые; каждый item несёт `is_current`; плоский SQL на earlier-строку вместо двух из плана (план-SQL имел key=?/LIKE-коллизию) |
+| changed_since | C.2 | 5c9a67d | дельта-поллинг `get_intervals` по valid_from >= порога (Memanto); None — вся цепочка как раньше |
+
+План-отклонения: тест B2 усилен (12 филлеров — later гарантированно off-page, план-версия при limit=10 пару не роняла); фикстура `hermetic_core` (не `hermetic_cm`); mypy требует tuple(params) в execute.
