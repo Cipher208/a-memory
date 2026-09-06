@@ -114,3 +114,37 @@ async def test_conflict_same_canon_key_no_self_overwrite(cm) -> None:
     metas = sorted(_json.loads(r["metadata"])["scope"] for r in rows)
     assert metas == ["earlier", "later"]
     assert rows[0]["value"] != rows[1]["value"], "значения не перезаписаны"
+
+
+@pytest.mark.asyncio
+async def test_semantic_dedup_skips_near_duplicate(cm, monkeypatch) -> None:
+    """S18 п.5: косинус > 0.92 против существующего same-kind факта — skip + advisory.
+
+    Эмбеддинги мокнуты детерминированно: первый факт в [1,0,0], парафраз в
+    [0.99, 0.1, 0] (cos ≈ 0.995), чужой текст в [0, 1, 0] (cos = 0)."""
+    from lifecycle.distiller import distill_and_route
+
+    fake_mem, fake_graph = FakeMem(), MagicMock()
+
+    from shared import embeddings as emb_mod
+
+    vectors: dict[str, list[float]] = {}
+
+    async def _fake_embed(texts: list[str], *, prefix: str = "") -> list[list[float]]:
+        out = []
+        for t in texts:
+            key = t.strip()
+            if key not in vectors:
+                vectors[key] = [1.0, 0.0, 0.0] if "Acme" in t else ([0.99, 0.1, 0.0] if "Corporation" in t else [0.0, 1.0, 0.0])
+            out.append(vectors[key])
+        return out
+
+    monkeypatch.setattr("config.config._data", {"memory": {"semantic_dedup": True}}, raising=False)
+    monkeypatch.setattr(emb_mod, "embed_texts", _fake_embed)
+
+    r1 = await distill_and_route(fake_mem, fake_graph, "semu1", "решил работать в Acme Corp постоянно", 0.9)
+    assert r1["l4_saved"] >= 1, "первый факт сохраняется (база пуста)"
+    r2 = await distill_and_route(fake_mem, fake_graph, "semu1", "решил работать в Acme Corporation вечно", 0.9)
+    assert r2["l4_saved"] == 0, f"парафрай сошёлся по косинусу — дубликат не сохранён: r2={r2}"
+    assert r2["semantic_skipped"] >= 1, "счётчик semantic_skipped проставлен"
+    assert r2["similar_to"], "A2-advisory содержит ключ существующего факта"

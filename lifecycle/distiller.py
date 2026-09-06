@@ -49,6 +49,45 @@ def _canonical_key(clause: str, kind: MemoryKind) -> str:
 # выше порога — дубликат, skip (не плодим near-dup L4-ключи).
 NOVELTY_JACCARD_MAX = 0.85
 
+# S18 п.5: 3-й сигнал дедупа (после exact-SHA на L0 и Jaccard novelty) —
+# косинус против существующих same-kind фактов. Config memory.semantic_dedup.
+_SEMANTIC_DEDUP_MAX = 0.92
+
+
+async def _semantic_duplicate(cm: Any, clause: str, kind: MemoryKind, user_id: str, layer: str) -> str | None:
+    """Key существующего L4-факта с косинусом > _SEMANTIC_DEDUP_MAX, иначе None.
+
+    Флаг memory.semantic_dedup (default off — включается после №11-eval).
+    Эмбеддинги недоступны (breaker/hash off/сбой) → None: dedup деградирует,
+    сохранение не блокируется. Сравнение в пределах kind — факты разных
+    типов не конфликтуют.
+    """
+    from config import config
+
+    if not bool(config.get("memory", "semantic_dedup", default=False)):
+        return None
+    try:
+        from shared.embeddings import embed_texts, similarity
+
+        conn = await cm.get("memory.db")
+        rows = await (
+            await conn.execute(
+                "SELECT key, value FROM core_memory WHERE layer=? AND user_id=? AND memory_kind=? LIMIT 50",
+                (layer, user_id, kind.value),
+            )
+        ).fetchall()
+        if not rows:
+            return None
+        vecs = await embed_texts([clause, *[str(r["value"]) for r in rows]])
+        if len(vecs) != len(rows) + 1:
+            return None
+        for i, r in enumerate(rows):
+            if similarity(vecs[0], vecs[i + 1]) > _SEMANTIC_DEDUP_MAX:
+                return str(r["key"])
+    except Exception:
+        return None
+    return None
+
 
 def _merged_meta(raw: Any, source_rid: int) -> dict[str, Any]:
     """S6a-4: metadata L4-строки с вмерженным source_raw_id (не затирая остальное)."""
@@ -158,6 +197,7 @@ async def distill_and_route(
         "l3_saved": 0,
         "conflicts": 0,
         "novelty_skipped": 0,
+        "semantic_skipped": 0,  # S18 п.5: cosine>0.92 дедуп
         "similar_to": [],  # S17 A2-advisory: ключи, с которыми клауза пересеклась (near-dup/конфликт)
     }
     # S17 ENGRAM: procedural («как сделать X») — agent-self track, L4 агентского слоя.
@@ -186,6 +226,13 @@ async def distill_and_route(
             if not _is_novel(clause, [str(r["value"]) for r in rows]):
                 stats["novelty_skipped"] += 1
                 stats["similar_to"].append(key)  # A2-advisory: парафраз этого ключа уже хранится
+                continue
+            # S18 п.5: semantic dedup — 3-й сигнал, до conflict-check (близкий
+            # парафрай не должен рождать конфликт-пару, он просто дубликат).
+            sem_dup = await _semantic_duplicate(cmem._cm, clause, kind, user_id, cmem.layer)
+            if sem_dup is not None:
+                stats["semantic_skipped"] += 1
+                stats["similar_to"].append(sem_dup)
                 continue
         conflict = await resolver.check(user_id, clause)
         has_conflict = bool(conflict.get("is_conflict"))
