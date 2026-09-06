@@ -216,6 +216,9 @@
 - B2 recall hygiene: is_current-view / superseded-флаги, чтобы recall не отдавал закрытые интервалы (bi-temporal читает old+new только для KU-запросов — остальное фильтрует).
 - 3-option конфликт-контракт агенту (supersede/retain/annotate): ConflictResolver.resolve есть, agent-facing surface нет — тул или расширение memory_recall.
 - Gap-registry (3M Find Gap): L3-questions → ночной registry → proactive acquisition.
+- **B6 UPDATE>MERGE>CREATE + лимит активных сущностей** (TencentDB): был в драфте как «Phase G после entity linking, needs eval-цифры» — в диздок не перенесён. Стадия: после №11 (heuristic размера, false-merge дороже разрастания).
+- **Offload тяжёлых tool-логов в refs/*.md** (TencentDB v2): в контексте только Mermaid-канвас с node_id (Mermaid есть; offload-механика — Stage 2 мелочь).
+- **Circuit breaker на harness-адаптерах** (TencentDB v9: 5 fails → 60s pause): hermes-плагин breaker'а не имеет (проверено) — Stage 2 мелочь, адаптеры Hermes/cow/MiMo.
 
 ### [S19] Сверка исходников (2026-09-05, a-memory-start-FGH / l0-l4-pipeline / graph-miners / spacy-integration)
 
