@@ -517,6 +517,11 @@ async def _f_pair_edges(conn: Any, layer: str, rows: list[Any]) -> int:
 _EMBED_JACCARD = 0.7
 _EMBED_TOPK = 15  # не более 15 рёбер semantic_overlap на узел от этого минера
 _SEMANTIC_WEIGHT = 0.5
+# S17 доп.9: подтверждающий слой — keyword-сигнал (общие теги/канон-токены)
+# соглашается с embedding-сходством → вес 0.6, противоречит → ребро отбрасывается.
+_SEMANTIC_CONFIRMED_WEIGHT = 0.6
+# S17 доп.10: anomalous-vector — |вектор| == 0 или все компоненты равны (бит-
+# вырожденность) = мусорный узел, флаг `anomaly:junk_vector` в epi_tags.
 
 # #6: маркер-словарь причинно-следственного перехода (план G4b, Step 4).
 _MARKERS = re.compile(r"починила|исправила|теперь работает|сломалось|переделали|решено|закрыто")
@@ -711,15 +716,32 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     tags: dict[int, list[str]] = {}
     for r in tag_rows:
         tags.setdefault(int(r["node_id"]), []).append(_canon(str(r["tag"]), syn))
+    token_sets = [_canon_tokens(content, syn) for _, content in nodes]
+    # S17 доп.9: подтверждающий слой (graph.embedding_crosscheck, default off).
+    from config import config
+
+    crosscheck = bool(config.get("graph", "embedding_crosscheck", default=False))
 
     try:
         # A-MEM rich embedding: f"{content} {tags}"; канонизация (_canon из T2) —
         # на тегах, чтобы варианты имени/технологии попадали в один кэш-ключ смысла.
         # Ключ кэша = raw content — переиспользует векторы, посеянные ingestor'ом.
-        vecs = await embed_texts([f"{c} {' '.join(sorted(tags.get(nid, [])))}" for nid, c in nodes])
+        # anomaly:*-теги (доп.10) в текст не попадают — флаг не меняет вектор узла.
+        vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
         bits = [_bits_int(embed_to_binary(v, dim=len(v))) for v in vecs]
     except Exception:
         return {"edges": 0}  # эмбеддинг-бэкенд недоступен (нет numpy/модели) — минер пропускается
+
+    # S17 доп.10: бит-вырожденные векторы (0 бит — текст без значимых токенов,
+    # мусор из L3-дампов) → флаг `anomaly:junk_vector`, кандидат на чистку.
+    # anomaly:*-теги в rich-embed текст не попадают (см. ниже) — самозагрязнения нет.
+    flagged = 0
+    for (nid, _), b in zip(nodes, bits, strict=True):
+        if b == 0:
+            await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, 'anomaly:junk_vector')", (nid,))
+            flagged += 1
+    if flagged:
+        await conn.commit()
 
     cands: list[tuple[float, int, int]] = []
     for i in range(len(nodes)):
@@ -735,11 +757,20 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
         a, b = nodes[i][0], nodes[j][0]
         if degree.get(a, 0) >= _EMBED_TOPK or degree.get(b, 0) >= _EMBED_TOPK:
             continue  # top-k=15 на узел
-        edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_WEIGHT, "embedding")
+        if crosscheck:
+            # доп.9: keyword-голос — общие канон-токены ИЛИ общие теги;
+            # «похоже по вектору, но ни лексического, ни тегового следа» на
+            # hash-векторах = шум → ребро не пишется (доп.9 «отбрасывается»).
+            lex_agree = bool(token_sets[i] & token_sets[j]) or bool(set(tags.get(a, [])) & set(tags.get(b, [])))
+            if not lex_agree:
+                continue
+            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_CONFIRMED_WEIGHT, "embedding")
+        else:
+            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_WEIGHT, "embedding")
         degree[a] = degree.get(a, 0) + 1
         degree[b] = degree.get(b, 0) + 1
     await conn.commit()
-    return {"edges": edges}
+    return {"edges": edges, "anomalies": flagged}
 
 
 async def _find_or_add_node(conn: Any, layer: str, user_id: str, node_type: str, content: str) -> int:

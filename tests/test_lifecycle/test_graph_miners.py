@@ -498,6 +498,62 @@ async def test_miner_embedding_topk_cap_fifteen_per_node(db):
 
 
 @pytest.mark.asyncio
+async def test_miner_embedding_crosscheck_confirms_and_drops(db, monkeypatch):
+    """S17 доп.9: crosscheck ON — keyword-согласие → вес 0.6; лексический след
+    отсутствует → ребро отбрасывается. OFF (default) — статус-кво 0.5."""
+    t_confirm, t_drop, t_far = (
+        "очередь событий починки воркера",
+        "пирог рецепт капуста духовка",
+        "очередь событий воркера починена",
+    )
+    await _seed_vector(t_confirm, _V_ALL_ON)
+    await _seed_vector(t_drop, _V_NEAR)  # далёкий текст с близким вектором = шум-пара
+    await _seed_vector(t_far, _V_NEAR)
+    await _node(t_confirm, T)
+    _n_drop, n_far = await _node(t_drop, T), await _node(t_far, T)
+
+    # OFF: обе пары получают рёбра 0.5 (статус-кво, crosscheck не спросили)
+    from lifecycle.graph_miners import miner_embedding
+
+    r_off = await miner_embedding(db, "user")
+    rows_off = await _edges("semantic_overlap")
+    assert r_off["edges"] == 3 and all(r["weight"] == pytest.approx(0.5) for r in rows_off)
+
+    # ON: confirm-пара (общие токены) → 0.6; шум-пара (лексики нет) → отброшена
+    monkeypatch.setattr("config.config._data", {"graph": {"embedding_crosscheck": True}}, raising=False)
+
+    # чистим рёбра и перезапускаем только embedding-минер
+    conn = await db.get("memory.db")
+    await conn.execute("DELETE FROM epi_edges WHERE relation='semantic_overlap'")
+    await conn.commit()
+    r_on = await miner_embedding(db, "user")
+    rows_on = await _edges("semantic_overlap")
+    assert r_on["edges"] == 1, f"шум-пара отброшена: {r_on}"
+    assert all(r["weight"] == pytest.approx(0.6) for r in rows_on), f"подтверждённый вес 0.6: {rows_on}"
+    pair = {rows_on[0]["source_id"], rows_on[0]["target_id"]}
+    assert n_far in pair, "оставшееся ребро — keyword-подтверждённая пара"
+
+
+@pytest.mark.asyncio
+async def test_miner_embedding_flags_junk_vectors(db):
+    """S17 доп.10: бит-вырожденный вектор → anomaly:junk_vector; живые узлы
+    не флагуются; аномальный узел не участвует в рёбрах."""
+    await _node("очередь событий починки воркера", T)
+    await _seed_vector("очередь событий починки воркера", _V_ALL_ON)
+    junk = await _node("про ужин", T)  # контент живой, но вектор сеется вырожденный
+    await _seed_vector("про ужин", [0.0] * 384)  # все нули → 0 бит (MIB sign>0 = false)
+
+    from lifecycle.graph_miners import miner_embedding
+
+    result = await miner_embedding(db, "user")
+
+    assert result["anomalies"] == 1, f"один junk-узел: {result}"
+    conn = await db.get("memory.db")
+    tags = await (await conn.execute("SELECT node_id, tag FROM epi_tags WHERE tag='anomaly:junk_vector'")).fetchall()
+    assert len(tags) == 1 and tags[0]["node_id"] == junk, f"флаг ровно аномальному: {tags}"
+
+
+@pytest.mark.asyncio
 async def test_miner_embedding_skips_tool_junk(db):
     await _node('{"type": "tool_result", "tool_use_id": "t1", "content": "raw"}', T)
     await _node("обычный текст про деплой сервиса", T)

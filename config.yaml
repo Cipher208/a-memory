@@ -139,6 +139,10 @@ binary:
 # === Graph ===
 graph:
   max_depth: 3
+  # S17 доп.9: подтверждающий слой минера #9 — embedding-пара сверяется с
+  # keyword-сигналом (общие теги/канон-токены): согласие → вес 0.6, конфликт →
+  # ребро не пишется. Default off (статус-кво: одиночный embedding-сигнал 0.5).
+  embedding_crosscheck: false
 
 # === Wiki ===
 # Type flags + external dirs synced on start / sync_external.
