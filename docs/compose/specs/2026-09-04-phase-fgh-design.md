@@ -198,6 +198,13 @@
 
 Плюс **EMA-гейт** (F2-обязательство): adaptive_threshold выпал из auto_save_text при переработках — порог статичный 0.5. Вернуть EMA-член в гейт (вернув репутацию «без изменений логики»).
 
+**Дополнение из первоисточника a-memory-start-FGH.md (сверка 2026-09-05):**
+
+8. **Drill-down переживает архивацию** (принцип 5 линии): diagnostics.drill_down ищет сырье только в l0_journal — после tier_l0 строка уезжает в l0_cold_archive и ссылка ведёт в тупик. Фикс: drill_down фолбэк в l0_cold_archive по source_raw_id.
+9. **Подтверждающий слой эмбеддинг-минера** (роль 2 из стартового дока): keyword-связь (теги/токены) + высокое векторное сходство → вес ребра растёт (0.4→0.6); сигналы противоречат → вес падает/ребро отбрасывается. Сейчас минер #9 пишёт semantic_overlap независимо, кросс-валидации нет.
+10. **Anomalous-vector мусор-детектор** (бонус-трюк): L3-дампы дают аномальные векторы — эмбеддинг-минер попутно флагует «мусорные узлы, кандидаты на чистку» (двойная польза с пре-чисткой). Сейчас не реализовано.
+11. **HDBSCAN-кластеризация эмбеддингов** (роль 3): сверка с louvain-комьюнити → community-хабы. Не реализовано (louvain есть, эмбеддинг-кластеров нет).
+
 ### [S18] Stage 2 — пополнение (сверка 2026-09-05, сверх S14/S16-distillate)
 
 - GA per-query min-max для ACT-R-члена в multi_source (v17 #5).
@@ -209,4 +216,28 @@
 - B2 recall hygiene: is_current-view / superseded-флаги, чтобы recall не отдавал закрытые интервалы (bi-temporal читает old+new только для KU-запросов — остальное фильтрует).
 - 3-option конфликт-контракт агенту (supersede/retain/annotate): ConflictResolver.resolve есть, agent-facing surface нет — тул или расширение memory_recall.
 - Gap-registry (3M Find Gap): L3-questions → ночной registry → proactive acquisition.
+
+### [S19] Сверка исходников (2026-09-05, a-memory-start-FGH / l0-l4-pipeline / graph-miners / spacy-integration)
+
+> Построчная сверка пяти исходных доков против диздока/кода. Найденные пропуски —
+> в S17 (немедленно) или сюда (Stage 2). Помечены [S17↑] если перенесены.
+
+**Из start-FGH / l0-l4-pipeline (линия L0–L4):**
+- **wiki_id на факте** (обратная ссылка L4→wiki: «факт помнит wiki_id источника»): реализован только минер wiki_fact_links (ребро), колонки/метаданных wiki_id на core_memory нет → Stage 2: metadata.wiki_ids при [[fact:]]-линковке.
+- **Recall со страницы** (page → связанные факты, гидратация вниз): нет прямой read-поверхности — потребители ходят через graph_node. Stage 2 (пара к wiki_id).
+- **Дедуп capture по content_hash** [S17↑ п.5].
+
+**Из graph-miners (граф):**
+- **Подтверждающий слой минера #9** [S17↑ доп. 9]: голосование keyword+embedding → weight 0.4→0.6.
+- **Anomalous-vector мусор-детектор** [S17↑ доп. 10].
+- **HDBSCAN-кластеризация** [S17↑ доп. 11].
+- **Стемминг в минере #2** (Эли: «стемминг уже есть» — по коду его нет; _TOKEN_RE голый regex → topic_overlap теряет RU-морфологию): Stage 2 — лёгкий стеммер ( Porter RU) в _canon_tokens.
+- **Retrieval-фильтр по heuristic-тегам** («recall может фильтровать по источнику ребра»): фильтр рёбер по provenance при graph-expand — Stage 2 (низкий приоритет).
+
+**Из spacy-integration (4 варианта углубления, все вне диздока — фиксируются сюда):**
+1. **ru_core_news_sm на privacy-гейт** (~12МБ): русский NER вместо en-модели на кириллице; расширение маскировки на произвольные русские PERSON/ORG без ручного словаря. Garbage-guard обязателен (ru-NER шумит на коротких текстах). 15 минут работы — ближайший шаг.
+2. **textcat-типизация клауз** (усиление kind_for_text): обучающие данные УЖЕ ЕСТЬ (core_memory.memory_kind + decay_rate ≤0.005 → самоклейб «инвариант vs событие»); argmax + порог уверенности, ниже порога → fallback keyword-мапы; eval на H-harness (NDCG/drift).
+3. **Лемматизация канон-ключей**: ru-леммы схлопывают формы («уволилась/увольнение» → одна основа) — меньше ручных синонимов.
+4. **Морфо-фичи для ImportanceScorer** (POS/модальность) — низкий приоритет.
+- **Паттерн интеграции** (инвариант): lazy-load + circuit-breaker (переиспользовать _embedding_breaker); fallback на правила при сбое; config-флаг; eval до/после.
 - **Минорный хвост осознанно-отложенного (distillate)**: B2 is_current-view; B4 ttl_minutes на тул-поверхности; B7 heat sum+1; B10 recurring→staging; C1 генератор сцен; C4 pinned; C5 private-флаг; C6 Layer Charter; C9 compact-render; D2 .abstract-тир; D3 MOC-first роутер; D4 retrieval-трейс в L0; D7 session-diversity; D12 BFS-upgrade `_from_graph`; E6-ретро skill-mine; changed-since модальность; Aeon lookaside buffer; Tenure hard-scope filter post-RRF; CWL dependency-aware инъекция; no-silent-fallback инвариант; reconstruction-check hot→warm; APEX fuse-then-summarize; Basic Memory observation-синтаксис. Каждый помечен в research draft с вердиктом; попадание в волны — на планировании.
