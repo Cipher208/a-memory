@@ -103,6 +103,13 @@ retrieval:
   # S17 п.3: AdaptiveRAG pre-gate (27 query-features, LLM-free) — дешёвый
   # skip-тир источников поверх RRF в full-арме. Default off до №11-абляции.
   pregate: false
+  # S19.2 textcat-пилот: 2-классовая модель стабильности клаузы (stable vs
+  # ephemeral) промоутит keyword-unmatched факты из L3 в L4. Модель обучается
+  # scripts/train_textcat.py (self-labels live core_memory), артефакт кладётся
+  # в <data_dir>/textcat_model. Default off — пилот: P 0.49 < keyword 0.64.
+  textcat: false
+  # textcat_threshold: 0.9   # уверенность argmax; ниже → fallback keyword-мапы
+  # textcat_model_path: ""   # оверрайд пути (default: <data_dir>/textcat_model)
 
 # === Memory write gate (S18) ===
 memory:

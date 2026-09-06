@@ -214,7 +214,16 @@ async def distill_and_route(
         key = _canonical_key(clause, kind)
         # ENGRAM procedural: how-to живёт в L4-namespace агента, не юзера.
         target: CoreMemory = cmem
-        if route_kind(kind) == "l4" and kind == MemoryKind.PROCEDURAL:
+        # S19.2 textcat: keyword-unmatched FACT (decay 0.010 → l3) с уверенным
+        # 'stable' не должна умирать в эпизодах — промоут в L4 (kind=FACT).
+        # Keyword-матчи не трогаются; флаг rag.textcat default OFF (pilot).
+        route = route_kind(kind)
+        if route == "l3" and kind == MemoryKind.FACT:
+            from shared.textcat import route_promote_stable
+
+            if route_promote_stable(clause):
+                route = "l4"
+        if route == "l4" and kind == MemoryKind.PROCEDURAL:
             if agent_cmem is None:
                 agent_cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="agent")
                 await agent_cmem._init_db()
@@ -241,7 +250,7 @@ async def distill_and_route(
                 continue
         conflict = await resolver.check(user_id, clause)
         has_conflict = bool(conflict.get("is_conflict"))
-        if route_kind(kind) == "l4":
+        if route == "l4":
             if has_conflict:
                 # C4 condition-splitting: противоречие — не затирание и не
                 # молчаливый contradiction-only, а ДВЕ условные записи.

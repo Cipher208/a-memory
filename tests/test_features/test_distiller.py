@@ -50,6 +50,44 @@ async def test_invariant_routes_to_l4_event_to_l3(cm) -> None:
 
 
 @pytest.mark.asyncio
+async def test_textcat_promotes_stable_fact_off_by_default(cm, monkeypatch) -> None:
+    """S19.2: keyword-unmatched FACT умирает в L3 (статус-кво); с мокнутым
+    'stable' — промоутится в L4; default OFF — статус-кво не меняется."""
+    from lifecycle.distiller import distill_and_route
+    from shared.memory_types import _KEYWORD_MAP, kind_for_text
+
+    clause = "сервер биллинга переехал в第四 датацентр Марта"  # без keyword-маркеров
+    assert not any(kw in clause.lower() for _, kws in _KEYWORD_MAP for kw in kws), "setup: keyword-miss"
+    assert kind_for_text(clause) is not None  # FACT fallback
+
+    # 1) default OFF: статус-кво → L3
+    fake_mem, fake_graph = FakeMem(), MagicMock()
+    r = await distill_and_route(fake_mem, fake_graph, "tx1", clause, 0.7)
+    assert r["l3_saved"] >= 1, f"OFF → ephemeral route: {r}"
+
+    # 2) ON + модель говорит 'stable' → L4
+    monkeypatch.setattr("config.config._data", {"rag": {"textcat": True}}, raising=False)
+    import shared.textcat as tc
+
+    monkeypatch.setattr(
+        tc,
+        "_model",
+        lambda: type(
+            "N",
+            (),
+            {
+                "make_doc": staticmethod(lambda t: object()),
+                "__call__": staticmethod(lambda d: type("D", (), {"cats": {"stable": 0.97, "ephemeral": 0.03}})()),
+            },
+        )(),
+    )
+    fake_mem2, fake_graph2 = FakeMem(), MagicMock()
+    r2 = await distill_and_route(fake_mem2, fake_graph2, "tx2", clause, 0.7)
+    assert r2["l4_saved"] >= 1, f"stable → L4 промоут: {r2}"
+    assert r2["l3_saved"] == 0, f"не дублируется в L3: {r2}"
+
+
+@pytest.mark.asyncio
 async def test_conflict_not_silent_update(cm) -> None:
     from lifecycle.distiller import distill_and_route
 
