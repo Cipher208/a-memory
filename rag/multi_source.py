@@ -311,12 +311,15 @@ class MultiSourceRAG:
             for r in await cur.fetchall()
         ]
 
-    async def _expand_graph(self, results: list[dict[str, Any]], user_id: str) -> list[dict[str, Any]]:
+    async def _expand_graph(self, results: list[dict[str, Any]], user_id: str, edge_exclude: set[str] | None = None) -> list[dict[str, Any]]:
         """GraphRAG stage (B1.6): append 1-hop epi_edges neighbors of graph hits.
 
         Neighbors enter the rerank with a damped score (0.5 * edge weight *
         confidence) under source="graph_expand". Primary results pass through
         untouched; no-op without a cm or without graph hits.
+
+        S19: edge_exclude — имена heuristic-происхождения (tokens/tags/...):
+        рёбра с тегом heuristic:<name> не разворачиваются. None = статус-кво.
         """
         if not self.cm:
             return results
@@ -332,14 +335,22 @@ class MultiSourceRAG:
 
         conn = await self.cm.get(DB_NAME)
         ph = ",".join("?" * len(node_ids))
+        where_extra = ""
+        params: list[Any] = [*node_ids, *node_ids, user_id]
+        if edge_exclude:
+            # epi_edges.tags — JSON-массив строк ('["heuristic:tokens"]'):
+            # фильтр по подстроке каждого exclude-имени.
+            like_conds = " AND ".join(["e.tags NOT LIKE ?" for _ in edge_exclude])
+            where_extra = f" AND ({like_conds})"
+            params.extend(f'%"heuristic:{name}"%' for name in edge_exclude)
         cur = await conn.execute(
             f"""SELECT n.node_id, n.content, n.node_type, n.confidence, e.weight
                 FROM epi_edges e
                 JOIN epi_nodes n
                   ON (n.node_id = e.target_id AND e.source_id IN ({ph}))
                   OR (n.node_id = e.source_id AND e.target_id IN ({ph}))
-                WHERE n.user_id=?""",
-            (*node_ids, *node_ids, user_id),
+                WHERE n.user_id=?{where_extra}""",
+            params,
         )
         existing = {r.get("id") for r in results}
         for row in await cur.fetchall():

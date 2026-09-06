@@ -163,6 +163,41 @@ class TestGraphExpand:
         m = MultiSourceRAG(FakeRAG(), FakeWiki(), cm=None)
         assert asyncio.run(m._expand_graph([{"id": 1, "source": "core", "score": 0.5}], "u1")) == [{"id": 1, "source": "core", "score": 0.5}]
 
+    def test_graph_expand_excludes_tagged_edges(self, tmp_path):
+        """S19: edge_exclude — рёбра с тегом heuristic:<name> не разворачиваются;
+        default None = статус-кво (все 1-hop соседи)."""
+        import asyncio
+
+        from graph.epistemic import EpistemicGraph
+        from rag.multi_source import MultiSourceRAG
+        from shared.connection import AsyncConnectionManager
+
+        cm = AsyncConnectionManager(base_dir=str(tmp_path))
+        graph = EpistemicGraph(cm=cm, layer="user")
+
+        async def t():
+            await graph.init_db()
+            alice, _ = await graph.find_or_add_entity("u1", "Алиса")
+            noisy, _ = await graph.find_or_add_entity("u1", "Шум", entity_type="concept")
+            await graph.add_edge(alice, noisy, "cofired", tags=["heuristic:tokens"])
+            m = MultiSourceRAG(FakeRAG(), FakeWiki(), cm=cm)
+            primary = [
+                {
+                    "id": -alice - 3_000_000,
+                    "title": "Graph Node",
+                    "content": "Алиса",
+                    "score": 0.9,
+                    "source": "graph",
+                }
+            ]
+            excluded = await m._expand_graph([dict(r) for r in primary], "u1", edge_exclude={"tokens"})
+            unfiltered = await m._expand_graph([dict(r) for r in primary], "u1")
+            return excluded, unfiltered
+
+        excluded, unfiltered = asyncio.run(t())
+        assert not any("Шум" in r["content"] for r in excluded), f"heuristic-ребро отфильтровано: {excluded!r}"
+        assert any("Шум" in r["content"] for r in unfiltered), "без edge_exclude — статус-кво, сосед разворачивается"
+
 
 class TestActrMinMax:
     """S18 п.1: per-query min-max ACT-R multipliers (v17 #5)."""
