@@ -284,3 +284,15 @@
 | changed_since | C.2 | 5c9a67d | дельта-поллинг `get_intervals` по valid_from >= порога (Memanto); None — вся цепочка как раньше |
 
 План-отклонения: тест B2 усилен (12 филлеров — later гарантированно off-page, план-версия при limit=10 пару не роняла); фикстура `hermetic_core` (не `hermetic_cm`); mypy требует tuple(params) в execute.
+
+**Прогон Plan B/D — as-shipped (2026-09-06, ead728c..ebd7af4):**
+
+| пункт | план | commit | verdict |
+|---|---|---|---|
+| channel-гранулярность | B.1 | ead728c | `shared/channels.py`: KNOWN_CHANNELS (9) + channel_of (prefix до `:`, unknown → other) + canonical_source; без миграции — конвенция |
+| 3-option конфликт-контракт | B.2 | 85a288b | memory_proposals action=conflict (тулов по-прежнему 65): supersede/retain через ConflictResolver.resolve (группа закрыта, проигравший архивирован); annotate — аннотация в metadata СТАРОЙ стороны конфликта; ключ — детерминированная `_canonical_key(content, kind_for_text)`-связка дистиллера (плановый cmem.search fuzzy — нет metadata у items и не та запись) |
+| orphan-anchor GC | B.3 | 06d3d7b | `_orphan_anchor_gc` в graph_enrich: episode:% якоря (fact/question) без рёбер старше 7д; вызов ПЕРЕД dream (REM мостит изолированные якоря первыми — episode-токены дают Jaccard 1.0); отчёт `orphan_gc: N`; noop-тест адаптирован |
+| counter-signal → канон-ключи | B.4 | 081a446 | `_canonical_key` разворачивает superseded-имя в current ДО синоним-канонизации → переименование падает в один ключ, C4 строит superseded-цепочку сам; dual_route-пессимизация не задета |
+| gap-registry | D.1 | ff3ceb0+f0e240b | `lifecycle/gap_registry.py`: question-эпизоды (SQL по ВСЕМ пользователям, tags LIKE — search_by_tag per-user) + zero-result хвосты (≥2 повторов) → memory_gaps (gap_hash, идемпотентно check-then-write); graph_enrich фаза + отчёт `gap_registry`; zero-result ветка молчит до первого ensure минера |
+| harness breaker | D.2 | 87d91bf | `shared/harness_breaker.py`: harness_call per-agent 5 fails → 60s open (breaker_registry-backed), HarnessUnavailableError; адаптеры вне репо подключают следующим визитом |
+| retrieval-фильтр provenance | D.3 | ebd7af4 | `_expand_graph(..., edge_exclude=None)`: рёбра с тегом heuristic:<name> не разворачиваются при graph-expand; None = статус-кво (LIKE по JSON-массиву tags) |
