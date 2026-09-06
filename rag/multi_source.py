@@ -45,6 +45,28 @@ def _kind_weight(kind: str | None) -> float:
     return float(table.get(str(kind or "fact"), 1.0))
 
 
+_ACTR_FLOOR = 1.0
+_ACTR_CEIL = 1.3  # текущий максимум (1 + 0.3 * actr) сохраняется для top-факта
+
+
+def _minmax_actr(activations: list[float]) -> list[float]:
+    """Per-query min-max ACT-R множителей в [_ACTR_FLOOR, _ACTR_CEIL] (S18, v17 #5).
+
+    Без min-max факт с actr=0 и actr=1 различаются в 1.3× только в одном
+    множителе поверх разных importance — разброс немасштабируем. Min-max
+    держит span [1.0, 1.3] относительно ЛУЧШЕГО факта выдачи: топ всегда
+    получает максимум, худший — 1.0 (нейтрально, без наказания).
+    Вырожденный случай (все равны / пусто) → нейтральный 1.0.
+    """
+    if not activations:
+        return []
+    lo, hi = min(activations), max(activations)
+    if hi - lo < 1e-12:
+        return [_ACTR_FLOOR] * len(activations)
+    span = _ACTR_CEIL - _ACTR_FLOOR
+    return [_ACTR_FLOOR + span * (a - lo) / (hi - lo) for a in activations]
+
+
 class MultiSourceRAG:
     def __init__(self, rag: Any, wiki: Any, cm: Any | None = None):
         self.rag = rag
@@ -168,16 +190,19 @@ class MultiSourceRAG:
         from rag.actr import actr_activation
 
         now = time.time()
+        # S18 п.1: per-query min-max ACT-R — топ-эпизод получает ceil, худший 1.0.
+        acts = [actr_activation(now, episode.created_at, 1) for episode in episodes]
+        mult = _minmax_actr(acts)
         return [
             {
                 "id": -episode.episode_id - _ID_OFFSET_EPISODIC,
                 "title": f"Episode {episode.episode_id}",
                 "content": episode.summary,
-                "score": episode.emotional_weight * weight * (1 + 0.3 * actr_activation(now, episode.created_at, 1)),
+                "score": episode.emotional_weight * weight * mult[i],
                 "source": "episodic",
                 "created_at": episode.created_at,
             }
-            for episode in episodes
+            for i, episode in enumerate(episodes)
         ]
 
     async def _from_core(self, query: str, user_id: str, limit: int, strategy: str, weight: float) -> list[dict[str, Any]]:
@@ -204,19 +229,21 @@ class MultiSourceRAG:
             )
             freq = {int(r["target_id"]): int(r["c"]) for r in await cur.fetchall()}
 
+        # S18 п.1: per-query min-max ACT-R — топ-факт получает ceil (1.3),
+        # худший нейтральный floor (1.0) относительно этой выдачи.
+        acts = [actr_activation(now, f.get("updated_at", now), freq.get(int(f.get("entry_id", 0)), 0)) for f in facts]
+        actr_mult = _minmax_actr(acts)
+
         return [
             {
                 "id": hash(f["key"]) % 10000000,
                 "title": f["key"],
                 "content": f["value"],
-                "score": f["importance"]
-                * weight
-                * _kind_weight(f.get("memory_kind"))
-                * (1 + 0.3 * actr_activation(now, f.get("updated_at", now), freq.get(int(f.get("entry_id", 0)), 0))),
+                "score": f["importance"] * weight * _kind_weight(f.get("memory_kind")) * actr_mult[i],
                 "source": "core",
                 "entry_id": f.get("entry_id"),
             }
-            for f in facts
+            for i, f in enumerate(facts)
         ]
 
     async def _from_graph(self, query: str, user_id: str, limit: int, strategy: str, weight: float) -> list[dict[str, Any]]:

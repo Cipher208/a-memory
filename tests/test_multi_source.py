@@ -1,5 +1,7 @@
 """Tests for MultiSourceRAG — unified search across RAG + Wiki."""
 
+import pytest
+
 
 class FakeRAG:
     """Minimal RAG mock for testing."""
@@ -160,3 +162,23 @@ class TestGraphExpand:
 
         m = MultiSourceRAG(FakeRAG(), FakeWiki(), cm=None)
         assert asyncio.run(m._expand_graph([{"id": 1, "source": "core", "score": 0.5}], "u1")) == [{"id": 1, "source": "core", "score": 0.5}]
+
+
+class TestActrMinMax:
+    """S18 п.1: per-query min-max ACT-R multipliers (v17 #5)."""
+
+    def test_minmax_actr_spreads_between_floor_and_ceiling(self):
+        from rag.multi_source import _minmax_actr
+
+        out = _minmax_actr([0.0, 0.5, 1.0])
+        assert out == pytest.approx([1.0, 1.15, 1.3])
+
+    def test_minmax_actr_degenerate_all_equal(self):
+        from rag.multi_source import _minmax_actr
+
+        assert _minmax_actr([0.7, 0.7, 0.7]) == pytest.approx([1.0, 1.0, 1.0])
+
+    def test_minmax_actr_empty(self):
+        from rag.multi_source import _minmax_actr
+
+        assert _minmax_actr([]) == []
