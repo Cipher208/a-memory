@@ -293,14 +293,20 @@ class CoreMemory:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
-    async def get_intervals(self, user_id: str, key: str) -> list[dict[str, Any]]:
-        """A2.1: the full value interval chain for a key (oldest first)."""
+    async def get_intervals(self, user_id: str, key: str, changed_since: float | None = None) -> list[dict[str, Any]]:
+        """A2.1: the full value interval chain for a key (oldest first).
+
+        S18 (Memanto): changed_since → только интервалы с valid_from >= порога
+        (дельта-поллинг «что изменилось с X»); None — вся цепочка как раньше.
+        """
         conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT value, importance, memory_kind, valid_from, valid_to FROM core_memory_temporal"
-            " WHERE layer=? AND user_id=? AND key=? ORDER BY valid_from",
-            (self.layer, user_id, key),
-        )
+        sql = "SELECT value, importance, memory_kind, valid_from, valid_to FROM core_memory_temporal WHERE layer=? AND user_id=? AND key=?"
+        params: list[Any] = [self.layer, user_id, key]
+        if changed_since is not None:
+            sql += " AND valid_from >= ?"
+            params.append(float(changed_since))
+        sql += " ORDER BY valid_from"
+        cursor = await conn.execute(sql, tuple(params))
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 

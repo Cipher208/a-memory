@@ -135,3 +135,26 @@ async def test_search_hides_earlier_even_off_page(hermetic_core):
     full = await cm.search("b2u", "старое значение", limit=10, include_superseded=True)
     hidden = [i for i in full if not i["is_current"]]
     assert hidden and hidden[0]["value"].startswith("старое"), f"include_superseded=True вернул скрытую: {full}"
+
+
+async def test_get_intervals_changed_since(hermetic_core):
+    """S18 (Memanto): changed_since → дельта-поллинг «что изменилось с X».
+
+    None (default) — вся цепочка как раньше; с порогом — только интервалы
+    с valid_from >= changed_since.
+    """
+    from core.memory import CoreMemory
+
+    cm = CoreMemory(cm=connection_manager, layer="user")
+    await cm.save("cdu", "k", "v1", importance=0.5)
+    mid = time.time() + 0.001
+    await asyncio.sleep(0.01)
+    await cm.save("cdu", "k", "v2", importance=0.5)
+    await asyncio.sleep(0.01)
+    await cm.save("cdu", "k", "v3", importance=0.5)
+
+    all_iv = await cm.get_intervals("cdu", "k")
+    assert len(all_iv) >= 2
+    delta = await cm.get_intervals("cdu", "k", changed_since=mid)
+    assert len(delta) >= 1 and all(float(i["valid_from"]) >= mid for i in delta)
+    assert len(delta) < len(all_iv), "дельта меньше полной цепочки"
