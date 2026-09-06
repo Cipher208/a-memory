@@ -268,6 +268,18 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
             logger.warning("miner %s failed: %s", name, exc)
             miners[name] = {"edges": -1, "error": str(exc)[:200]}  # -1 = сбой (edges не отрицательные)
 
+    # S17 доп.11: HDBSCAN-кластеры MIB-векторов + сверка с louvain — отчётная
+    # секция за флагом (graph.embed_clusters, default off — shape отчёта стабилен).
+    from config import config
+
+    if bool(config.get("graph", "embed_clusters", default=False)):
+        with contextlib.suppress(Exception):
+            from lifecycle.embedding_clusters import cluster_embeddings
+
+            cluster_report = await cluster_embeddings(cm, layer=layer)
+            if cluster_report.get("clusters"):
+                miners["embedding"]["clusters"] = cluster_report["clusters"]
+
     # G5 sanitation: validity recheck (рёбра вне окна → status='expired').
     from lifecycle.graph_sanitation import validate_edges
 
