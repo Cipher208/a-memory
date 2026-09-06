@@ -601,6 +601,30 @@ async def test_miner_entities_spacy_org_shared_mention(db):
     assert (min(n1, n2), max(n1, n2)) in {(r["source_id"], r["target_id"]) for r in rows}
 
 
+@pytest.mark.asyncio
+async def test_miner_entities_degree_cap_anti_hub(db):
+    """B6 post-eval: multi-topic dump (все 11 синоним-классов) не собирает
+    звезду из 20 узлов — cap 12 co_mentions на узел."""
+    # хаб: текст, содержащий ВСЕ канон-классы словаря (postgres, память, деплой, бэкап, Лили...)
+    hub = await _node("postgres память деплой backup Лили внутри textpost backupstore", T)
+    for i in range(20):
+        await _node(f"postgres кластер партнёр {i}", T)
+
+    from lifecycle.graph_miners import miner_entities
+
+    result = await miner_entities(db, "user")
+
+    conn = await db.get("memory.db")
+    deg = await (
+        await conn.execute(
+            "SELECT COUNT(*) FROM epi_edges e WHERE e.relation='co_mentions' AND (e.source_id=? OR e.target_id=?)",
+            (hub, hub),
+        )
+    ).fetchone()
+    assert result["edges"] > 0, "обычные co_mentions работают"
+    assert deg[0] <= 12, f"хаб срезан лимитом 12: {deg[0]}"
+
+
 class _FakeL3:
     async def save(self, user_id: str, summary: str, weight: float, tags: list[str]) -> int:
         return 1

@@ -228,7 +228,13 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
 
 
 async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#3: словарь синонимов (канон-классы, обе стороны) + spaCy NER (латиница ORG/GPE) → `co_mentions` 0.4."""
+    """#3: словарь синонимов (канон-классы, обе стороны) + spaCy NER (латиница ORG/GPE) → `co_mentions` 0.4.
+
+    S17 B6 post-eval (2026-09-06, цифры в диздоке): false-merge не обнаружен
+    (0 дублей на 3 инстансах), зато разрастание реально — multi-topic dump с
+    11 классами собрал 109 co_mentions из 137 (hermes). Лимит степени
+    `_CO_MENTIONS_TOPK` на узел режет хабы (паттерн _EMBED_TOPK минера #9).
+    """
     conn = await cm.get(DB_NAME)
     nodes = await _layer_nodes(conn, layer)
     if len(nodes) < 2:
@@ -239,12 +245,18 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
     nlp = _get_ner()
     ents = [_entities(str(c), syn, nlp) for _, c in nodes]
     edges = 0
+    degree: dict[int, int] = {}
     for i in range(len(nodes)):
         if not ents[i]:
             continue
         for j in range(i + 1, len(nodes)):
             if ents[i] & ents[j]:
-                edges += await _insert_edge(conn, nodes[i][0], nodes[j][0], "co_mentions", 0.4, "entities")
+                a, b = nodes[i][0], nodes[j][0]
+                if degree.get(a, 0) >= _CO_MENTIONS_TOPK or degree.get(b, 0) >= _CO_MENTIONS_TOPK:
+                    continue  # B6: лимит активных сущностей — анти-хаб
+                edges += await _insert_edge(conn, a, b, "co_mentions", 0.4, "entities")
+                degree[a] = degree.get(a, 0) + 1
+                degree[b] = degree.get(b, 0) + 1
     await conn.commit()
     return {"edges": edges}
 
@@ -541,6 +553,9 @@ async def _f_pair_edges(conn: Any, layer: str, rows: list[Any]) -> int:
 _EMBED_JACCARD = 0.7
 _EMBED_TOPK = 15  # не более 15 рёбер semantic_overlap на узел от этого минера
 _SEMANTIC_WEIGHT = 0.5
+# B6 post-eval: лимит co_mentions-рёбер на узел — multi-topic dump (саммари с
+# 11 синоним-классами) собирал 109 рёбер из 137; хабы топят entity-RRF.
+_CO_MENTIONS_TOPK = 12
 # S17 доп.9: подтверждающий слой — keyword-сигнал (общие теги/канон-токены)
 # соглашается с embedding-сходством → вес 0.6, противоречит → ребро отбрасывается.
 _SEMANTIC_CONFIRMED_WEIGHT = 0.6
