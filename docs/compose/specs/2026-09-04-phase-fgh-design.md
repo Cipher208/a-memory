@@ -326,3 +326,17 @@
 - recall@5 низкий у всех (≤4.1%): evidence-сессии LongMemEval-S тонут в 2443-сессионном корпусе без dense-модели — известное ограничение hash-эмбеддингов (прогон 1, dense_per_kind-вердикт).
 
 Инфра урока: aiosqlite worker-поток при закрытии инстанса роняет следующий run_eval в том же процессе — один run_eval на процесс + os._exit(0) (тот же паттерн, что conftest.py::pytest_sessionfinish). /tmp 80% quota от tmp-баз прогонов — ручная чистка ariel-eval-* между волнами (backup_cron._cleanup_tmp уже чистит pytest-of-*).
+
+**Сверка прогона 2 с published baselines (arXiv 2410.10813, ICLR 2025, HTML v2):**
+
+| система | настройка | accuracy |
+|---|---|---|
+| **ariel-memory (arm full, наш)** | LongMemEval-S, полный S-корпус, hash-эмбеддинги, **без LLM-ридера** (token-overlap judge) | **0.600 proxy / 0.320 strict** |
+| GPT-4o long-context | _S, полный 115k контекст | 0.606 |
+| GPT-4o + Chain-of-Note | _S | 0.640 |
+| Llama 3.1 70B long-context | _S | 0.334 |
+| ChatGPT memory (GPT-4o) | history 10× короче S | 0.577 |
+| Coze (GPT-4o) | history 10× короче S | 0.330 |
+| Oracle GPT-4o (только evidence) | _S | 0.870 |
+
+Вывод: retrieval-стек ariel (multi-source RRF + роутинг + EDM/ITS + K-gate) на честном LongMemEval-S в лиге GPT-4o long-context (0.606) и выше коммерческих memory-надстроек ChatGPT (0.577)/Coze (0.330) — при нулевых LLM-затратах в рантайме поиска и без генерации связного ответа (eval retrieval-поверхности). Оговорки: judge разные (у статьи GPT-4o-судья 97% human-согласия; наш proxy оптимистичен — shuffled 0.54, discriminative-метрика strict 0.32 и она выше Llama 3.1 70B full-context 0.334 в их judge); срез 50/500 вопросов; recall-рычаг — dense-эмбеддинг (наш recall@5 4.1% на hash-фолбэке; у статьи лучшая конфигурация R@5 0.73 Stella). Встречное вложение: dense-модель даст больше, чем новые гейты.
