@@ -322,6 +322,15 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     # поэтому безрёберные якоря надо убрать до фазы сна.
     orphaned = await _orphan_anchor_gc(conn, layer)
 
+    # S18 п.9 gap-registry: question-эпизоды + zero-result хвосты (best-effort).
+    gap_written = 0
+    try:
+        from lifecycle.gap_registry import build_registry
+
+        gap_written = int((await build_registry(layer))["written"])
+    except Exception as exc:
+        logger.debug("gap registry skipped: %s", exc)
+
     # C6: трёхфазный dream — NREM decay/prune → REM bridge → Insight abstracts.
     dream: dict[str, int] = {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0}
     with contextlib.suppress(Exception):
@@ -350,6 +359,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     return {
         "nodes_cleaned": cleaned,
         "orphan_gc": orphaned,
+        "gap_registry": {"written": gap_written},
         "miners": miners,
         "sanitation": {"expired": expired, "valence_tagged": valence_tagged, "centrality_top": centrality_top},
         "behavior": behavior,

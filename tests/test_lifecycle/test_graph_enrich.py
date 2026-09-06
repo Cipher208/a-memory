@@ -89,10 +89,11 @@ async def test_graph_enrich_noop_layer_keeps_stats_shape(graph):
 
     result = await graph_enrich(layer="agent")
 
-    # Адаптировано под C3/S6b + C6 + C8 + T14 + S18 п.4 (orphan_gc): dream + segments + wiki-комьюнити.
+    # Адаптировано под C3/S6b + C6 + C8 + T14 + S18 (orphan_gc, gap_registry): dream + segments + wiki-комьюнити.
     assert result == {
         "nodes_cleaned": 0,
         "orphan_gc": 0,
+        "gap_registry": {"written": 0},
         "miners": {k: {"edges": 0} for k in result["miners"]},
         "sanitation": {"expired": 0, "valence_tagged": 0, "centrality_top": []},
         "behavior": {},
