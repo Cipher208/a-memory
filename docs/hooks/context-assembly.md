@@ -53,8 +53,7 @@ ariel-py -m autohooks context --config ~/.config/ariel-autohooks/<agent>.yaml \
 ```python
 from features.offload import offload_tool_log
 
-result = await offload_tool_log(wiki, user_id, tool_name, tool_output,
-                                summary="Self-Monitoring Report 08:05")
+result = await offload_tool_log(wiki, user_id, tool_name, tool_output, summary="Self-Monitoring Report 08:05")
 if result:  # лог > 4000 символов
     # в память/контекст идёт ТОЛЬКО указатель:
     pointer = f"{tool_name} лог оффлоаден ({result['chars']} симв) → {result['ref_path']}"
