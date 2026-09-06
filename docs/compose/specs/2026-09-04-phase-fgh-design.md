@@ -296,3 +296,12 @@
 | gap-registry | D.1 | ff3ceb0+f0e240b | `lifecycle/gap_registry.py`: question-эпизоды (SQL по ВСЕМ пользователям, tags LIKE — search_by_tag per-user) + zero-result хвосты (≥2 повторов) → memory_gaps (gap_hash, идемпотентно check-then-write); graph_enrich фаза + отчёт `gap_registry`; zero-result ветка молчит до первого ensure минера |
 | harness breaker | D.2 | 87d91bf | `shared/harness_breaker.py`: harness_call per-agent 5 fails → 60s open (breaker_registry-backed), HarnessUnavailableError; адаптеры вне репо подключают следующим визитом |
 | retrieval-фильтр provenance | D.3 | ebd7af4 | `_expand_graph(..., edge_exclude=None)`: рёбра с тегом heuristic:<name> не разворачиваются при graph-expand; None = статус-кво (LIKE по JSON-массиву tags) |
+
+**Прогон Plan E — as-shipped (2026-09-06, f0bad78..74f13e9):**
+
+| пункт | план | commit | verdict |
+|---|---|---|---|
+| wiki_id backlink | E.1 | f0bad78 | минер wiki_fact_links мёржит page **node_id** в `metadata.wiki_ids` (idempotent set, no-op save при повторе — LEDGER не раздувается); существующие metadata-ключи (scope, source_raw_id) выживают; node_id, не wiki_index.entry_id — узловое пространство рёбер и read-поверхности |
+| recall со страницы | E.2 | 74f13e9 | `wiki_read` → `related_facts` + `related_count` (обратный проход по wiki_fact_link-рёбрам, join fact-узел.content == core_memory.value, private исключены); пустой список = норма; тулов 65 стабильно |
+
+Волна S18-19 ЗАКРЫТА полностью: A (4) + C (2+диздок) + B (4) + D (3) + E (2) = 15 пунктов + диздок-вердикты; gate 1452/0, mypy 224 clean, ruff/format clean.
