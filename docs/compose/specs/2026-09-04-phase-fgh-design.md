@@ -255,3 +255,20 @@
 **Из Автохуки.md (исходная спека автоматической памяти, сверка):** реализовано полностью — «триггеры не таймеры» (autohooks daemon poll = transport, saves server-side), хуки session_started/session_ended/new_message/memory_pressure/auto_context/post_session_diff, fire-async + mem-передача + хендлеры-исполнители (registry takes_mem/is_async), server-side importance-gate вместо эвристик демона. Единственный непокрытый пункт:
 - **`context_assembly` хук** (pre-response сборка контекста системой, «я не думаю об инжекте») — инъекция происходит harness-side; ariel-часть готова (memory_context_inject + session-start inject + auto_context post-recall). Доработка — контракт harness-адаптеров (Stage 2, cow/Hermes/MiMo).
 - **Минорный хвост осознанно-отложенного (distillate)**: B2 is_current-view; B4 ttl_minutes на тул-поверхности; B7 heat sum+1; B10 recurring→staging; C1 генератор сцен; C4 pinned; C5 private-флаг; C6 Layer Charter; C9 compact-render; D2 .abstract-тир; D3 MOC-first роутер; D4 retrieval-трейс в L0; D7 session-diversity; D12 BFS-upgrade `_from_graph`; E6-ретро skill-mine; changed-since модальность; Aeon lookaside buffer; Tenure hard-scope filter post-RRF; CWL dependency-aware инъекция; no-silent-fallback инвариант; reconstruction-check hot→warm; APEX fuse-then-summarize; Basic Memory observation-синтаксис. Каждый помечен в research draft с вердиктом; попадание в волны — на планировании.
+
+### [S20] Stage 2 — вердикты (журнал абляций и решённых пунктов, 2026-09-06)
+
+**№11 ENGRAM-абляция, прогон 1 (MINI_DATASET n=10, proxy-judge, commit f93f6c3):**
+5-source RRF побеждает dense-per-kind решительно — вызов драфта отработан, источники НЕ режутся.
+
+| arm | accuracy | ndcg@5 | recall@5 | construction_tokens | verdict |
+|---|---|---|---|---|---|
+| rrf | 1.000 | 0.389 | 0.600 | 1257 | статус-кво без EDM/ITS |
+| dense_per_kind | 0.200 | 0.000 | 0.000 | 125 | PROVален: ENGRAM-упрощение без wiki/episodic-путей теряет всё |
+| gated | 1.000 | 0.430 | 0.600 | 1150 | pre-gate −107 tok (−8.5%) без потери качества |
+| full | 1.000 | 0.729 | 1.000 | 1008 | WINNER: EDM/ITS + роутинг, и короче всех |
+
+- Negative-control: shuffled 0.300 < real 1.000 на rrf/full — PASS (judge чувствителен).
+- dense_per_kind 0.20 acc — ожидаемо: арм ищет только L4/rag по kind_for_text(query), wiki/episodic недоступны (это конструкция арма, не баг). ENGRAM-схема «+15 pts @ 1% токенов» не воспроизводится на многослойной памяти без dense-модели; наш hash-fallback эмбеддинг-тир не даёт dense-качества.
+- gated −8.5% construction_tokens при acc=1.0 — pre-gate кандидат на включение в проде ПОСЛЕ прогона на LongMemEval-S (HF сейчас недоступен оффлайн — прогон откладывается до сети; MINI-вердикт прелиминарный).
+- dense_per_kind остаётся армом №11-eval, НЕ прод-путём.

@@ -289,6 +289,9 @@ async def _score(
 
     n = n_questions
     precision = relevant_hits / all_hits if all_hits else 0.0
+    # arms в обход MultiSourceRAG (dense_per_kind) не проходят через счётчик:
+    # search_calls < n — negative search_calls не метрика, кламп в 0.
+    reacq = max(0, counting_rag.search_calls - n)
     return EvalReport(
         arm=arm,
         dataset=dataset,
@@ -296,7 +299,7 @@ async def _score(
         recall_at5=recall_hits / recall_total if recall_total else None,
         precision=precision,
         noise_isolation=1.0 - precision,
-        reacquisition_calls=counting_rag.search_calls - n,
+        reacquisition_calls=reacq,
         construction_tokens=constructed_chars // 4,
         ndcg_at5=ndcg_sum / ndcg_n if ndcg_n else 0.0,
         accuracy_strict=strict_correct / n if n else 0.0,
