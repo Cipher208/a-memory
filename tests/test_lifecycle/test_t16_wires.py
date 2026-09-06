@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from unittest.mock import MagicMock
 
@@ -149,3 +150,80 @@ async def test_wiki_fact_links_miner(cm):
     assert res["edges"] >= 1, f"wiki↔L4 мост построен: {res}"
     edge = await (await conn.execute("SELECT source_id, target_id FROM epi_edges WHERE relation='wiki_fact_link'")).fetchone()
     assert edge is not None and fact_node in (edge[0], edge[1]), f"ребро между wiki_page и fact: {edge}"
+
+
+async def _seed_wiki_fact_link(cm, user_id: str = "u2") -> tuple[int, str]:
+    """Setup для backlink-теста: fact-запись + fact-узел + wiki-страница с [[fact:]]-ссылкой.
+
+    Возвращает (page_node_id, file_path) — backlink пишет ИМЕННО page node_id
+    (узловое пространство, то же, что рёбра и related_facts read)."""
+    import time as _time
+
+    from core.memory import CoreMemory
+
+    conn = await cm.get("memory.db")
+    cmem = CoreMemory(cm=cm, layer="user")
+    await cmem._init_db()
+    await cmem.save(user_id, "fact:backup_enc", "бэкапы шифруются ключом x", importance=0.8, memory_kind="fact")
+    await conn.execute(
+        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?,'u2','бэкапы шифруются ключом x','fact','[]',0.5,?)",
+        (cmem.layer, _time.time()),
+    )
+    await conn.execute(
+        "INSERT INTO wiki_index (layer, wiki_type, title, file_path, content, created_at, updated_at) VALUES (?, 'diary', 'ops', 'ops2', 'см. [[fact:backup_enc]]', ?, ?)",
+        (cmem.layer, _time.time(), _time.time()),
+    )
+    cur = await conn.execute(
+        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, 'u2', 'ops2', 'wiki_page', '[]', 0.5, ?)",
+        (cmem.layer, _time.time()),
+    )
+    await conn.commit()
+    return int(cur.lastrowid or 0), "ops2"
+
+
+@pytest.mark.asyncio
+async def test_wiki_fact_links_backfills_wiki_ids(cm):
+    """S19: [[fact:key]]-линк → metadata.wiki_ids содержит entry_id страницы;
+    повторный минер не плодит дубли в wiki_ids."""
+    from lifecycle.graph_miners import miner_wiki_fact_links
+
+    entry_id, _ = await _seed_wiki_fact_link(cm)
+    conn = await cm.get("memory.db")
+
+    first = await miner_wiki_fact_links(cm, "user")
+    assert first["edges"] >= 1
+    meta = json.loads(
+        (await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='u2' AND key='fact:backup_enc'")).fetchone())[0] or "{}"
+    )
+    assert meta.get("wiki_ids") == [entry_id], f"backlink записан: {meta}"
+
+    # повторный прогон: ребро upsert (rows=0), wiki_ids НЕ дублируются
+    await miner_wiki_fact_links(cm, "user")
+    meta2 = json.loads(
+        (await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='u2' AND key='fact:backup_enc'")).fetchone())[0] or "{}"
+    )
+    assert meta2.get("wiki_ids") == [entry_id], f"дублей нет: {meta2}"
+
+
+@pytest.mark.asyncio
+async def test_wiki_ids_merges_with_existing_metadata(cm):
+    """Мердж сохраняет существующие metadata-ключи (scope, source_raw_id...)."""
+    from core.memory import CoreMemory
+    from lifecycle.graph_miners import miner_wiki_fact_links
+
+    entry_id, _ = await _seed_wiki_fact_link(cm)
+    conn = await cm.get("memory.db")
+    cmem = CoreMemory(cm=cm, layer="user")
+    row = await (
+        await conn.execute("SELECT value, importance, memory_kind, source, metadata FROM core_memory WHERE user_id='u2' AND key='fact:backup_enc'")
+    ).fetchone()
+    base_meta = json.loads(row[4] or "{}")
+    base_meta["scope"] = "later"
+    await cmem.save("u2", "fact:backup_enc", str(row[0]), importance=float(row[1]), memory_kind=row[2], source=row[3] or "tool", metadata=base_meta)
+
+    await miner_wiki_fact_links(cm, "user")
+    meta = json.loads(
+        (await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='u2' AND key='fact:backup_enc'")).fetchone())[0] or "{}"
+    )
+    assert meta.get("scope") == "later", f"существующие ключи выжили: {meta}"
+    assert meta.get("wiki_ids") == [entry_id]

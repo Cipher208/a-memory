@@ -407,7 +407,7 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
             for cand in (key, f"fact:{key}"):
                 fact_row = await (
                     await conn.execute(
-                        "SELECT value FROM core_memory WHERE layer=? AND key=? LIMIT 1",
+                        "SELECT user_id, key, value, importance, memory_kind, source, metadata FROM core_memory WHERE layer=? AND key=? LIMIT 1",
                         (layer, cand),
                     )
                 ).fetchone()
@@ -424,6 +424,26 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
             if fact is None:
                 continue
             edges += await _insert_edge(conn, int(page["node_id"]), int(fact["node_id"]), "wiki_fact_link", 0.5, "provenance")
+            # S19: backlink L4→wiki — page node_id мёржится в metadata.wiki_ids
+            # (idempotent set; no-op save, если уже там — не раздуваем LEDGER).
+            from core.memory import CoreMemory, _load_meta
+
+            meta = _load_meta(fact_row["metadata"])
+            page_id = int(page["node_id"])
+            ids = {int(x) for x in meta.get("wiki_ids", []) if str(x).lstrip("-").isdigit()}
+            if page_id not in ids:
+                ids.add(page_id)
+                meta["wiki_ids"] = sorted(ids)
+                cmem = CoreMemory(cm=cm, layer=layer)
+                await cmem.save(
+                    str(fact_row["user_id"]),
+                    str(fact_row["key"]),
+                    str(fact_row["value"]),
+                    importance=float(fact_row["importance"]),
+                    memory_kind=fact_row["memory_kind"],
+                    source=str(fact_row["source"] or "consolidation:wiki_link"),
+                    metadata=meta,
+                )
     await conn.commit()
     return {"edges": edges}
 
