@@ -30,14 +30,19 @@ class Atom:
 
 
 def _canonical_key(clause: str, kind: MemoryKind) -> str:
-    from rag.synonyms import canonical_form, load_synonyms
+    from rag.synonyms import canonical_form, load_counter_signals, load_synonyms
 
     syn = load_synonyms()
+    counters = load_counter_signals()
     words = re.findall(r"[а-яёa-z0-9]+", clause.lower())
     canon: list[str] = []
     for w in words:
         if len(w) <= 2:
             continue
+        # S18: counter-signal пара канонизируется к ТЕКУЩЕМУ имени —
+        # переименование падает в тот же ключ, C4 строит superseded-цепочку сам.
+        if w in counters:
+            w = counters[w]
         # синонимы → одна каноническая форма (алфавитно-первая), postgres/postgresql/psql → postgres
         canon.append(canonical_form(w, syn))
         if len(canon) == 4:

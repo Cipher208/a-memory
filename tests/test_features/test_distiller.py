@@ -148,3 +148,29 @@ async def test_semantic_dedup_skips_near_duplicate(cm, monkeypatch) -> None:
     assert r2["l4_saved"] == 0, f"парафрай сошёлся по косинусу — дубликат не сохранён: r2={r2}"
     assert r2["semantic_skipped"] >= 1, "счётчик semantic_skipped проставлен"
     assert r2["similar_to"], "A2-advisory содержит ключ существующего факта"
+
+
+def test_canonical_key_counter_signal_unifies(monkeypatch) -> None:
+    """S18 п.7-связка: counter-signal пара канонизирует ключ к ТЕКУЩЕМУ имени.
+
+    «Гелиос» (superseded) и «Заря» (current) падают в один ключ — новая запись
+    занимает занятый канон-ключ, C4-механика сама строит superseded-цепочку
+    (earlier/later), вместо двух независимых фактов."""
+    monkeypatch.setattr("config.config._data", {"rag": {"counter_signals": {"гелиос": "заря"}}}, raising=False)
+    from lifecycle.distiller import _canonical_key
+    from shared.memory_types import MemoryKind
+
+    k_old = _canonical_key("проект Гелиос закрыт", MemoryKind.FACT)
+    k_new = _canonical_key("проект Заря закрыт", MemoryKind.FACT)
+    assert k_old == k_new, f"переименование → один ключ: {k_old!r} != {k_new!r}"
+
+
+def test_canonical_key_counter_signal_does_not_touch_current(monkeypatch) -> None:
+    """Обратное имя пары (current) не переписывается; чужие слова не задеты."""
+    monkeypatch.setattr("config.config._data", {"rag": {"counter_signals": {"гелиос": "заря"}}}, raising=False)
+    from lifecycle.distiller import _canonical_key
+    from shared.memory_types import MemoryKind
+
+    assert _canonical_key("проект Заря закрыт", MemoryKind.FACT) == _canonical_key("проект Заря закрыт", MemoryKind.FACT)
+    k_plain = _canonical_key("проект Марс закрыт", MemoryKind.FACT)
+    assert "марс" in k_plain, "слова вне таблицы counter_signals не трогаются"
