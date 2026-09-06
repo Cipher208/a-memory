@@ -203,6 +203,34 @@ async def _dream(conn: Any, layer: str) -> dict[str, int]:
     return {"nrem_decayed": nrem["decayed"] + nrem["boosted"], "nrem_pruned": nrem["pruned"], "rem_bridged": rem, "insights": insights}
 
 
+# S18 п.4 (Memora cue-anchor prune): grace-окно якорей — минер мог ещё не добежать.
+_ORPHAN_MIN_AGE_DAYS = 7
+
+
+async def _orphan_anchor_gc(conn: Any, layer: str) -> int:
+    """S18 п.4: derived-якоря 'episode:N' (fact/question) без рёбер старше 7д.
+
+    Минеры создают узлы-якоря (provenance 'episode:N', zero-result question);
+    если source-запись вычищена, узел висит без входящих рёбер — мусор.
+    Узлы с любым ребром выживают; свежие (<7д) не трогаются.
+    """
+    cutoff = time.time() - _ORPHAN_MIN_AGE_DAYS * 86400
+    cur = await conn.execute(
+        "SELECT node_id FROM epi_nodes n"
+        " WHERE n.layer=? AND n.node_type IN ('fact', 'question')"
+        " AND n.content LIKE 'episode:%'"
+        " AND n.created_at < ?"
+        " AND NOT EXISTS (SELECT 1 FROM epi_edges e WHERE e.source_id = n.node_id OR e.target_id = n.node_id)",
+        (layer, cutoff),
+    )
+    ids = [int(r["node_id"]) for r in await cur.fetchall()]
+    if not ids:
+        return 0
+    from graph.epistemic import EpistemicGraph
+
+    return await EpistemicGraph(cm=connection_manager, layer=layer).delete_nodes(ids)
+
+
 async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     """Pre-clean JSON junk from the graph, then run miners. Returns stats."""
     from graph.epistemic import EpistemicGraph
@@ -289,6 +317,11 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     with contextlib.suppress(Exception):
         behavior = await tool_behavior_stats()
 
+    # S18 п.4 orphan-anchor GC — ПЕРЕД dream: REM мостит изолированные узлы
+    # (якоря 'episode:N' токенизируются одинаково → Jaccard 1.0 → мост),
+    # поэтому безрёберные якоря надо убрать до фазы сна.
+    orphaned = await _orphan_anchor_gc(conn, layer)
+
     # C6: трёхфазный dream — NREM decay/prune → REM bridge → Insight abstracts.
     dream: dict[str, int] = {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0}
     with contextlib.suppress(Exception):
@@ -316,6 +349,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
 
     return {
         "nodes_cleaned": cleaned,
+        "orphan_gc": orphaned,
         "miners": miners,
         "sanitation": {"expired": expired, "valence_tagged": valence_tagged, "centrality_top": centrality_top},
         "behavior": behavior,

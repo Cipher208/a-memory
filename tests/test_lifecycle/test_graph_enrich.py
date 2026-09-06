@@ -5,6 +5,8 @@ from typing import Any
 
 import pytest
 
+import time
+
 from shared.connection import connection_manager
 from shared.migrations import MigrationManager
 
@@ -87,9 +89,10 @@ async def test_graph_enrich_noop_layer_keeps_stats_shape(graph):
 
     result = await graph_enrich(layer="agent")
 
-    # Адаптировано под C3/S6b + C6 + C8 + T14: dream + segments + wiki-комьюнити.
+    # Адаптировано под C3/S6b + C6 + C8 + T14 + S18 п.4 (orphan_gc): dream + segments + wiki-комьюнити.
     assert result == {
         "nodes_cleaned": 0,
+        "orphan_gc": 0,
         "miners": {k: {"edges": 0} for k in result["miners"]},
         "sanitation": {"expired": 0, "valence_tagged": 0, "centrality_top": []},
         "behavior": {},
@@ -130,6 +133,38 @@ async def _age_edge(conn: Any, a: int, b: int, days: int, weight: float | None =
 def no_miners(monkeypatch):
     """Dream-тесты герметичны: минеры выключены (их рёбра и ингибиция шумят)."""
     monkeypatch.setattr("lifecycle.graph_miners.MINERS", {})
+
+
+@pytest.mark.asyncio
+async def test_orphan_anchor_gc_removes_stale_edgeless_anchors(graph, no_miners):
+    """S18 п.4 (Memora cue-anchor prune): derived-якоря 'episode:N' без рёбер
+    старше 7д удаляются; с ребром или свежие — выживают."""
+    from lifecycle.graph_enrich import graph_enrich
+
+    orphan = await graph.add_node("gu", "episode:42", "fact")
+    linked = await graph.add_node("gu", "episode:43", "fact")
+    fresh = await graph.add_node("gu", "episode:44", "fact")
+    anchor = await graph.add_node("gu", "episode:45", "fact")
+    normal = await graph.add_node("gu", "Борис работает в Google", "fact")
+    await graph.add_edge(linked, normal, "mentions")
+    await graph.add_edge(anchor, normal, "mentions")
+    # единственное ребро anchor'а ведёт на normal — но normal не якорь, выживет
+
+    conn = await connection_manager.get("memory.db")
+    for nid in (orphan, linked):  # fresh остаётся молодым
+        await conn.execute("UPDATE epi_nodes SET created_at=? WHERE node_id=?", (time.time() - 8 * 86400, nid))
+    await conn.commit()
+
+    result = await graph_enrich(layer="user")
+
+    assert result["orphan_gc"] >= 1, f"orphan_gc в отчёте: {result}"
+    rows = await (await conn.execute("SELECT node_id FROM epi_nodes")).fetchall()
+    remaining = {int(r["node_id"]) for r in rows}
+    assert orphan not in remaining, "старый безрёберный якорь удалён"
+    assert linked in remaining, "якорь с ребром выживает"
+    assert fresh in remaining, "свежий (<7д) якорь не трогается"
+    assert anchor in remaining, "якорь с ребром выживает"
+    assert normal in remaining, "не-якорный узел вне компетенции GC"
 
 
 @pytest.mark.asyncio
