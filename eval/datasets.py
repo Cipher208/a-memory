@@ -7,8 +7,12 @@ knowledge_update KU-пара old/new, temporal, enumerative, false-premise abste
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,25 @@ MINI_DATASET: list[EvalQuestion] = [
 ]
 
 _HF_CANDIDATES = ("moorcheh/memanto-evaluation", "xiaowu0162/LongMemEval-S")
+# Прогон 2 (S20): официальный repo xiaowu0162/longmemeval хранит варианты
+# файлами без расширений — load_dataset карточку не резолвит, поэтому S-файл
+# качается напрямую в кэш и читается локально (env ARIEL_LME_PATH — оверрайд).
+_LOCAL_LME_PATHS = (
+    os.environ.get("ARIEL_LME_PATH") or "",
+    str(Path.home() / ".cache" / "ariel-eval" / "longmemeval_s.json"),
+)
+
+
+def _stride_sample(rows: list[Any], limit: int) -> list[Any]:
+    """Равномерная детерминированная выборка: каждая len/limit-я строка.
+
+    Первые N строк датасета скошены по question_type — stride покрывает все
+    категории пропорционально; порядок стабилен между армами.
+    """
+    if limit >= len(rows):
+        return list(rows)
+    step = len(rows) / limit
+    return [rows[min(len(rows) - 1, int(i * step))] for i in range(limit)]
 
 
 async def load_longmemeval_s(limit: int = 50) -> list[EvalQuestion]:
@@ -88,39 +111,56 @@ async def load_eval_bundle(dataset: str, limit: int = 50) -> tuple[list[EvalQues
 
 
 def _try_hf(limit: int) -> tuple[list[EvalQuestion], dict[str, str]] | None:
-    """Best-effort HF-адаптер: moorcheh/memanto-evaluation → official LongMemEval-S.
+    """Best-effort LongMemEval-S: локальный кэш-файл → официальный HF-repo.
 
     Официальный формат: question_id / question_type / question / answer /
-    question_ids (evidence) / haystack_session_ids + haystack_sessions.
-    Любая ошибка (нет библиотеки, нет сети, другая схема) → None → fallback.
+    answer_session_ids (evidence) / haystack_session_ids + haystack_sessions.
+    Любая ошибка (нет файла/библиотеки/сети, другая схема) → следующий
+    кандидат; ничего не вышло → None → fallback на MINI.
     """
-    try:
-        from datasets import load_dataset  # type: ignore[import-not-found]
-
-        for name in _HF_CANDIDATES:
+    rows: list[dict[str, Any]] | None = None
+    # 1) локальный кэш (быстро, детерминированно, без сети)
+    for p in _LOCAL_LME_PATHS:
+        if p and Path(p).is_file():
             try:
-                ds = load_dataset(name, split="test")
+                rows = json.loads(Path(p).read_text(encoding="utf-8"))
+                logger.info("LongMemEval-S из локального кэша %s (%s строк)", p, len(rows))
+                break
             except Exception as exc:
-                logger.debug("HF dataset %s unavailable: %s", name, exc)
-                continue
-            questions: list[EvalQuestion] = []
-            sessions: dict[str, str] = {}
-            for i, row in enumerate(ds):
-                q_id = str(row.get("question_id") or f"lme-{i}")
-                for j, sess in enumerate(row.get("haystack_sessions") or []):
-                    sid = str((row.get("haystack_session_ids") or [f"{q_id}-s{j}"])[j])
-                    text = sess if isinstance(sess, str) else "\n".join(str(m.get("content", "")) for m in sess)
-                    sessions[sid] = text
-                questions.append(
-                    EvalQuestion(
-                        q_id=q_id,
-                        question=str(row.get("question") or ""),
-                        expected_answer=str(row.get("answer") or ""),
-                        category=str(row.get("question_type") or "unknown"),
-                        evidence_session_ids=[str(s) for s in (row.get("question_ids") or [])],
-                    )
-                )
-            return questions, sessions
-    except Exception as exc:
-        logger.info("HF datasets недоступны (%s) — LongMemEval-S fallback", exc)
-    return None
+                logger.debug("local LME file %s unreadable: %s", p, exc)
+    # 2) HF-repo (разные схемы именования — перебор кандидатов)
+    if rows is None:
+        try:
+            from datasets import load_dataset  # type: ignore[import-untyped]
+
+            for name in _HF_CANDIDATES:
+                try:
+                    ds = load_dataset(name, split="test")
+                    rows = [dict(r) for r in ds]
+                    break
+                except Exception as exc:
+                    logger.debug("HF dataset %s unavailable: %s", name, exc)
+        except Exception as exc:
+            logger.info("HF datasets недоступны (%s) — LongMemEval-S fallback", exc)
+    if not rows:
+        return None
+    rows = _stride_sample(rows, limit)
+    questions: list[EvalQuestion] = []
+    sessions: dict[str, str] = {}
+    for i, row in enumerate(rows):
+        q_id = str(row.get("question_id") or f"lme-{i}")
+        for j, sess in enumerate(row.get("haystack_sessions") or []):
+            sid = str((row.get("haystack_session_ids") or [f"{q_id}-s{j}"])[j])
+            text = sess if isinstance(sess, str) else "\n".join(str(m.get("content", "")) for m in sess)
+            sessions[sid] = text
+        questions.append(
+            EvalQuestion(
+                q_id=q_id,
+                question=str(row.get("question") or ""),
+                expected_answer=str(row.get("answer") or ""),
+                category=str(row.get("question_type") or "unknown"),
+                # S-файл: evidence = answer_session_ids; question_ids — фолбэк схемы
+                evidence_session_ids=[str(s) for s in (row.get("answer_session_ids") or row.get("question_ids") or [])],
+            )
+        )
+    return questions, sessions

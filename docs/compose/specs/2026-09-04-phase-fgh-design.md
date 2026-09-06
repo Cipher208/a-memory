@@ -305,3 +305,24 @@
 | recall со страницы | E.2 | 74f13e9 | `wiki_read` → `related_facts` + `related_count` (обратный проход по wiki_fact_link-рёбрам, join fact-узел.content == core_memory.value, private исключены); пустой список = норма; тулов 65 стабильно |
 
 Волна S18-19 ЗАКРЫТА полностью: A (4) + C (2+диздок) + B (4) + D (3) + E (2) = 15 пунктов + диздок-вердикты; gate 1452/0, mypy 224 clean, ruff/format clean.
+
+**№11 ENGRAM-абляция, прогон 2 (LongMemEval-S n=50 stride, proxy-judge, 2026-09-06):**
+Датасет: официальный xiaowu0162/longmemeval (S-файл 265МБ → локальный кэш; карточка битая для load_dataset — файлы без расширений). 50 вопросов stride-выборкой (все 6 категорий: multi-session 14, temporal 13, KU 8, ss-user 7, ss-assistant 5, ss-pref 3), корпус = union haystack их сессий (2443 сессии). Хэш-эмбеддинги (ARIEL_HASH_EMBEDDINGS=1, консистентно с прогоном 1).
+
+| arm | accuracy | strict | recall@5 | ndcg@5 | precision | construction_tokens | время |
+|---|---|---|---|---|---|---|---|
+| rrf | 0.500 | 0.200 | 0.010 | 0.500 | 0.142 | 879 501 | 104с |
+| dense_per_kind | 0.420 | 0.040 | 0.000 | 0.187 | 0.038 | 790 784 | 58с |
+| gated | 0.500 | 0.200 | 0.010 | 0.500 | 0.142 | 879 501 | 109с |
+| full | **0.600** | **0.320** | **0.041** | **0.572** | **0.282** | 1 664 494 | 652с |
+| full_pregate | 0.600 | 0.320 | 0.041 | 0.572 | 0.282 | 1 664 494 | 650с |
+| rrf_shuffled (neg-ctrl) | 0.420 | 0.080 | 0.010 | 0.368 | 0.116 | 879 501 | 103с |
+| full_shuffled (neg-ctrl) | 0.540 | 0.180 | 0.041 | 0.359 | 0.200 | 1 664 494 | 647с |
+
+Вердикты:
+- **full подтверждает победу** (второй датасет): acc 0.600 vs 0.500 rrf, strict 0.320 vs 0.200, recall@5 4.1% vs 1.0%, precision 0.282 vs 0.142 — EDM/ITS + роутинг лучше статус-кво и на длинном корпусе. dense_per_kind мёртв и здесь (recall 0.000).
+- **VERDICT ПРОТИВ pre-gate в проде**: gated ≡ rrf байт-в-байт (гейт-матрица gate_sources для английских вопросных запросов — «длинный/вопросный → полный fan-out»; MINI-экономика −8.5% была на русских коротких/перечислительных запросах) и full_pregate ≡ full (pre-gate урезает пул fan-out, но после EDM-rerank финальные топ-хиты те же — экономия есть в стоимости fan-out, НЕ в construction_tokens; на S нулевая). retrieval.pregate остаётся default-off; кандидат пересматривается только при русской рабочей нагрузке с короткими/перечислительными запросами.
+- **Честная плашка judge**: proxy-judge на английском слабодискриминативен — full_shuffled 0.540 против real 0.600 (на MINI падение было 1.000→0.300). Discriminative-метрика — strict (0.320 vs 0.180). Абсолютные acc значения оптимистичны; сравнение армов валидно (все на одном judge).
+- recall@5 низкий у всех (≤4.1%): evidence-сессии LongMemEval-S тонут в 2443-сессионном корпусе без dense-модели — известное ограничение hash-эмбеддингов (прогон 1, dense_per_kind-вердикт).
+
+Инфра урока: aiosqlite worker-поток при закрытии инстанса роняет следующий run_eval в том же процессе — один run_eval на процесс + os._exit(0) (тот же паттерн, что conftest.py::pytest_sessionfinish). /tmp 80% quota от tmp-баз прогонов — ручная чистка ariel-eval-* между волнами (backup_cron._cleanup_tmp уже чистит pytest-of-*).
