@@ -132,6 +132,47 @@ async def test_s6a_source_rid_and_drill_down(cm) -> None:
     assert d["source_raw_id"] == 42
     assert d["raw_text"] == "я решила выбрать PostgreSQL"
     assert d["raw_event"] == "new_message"
+
+
+@pytest.mark.asyncio
+async def test_s6a_drill_down_survives_cold_archive(cm) -> None:
+    """S17 доп.8: L0-строка уехала в l0_cold_archive (tier_l0) → drill_down
+    фолбэком достаёт сырье оттуда, помечая archived=True; до фолбэка был тупик."""
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO l0_journal (id, ts, event, layer, user_id, text) VALUES (77, ?, 'remember', 'user', 'dd2', 'я решила шифровать бэкапы')",
+        (time.time(),),
+    )
+    await conn.commit()
+
+    from lifecycle.distiller import distill_and_route
+
+    stats = await distill_and_route(FakeMem(cm), MagicMock(), "dd2", "я решила шифровать бэкапы", 0.8, source_rid=77)
+    assert stats["l4_saved"] >= 1
+    row = await (await conn.execute("SELECT entry_id FROM core_memory WHERE user_id='dd2'")).fetchone()
+
+    # имитируем tier_l0: строка перенесена в холодный тир и удалена из журнала
+    await conn.execute(
+        "INSERT INTO l0_cold_archive (id, ts, event, raw_type, layer, user_id, decisions, archived_at, text)"
+        " SELECT id, ts, event, 'plain', layer, user_id, '[]', ?, text FROM l0_journal WHERE id=77",
+        (time.time(),),
+    )
+    await conn.execute("DELETE FROM l0_journal WHERE id=77")
+    await conn.commit()
+
+    from features.diagnostics import drill_down
+
+    d = await drill_down(int(row["entry_id"]), "dd2")
+    assert d["source_raw_id"] == 77
+    assert d["raw_text"] == "я решила шифровать бэкапы", f"фолбэк в cold archive: {d}"
+    assert d["raw_event"] == "remember"
+    assert d["archived"] is True, "флаг: сырье из холодного тира"
+
+    # сырья нет нигде — прежний тупик сохраняет контракт
+    await conn.execute("DELETE FROM l0_cold_archive WHERE id=77")
+    await conn.commit()
+    d2 = await drill_down(int(row["entry_id"]), "dd2")
+    assert d2["raw_text"] is None and "archived" not in d2
     assert d["raw_ts"] is not None and d["key"] and d["value"]
 
     # L3: у episodes нет metadata-колонки → провенанс уходит тегом raw:<rid>

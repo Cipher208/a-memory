@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -39,6 +40,26 @@ async def drill_down(entry_id: int, user_id: str) -> dict[str, Any]:
         return {"source_raw_id": None}
     raw = await (await conn.execute("SELECT text, ts, event FROM l0_journal WHERE id=? AND user_id=?", (int(rid), user_id))).fetchone()
     if raw is None:
+        # S17 доп.8: строка пережила tier_l0 — уехала в l0_cold_archive (>180д
+        # обработанные). Drill-down не должен вести в тупик: фолбэк по id.
+        with contextlib.suppress(Exception):  # таблицы может ещё не быть (до первого тиринга)
+            raw = await (
+                await conn.execute(
+                    "SELECT text, ts, event FROM l0_cold_archive WHERE id=? AND user_id=?",
+                    (int(rid), user_id),
+                )
+            ).fetchone()
+        if raw is not None:
+            return {
+                "entry_id": int(entry_id),
+                "key": str(row["key"]),
+                "value": str(row["value"]),
+                "source_raw_id": int(rid),
+                "raw_text": str(raw["text"]),
+                "raw_ts": float(raw["ts"]),
+                "raw_event": str(raw["event"]),
+                "archived": True,  # сырье из холодного тира (l0_cold_archive)
+            }
         return {"source_raw_id": int(rid), "raw_text": None, "raw_ts": None, "raw_event": None, "key": str(row["key"]), "value": str(row["value"])}
     return {
         "entry_id": int(entry_id),
