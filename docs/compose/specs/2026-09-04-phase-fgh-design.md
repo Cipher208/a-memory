@@ -126,7 +126,8 @@
 
 ### [S10] Dual-route retrieval
 
-- **Primary (F-наследие)**: RRF k=60 5-source (BM25 demote до minority) → **EDM re-rank** α·R+β·N+γ·G−δ·K → **ITS threshold-gating** (min-max [0,1] per query, threshold ~0.05, k≤100) → детерминизм (same query → same results, MOSS 1 год продакшена валидирует).
+- **Primary (F-наследие)**: RRF k=60 5-source (BM25 demote до minority) → **EDM re-rank** α·R+β·N+γ·G−δ·K → **ITS threshold-gating** (min-max [0,1] per query, threshold ~0.05, k≤100) → детерминизм (same query → same results, MOSS 1 год продакшена валидирует; **флаг `deterministic_retrieval`** для регламентированных сценариев, default off — v27).
+- **Counter-signal алиасы** (Tenure): superseded-имена живут как aliases с негативной ролью в ранжировании (ceiling 25/белиф) — не drop, а понижение.
 - **S2 exhaustive route** (Mnemis): «list all X» — иерархический top-down scan (категория несёт агрегатную summary потомков); similarity структурно фейлится на enumerative; **compression constraint** (категория ≥n детей, |слой i+1|≤|слой i|).
 - **Adaptive pre-gate**: 27 query-features без LLM решают, фаерить ли полный ретрив (Adaptive RAG).
 - **D-Mem escalation**: dense-first; граф-reranker только при провале confidence-гейта (96.7% recovery при меньшем cost) — примиряет HippoRAG2-верdict с графом.
@@ -143,6 +144,7 @@
 - Ablation arms (см. S10) + oracle-retention абляции (random ≈ oracle в одном env) + negative-control protocol (mazemaker: off-switch должен падать) + judge rubric anchored 0-5 (LCC) + честная плашка «какие компоненты включены» (Mem0/Cognee урок) + **LLM-adjudication arm** (A-MEM: локальная LLM подтверждает top-k эмбеддинг-рёбра; links-only +12 F1 multi-hop — единственный кандидат на нарушение no-LLM, решает абляция) + **StateMemBench-пробы**: closed-pool (superseded value = scored outcome), anti-trap (anti-prefer-latest), sequence-пробы (derived recomputed, never quoted), per-substrate salience floors, k-sweep flatness отчёт (не тюнить k на state-задачах).
 - Референс-планки: gbrain 93.19/95.32 strict-R@5; MemoryPalace 96.6; Memanto 89.8 LME / 87.1 LoCoMo (platform-only, Moorcheh cloud); Memora 87.4; APEX-MEM 88.88/86.2; LoCoMo SOTA band 86-94.
 - Eval harness = отдельный артефакт с открытыми конфигами (Mem0 `memory-benchmarks` паттерн).
+- **Cross-encoder rerank** (v2 #2): парк до №11 — включается как arm только если бенчмарк покажет провал RRF (Basic Memory fail-fast disabled-by-default паттерн).
 
 ### [S12] Библиотеки
 
@@ -179,4 +181,32 @@
 - Счётчик тулов: **65** (после удаления memory_forget в tails-волне; 66 был временно с memory_stash).
 - privacy strict-mode (<0.5 confidence refusal) — включать ли по умолчанию (опасность ложных отказов для легитимных сообщений; LLM-Redactor default: on).
 - **memory_forget удалён vs Cognee forget-verb**: verb-forget (dataset-scoped GDPR-стиль) ≠ удалённый тул (single-key L4); verb-forget реализуется примитивом `forget` (scope-параметры) — tension разрешён, отдельный тул не возвращать.
+
+### [S17] Stage 1 tail — потерянные 🔑-пункты драфта (сверка драфт→диздок→план→код, 2026-09-05)
+
+> Сверка v38-драфта против диздока/плана C1-C8/кода нашла 7 🔑-обязательств, потерянных
+> при конверсии (застряли между стадиями без владельца). Все — F-фундамент, ноль
+> межзависимостей. **Закрываются немедленно как окончание Stage 1**, до Stage 2.
+
+1. **`deterministic_retrieval` флаг** (v27 п.3): флаг в config — retrieval отдаёт детерминированный порядок (ITS min-max без ингибиции/дрожаний) для регламентированных сценариев. Default off. Реализация: bypass inhibit/EMA-членов в edm_rerank при флаге.
+2. **ENGRAM procedural kind** (v28 #3): процедурный kind («как сделать X», how-to) — 14-й MemoryKind с own policy (never_archive=True, decay 0) + kind_for_text-маркеры («сделай так», «порядок действий», «инструкция по») → роутится в L4-namespace агента (agent-self track). Data-фундамент для Stage 2 behavior-аннотаций.
+3. **AdaptiveRAG pre-gate** (v28 #5): 27 query-features (7 групп, LLM-free) решают «фаерить ли все источники» — дешёвый skip-тир поверх RRF (cost down + шум down), результат питает N_eff/abstention. Реализация: feature-вектор запроса (длина, тип, наличие дат, вопросительная форма...) → простой гейт.
+4. **A2 advisory `similarTo` в ответе save** (волна A2): ConflictResolver ловит near-dup на записи → сейчас пишет memory_conflicts молча; вернуть advisory в ответе save (поля `similar_to: [key…]`), агент сам решает переформулировать.
+5. **SHA-256 дедуп L0-блоков** (механизмы разрастания п.2): колонка content_hash в l0_journal (или in-capture дедуп) — повторный вывод команды хранится один раз, ссылки на первую запись. Дедуп сейчас только тул-уровень (_DedupCache, TTL 300с).
+6. **Zero-result минер** (open-index, v25): провальные запросы (0 хитов) журналируются как минер-сигнал «что смоделировать следующим» (LME +9.4% recall) — поверх recall_events/co_pairs инфраструктуры.
+7. **Counter-signal алиасы** (Tenure): superseded-имена в ранжировании с негативной ролью (не drop) — связка с conflict resolution + канон-ключами.
+
+Плюс **EMA-гейт** (F2-обязательство): adaptive_threshold выпал из auto_save_text при переработках — порог статичный 0.5. Вернуть EMA-член в гейт (вернув репутацию «без изменений логики»).
+
+### [S18] Stage 2 — пополнение (сверка 2026-09-05, сверх S14/S16-distillate)
+
+- GA per-query min-max для ACT-R-члена в multi_source (v17 #5).
+- maxChars per-memory при инъекции (D6, S-эффорт).
+- Channel-гранулярность metadata (A4: user_explicit/episode_promotion/... → +tool/import/shared).
+- `changed_since`-модальность в get_intervals (Memanto temporal versioning).
+- Orphan-anchor GC для derived-ключей минеров (Memora cue-anchor prune).
+- Semantic dedup cosine>0.92 merge как 3-й сигнал после exact-SHA + novelty-Jaccard (memory-os/3M консенсус).
+- B2 recall hygiene: is_current-view / superseded-флаги, чтобы recall не отдавал закрытые интервалы (bi-temporal читает old+new только для KU-запросов — остальное фильтрует).
+- 3-option конфликт-контракт агенту (supersede/retain/annotate): ConflictResolver.resolve есть, agent-facing surface нет — тул или расширение memory_recall.
+- Gap-registry (3M Find Gap): L3-questions → ночной registry → proactive acquisition.
 - **Минорный хвост осознанно-отложенного (distillate)**: B2 is_current-view; B4 ttl_minutes на тул-поверхности; B7 heat sum+1; B10 recurring→staging; C1 генератор сцен; C4 pinned; C5 private-флаг; C6 Layer Charter; C9 compact-render; D2 .abstract-тир; D3 MOC-first роутер; D4 retrieval-трейс в L0; D7 session-diversity; D12 BFS-upgrade `_from_graph`; E6-ретро skill-mine; changed-since модальность; Aeon lookaside buffer; Tenure hard-scope filter post-RRF; CWL dependency-aware инъекция; no-silent-fallback инвариант; reconstruction-check hot→warm; APEX fuse-then-summarize; Basic Memory observation-синтаксис. Каждый помечен в research draft с вердиктом; попадание в волны — на планировании.
