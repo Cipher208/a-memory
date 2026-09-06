@@ -104,6 +104,18 @@ retrieval:
   # skip-тир источников поверх RRF в full-арме. Default off до №11-абляции.
   pregate: false
 
+# === Memory write gate (S18) ===
+memory:
+  # S18 п.5: semantic dedup — cosine>0.92 против same-kind фактов как 3-й
+  # сигнал дедупа (после SHA-256 и Jaccard-novelty). Нужны честные эмбеддинги
+  # (hash-fallback шумный); default off до №11-eval.
+  semantic_dedup: false
+
+# === Injection ===
+inject:
+  # S18 D6: per-block cap при инъекции — один длинный факт не съедает бюджет.
+  max_chars: 400
+
 # === Embeddings ===
 # Multilingual (100+ languages incl. Russian). If sentence-transformers is not
 # installed the system falls back to deterministic hash embeddings ("hash").
