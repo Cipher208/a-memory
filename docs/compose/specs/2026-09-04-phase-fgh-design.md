@@ -239,10 +239,22 @@
 
 **Из spacy-integration (4 варианта углубления, все вне диздока — фиксируются сюда):**
 1. **ru_core_news_sm на privacy-гейт** (~12МБ): русский NER вместо en-модели на кириллице; расширение маскировки на произвольные русские PERSON/ORG без ручного словаря. Garbage-guard обязателен (ru-NER шумит на коротких текстах). ~~15 минут работы — ближайший шаг~~ **SHIPPED 2026-09-06 (`2a91ff7`, S19.1): PER ≥2 токенов (однотокенный = шум «Кисонька»), ORG/LOC однотокенные легитимны, en-NER только на латинице, breaker ru_ner_model 3/60s, `rag.ru_ner` default on, тесты test_privacy_ru_ner.py 6.**
-2. **textcat-типизация клауз** (усиление kind_for_text): обучающие данные УЖЕ ЕСТЬ (core_memory.memory_kind + decay_rate ≤0.005 → самоклейб «инвариант vs событие»); argmax + порог уверенности, ниже порога → fallback keyword-мапы; eval на H-harness (NDCG/drift).
+2. **textcat-типизация клауз** (усиление kind_for_text): обучающие данные УЖЕ ЕСТЬ (core_memory.memory_kind + decay_rate ≤0.005 → самоклейб «инвариант vs событие»); argmax + порог уверенности, ниже порога → fallback keyword-мапы; eval на H-harness (NDCG/drift). ~~Обучающие данные УЖЕ ЕСТЬ~~ **ПИЛОТ SHIPPED 2026-09-06 (`9d17e07`), вердикт НИЖЕ. Инвентаризация данных опровергла масштаб: все 5 инстансов L4 = 448, fact 81%, non-fact 87 (decision 2, todo 1) — 14 классов не на чем.**
 3. **Лемматизация канон-ключей**: ru-леммы схлопывают формы («уволилась/увольнение» → одна основа) — меньше ручных синонимов.
 4. **Морфо-фичи для ImportanceScorer** (POS/модальность) — низкий приоритет.
 - **Паттерн интеграции** (инвариант): lazy-load + circuit-breaker (переиспользовать _embedding_breaker); fallback на правила при сбое; config-флаг; eval до/после.
+
+**S19.2 textcat-пилот — вердикт (2026-09-06, `9d17e07`):**
+
+Схема: 2-классовая модель (stable = kind с decay ≤0.005 / ephemeral — ровно «инвариант vs событие» Эли, тот же порог что route_kind). Данные: self-labels всех 5 live-инстансов (310 строк, stable 48 / ephemeral 262), oversampling minority; ru_core_news_sm tok2vec заморожен, учится только textcat; интеграция — ТОЛЬКО keyword-miss ветка: FACT (decay 0.010 → L3) с argmax 'stable' ≥ 0.9 промоутится в L4, keyword-матчи и уверенность ниже порога не трогаются, флаг `rag.textcat` default OFF, breaker textcat_model 3/60s.
+
+| конфигурация | 5-fold CV | stable precision | stable recall |
+|---|---|---|---|
+| keyword-мапы (статус-кво) | acc 0.871 | **0.636** | 0.352 |
+| keyword + textcat (th=0.9) | acc 0.848 | 0.485 | **0.484** |
+| textcat-only (dev n=62, th=0.9) | acc 0.839 | 0.750 | 0.300 |
+
+Вердикт: **прод НЕ включаем** — модель добавляет recall (+13пп) но роняет precision (−15пп): половина L4-промоушенов была бы ложной, а L4-загрязнение дороже пропущенного факта. Keyword-мапы остаются единственным роутером. Шипится инфраструктура: `shared/textcat.py` (classify + route_promote_stable + breaker), `shared/textcat_data.py` (сборщик self-labels), `scripts/train_textcat.py` (train + threshold sweep + метрики в train_metrics.json), дистиллер-хук за флагом, тесты 11. Путь включения: переобучение при L4 non-fact ≥ 300 (сейчас 87), затем 5-fold P ≥ 0.75 → флаг ON владельцем. OOD-наблюдение: на мусоре ('abc') модель уверена в ephemeral — порог защищает только stable-сторону, что и нужно по контракту.
 
 **Из EDM.md (транскрипт Aurelle, сверка 2026-09-05):** драфт v34 покрывает документ полностью — формул MIB/EDM/ITS в статье нет (реконструкция = модель), sign ≈ fancy MIB, конфаунды сравнения (Pinecone+Cohere vs встроенный ITS, exhaustive vs HNSW), цифры MAIR. Указатели раздела 7 доехали в драфт, но не в диздок — фиксируются:
 - **TOKI** (bitemporal operator algebra для contradiction resolution) — G-комплемент conflict-fusion;
