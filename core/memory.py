@@ -361,12 +361,20 @@ class CoreMemory:
         await conn.commit()
         return int(cursor.rowcount)
 
-    async def search(self, user_id: str, query: str, limit: int = 10, layer: str | None = None) -> list[dict[str, Any]]:
+    async def search(
+        self, user_id: str, query: str, limit: int = 10, layer: str | None = None, *, include_superseded: bool = False
+    ) -> list[dict[str, Any]]:
         """Tokenized recall across key and value.
 
         Multi-word queries match facts containing ANY word, ranked by
         matched-word count then importance. Single-word queries behave
         exactly like the old whole-phrase LIKE.
+
+        B2 is_current-view: earlier-сторона conflict-split пары скрыта, если
+        later-версия существует ГЛОБАЛЬНО (key '::vN' по C4-версионированию
+        или same-key с scope=later) — даже когда пара не сошлась на одной
+        странице выдачи. include_superseded=True возвращает скрытые строки
+        (is_current=False); каждый item несёт is_current.
         """
         layer = layer or self.layer
         conn = await self._cm.get(DB_NAME)
@@ -412,11 +420,28 @@ class CoreMemory:
                     superseded_keys.add(key_j)
                     fused_later.add(i)
                     break
+        # B2 is_current: off-page пара. earlier скрыта, если later существует
+        # глобально — по C4-версионированию ключа (key '::vN') или same-key
+        # с scope=later (SQL key=? не матчит саму earlier-строку с scope=
+        # earlier; метаданные парсим Python-ом — json_extract не нужен).
+        for meta, key in picked_metas:
+            if meta.get("scope") != "earlier" or key in superseded_keys:
+                continue
+            ref = meta.get("contradicts")
+            ref_key = str(ref) if ref is not None else key
+            later_rows = await (
+                await conn.execute(
+                    "SELECT key, metadata FROM core_memory WHERE layer=? AND user_id=? AND visibility != 'private' AND (key=? OR key LIKE ?) LIMIT 2",
+                    (layer, user_id, ref_key, ref_key + "::v%"),
+                )
+            ).fetchall()
+            if any(str(r["key"]) != ref_key or _load_meta(r["metadata"]).get("scope") == "later" for r in later_rows):
+                superseded_keys.add(key)
         out: list[dict[str, Any]] = []
         for i, (_, _, r) in enumerate(picked):
             meta, key = picked_metas[i]
-            if meta.get("scope") == "earlier" and key in superseded_keys:
-                continue  # скрыта read-time fusion'ом — осталась в core_memory
+            if meta.get("scope") == "earlier" and key in superseded_keys and not include_superseded:
+                continue  # скрыта fusion'ом/B2 — осталась в core_memory
             item: dict[str, Any] = {
                 "key": key,
                 "value": str(r["value"]),
@@ -424,6 +449,7 @@ class CoreMemory:
                 "entry_id": int(r["entry_id"]),
                 "updated_at": float(r["updated_at"]),
                 "memory_kind": r["memory_kind"],  # E15: kind weights read this
+                "is_current": key not in superseded_keys,  # B2
             }
             if i in fused_later:
                 item["superseded_context"] = {"scope": "later", "has_earlier": True}

@@ -107,3 +107,31 @@ async def test_temporal_write_failure_never_breaks_save(hermetic_core):
     assert entry_id > 0
     row = await cm.get("u1", "still saved")
     assert row is not None and row.value == "value"
+
+
+async def test_search_hides_earlier_even_off_page(hermetic_core):
+    """B2 is_current-view: earlier скрыта, если later существует ГЛОБАЛЬНО.
+
+    Пара C4 (как пишет дистиллятор): earlier 'fact:x', later 'fact:x::v1'
+    с contradicts. Запрос матчит только 'старое значение' — later вообще
+    не попадает на страницу выдачи (12 филлеров matched=1/imp=1.0
+    выталкивают matched=1/imp=0.9 за limit=10). S2 on-page fusion тут
+    бессильна — пара не сошлась в picked; B2 закрывает earlier по
+    факту существования later в БД. include_superseded=True возвращает
+    скрытую строку с is_current=False.
+    """
+    from core.memory import CoreMemory
+
+    cm = CoreMemory(cm=connection_manager, layer="user")
+    await cm.save("b2u", "fact:x", "старое значение", importance=0.9, metadata={"scope": "earlier"})
+    await cm.save("b2u", "fact:x::v1", "новое значение", importance=0.9, metadata={"scope": "later", "contradicts": "fact:x"})
+    for n in range(12):
+        await cm.save("b2u", f"filler:{n}", f"значение filler {n}", importance=1.0)
+
+    out = await cm.search("b2u", "старое значение", limit=10)
+    assert not any(i["value"].startswith("старое") for i in out), f"earlier протекла: {out}"
+    assert all(i["is_current"] for i in out), f"каждый item несёт is_current=True: {out}"
+
+    full = await cm.search("b2u", "старое значение", limit=10, include_superseded=True)
+    hidden = [i for i in full if not i["is_current"]]
+    assert hidden and hidden[0]["value"].startswith("старое"), f"include_superseded=True вернул скрытую: {full}"
