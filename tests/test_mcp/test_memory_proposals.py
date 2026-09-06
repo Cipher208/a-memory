@@ -75,3 +75,73 @@ async def test_unknown_action_raises(ensure_schema: Path) -> None:
 async def test_unknown_id_raises(ensure_schema: Path) -> None:
     with pytest.raises(ValueError, match="unknown proposal"):
         await _call(ensure_schema, action="decide", proposal_id=424242, approve=True)
+
+
+async def test_conflict_decision_supersede(fresh_dir: Path) -> None:
+    """S18 п.8: 3-option конфликт-контракт — supersede закрывает группу."""
+    from rag.conflict import ConflictResolver
+
+    resolver = ConflictResolver()
+    r1 = await resolver.check("conflict-u1", "user works at Acme corp")
+    r2 = await resolver.check("conflict-u1", "user works at Acme corp office")
+    assert r1["is_conflict"] is False
+    assert r2["is_conflict"], "setup: конфликт создан"
+    gid, old_id = r2["conflict_group_id"], r2["conflicts_with_id"]
+
+    out = await _call(fresh_dir, action="conflict", payload={"group_id": gid, "decision": "supersede", "keep_id": old_id})
+    assert out["status"] == "resolved" and out["decision"] == "supersede"
+    conn = await connection_manager.get("memory.db")
+    row = await (await conn.execute("SELECT COUNT(*) FROM memory_conflicts WHERE conflict_group_id=?", (gid,))).fetchone()
+    assert row[0] == 0, "группа закрыта"
+
+
+async def test_conflict_decision_annotate(fresh_dir: Path) -> None:
+    """annotate: обе записи остаются, аннотация в metadata старого факта."""
+    from lifecycle.distiller import _canonical_key
+    from shared.memory_types import kind_for_text
+    from shared.migrations import MigrationManager
+
+    await MigrationManager(cm=connection_manager).migrate()
+
+    text = "deployment target is staging"
+    key = _canonical_key(text, kind_for_text(text))
+    from core.memory import CoreMemory
+
+    cmem = CoreMemory(cm=connection_manager, layer="user")
+    await cmem.save("conflict-u2", key, text, importance=0.8, metadata={"scope": "earlier"})
+
+    from rag.conflict import ConflictResolver
+
+    resolver = ConflictResolver()
+    await resolver.check("conflict-u2", text)
+    r2 = await resolver.check("conflict-u2", "deployment target is production")
+    assert r2["is_conflict"], "setup: конфликт создан"
+
+    out = await _call(
+        fresh_dir,
+        action="conflict",
+        payload={"group_id": r2["conflict_group_id"], "decision": "annotate", "annotation": "обе правды: staging для дев, prod для релиза"},
+        user_id="conflict-u2",
+    )
+    assert out["status"] == "resolved" and out["decision"] == "annotate"
+    assert out["annotated_key"] == key
+    # аннотация мёржится в существующий metadata (scope=earlier выживает)
+    db = await connection_manager.get("memory.db")
+    row = await (await db.execute("SELECT metadata, importance FROM core_memory WHERE user_id='conflict-u2' AND key=?", (key,))).fetchone()
+    import json
+
+    meta = json.loads(row[0])
+    assert meta["annotated"] == "обе правды: staging для дев, prod для релиза"
+    assert meta["scope"] == "earlier", "существующий metadata мёржится, не затирается"
+    assert row[1] == 0.8, "importance сохраняется"
+
+
+async def test_conflict_decision_validation_errors(fresh_dir: Path) -> None:
+    out = await _call(fresh_dir, action="conflict", payload={"group_id": "nope", "decision": "bogus"})
+    assert out["status"] == "error"
+    out2 = await _call(fresh_dir, action="conflict", payload={"group_id": "nope", "decision": "retain", "keep_id": 0})
+    assert out2["status"] == "error"
+    out3 = await _call(fresh_dir, action="conflict", payload={"group_id": "nope", "decision": "annotate", "annotation": ""})
+    assert out3["status"] == "error"
+    out4 = await _call(fresh_dir, action="conflict", payload={"group_id": "ghost-group", "decision": "annotate", "annotation": "x"})
+    assert out4["status"] == "error", "неизвестная группа → error"

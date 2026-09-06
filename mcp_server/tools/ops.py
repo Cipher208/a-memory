@@ -736,7 +736,9 @@ async def memory_proposals(
     transitions-table id — removes the promoted L4 fact, source episode stays) |
     "propose" (E17b producer: stage a deliberate mutation — kind='wiki_write'
     {title, content, wiki_type?} or 'core_write' {key, value, importance};
-    requires the review tier so agents stage instead of writing directly).
+    requires the review tier so agents stage instead of writing directly) |
+    "conflict" (S18 п.8: 3-option conflict contract — resolve one memory_conflicts
+    group with decision supersede/retain/annotate).
     The apply path executes the exact write the direct path would have done;
     every decision is audit-logged.
     """
@@ -745,6 +747,66 @@ async def memory_proposals(
         from features.staging import list_pending
 
         return {"status": "ok", "proposals": await list_pending(user_id, limit)}
+    if action == "conflict":
+        from shared.constants import DB_NAME
+
+        from rag.conflict import ConflictResolver
+
+        p = payload or {}
+        group_id = str(p.get("group_id") or "")
+        decision = str(p.get("decision") or "")
+        if not group_id or decision not in ("supersede", "retain", "annotate"):
+            return {"status": "error", "error": "need group_id + decision in supersede/retain/annotate"}
+        if decision in ("supersede", "retain"):
+            # supersede: новая запись побеждает, старая уходит (группа закрыта,
+            # проигравший архивируется резолвером). retain: обе правды, группа
+            # закрыта так же — семантика различается агентским интентом.
+            keep_id = int(p.get("keep_id") or 0)
+            if not keep_id:
+                return {"status": "error", "error": "keep_id required for supersede/retain"}
+            ok = await ConflictResolver().resolve(group_id, keep_id)
+            return {"status": "resolved" if ok else "error", "decision": decision}
+        # annotate: обе записи остаются — аннотация связывает их в metadata
+        # старой стороны конфликта (первая строка группы = ранняя; её ключ —
+        # та же _canonical_key-связка, что и в дистиллере _mark_earlier_scope).
+        annotation = str(p.get("annotation") or "")
+        if not annotation:
+            return {"status": "error", "error": "annotation required for annotate"}
+        from core.memory import CoreMemory
+        from lifecycle.distiller import _canonical_key
+        from shared.memory_types import kind_for_text
+
+        conn = await connection_manager.get(DB_NAME)
+        try:
+            rows = await (
+                await conn.execute("SELECT id, content FROM memory_conflicts WHERE conflict_group_id=? ORDER BY id LIMIT 1", (group_id,))
+            ).fetchall()
+        except Exception:  # no conflicts table yet == group never existed
+            return {"status": "error", "error": f"unknown group {group_id}"}
+        cmem = CoreMemory(cm=connection_manager, layer=layer)
+        key = _canonical_key(str(rows[0][1]), kind_for_text(str(rows[0][1])))
+        row = await (
+            await conn.execute(
+                "SELECT value, importance, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+                (layer, user_id, key),
+            )
+        ).fetchone()
+        if row is None:
+            return {"status": "error", "error": "no matching L4 fact to annotate"}
+        from core.memory import _load_meta
+
+        merged = _load_meta(row[2])
+        merged["annotated"] = annotation
+        await cmem.save(
+            user_id,
+            key,
+            str(row[0]),
+            importance=float(row[1]),
+            memory_kind=kind_for_text(str(rows[0][1])).value,
+            source="consolidation:annotate",
+            metadata=merged,
+        )
+        return {"status": "resolved", "decision": "annotate", "annotated_key": key}
     if action == "propose":
         from features.staging import propose
 
