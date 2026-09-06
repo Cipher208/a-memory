@@ -103,6 +103,28 @@ async def wiki_read(
                     (str(entry.file_path), _time.time()),
                 )
                 _conn.commit()  # telemetry is best-effort, never blocks the read
+    related: list[dict[str, Any]] = []
+    with contextlib.suppress(Exception):
+        # S19: page → related facts (recall со страницы, гидратация вниз).
+        # Рёбра wiki_fact_link минера: wiki_page-узел (content == file_path)
+        # ↔ fact-узел (content == core_memory.value) — тот же контракт, что
+        # miner_provenance. Private-факты не покидают стор.
+        from shared.connection import connection_manager as _cm
+        from shared.constants import DB_NAME as _DB
+
+        conn = await _cm.get(_DB)
+        rows = await (
+            await conn.execute(
+                "SELECT cm.key, cm.value, cm.importance FROM epi_edges e"
+                " JOIN epi_nodes w ON w.node_id = e.source_id OR w.node_id = e.target_id"
+                " JOIN epi_nodes f ON (f.node_id = e.source_id OR f.node_id = e.target_id) AND f.node_id != w.node_id"
+                " JOIN core_memory cm ON cm.layer = ? AND cm.user_id = f.user_id AND cm.value = f.content"
+                " WHERE w.node_type = 'wiki_page' AND w.content = ? AND f.node_type = 'fact' AND cm.visibility != 'private'"
+                " ORDER BY cm.importance DESC LIMIT 10",
+                (layer, entry.file_path),
+            )
+        ).fetchall()
+        related = [{"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])} for r in rows]
     return {
         "status": "ok",
         "title": entry.title,
@@ -110,6 +132,8 @@ async def wiki_read(
         "tags": list(entry.tags),
         "file_path": entry.file_path,
         "content": entry.content,
+        "related_facts": related,
+        "related_count": len(related),
     }
 
 
