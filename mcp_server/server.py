@@ -187,6 +187,19 @@ def _register_all_tools() -> None:
         for name in hidden:
             del tools[name]
 
+    # Stage 2-C: meta layer — collapse tier members into per-tier dispatchers.
+    # Opt-in via ARIEL_META=1; default off keeps the flat surface (eval
+    # harness, existing clients) byte-identical.
+    if os.environ.get("ARIEL_META") == "1":
+        from mcp_server.meta_tools import build_meta_tools
+
+        allowed = set(tools)
+        meta = build_meta_tools(dict(tools), allowed)
+        for meta_name, meta_fn in meta.items():
+            for member in EXTRA_TIERS[meta_name](meta_name, set(tools)):
+                tools.pop(member, None)
+            tools[meta_name] = meta_fn
+
     from mcp_server.annotations import annotations_for
 
     for name, func in tools.items():

@@ -14,10 +14,15 @@ from mcp_server.registry import get_all_tools
 
 
 def test_annotations_cover_entire_registry() -> None:
-    """Каждый из 65 тулов в карте; в карте нет stale-имён."""
+    """Каждый тул registry в карте; сверх registry — только Stage 2-C
+    мета-диспетчеры (ARIEL_META names); прочих stale-имён нет."""
+    from mcp_server.server import EXTRA_TIERS
+
     tools = set(get_all_tools())
     mapped = set(_ANNOTATIONS)
-    assert mapped == tools, f"missing={sorted(tools - mapped)} stale={sorted(mapped - tools)}"
+    meta_names = set(EXTRA_TIERS)  # context, insight, write, wiki, review, admin
+    assert mapped - tools <= meta_names, f"stale={sorted(mapped - tools - meta_names)}"
+    assert tools - mapped == set(), f"missing={sorted(tools - mapped)}"
 
 
 def test_read_only_tools_are_sane() -> None:

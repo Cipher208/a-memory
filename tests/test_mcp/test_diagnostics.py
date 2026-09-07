@@ -98,10 +98,10 @@ async def test_heal_remigrate(hermetic_base):
     assert res["healed"] == ["remigrate"]
 
 
-def test_tool_count_65():
+def test_tool_count_66():
     from mcp_server.tools_layer import _register_tools
 
-    assert len(_register_tools) == 65
+    assert len(_register_tools) == 66  # 65 + wake_up (Stage 2-C E10)
 
 
 def test_tools_registered_via_mcp_surface():

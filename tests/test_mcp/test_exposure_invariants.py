@@ -71,6 +71,6 @@ def test_live_agent_legacy_combo_unchanged_count() -> None:
     """The exact string in the three live-agent configs: measured count."""
     names = set(get_all_tools())
     exposed = resolve_exposure("primitives,context,insight,write,wiki,brief,review", names)
-    # Pre-C measurement: 57 (brief tier added daily_brief => +1 after C).
-    # Measured wins over plan: re-probe if this fails.
-    assert len(exposed) == 58
+    # Post-C measurement: legacy combo (brief ignored) + wake_up primitive
+    # + skill_promote in write = 59 (was 57 pre-C).
+    assert len(exposed) == 59

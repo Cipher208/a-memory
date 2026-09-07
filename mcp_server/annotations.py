@@ -108,6 +108,13 @@ _ANNOTATIONS: dict[str, ToolHints] = {
     "memory_sync_replica": ToolHints(),
     "memory_api_key": ToolHints(destructive=True),  # revoke
     "memory_saga": ToolHints(destructive=True),  # rollback
+    # ── Stage 2-C meta-dispatchers: action-mix by worst member action ──
+    "context": ToolHints(read_only=True, destructive=False, idempotent=False),  # all-read tier
+    "insight": ToolHints(read_only=True, destructive=False, idempotent=False),
+    "write": ToolHints(),  # mixed writes
+    "wiki": ToolHints(destructive=True),  # wiki_delete inside
+    "review": ToolHints(),  # proposals decide/apply inside
+    "admin": ToolHints(destructive=True),  # cleanup/data inside
 }
 
 
