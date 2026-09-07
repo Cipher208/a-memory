@@ -14,6 +14,7 @@ destructive=true) — никогда не промоутем write-тул к б�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -114,14 +115,12 @@ def hints_for(name: str) -> ToolHints:
     return _ANNOTATIONS.get(name, ToolHints())
 
 
-def annotations_for(name: str) -> dict[str, bool]:
-    """Render hints to the annotations dict for mcp.tool(annotations=...)."""
+def annotations_for(name: str) -> Any:
+    """Build an MCP ToolAnnotations object for mcp.tool(annotations=...)."""
+    from mcp.types import ToolAnnotations
+
     h = hints_for(name)
-    return {
-        "read_only_hint": h.read_only,
-        "destructive_hint": h.destructive,
-        "idempotent_hint": h.idempotent,
-    }
+    return ToolAnnotations(read_only_hint=h.read_only, destructive_hint=h.destructive, idempotent_hint=h.idempotent)
 
 
 def annotated_count() -> int:

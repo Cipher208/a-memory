@@ -40,7 +40,7 @@ def test_unknown_tool_falls_back_conservative() -> None:
     h = hints_for("brand_new_unknown_tool")
     assert not h.read_only and h.destructive
     a = annotations_for("brand_new_unknown_tool")
-    assert a == {"read_only_hint": False, "destructive_hint": True, "idempotent_hint": False}
+    assert a.read_only_hint is False and a.destructive_hint is True and a.idempotent_hint is False
 
 
 def test_server_wires_annotations_into_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
