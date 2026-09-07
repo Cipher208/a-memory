@@ -93,7 +93,7 @@ def _make_dispatcher(
         result = _scope_tool(fn)(**kwargs)
         if inspect.isawaitable(result):
             result = await result
-        return result
+        return dict(result) if isinstance(result, dict) else {"result": result}
 
     dispatcher.__name__ = tier
     dispatcher.__doc__ = (

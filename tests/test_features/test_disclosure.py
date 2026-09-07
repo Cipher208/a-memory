@@ -100,7 +100,7 @@ def async_dummy(return_value):
     return _fn
 
 
-def test_tool_count_65():
+def test_tool_count_66():
     from mcp_server.tools_layer import _register_tools
 
-    assert len(_register_tools) == 65
+    assert len(_register_tools) == 66  # 65 + wake_up (Stage 2-C E10)
