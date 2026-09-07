@@ -41,6 +41,7 @@ _ANNOTATIONS: dict[str, ToolHints] = {
     "project": ToolHints(),
     "memory_recall": ToolHints(read_only=True, destructive=False, idempotent=True),
     "memory_hook": ToolHints(),  # dispatch one lifecycle event (may mutate)
+    "wake_up": ToolHints(read_only=True, destructive=False, idempotent=True),  # Stage 2-C E10
     # ── sessions / episodes / graph reads ──
     "memory_session_start": ToolHints(),
     "memory_session_end": ToolHints(),

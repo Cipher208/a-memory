@@ -9,7 +9,7 @@ from mcp_server.registry import get_all_tools
 from mcp_server.slots import SLOTS, SLOT_NAMES, slot_of
 
 # Tools that do not exist in the registry yet but have a slot assigned.
-EXPECTED_FORWARD = {"wake_up"}
+EXPECTED_FORWARD: set[str] = set()  # wake_up registered since Stage 2-C wake_up task
 
 
 def test_every_registry_tool_has_exactly_one_slot() -> None:

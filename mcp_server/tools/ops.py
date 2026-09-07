@@ -1217,6 +1217,33 @@ async def memory_recap(
     return {"blocks": blocks, "count": len(blocks)}
 
 
+async def wake_up(
+    budget: int = 2000,
+    layer: str = "user",
+    user_id: str = "default",
+    ctx: Context[Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Wake up (E10, Stage 2-C): one-call memory lift for a fresh session.
+
+    Glues memory_recap (continuity pack) and the inject critical set onto a
+    shared token budget: recap takes at most half, inject gets the rest.
+    Returns structured blocks plus a rendered markdown block with a
+    cache:break between the two halves.
+    """
+    app = _get_ctx(ctx)
+    layer = _validate_layer(layer)
+    from .base import _get_memory, _get_rag
+
+    mem = _get_memory(app, layer, user_id)
+    rag = _get_rag(app, layer)
+    from features.wake_up import render_wake_up_md, wake_up_blocks
+
+    assembly = await wake_up_blocks(mem, rag, user_id, budget=int(budget))
+    assembly["markdown"] = render_wake_up_md(assembly)
+    metrics.inc(METRIC_TOOL_CALLS)
+    return assembly
+
+
 async def memory_steering(
     query: str = "",
     ctx: Context[Any, Any] | None = None,

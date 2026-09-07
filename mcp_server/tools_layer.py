@@ -56,6 +56,7 @@ from .tools.ops import (
     memory_stash,  # Phase D D1.12
     memory_procedure,  # Phase D D2.5
     memory_standing,  # A2.5
+    wake_up,  # Stage 2-C E10
 )
 
 # Re-export _fire_hook for backward compatibility and tests
@@ -129,6 +130,7 @@ _register_tools: dict[str, Any] = {
     "wiki_reflect": wiki_reflect,
     "wiki_query": wiki_query,
     "daily_brief": daily_brief,
+    "wake_up": wake_up,
 }
 
 for _name, _func in _register_tools.items():
