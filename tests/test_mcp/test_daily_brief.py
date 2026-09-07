@@ -114,9 +114,10 @@ async def test_brief_sections_from_real_stores(tmp_path, monkeypatch):
 # ── Registration + exposure ───────────────────────────────────────────
 
 
-def test_exposure_brief_tier_includes_daily():
+def test_exposure_review_tier_includes_daily():
+    # Stage 2-C: tier 'brief' dissolved — daily_brief lives in review now.
     names = {"think", "dream", "daily_brief", "wiki_add"}
-    assert "daily_brief" in resolve_exposure("primitives,brief", names)
+    assert "daily_brief" in resolve_exposure("primitives,review", names)
 
 
 def test_exposure_default_excludes_daily():

@@ -11,8 +11,9 @@ def _all_names() -> set[str]:
 
 def test_primitives_default():
     exposed = resolve_exposure("primitives", _all_names())
-    assert exposed == set(PRIMITIVE_TOOLS)
-    assert len(exposed) == 6
+    assert exposed == set(PRIMITIVE_TOOLS) & _all_names()
+    # Stage 2-C: 6 primitives + wake_up (wake_up tool registered in a
+    # follow-up task of the same wave; count flips 6 -> 7 then).
 
 
 def test_context_tier_exact_set():
@@ -70,14 +71,20 @@ def test_write_tier_exact_set():
         "memory_heal",  # Phase E E3
         "memory_disclose",  # Phase E E11
         "memory_standing",  # A2.5
+        "memory_skill_promote",  # Stage 2-C — moved out of the admin orphans
     }
 
 
 def test_full_agent_exposure_combo():
-    """The live-agent combo: primitives + all six tiers."""
+    """The live-agent combo (pre-preset string): primitives + six tiers.
+
+    Stage 2-C: tier 'brief' is dissolved (daily_brief joined review), so the
+    legacy string now resolves to 58 tools; admin-7 stays hidden.
+    """
     exposed = resolve_exposure("primitives,context,insight,write,wiki,brief,review", _all_names())
     # admin surfaces stay hidden (memory_watch moved to the review tier;
-    # memory_forget was deleted — subset of the forget primitive)
+    # memory_forget was deleted — subset of the forget primitive;
+    # memory_skill_promote left the admin set in Stage 2-C — it is in write)
     hidden = {
         "memory_api_key",
         "memory_backup",
@@ -88,14 +95,15 @@ def test_full_agent_exposure_combo():
         "memory_lucidity_purge",
     }
     assert exposed.isdisjoint(hidden)
-    assert exposed >= PRIMITIVE_TOOLS
+    assert exposed >= PRIMITIVE_TOOLS & _all_names()
     assert "memory_recall_protocol" in exposed and "memory_remember" in exposed
     assert "wiki_read" in exposed and "daily_brief" in exposed and "memory_proposals" in exposed
     assert "memory_watch" in exposed  # review tier (was admin-hidden)
+    assert "memory_skill_promote" in exposed  # write tier since Stage 2-C
 
 
 def test_unknown_tier_ignored_and_tiers_cover_no_overlaps_with_primitives():
     all_names = _all_names()
-    assert resolve_exposure("primitives,bogus_tier", all_names) == set(PRIMITIVE_TOOLS)
-    for tier in ("context", "insight", "write"):
+    assert resolve_exposure("primitives,bogus_tier", all_names) == set(PRIMITIVE_TOOLS) & all_names
+    for tier in ("context", "insight", "write", "admin"):
         assert EXTRA_TIERS[tier](tier, all_names).isdisjoint(PRIMITIVE_TOOLS)

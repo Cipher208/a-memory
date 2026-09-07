@@ -29,15 +29,15 @@ STDIO_TRANSPORT: Literal["stdio"] = "stdio"
 
 # Tools agents always see: the universal primitives. Everything else stays
 # reachable through them (and ops via the dashboard HTTP surface).
-PRIMITIVE_TOOLS = frozenset({"think", "dream", "forget", "evolve", "project", "memory_hook"})
+PRIMITIVE_TOOLS = frozenset({"think", "dream", "forget", "evolve", "project", "memory_hook", "wake_up"})
 
 
 EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
     # tier name -> matcher(tool_name, all_names) returning extra tools to expose
     "wiki": lambda name, names: {n for n in names if n.startswith("wiki_")},
-    "brief": lambda name, names: {n for n in names if n.startswith("daily_")},
-    # review: staged-mutation review surface (C1.11/C1.13/C1.14) — opt-in per instance
-    "review": lambda name, names: names & {"memory_proposals", "memory_report_card", "memory_watch"},
+    # review: staged-mutation review surface (C1.11/C1.13/C1.14) — opt-in per instance.
+    # Stage 2-C: tier 'brief' dissolved here (daily_brief was its only member).
+    "review": lambda name, names: names & {"memory_proposals", "memory_report_card", "memory_watch", "daily_brief"},
     # Phase D coherent groups:
     # context = build/recover context (recall protocol, recap, budgets, steering, compression)
     "context": lambda name, names: (
@@ -95,19 +95,59 @@ EXTRA_TIERS: dict[str, Callable[[str, set[str]], set[str]]] = {
             "memory_heal",  # Phase E E3 — mutating operator surface
             "memory_disclose",  # Phase E E11 — disclosure rule CRUD
             "memory_standing",  # A2.5 — standing query save/delete
+            "memory_skill_promote",  # Stage 2-C — was an orphan (admin-8)
         }
     ),
+    # admin = operator surface (Stage 2-C): keys, backups, data lifecycle,
+    # replication. Never part of the agent preset; before Stage 2-C these
+    # were orphans visible only with ARIEL_EXPOSE=all.
+    "admin": lambda name, names: (
+        names
+        & {
+            "memory_api_key",
+            "memory_backup",
+            "memory_cleanup",
+            "memory_data",
+            "memory_lucidity_purge",
+            "memory_saga",
+            "memory_sync_replica",
+        }
+    ),
+}
+
+
+_EXPOSE_PRESETS: dict[str, str] = {
+    "full": "all",
+    "agent": "primitives,context,insight,write,wiki,review",
+    "operator": "agent,admin",
 }
 
 
 def resolve_exposure(expose: str, all_names: set[str]) -> set[str]:
     """Resolve an ARIEL_EXPOSE value to the exposed tool-name set.
 
-    Formats: 'primitives' (default), 'all', or comma-separated tiers
-    e.g. 'primitives,wiki'. Unknown tiers are ignored.
+    Formats: 'primitives' (default), 'all', named presets ('agent',
+    'operator', 'full' — Stage 2-C), or comma-separated tiers e.g.
+    'primitives,wiki'. Unknown tokens are ignored. Presets expand to their
+    tier list (one level; 'operator' references 'agent').
     """
+    expanded: list[str] = []
+    pending = [t.strip() for t in expose.split(",") if t.strip()]
+    # expand presets to a fixpoint ('operator' references 'agent' — one
+    # level of nesting is supported, the loop also tolerates deeper chains)
+    while pending:
+        token = pending.pop(0)
+        preset = _EXPOSE_PRESETS.get(token)
+        if preset == "all":
+            expanded.append("all")
+        elif preset:
+            pending.extend(preset.split(","))
+        else:
+            expanded.append(token)
+    if "all" in expanded:
+        return set(all_names)
     allowed = set(PRIMITIVE_TOOLS) & all_names
-    for tier in (t.strip() for t in expose.split(",") if t.strip()):
+    for tier in expanded:
         matcher = EXTRA_TIERS.get(tier)
         if matcher:
             allowed |= matcher(tier, all_names)
