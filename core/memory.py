@@ -456,6 +456,7 @@ class CoreMemory:
                 "updated_at": float(r["updated_at"]),
                 "memory_kind": r["memory_kind"],  # E15: kind weights read this
                 "is_current": key not in superseded_keys,  # B2
+                "uri": f"ariel://{layer}/fact/{key}",  # Stage 2-A: stable ref
             }
             if i in fused_later:
                 item["superseded_context"] = {"scope": "later", "has_earlier": True}

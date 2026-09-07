@@ -160,6 +160,8 @@
 
 - Сведение 65 тулов + slots + URI-keys (включая peers/ tunnels резерв) + MCP behavior-аннотации (readOnlyHint/destructiveHint/idempotentHint — fork поддерживает ToolAnnotations; data-фундамент из триплет-минера) + переименования (wake_up alias) + admin-тулы манифест. **Начинается только после F/G/H.**
 
+**→ Stage 2 стартовал 2026-09-07, План A (URI-keys) SHIPPED (`shared/uris.py`): схема `ariel://<layer>/<store>/<key>` (fact/wiki/graph/node/episode/l0) поверх существующих ключей, ноль миграций; `parse_uri` (мусор/резервы peer/ отвергнуты) + `resolve_uri` (user_id обязателен в вызове — изоляция: чужое по URI не резолвится; peer → ValueError reserved). Интеграция: search-items и wiki_read несут `uri`, `drill_down(entry_id | ariel-URI, user_id)` принимает URI. Тесты 9 (parse-матрица, roundtrip, изоляция user_id/layer, peer ValueError, search/wiki_read/drill_down интеграция). Gate 1494/0, mypy 231 clean. Следом: План B (behavior-аннотации), C (slots+consolidation), D (Stage2-eval).
+
 ## [S15] Волновой план
 
 - **F1**: L0-журнал + watermark + классификатор + G0 (privacy) — фундамент.

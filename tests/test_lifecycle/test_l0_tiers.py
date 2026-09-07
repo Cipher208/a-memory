@@ -177,8 +177,12 @@ async def test_export_clack_jsonl_lossless(cm: Any) -> None:
     now = time.time()
     t1 = "Холодная запись один. Полный текст. Три предложения для lossless-проверки."
     t2 = "Холодная запись два. Ещё полный текст. С метаданными решения."
+    # возраст фиксирован относительно СОСЕДНЕГО месяца today-200д, чтобы обе
+    # записи гарантированно легли в один JSONL-бакет (10.03.2026: 200д→фев,
+    # 190д→мар — разные файлы; дата-зависимый флейм, пойман 2026-09-07)
+    age_near = 200 - (time.gmtime(now).tm_mday)  # внутри того же месяца
     await _seed(cm, t1, age_days=200, status="promoted_l4", decisions='[{"gate": "g1", "verdict": "save"}]')
-    await _seed(cm, t2, age_days=190, status="saved_l3", decisions='[{"gate": "g1", "verdict": "save"}]')
+    await _seed(cm, t2, age_days=max(181, age_near + 1), status="saved_l3", decisions='[{"gate": "g1", "verdict": "save"}]')
     await _seed(cm, "Живая свежая запись. Осталась в журнале.", age_days=5, status="promoted_l4")
     res = await tier_l0(now=now)
     assert res["cold"] == 2 and res["exported"]

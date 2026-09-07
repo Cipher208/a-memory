@@ -125,12 +125,15 @@ async def wiki_read(
             )
         ).fetchall()
         related = [{"key": str(r["key"]), "value": str(r["value"]), "importance": float(r["importance"])} for r in rows]
+    from shared.uris import wiki_uri
+
     return {
         "status": "ok",
         "title": entry.title,
         "wiki_type": entry.wiki_type,
         "tags": list(entry.tags),
         "file_path": entry.file_path,
+        "uri": wiki_uri(layer, entry.file_path),  # Stage 2-A: stable ref
         "content": entry.content,
         "related_facts": related,
         "related_count": len(related),

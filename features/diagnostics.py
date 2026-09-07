@@ -13,20 +13,50 @@ from typing import Any
 HEAL_ACTIONS = ("remigrate", "reset_breakers", "purge_invalid_l1")
 
 
-async def drill_down(entry_id: int, user_id: str) -> dict[str, Any]:
+async def drill_down(entry_id: int | str, user_id: str, layer: str = "user") -> dict[str, Any]:
     """S6a-4 provenance reader: L4-запись → исходное сырье l0_journal.
 
     По metadata.source_raw_id (пишет distiller) достаём raw-строку l0_journal:
     текст, момент фиксации и событие-источник — гидратация вниз «почему мы
     так решили». Нет провенанса → {'source_raw_id': None}.
+
+    Stage 2-A: entry_id может быть ariel-URI (`ariel://user/fact/<key>`) —
+    резолвится в entry_id до провенанс-чтения.
     """
     from shared.connection import connection_manager
     from shared.constants import DB_NAME
 
     conn = await connection_manager.get(DB_NAME)
-    row = await (
-        await conn.execute("SELECT key, value, metadata FROM core_memory WHERE entry_id=? AND user_id=?", (int(entry_id), user_id))
-    ).fetchone()
+    if isinstance(entry_id, str) and entry_id.startswith("ariel://"):
+        from shared.uris import parse_uri
+
+        parsed = parse_uri(entry_id)
+        if parsed is None or parsed.get("reserved"):
+            return {"source_raw_id": None, "error": f"unresolvable URI: {entry_id!r}"}
+        if parsed["store"] != "fact":
+            # не-L4 URI не несут провенанс-цепочки — вернём сам резолв
+            from shared.uris import resolve_uri
+
+            resolved = await resolve_uri(connection_manager, parsed["layer"], user_id, entry_id)
+            return {"source_raw_id": None, "resolved": resolved} if resolved else {"source_raw_id": None}
+        row = await (
+            await conn.execute(
+                "SELECT entry_id, key, value, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+                (parsed["layer"], user_id, parsed["key"]),
+            )
+        ).fetchone()
+        if row is None:
+            return {"source_raw_id": None}
+        entry_id = int(row["entry_id"])
+        row_meta = row
+    else:
+        row_meta = await (
+            await conn.execute(
+                "SELECT key, value, metadata FROM core_memory WHERE entry_id=? AND user_id=?",
+                (int(entry_id), user_id),
+            )
+        ).fetchone()
+    row = row_meta
     if row is None:
         return {"source_raw_id": None}
     try:
