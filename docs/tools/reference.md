@@ -2,20 +2,24 @@
 
 Product name: **a-memory** · package: `mcp-ariel-memory` · v1.8.0
 
-a-memory exposes three tool surfaces:
+a-memory exposes three tool surfaces (slots/tiers/presets manifest:
+[exposure.md](exposure.md)):
 
 | Surface | Tools | How |
 |---------|-------|-----|
-| **Primitives** (default) | 6 | What every MCP client sees out of the box: `think` / `dream` / `forget` / `evolve` / `project` / `memory_hook` |
+| **Primitives** (default) | 7 | What every MCP client sees out of the box: `think` / `dream` / `forget` / `evolve` / `project` / `memory_hook` / `wake_up` (Stage 2-C E10) |
 | **+ wiki** | +7 | `ARIEL_EXPOSE=primitives,wiki` — `wiki_add`/`wiki_search`/`wiki_list`/`wiki_read`/`wiki_delete`/`wiki_summarize`/`wiki_link` |
-| **+ brief** | +1 | adds `daily_brief` (one-call status report) |
-| **+ review** | +3 | adds `memory_proposals`, `memory_report_card` — staged-mutation review surface (C1.11/C1.14) — and `memory_watch` (C1.10 operator CRUD over watch_rules) |
+| **+ review** | +4 | adds `memory_proposals`, `memory_report_card` — staged-mutation review surface (C1.11/C1.14) —, `memory_watch` (C1.10 operator CRUD over watch_rules) and `daily_brief` (ex-`brief` tier, dissolved 2026-09-07) |
 | **+ context** | +7 | build/recover context: `memory_recall_protocol` (D1.1), `memory_recap` (D1.2), `memory_get_smart_context` (D1.10), `memory_context`, `memory_context_inject`, `memory_steering` (D1.3), `memory_compress` (D1.4) |
 | **+ insight** | +17 | read-side analytics: `memory_query` (D1.7), `memory_fact_blame` (D1.6), `memory_history` (D1.14, dual-tier), `memory_quality` (D1.19), `memory_reflect` (D1.16), `memory_stats`, `memory_search`, `memory_recall`, `memory_episode_recall/list/get`, `memory_session_list`, `memory_graph_query/nodes/edges`, `memory_diagnose` (E3), `memory_standing` (A2.5, dual-tier) |
-| **+ write** | +16 | shape memory: `memory_remember`, `memory_save_typed` (D1.8), `memory_load_rules` (D1.9), `memory_scratchpad` (D1.15), `memory_counterfactual` (D1.20), `memory_branch` (D1.11), `memory_history` (D1.14, dual-tier), `memory_stash` (D1.12), `memory_procedure` (D2.5), `memory_episode_save`, `memory_graph_add` (E17a causal action), `memory_session_start`, `memory_session_end`, `memory_heal` (E3), `memory_disclose` (E11), `memory_standing` (A2.5, dual-tier) |
-| **Full surface** | 65 | `ARIEL_EXPOSE=all` — everything, incl. admin ops (backup, api_key, cleanup, saga, data) |
+| **+ write** | +17 | shape memory: `memory_remember`, `memory_save_typed` (D1.8), `memory_load_rules` (D1.9), `memory_scratchpad` (D1.15), `memory_counterfactual` (D1.20), `memory_branch` (D1.11), `memory_history` (D1.14, dual-tier), `memory_stash` (D1.12), `memory_procedure` (D2.5), `memory_episode_save`, `memory_graph_add` (E17a causal action), `memory_session_start`, `memory_session_end`, `memory_heal` (E3), `memory_disclose` (E11), `memory_standing` (A2.5, dual-tier), `memory_skill_promote` (Stage 2-C, ex-orphan) |
+| **+ admin** | +7 | `ARIEL_EXPOSE=<...,admin>` or preset `operator` — `memory_api_key`, `memory_backup`, `memory_cleanup`, `memory_data`, `memory_lucidity_purge`, `memory_saga`, `memory_sync_replica` (Stage 2-C tier; before it these were orphans visible only with `all`) |
+| **Full surface** | 66 | `ARIEL_EXPOSE=all` (preset `full`) — everything |
 
-Recommended live-agent value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` → 65 tools; the remaining admin tools stay hidden unless `all`.
+Recommended live-agent value: `ARIEL_EXPOSE=agent` (preset; expands to
+`primitives,context,insight,write,wiki,review`) → 59 tools. With
+`ARIEL_META=1` the same preset collapses to 13 visible schemas (one
+dispatcher per tier) — see [exposure.md](exposure.md).
 
 `think` also accepts optional `wiki_type` / `wiki_title`: passing either forces a
 wiki save with an explicit page name instead of the automatic Thought_<ts>
