@@ -147,8 +147,12 @@ def _register_all_tools() -> None:
         for name in hidden:
             del tools[name]
 
+    from mcp_server.annotations import annotations_for
+
     for name, func in tools.items():
-        mcp.tool(name=name)(_scope_tool(func))
+        # Stage 2-B: behavior hints из единой карты (annotations.py) —
+        # консервативный default для не-картных имён (destructive=true).
+        mcp.tool(name=name, annotations=annotations_for(name))(_scope_tool(func))
 
     # Startup evidence for the env-sanitization gotcha: MCP stdio clients pass
     # a sanitized environment, so a shell-profile ARIEL_EXPOSE silently never
