@@ -25,7 +25,15 @@ logger = logging.getLogger(__name__)
 
 class BackupCron:
     def __init__(self, base_dir: str | None = None):
-        self.base_dir = Path(base_dir or str(Path.home() / ".mcp-ariel-memory"))
+        if base_dir is None:
+            # Same resolution as AsyncConnectionManager: the per-instance
+            # MCP_MEMORY_DATA_DIR. The old hard-coded ~/.mcp-ariel-memory made
+            # every agent process (cowagent/hermes/mimocode) back up and
+            # cycle-gate the shared default DB instead of its own live one.
+            from shared.connection import connection_manager
+
+            base_dir = str(connection_manager.base_dir)
+        self.base_dir = Path(base_dir)
         self.backup_dir = self.base_dir / "backups"
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self.interval_hours = config.get("backup", "backup_interval_hours") or 24
