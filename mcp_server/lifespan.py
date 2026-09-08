@@ -58,7 +58,7 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                     for layer in ("user", "agent"):
                         engine = ConsolidationEngine(layer=layer)
                         buf = DreamBuffer(layer=layer)
-                        await buf._init_db()
+                        await buf.ensure()
 
                         conn = await buf._cm.get("memory.db")
                         cur = await conn.execute("SELECT DISTINCT user_id FROM staging_memories WHERE layer=?", (layer,))
