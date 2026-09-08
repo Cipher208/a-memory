@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 import re
+
+from config import config
 from typing import Any
 
 from rag.ablation import dense_per_kind_search, gated_search, pre_gate_flags, retrieval_mode
@@ -207,6 +209,11 @@ async def route_query(
     # S17 pre-gate: {} когда retrieval.pregate off (статус-кво), иначе урезанный
     # fan-out по фичам запроса — cost down + шум down, N_eff отражает урезание.
     pool = await rag.search(query, user_id=user_id, limit=100, include_graph=False, **pre_gate_flags(query))
+    # CLACK exp3: q-fields boost (score += w·|qt∩qf|) до EDM — флаг config-only.
+    if bool(config.get("retrieval", "qfields", "enabled", default=False)):
+        from lifecycle.qfields import apply_qfield_boost
+
+        pool = await apply_qfield_boost(_graph_cm(rag, cm), pool, query)
     graph_cm = _graph_cm(rag, cm)
     hits = await edm_rerank(pool, query, cm=graph_cm, user_id=user_id, layer=layer)
 

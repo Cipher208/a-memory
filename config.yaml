@@ -115,6 +115,14 @@ retrieval:
   textcat: false
   # textcat_threshold: 0.9   # уверенность argmax; ниже → fallback keyword-мапы
   # textcat_model_path: ""   # оверрайд пути (default: <data_dir>/textcat_model)
+  # CLACK exp3 (2026-09-08): q-fields (doc2query) — 3 гипотетических запроса на
+  # rag-юнит (ночная джоба) + лексический буст 2.0·|qt∩qf| в route_query.
+  # hit@5 0.08→0.46 на LongMemEval-S снапшоте. Default off до A/B-вердикта.
+  qfields:
+    enabled: false          # джоба + буст; config-only флаг (без env)
+    weight: 2.0             # буст |qt ∩ qf| (CLACK qb, канон 2.0)
+    max_units_per_night: 100  # cost-cap ночной джобы (LLM-вызовы)
+    llm_config_path: ""     # путь к api_config.json (base_url/api_key/model); пусто = джоба спит
 
 # === Memory write gate (S18) ===
 memory:

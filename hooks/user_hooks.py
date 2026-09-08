@@ -103,6 +103,10 @@ class UserHooks:
 
             result["graph_enrich"] = await graph_enrich(layer="user")
         with contextlib.suppress(Exception):
+            from lifecycle.qfields import qfield_enrich
+
+            result["qfields"] = await qfield_enrich(layer="user")
+        with contextlib.suppress(Exception):
             from features.skill_pipeline import auto_promote_fresh
 
             from wiki.manager import WikiManager
