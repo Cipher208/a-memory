@@ -177,12 +177,19 @@ async def test_export_clack_jsonl_lossless(cm: Any) -> None:
     now = time.time()
     t1 = "Холодная запись один. Полный текст. Три предложения для lossless-проверки."
     t2 = "Холодная запись два. Ещё полный текст. С метаданными решения."
-    # возраст фиксирован относительно СОСЕДНЕГО месяца today-200д, чтобы обе
-    # записи гарантированно легли в один JSONL-бакет (10.03.2026: 200д→фев,
-    # 190д→мар — разные файлы; дата-зависимый флейм, пойман 2026-09-07)
-    age_near = 200 - (time.gmtime(now).tm_mday)  # внутри того же месяца
-    await _seed(cm, t1, age_days=200, status="promoted_l4", decisions='[{"gate": "g1", "verdict": "save"}]')
-    await _seed(cm, t2, age_days=max(181, age_near + 1), status="saved_l3", decisions='[{"gate": "g1", "verdict": "save"}]')
+    # Обе записи — в ОДНОМ UTC-месяце: 12:00 UTC 1-го числа месяца точки
+    # now-200д. Это всегда ≥199.5д назад (гарантированно cold) и всегда
+    # внутри бакета strftime(now-200д). Прежняя арифметика «200−mday»
+    # пересекала границу месяца при mday > дней-в-месяце−28 (дата-зависимые
+    # фейлы 2026-09-07 и 2026-09-09: 200−9д → t2 уезжал в следующий месяц).
+    from datetime import datetime, timezone
+
+    base = now - 200 * 86400
+    gy, gmon = time.gmtime(base).tm_year, time.gmtime(base).tm_mon
+    ts_same_month = datetime(gy, gmon, 1, 12, 0, tzinfo=timezone.utc).timestamp()
+    age_same = (now - ts_same_month) / 86400
+    await _seed(cm, t1, age_days=age_same, status="promoted_l4", decisions='[{"gate": "g1", "verdict": "save"}]')
+    await _seed(cm, t2, age_days=age_same, status="saved_l3", decisions='[{"gate": "g1", "verdict": "save"}]')
     await _seed(cm, "Живая свежая запись. Осталась в журнале.", age_days=5, status="promoted_l4")
     res = await tier_l0(now=now)
     assert res["cold"] == 2 and res["exported"]
