@@ -29,10 +29,58 @@ import os
 import sqlite3
 import sys
 import threading
+import weakref
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Registry of every aiosqlite connection handed out by any manager.
+# aiosqlite worker threads are non-daemon and block in queue.get() forever,
+# so a connection dropped without close() (test fixtures do _conns.clear())
+# leaks a thread that hangs interpreter shutdown — the historical reason
+# tests/conftest.py called os._exit(0). leaked_connection_workers() lets
+# teardown stop those workers explicitly instead of nuking the process.
+# Strong refs: the worker thread keeps only the tx queue alive, the
+# Connection object itself becomes unreachable — a WeakSet would lose it.
+_tracked_aiosqlite_conns: list[Any] = []
+_managers: weakref.WeakSet[AsyncConnectionManager] = weakref.WeakSet()
+
+
+def leaked_connection_workers(*, stop: bool = False, force: bool = False) -> list[Any]:
+    """Return aiosqlite connections no longer owned by any manager.
+
+    A connection is "leaked" when its worker thread is running but the
+    connection is not tracked in any manager's _conns dict (fixture-style
+    ``_conns.clear()`` without ``close_all()``). With stop=True, sends the
+    aiosqlite stop sentinel so each leaked worker exits (sqlite handle
+    closed as part of stop()). Live connections are never touched unless
+    force=True. Closed entries are pruned from the registry.
+
+    force=True is for interpreter teardown (pytest_sessionfinish): stop
+    every tracked connection still alive, owned or not — at that point no
+    async code can legitimately use them, and non-daemon workers would
+    otherwise hang the exit.
+    """
+    owned: set[int] = set()
+    if not force:
+        for m in list(_managers):
+            for conn in m._conns.values():
+                owned.add(id(conn))
+
+    leaked: list[Any] = []
+    for conn in list(_tracked_aiosqlite_conns):
+        if getattr(conn, "_connection", None) is None:
+            _tracked_aiosqlite_conns.remove(conn)  # closed — prune
+            continue
+        if not force and id(conn) in owned:
+            continue
+        leaked.append(conn)
+        if stop:
+            with contextlib.suppress(Exception):
+                conn.stop()
+            _tracked_aiosqlite_conns.remove(conn)
+    return leaked
 
 
 def _wal_enabled() -> bool:
@@ -150,6 +198,7 @@ class AsyncConnectionManager:
         self.base_dir = Path(base_dir or _DEFAULT_DIR)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._conns: dict[str, Any] = {}
+        _managers.add(self)
 
     # ------------------------------------------------------------------
     # Core API
@@ -183,6 +232,7 @@ class AsyncConnectionManager:
         import aiosqlite
 
         conn = await aiosqlite.connect(db_path)
+        _tracked_aiosqlite_conns.append(conn)
         conn.row_factory = aiosqlite.Row
         # page_size/auto_vacuum must precede journal_mode=WAL (WAL seals page size)
         await conn.execute("PRAGMA page_size=16384")  # 16KB pages, new DBs only (no-op on existing)

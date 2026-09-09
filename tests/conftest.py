@@ -90,7 +90,32 @@ def deterministic_gate_and_registry():
     adaptive_threshold._current_value = None
 
 
+@pytest.fixture(autouse=True)
+def reap_leaked_workers():
+    """Stop aiosqlite workers leaked by clear()-style teardowns after each test.
+
+    Stopping right after the test (while its event loop is still alive)
+    makes the stop sentinel fully effective; a single end-of-session sweep
+    left a few stubborn workers parked in tx.get() with no live loop.
+    """
+    yield
+    from shared.connection import leaked_connection_workers
+
+    leaked_connection_workers(stop=True)
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Force exit after all tests complete — aiosqlite worker thread bug."""
-    os._exit(0)
+    """Force-stop every live aiosqlite worker so shutdown doesn't hang.
+
+    aiosqlite worker threads are non-daemon; fixtures that drop handles via
+    _conns.clear() leave them parked in queue.get() forever, hanging
+    interpreter shutdown. Historically this file called os._exit(0), which
+    also swallowed failure output and exit codes. Now: force-stop all
+    tracked workers (per-test reaping already handled fixture leaks; this
+    catches connections still owned by surviving managers), then let
+    pytest exit normally with the real exit status.
+    """
+    from shared.connection import leaked_connection_workers
+
+    leaked_connection_workers(stop=True, force=True)
