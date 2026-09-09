@@ -1,14 +1,17 @@
 # ROADMAP
 
 > **LEGACY — frozen 2026-09-03.** This file predates the phased plan and no
-> longer reflects reality: the tool surface is now 66 tools (not "19"), the
-> schema lives in the alembic chain (§2 "Alembic schema migrations" below is
-> DONE), and the §17 migration list predates phases A–E that already shipped
-> it. The canonical development plan is
-> **`docs/compose/specs/2026-08-28-roadmap-master-list.md`** (+ its audit
-> ledger `docs/compose/specs/2026-09-01-stage1-dumps-gap-audit.md`); the live
-> release checklist lives in CHANGELOG.md. The original text below is kept
-> only for the pre-v1.0.0 items that still apply (publishing, docker, npm).
+> longer reflects reality: the tool surface is now 13 meta-tools (ARIEL_META=1)
+> over a 66-name internal registry, the schema lives in the alembic chain
+> (§2 "Alembic schema migrations" below is DONE), and the §17 migration list
+> predates phases A–E that already shipped it. Canonical plan chain:
+> **`docs/compose/specs/2026-08-28-roadmap-master-list.md`** (feature scope,
+> CLOSED) → **`docs/compose/specs/2026-09-04-phase-fgh-design.md`** (F/G/H +
+> Stage 2, SHIPPED) → **`docs/compose/specs/2026-09-09-polish-roadmap.md`**
+> (ACTIVE: polish-era sequencing — test refactor, transport E2E, eval rigor,
+> core modularity, i18n, ops discipline). The live release checklist lives in
+> CHANGELOG.md. The original text below is kept only for the pre-v1.0.0 items
+> that still apply (publishing, docker, npm).
 
 > Future development plans for mcp-ariel-memory after v1.0.0.
 
