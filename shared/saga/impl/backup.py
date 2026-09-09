@@ -1,3 +1,4 @@
+import os
 import shutil
 import time
 import logging
@@ -11,9 +12,18 @@ from shared.constants import DB_NAME
 logger = logging.getLogger(__name__)
 
 
+def _default_base_dir() -> Path:
+    """Resolve the default base dir for saga backups.
+
+    Same default as AsyncConnectionManager._DEFAULT_DIR — respects
+    MCP_MEMORY_DATA_DIR so saga backups never land in another instance's dir.
+    """
+    return Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory"))
+
+
 async def _backup_copy_db(ctx: dict[str, Any]) -> dict[str, Any]:
     """Copy the main database file to a new backup directory."""
-    base = Path.home() / ".mcp-ariel-memory"
+    base = _default_base_dir()
     backup_root = base / "backups"
 
     def _prepare_dirs() -> Path:

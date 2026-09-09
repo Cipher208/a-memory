@@ -16,6 +16,7 @@ File shape (<data_dir>/.meta/<name>.yaml):
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ def _check_name(name: str) -> None:
 
 def meta_dir() -> Path:
     base = connection_manager.base_dir
-    return (Path(str(base)) / ".meta") if base else Path.home() / ".mcp-ariel-memory" / ".meta"
+    return (Path(str(base)) / ".meta") if base else Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / ".meta"
 
 
 def list_standing() -> list[dict[str, Any]]:
