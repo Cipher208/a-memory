@@ -262,10 +262,10 @@ class UserHooks:
     async def _new_message(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
         """Evaluate importance of incoming text; threshold-gated auto-save.
 
-        Аудит 05.09 (P1): new_message/auto_save_candidate/on_turn_end сходятся
-        сюда — без дедупа по source_msg_id харнесс, шлющий несколько событий
-        для одного сообщения, плодил дубли L3/L4. Дедуп по memory_dispatch_log
-        (таблица C1.10, source_msg_id уже пишется в external.py).
+        Audit 05.09 (P1): new_message/auto_save_candidate/on_turn_end converge
+        here — without dedup by source_msg_id, a harness sending several events
+        for one message produced L3/L4 duplicates. Dedup via memory_dispatch_log
+        (table C1.10; source_msg_id is already written in external.py).
         """
         from hooks.external import auto_save_text
 

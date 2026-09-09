@@ -21,7 +21,7 @@ HARNESS_RECOVERY_S = 60.0
 
 
 class HarnessUnavailableError(RuntimeError):
-    """Breaker open — ariel instance считается недоступным."""
+    """Breaker open — the ariel instance is considered unavailable."""
 
 
 def _breaker(agent: str) -> Any:

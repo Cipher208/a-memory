@@ -1,13 +1,13 @@
-"""S13 semantica decision read-поверхность: trace_decision_chain.
+"""S13 semantica decision read-surface: trace_decision_chain.
 
-По узлу-действию (epi_nodes) восстанавливает causal-цепочку action → outcome →
-… — BFS вперёд по рёбрам epi_edges с relation из CAUSAL_RELATIONS (то, что
-реально пишет graph/epistemic.py::record_causal — E17a/B1.7:
-{"caused", "led_to", "prevented"}; «blocked» из ранних черновиков S13 не
-существует в писателе). Read-only, no LLM.
+Given an action node (epi_nodes), rebuild the causal chain action → outcome →
+... — a forward BFS over epi_edges with relation in CAUSAL_RELATIONS (what
+graph/epistemic.py::record_causal actually writes — E17a/B1.7:
+{"caused", "led_to", "prevented"}; "blocked" from early S13 drafts does not
+exist in the writer). Read-only, no LLM.
 
-Глубина ограничена `depth` (default 5), циклы обрываются visited-множеством.
-Scope: узлы фильтруются по (layer, user_id) — чужие цепочки не видны.
+Depth is capped by `depth` (default 5); cycles are cut off by the visited set.
+Scope: nodes are filtered by (layer, user_id) — other users' chains are not visible.
 """
 
 from __future__ import annotations
@@ -18,13 +18,13 @@ from graph.epistemic import CAUSAL_RELATIONS
 
 
 async def trace_decision_chain(node_id: int, user_id: str, depth: int = 5, *, layer: str = "user") -> dict[str, Any]:
-    """BFS по causal-рёбрам от узла: {'root': {...} | None, 'chain': [...]}.
+    """BFS over causal edges from a node: {'root': {...} | None, 'chain': [...]}.
 
-    chain — в порядке обхода BFS: {node_id, content, node_type, relation,
-    strength, depth}, где relation/strength — ребро, которым узел достигнут,
-    depth — расстояние от корня (1-based). root — тот же формат с
-    relation/strength=None, depth=0. Несуществующий node_id (или узел другого
-    user_id/layer) → {'root': None, 'chain': []}.
+    chain is in BFS traversal order: {node_id, content, node_type, relation,
+    strength, depth}, where relation/strength is the edge the node was reached
+    by and depth is the distance from the root (1-based). root uses the same
+    format with relation/strength=None, depth=0. A non-existent node_id (or a
+    node of another user_id/layer) → {'root': None, 'chain': []}.
     """
     from shared.connection import connection_manager
     from shared.constants import DB_NAME

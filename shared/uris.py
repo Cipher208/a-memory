@@ -1,17 +1,18 @@
 """Stage 2 Plan A: ariel URI scheme — stable references across stores.
 
-Формат: ``ariel://<layer>/<store>/<key>``
+Format: ``ariel://<layer>/<store>/<key>``
 
   ariel://user/fact/fact:postgres_stack   core_memory (layer + key)
   ariel://user/wiki/work_notes/refs-x.md  wiki_index (layer + file_path)
   ariel://user/graph/node/42              epi_nodes (node_id)
   ariel://user/episode/123                episodes (episode_id)
   ariel://user/l0/9001                    l0_journal (id)
-  ariel://peer/<name>/…                   ЗАРЕЗЕРВИРОВАНО (peers/tunnels, не строится)
+  ariel://peer/<name>/...                 RESERVED (peers/tunnels, not built)
 
-URI определяет слой + хранилище + ключ; user_id — параметр вызова resolve
-(изоляция сохраняется: резолв требует user_id и чужое не найдёт). Ноль
-миграций: URI выводится из существующих ключей, ничего не пере-хэшируется.
+A URI identifies layer + store + key; user_id is a resolve() call parameter
+(isolation preserved: resolving requires user_id and will not find another
+user's records). Zero migrations: the URI is derived from existing keys,
+nothing is re-hashed.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ def fact_uri(layer: str, key: str) -> str:
 
 
 def wiki_uri(layer: str, file_path: str) -> str:
-    # путь сохраняется как есть (с .md) — wm.get резолвит по полному имени
+    # path is kept as-is (with .md) — wm.get resolves by the full name
     return f"{SCHEME}{layer}/wiki/{file_path!s}"
 
 
@@ -49,10 +50,10 @@ def l0_uri(layer: str, rid: int) -> str:
 
 
 def parse_uri(uri: str) -> dict[str, Any] | None:
-    """``{'layer', 'store', 'key', 'rest'}`` | None (не ariel-URI / мусор).
+    """Parse an ariel URI into ``{'layer', 'store', 'key', 'rest'}`` or return None (not an ariel-URI / garbage).
 
-    rest — хвост после store (для wiki это путь; для graph/node — id).
-    Зарезервированные namespace (peer/) парсятся с флагом reserved=True.
+    ``rest`` is the tail after ``store`` (for wiki it is the path; for graph/node — the id).
+    Reserved namespaces (peer/) are parsed with the reserved=True flag.
     """
     if not isinstance(uri, str) or not uri.startswith(SCHEME):
         return None
@@ -66,7 +67,7 @@ def parse_uri(uri: str) -> dict[str, Any] | None:
     tail = parts[2].strip() if len(parts) > 2 else ""
     if not layer or not store:
         return None
-    # peer/ и прочие резервы живут на store-позиции (слоя всегда 2 сегмента)
+    # peer/ and other reserves occupy the store position (the layer part is always 2 segments)
     if store == "peer" or any(store == p.rstrip("/") for p in RESERVED_PREFIXES):
         return {"layer": layer, "store": "peer", "key": tail, "rest": rest, "reserved": True}
     if store not in ("fact", "wiki", "graph", "episode", "l0"):
@@ -92,9 +93,9 @@ async def resolve_uri(
     *,
     wiki: Any | None = None,
 ) -> dict[str, Any] | None:
-    """URI → содержимое. None = не найдено/не ariel-URI; peer → ValueError.
+    """Resolve a URI to its content. None = not found / not an ariel-URI; peer → ValueError.
 
-    user_id обязателен в вызове — изоляция: чужие записи по URI не видны.
+    ``user_id`` is required in the call — isolation: other users' records are not visible via a URI.
     """
     parsed = parse_uri(uri)
     if parsed is None:

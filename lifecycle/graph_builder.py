@@ -6,7 +6,7 @@ Stage 3 LINK    — find_or_add_entity both sides + add_edge (edge dedup is free
                   epi_edges PK is (source_id, target_id, relation)).
 
 # ponytail: regex extraction covers explicit patterns only, and RU inflected
-# forms ("Бориса" vs "Борис") count as separate entities — upgrade path is an
+# forms ("Borisa" vs "Boris") count as separate entities — upgrade path is an
 # LLM extractor wired behind this same interface if link density proves too low.
 """
 
@@ -47,7 +47,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str, str]] = [
     ),
 ]
 
-# First-person discovery: "встретил Бориса", "talked to Claire" — creates the
+# First-person discovery: "vstretil Borisa", "talked to Claire" — creates the
 # person entity without an edge (no subject entity exists for "I").
 _DISCOVERY = re.compile(
     r"(?:встретил|встретилась|встретил(?:а|и)\s+с|поговорил(?:а)?\s+с|позвонил(?:а)?\s+|написал(?:а)?\s+|met|talked\s+to|called)\s+(?:с\s+)?(?P<name>[A-ZА-ЯЁ][\wа-яё-]{1,29})",

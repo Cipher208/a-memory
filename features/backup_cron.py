@@ -135,9 +135,9 @@ class BackupCron:
 
     def _fire_nightly_hooks(self) -> None:
         """Trigger nightly maintenance hooks for both layers."""
-        # C7 cycles-daemon gate: cycle_due (персистентный last_run) + triple
-        # cost-cap. Ночной проход гоняется только когда цикл созрел и бюджет
-        # не в блоке — планировщик из дизайн-дока S13.
+        # C7 cycles-daemon gate: cycle_due (persistent last_run) + triple
+        # cost-cap. The nightly pass runs only when the cycle is due and the
+        # budget is not blocked — the scheduler from the S13 design doc.
         state_path: Path | None = None
         try:
             from features.cycles import nightly_gate
@@ -159,7 +159,7 @@ class BackupCron:
                 with contextlib.suppress(Exception):
                     from features.cycles import record_nightly_done
 
-                    record_nightly_done(state_path)  # успешный проход фиксируем
+                    record_nightly_done(state_path)  # record the successful pass
         except Exception:
             logger.exception("Nightly hook error")
         # Compact-to-budget after nightly builds (graph_build runs inside the
@@ -237,14 +237,14 @@ class BackupCron:
             logger.info("Cleaned up %d old backups", removed)
         self._cleanup_tmp()
 
-    # Тест-артефакты /tmp не убираются сами: conftest os._exit(0) обходит
-    # pytest-tmpdir pruning (pytest-of-<user> разросся до 2.3G), hermetic-фикстуры
-    # оставляют ariel-test-global-*, eval-харнесс — ariel-eval-*. Полный /tmp на
-    # tmpfs встал и локальный pre-push pytest-гейт (2026-09-06).
+    # Test artifacts in /tmp do not clean themselves up: conftest os._exit(0)
+    # bypasses pytest-tmpdir pruning (pytest-of-<user> grew to 2.3G), hermetic
+    # fixtures leave ariel-test-global-*, the eval harness — ariel-eval-*. The
+    # full /tmp on tmpfs filled up and stalled the local pre-push pytest gate (2026-09-06).
     _TMP_CLEANUP_DAYS = 2
 
     def _cleanup_tmp(self, tmp_root: Path | None = None) -> int:
-        """Снести протухшие тест-артефакты в /tmp. Строгие префиксы, best-effort."""
+        """Tear down stale test artifacts in /tmp. Strict prefixes, best-effort."""
         import getpass
         import shutil as _shutil
 
@@ -263,7 +263,7 @@ class BackupCron:
                     _shutil.rmtree(d)
                     removed += 1
             except OSError:
-                continue  # чужая/занятая директория — не наша забота
+                continue  # someone else's / busy directory — not our concern
         if removed:
             logger.info("Tmp cleanup: removed %d stale test dirs (>%dd)", removed, self._TMP_CLEANUP_DAYS)
         return removed

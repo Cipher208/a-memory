@@ -105,10 +105,10 @@ async def wiki_read(
                 _conn.commit()  # telemetry is best-effort, never blocks the read
     related: list[dict[str, Any]] = []
     with contextlib.suppress(Exception):
-        # S19: page → related facts (recall со страницы, гидратация вниз).
-        # Рёбра wiki_fact_link минера: wiki_page-узел (content == file_path)
-        # ↔ fact-узел (content == core_memory.value) — тот же контракт, что
-        # miner_provenance. Private-факты не покидают стор.
+        # S19: page → related facts (recall from the page, hydration downward).
+        # Miner wiki_fact_link edges: wiki_page node (content == file_path)
+        # ↔ fact node (content == core_memory.value) — the same contract as
+        # miner_provenance. Private facts never leave the store.
         from shared.connection import connection_manager as _cm
         from shared.constants import DB_NAME as _DB
 

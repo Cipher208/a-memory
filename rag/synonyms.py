@@ -17,7 +17,7 @@ _BUILTIN_SYNONYMS: dict[str, list[str]] = {
     "deploy": ["деплой", "deployment"],
     "бэкап": ["backup"],
     "backup": ["бэкап"],
-    # G4 entity-канонизация (минер #3): варианты имени → один узел сущности
+    # G4 entity canonization (miner #3): name variants → one entity node
     "лили": ["lily", "лисёныш"],
     "lily": ["лили", "лисёныш"],
     "лисёныш": ["лили", "lily"],
@@ -33,12 +33,12 @@ def load_synonyms() -> dict[str, list[str]]:
 
 
 def load_counter_signals() -> dict[str, str]:
-    """Config `rag.counter_signals` {superseded_name: current_name} (S17 п.7).
+    """Config `rag.counter_signals` {superseded_name: current_name} (S17 item 7).
 
-    Tenure counter-signal aliases: superseded-имена сущностей (переименования)
-    остаются валидными для поиска, но получают негативную роль в ранжировании —
-    хит, содержащий старое имя без текущего, пессимизируется (не дропается).
-    Дефолт {} — механика нейтральна, пока владелец не объявит пары.
+    Tenure counter-signal aliases: superseded entity names (renames) remain
+    valid for search but get a negative role in ranking — a hit containing the
+    old name without the current one is demoted (not dropped).
+    Default {} — the mechanic is neutral until the owner declares pairs.
     """
     from config import config
 
@@ -51,7 +51,7 @@ def load_counter_signals() -> dict[str, str]:
 def canonical_form(w: str, synonyms: dict[str, list[str]] | None = None) -> str:
     """Canonical form of a token: the synonym class unfolded in BOTH directions.
 
-    Config `rag.synonyms` entries may be one-directional (`{"мамочка": ["mom"]}`
+    Config `rag.synonyms` entries may be one-directional (`{"mamochka": ["mom"]}`
     without the reverse key) — a token that appears only as a value still maps
     to the class. Canon = lexicographically smallest member (stable across
     callers: distiller keys, graph miner entity linking).

@@ -1,7 +1,7 @@
-"""C7 / S13: Mermaid canvas — epi_nodes/epi_edges → `graph TD` строка.
+"""C7 / S13: Mermaid canvas — epi_nodes/epi_edges → a `graph TD` string.
 
-Узлы N<id>["content (type)"], рёбра только между отрендеренными узлами
-(иначе Mermaid придумает призрачные узлы). CLI: scripts/ariel_cli.py mermaid.
+Nodes N<id>["content (type)"], edges only between rendered nodes
+(otherwise Mermaid invents ghost nodes). CLI: scripts/ariel_cli.py mermaid.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ async def render_mermaid(conn: Any, layer: str, limit: int = 50) -> str:
     if not nodes:
         return "graph TD"
     ids = {int(r["node_id"]) for r in nodes}
-    # только active-рёбра (G2.0 validity windows) — expired на канвасе не рисуем
+    # only active edges (G2.0 validity windows) — expired ones are not drawn
     edges = await (await conn.execute("SELECT source_id, target_id, relation FROM epi_edges WHERE status='active'")).fetchall()
     # ponytail: full epi_edges scan + python filter — graph is audit-scale (<100k);
     # IN-list SQL if the graph ever outgrows that.

@@ -14,14 +14,14 @@ HEAL_ACTIONS = ("remigrate", "reset_breakers", "purge_invalid_l1")
 
 
 async def drill_down(entry_id: int | str, user_id: str, layer: str = "user") -> dict[str, Any]:
-    """S6a-4 provenance reader: L4-запись → исходное сырье l0_journal.
+    """S6a-4 provenance reader: L4 entry → original raw l0_journal record.
 
-    По metadata.source_raw_id (пишет distiller) достаём raw-строку l0_journal:
-    текст, момент фиксации и событие-источник — гидратация вниз «почему мы
-    так решили». Нет провенанса → {'source_raw_id': None}.
+    Via metadata.source_raw_id (written by the distiller) we fetch the raw
+    l0_journal row: text, fixation moment and the source event — downward
+    hydration of "why we decided this". No provenance → {'source_raw_id': None}.
 
-    Stage 2-A: entry_id может быть ariel-URI (`ariel://user/fact/<key>`) —
-    резолвится в entry_id до провенанс-чтения.
+    Stage 2-A: entry_id may be an ariel-URI (`ariel://user/fact/<key>`) —
+    resolved to an entry_id before the provenance read.
     """
     from shared.connection import connection_manager
     from shared.constants import DB_NAME
@@ -34,7 +34,7 @@ async def drill_down(entry_id: int | str, user_id: str, layer: str = "user") -> 
         if parsed is None or parsed.get("reserved"):
             return {"source_raw_id": None, "error": f"unresolvable URI: {entry_id!r}"}
         if parsed["store"] != "fact":
-            # не-L4 URI не несут провенанс-цепочки — вернём сам резолв
+            # non-L4 URIs carry no provenance chain — return the raw resolution
             from shared.uris import resolve_uri
 
             resolved = await resolve_uri(connection_manager, parsed["layer"], user_id, entry_id)
@@ -70,9 +70,9 @@ async def drill_down(entry_id: int | str, user_id: str, layer: str = "user") -> 
         return {"source_raw_id": None}
     raw = await (await conn.execute("SELECT text, ts, event FROM l0_journal WHERE id=? AND user_id=?", (int(rid), user_id))).fetchone()
     if raw is None:
-        # S17 доп.8: строка пережила tier_l0 — уехала в l0_cold_archive (>180д
-        # обработанные). Drill-down не должен вести в тупик: фолбэк по id.
-        with contextlib.suppress(Exception):  # таблицы может ещё не быть (до первого тиринга)
+        # S17 addendum 8: the row survived tier_l0 — it moved to l0_cold_archive
+        # (>180d processed). Drill-down must not dead-end: fallback by id.
+        with contextlib.suppress(Exception):  # the table may not exist yet (before the first tiering)
             raw = await (
                 await conn.execute(
                     "SELECT text, ts, event FROM l0_cold_archive WHERE id=? AND user_id=?",
@@ -88,7 +88,7 @@ async def drill_down(entry_id: int | str, user_id: str, layer: str = "user") -> 
                 "raw_text": str(raw["text"]),
                 "raw_ts": float(raw["ts"]),
                 "raw_event": str(raw["event"]),
-                "archived": True,  # сырье из холодного тира (l0_cold_archive)
+                "archived": True,  # raw from the cold tier (l0_cold_archive)
             }
         return {"source_raw_id": int(rid), "raw_text": None, "raw_ts": None, "raw_event": None, "key": str(row["key"]), "value": str(row["value"])}
     return {
@@ -107,9 +107,9 @@ STALE_DAYS = 90  # mirrors shared.memory_types.can_archive default
 # content-audit severities: contradiction = data-integrity fail; rest advisory warn
 
 # C7 gap-reader (S13): reader must SURFACE unknown, not just fuse
-QUESTION_STALE_DAYS = 7  # вопрос старше — open question, нужен ответ
-HIGH_IMPORTANCE = 0.8  # порог create_safety: важные факты требуют L0-подтверждения
-L0_SCAN_LIMIT = 2000  # ponytail: python-side substring scan — audit-scale ок
+QUESTION_STALE_DAYS = 7  # older than this — open question, an answer is owed
+HIGH_IMPORTANCE = 0.8  # create_safety threshold: important facts require L0 confirmation
+L0_SCAN_LIMIT = 2000  # ponytail: python-side substring scan — fine at audit scale
 
 
 async def audit_content(user_id: str = "default") -> list[dict[str, Any]]:
@@ -263,7 +263,7 @@ async def audit_content(user_id: str = "default") -> list[dict[str, Any]]:
             )
 
     # (g) S13 file↔DB reconciliation: wiki .md files vs wiki_index rows
-    #     (orphans — файл без строки, stale — строка без файла)
+    #     (orphans — file without a row, stale — row without a file)
     from features.wiki_reconciliation import reconcile
 
     rec = await reconcile(user_id)
@@ -327,7 +327,7 @@ async def run_diagnose(user_id: str = "default") -> dict[str, Any]:
     except Exception as exc:
         check("pending_proposals", False, str(exc))
 
-    # S1 tamper-evidence: L0 hash-chain recheck (verify_chain; v1/v2 форматы).
+    # S1 tamper-evidence: L0 hash-chain recheck (verify_chain; v1/v2 formats).
     try:
         from shared.l0 import verify_chain
 

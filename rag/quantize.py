@@ -203,9 +203,9 @@ def hamming_distance(a: bytes, b: bytes) -> int:
 
 
 def bit_frequency_weights(corpus: list[bytes], dim: int = DEFAULT_DIM) -> list[float]:
-    """Бит-веса w_i = log(1/P(B_i=1)) по корпусу (сглаживание +1), clamped ≥0.1.
+    """Compute bit weights w_i = log(1/P(B_i=1)) over the corpus (+1 smoothing), clamped >= 0.1.
 
-    Редкий (информативный) бит весит больше; константный бит почти ничего.
+    A rare (informative) bit weighs more; a constant bit weighs almost nothing.
     """
     _check_numpy()
     if not corpus:
@@ -218,12 +218,12 @@ def bit_frequency_weights(corpus: list[bytes], dim: int = DEFAULT_DIM) -> list[f
 
 
 def weighted_hamming_score(a: bytes, b: bytes, weights: Sequence[float], dim: int = DEFAULT_DIM) -> float:
-    """Информационный Hamming (draft v37 §EDM): d_wH = Σ w_i·1[b_i≠c_i], скор = 1 − d_wH/Σw.
+    """Compute information-weighted Hamming (draft v37 §EDM): d_wH = Σ w_i·1[b_i≠c_i], score = 1 − d_wH/Σw.
 
-    weights[i] — вес бита i (напр. w_i = log(1/P(B_i=1)) — редкий информативный
-    бит весит больше тривиального). Не утверждено EDM-статьёй (модель) —
-    включается флагом и сверяется ablation'ом (Stage 2), дефолтный путь —
-    обычный hamming_distance.
+    weights[i] is the weight of bit i (e.g. w_i = log(1/P(B_i=1)) — a rare
+    informative bit outweighs a trivial one). Not endorsed by the EDM paper
+    (a model) — enabled by flag and validated by ablation (Stage 2); the
+    default path is plain hamming_distance.
     """
     _check_numpy()
     if len(a) != len(b):

@@ -129,16 +129,16 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
         if any(d.get("gate") == gate and d.get("config_hash") == chash for d in decisions):
             skipped += 1
             continue
-        # S6a-1 единый вход: строки с skip_distill (remember/think) уже
-        # записаны адресно своим входом — replay их не дистиллирует.
+        # S6a-1 single entry: rows with skip_distill (remember/think) were
+        # already written addressably by their own entry — replay does not distill them.
         if any(d.get("skip_distill") for d in decisions):
             await conn.execute("UPDATE l0_journal SET status='routed_direct', processed_at=? WHERE id=?", (time.time(), row["id"]))
             skipped += 1
             continue
-        # Аудит 05.09 (P1) replay-гонка: claim по статусу — второй concurrent
-        # replay видит статус уже 'processing' со свежим processed_at и
-        # пропускает строку; зависший 'processing' (grace 10м) пере-разбирается.
-        # aiosqlite rowcount после UPDATE недостоверен → check-then-update.
+        # Audit 05.09 (P1) replay race: claim by status — a second concurrent
+        # replay sees the status already 'processing' with a fresh processed_at
+        # and skips the row; a stuck 'processing' (grace 10m) is re-processed.
+        # aiosqlite rowcount after UPDATE is unreliable → check-then-update.
         recheck = await (await conn.execute("SELECT status, processed_at FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
         if recheck is None:
             skipped += 1
@@ -147,15 +147,15 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
             skipped += 1
             continue
         await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time(), row["id"]))
-        await conn.commit()  # claim фиксируется до дистилляции
+        await conn.commit()  # the claim is fixed before distillation
         mem = MemoryManager(cm=connection_manager).get_layer(row["layer"] or "user", row["user_id"])
         graph = EpistemicGraph(cm=connection_manager, layer=row["layer"] or "user")
         route = await distill_and_route(
             mem, graph, row["user_id"], row["text"], score_text(row["text"], event=gate), event=gate, source_rid=int(row["id"])
         )
         conflicts += route["conflicts"]
-        # C8: novelty_skipped = факт уже в L4 (повторный прогон той же строки) —
-        # это идемпотентный успех, не gated_out.
+        # C8: novelty_skipped = the fact is already in L4 (a re-run of the same row) —
+        # that is an idempotent success, not gated_out.
         new_status = "promoted_l4" if (route["l4_saved"] or route.get("novelty_skipped")) else ("saved_l3" if route["l3_saved"] else "gated_out")
         decisions.append({"gate": gate, "config_hash": chash, "ts": time.time()})
         await conn.execute(

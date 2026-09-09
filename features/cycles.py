@@ -1,10 +1,10 @@
 """C7 / S13: cycles-daemon config + chimera triple cost-cap.
 
-CycleConfig — интервалы демона (dream 24ч, gap-reader 1ч, reminder 60м,
-inactivity 3ч). CycleBudget + check_budget — тройной cost-cap для
-LLM-трогающей цикловой работы: per-cycle (жёстко), rolling-60m (мягко,
-восстанавливается само), per-task (жёстко). RollingCounter — deque
-timestamp'ов в памяти (без персистентности: пережить рестарт не нужно).
+CycleConfig — daemon intervals (dream 24h, gap-reader 1h, reminder 60m,
+inactivity 3h). CycleBudget + check_budget — the triple cost-cap for
+LLM-touching cycle work: per-cycle (hard), rolling-60m (soft,
+self-recovering), per-task (hard). RollingCounter — a deque
+of in-memory timestamps (no persistence: surviving a restart is not needed).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ THROTTLE_FRACTION = 0.9  # approaching a hard cap → soft throttle before the b
 
 @dataclass
 class CycleConfig:
-    """S13 cycles-daemon intervals (план: тики 60s/1ч/3ч/24ч)."""
+    """S13 cycles-daemon intervals (plan: ticks 60s/1h/3h/24h)."""
 
     dream_hours: float = 24.0
     gap_hours: float = 1.0
@@ -40,7 +40,7 @@ class CycleBudget:
 
 
 def cycle_due(last_run: float, interval_hours: float, *, now: float | None = None) -> bool:
-    """Return True если прошло >= interval_hours с последнего запуска (last_run<=0 — никогда)."""
+    """Return True when >= interval_hours has passed since the last run (last_run<=0 — never)."""
     if last_run <= 0:
         return True
     ts = time.time() if now is None else now
@@ -55,9 +55,9 @@ def check_budget(
     budget: CycleBudget | None = None,
     now: float | None = None,
 ) -> str:
-    """Вердикт cost-cap: 'block' (жёсткий кап) | 'throttle' (мягко) | 'allow'.
+    """Cost-cap verdict: 'block' (hard cap) | 'throttle' (soft) | 'allow'.
 
-    rolling_60m — timestamp'ы вызовов; за окном (60м) не считаются.
+    rolling_60m — call timestamps; ones outside the window (60m) do not count.
     """
     b = budget or CycleBudget()
     ts = time.time() if now is None else now
@@ -96,12 +96,12 @@ class RollingCounter:
 
 
 def nightly_gate(state_path: str | Path, *, now: float | None = None, budget: CycleBudget | None = None) -> dict[str, Any]:
-    """Cycles-daemon gate для ночного прохода (S13): cycle_due + check_budget.
+    """Cycles-daemon gate for the nightly pass (S13): cycle_due + check_budget.
 
-    Персистентный last_run (state JSON) — рестарт cron не пере-запускает
-    nightly раньше интервала dream_hours. Возвращает {'action': 'run'|'skip',
-    'budget': 'allow'|'throttle'|'block', 'last_run': ts}. Вызывающий после
-    успешного прохода обязан записать новый last_run (record_nightly_done).
+    A persistent last_run (state JSON) — a cron restart does not re-run
+    nightly earlier than dream_hours. Returns {'action': 'run'|'skip',
+    'budget': 'allow'|'throttle'|'block', 'last_run': ts}. After a successful
+    pass the caller must record the new last_run (record_nightly_done).
     """
     import contextlib
 
@@ -122,7 +122,7 @@ def nightly_gate(state_path: str | Path, *, now: float | None = None, budget: Cy
 
 
 def record_nightly_done(state_path: str | Path, *, now: float | None = None) -> None:
-    """Записать успешное завершение nightly (last_run + rolling-вызов)."""
+    """Record the successful nightly completion (last_run + a rolling call)."""
     import contextlib
 
     p = Path(state_path)

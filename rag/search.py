@@ -111,9 +111,9 @@ async def search_binary(
 
     rows_all = await cursor.fetchall()
     scored = []
-    # Взвешенный Hamming (draft v37, опция): веса по битам = log(1/P(b=1)),
-    # редкий информативный бит весит больше. Выключено по умолчанию — включается
-    # rag.weighted_hamming=1 и сверяется Stage-2 ablation'ом против plain Hamming.
+    # Weighted Hamming (draft v37, option): per-bit weights = log(1/P(b=1)),
+    # a rare informative bit weighs more. Off by default — enabled via
+    # rag.weighted_hamming=1 and validated by the Stage-2 ablation vs plain Hamming.
     weighted = False
     if _HAS_BINARY:
         from config import config

@@ -84,8 +84,8 @@ class ConsolidationEngine:
             kind = MemoryKind(kind_str) if validate_kind(kind_str) else MemoryKind.FACT
             pol = get_policy(kind)
 
-            # Аудит 05.09 (P1): transcript-фильтр как в consolidate_episodes —
-            # raw-переписки не должны становиться L4-фактами.
+            # Audit 05.09 (P1): transcript filter as in consolidate_episodes —
+            # raw conversation dumps must not become L4 facts.
             if _looks_like_transcript(content):
                 logger.warning("skipping transcript-shaped staging item from L4 promotion")
                 skipped += 1
@@ -101,8 +101,8 @@ class ConsolidationEngine:
                 skipped += 1
                 continue
 
-            # Аудит 05.09: канон-ключ через дистиллятор (синонимы схлопываются,
-            # kind-префикс) вместо ключей-обрубков staging_{content[:30]}.
+            # Audit 05.09: canonical key via the distiller (synonyms collapse,
+            # kind prefix) instead of the truncated staging_{content[:30]} keys.
             from lifecycle.distiller import _canonical_key
 
             key = _canonical_key(content, kind)
@@ -157,10 +157,10 @@ class ConsolidationEngine:
                     row["episode_id"],
                 )
                 continue
-            # Аудит 05.09 (P1): событие с живым decay (question/hypothesis/
-            # context) не должно становиться вечным L4-фактом. Факты с околону-
-            # левым decay (fact/decision/preference/relationship + never_archive)
-            # промотируются как раньше — kind-роутинг согласован с дистиллятором.
+            # Audit 05.09 (P1): an event with live decay (question/hypothesis/
+            # context) must not become an eternal L4 fact. Facts with near-zero
+            # decay (fact/decision/preference/relationship + never_archive)
+            # are promoted as before — kind routing is consistent with the distiller.
             from lifecycle.distiller import _canonical_key
             from shared.memory_types import kind_for_text
 

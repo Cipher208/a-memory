@@ -67,9 +67,9 @@ async def think(
 
     tasks = []
 
-    # Аудит 05.09 (P0): единый вход — think-контент фиксируется в L0 для
-    # провенанса, но с skip_distill: think сам маршрутизирует (L4/L3/wiki),
-    # replay не должен дистиллировать это повторно.
+    # Audit 05.09 (P0): single entry — think-content is captured into L0 for
+    # provenance, but with skip_distill: think routes itself (L4/L3/wiki),
+    # replay must not distill it a second time.
     from shared.l0 import capture as _l0_capture
 
     tasks.append(_l0_capture(event="think", layer=resolved_layer, user_id=user_id, text=text, decisions=[{"gate": "think", "skip_distill": True}]))
@@ -118,8 +118,8 @@ async def think(
     has_relation = any(re.search(p, text, re.IGNORECASE) for p in relation_patterns)
 
     if has_relation:
-        # F-T9: прямой add_node убран; текст уже в L0 (capture выше) — узел
-        # графа создаёт дистиллятор/минеры, не тул-слой.
+        # F-T9: direct add_node removed; the text is already in L0 (capture
+        # above) — the distiller/miners create the graph node, not the tool layer.
         actions.append({"type": "L0_captured", "event": "think"})
 
     # 5. Hooks

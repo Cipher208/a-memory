@@ -203,8 +203,8 @@ def _register_all_tools() -> None:
     from mcp_server.annotations import annotations_for
 
     for name, func in tools.items():
-        # Stage 2-B: behavior hints из единой карты (annotations.py) —
-        # консервативный default для не-картных имён (destructive=true).
+        # Stage 2-B: behavior hints from the single map (annotations.py) —
+        # conservative default for names missing from the map (destructive=true).
         mcp.tool(name=name, annotations=annotations_for(name))(_scope_tool(func))
 
     # Startup evidence for the env-sanitization gotcha: MCP stdio clients pass

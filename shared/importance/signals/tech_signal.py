@@ -13,7 +13,7 @@ class TechKeywordSignal(IImportanceSignal):
         if not tech_re:
             return 0.0
 
-        # ImportanceScorer logic: tokens = re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9_-]+", text.lower())
+        # ImportanceScorer logic: tokens = re.findall(r"[a-zA-Z<cyrillic-range>0-9_-]+", text.lower())
         # total_hits = ... signals.tech_keyword = min(1.0, total_hits * 0.25)
 
         # Following task description: Use compiled regex

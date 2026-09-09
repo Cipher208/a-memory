@@ -1,14 +1,14 @@
 """F-T7 session-close extraction: A5-regex patterns → staged proposals.
 
-На закрытии сессии тексты сессии (ctx['session_texts'] или L1 ring)
-сканируются на preference / experience / lesson(anti-pattern) фразы;
-каждое совпадение → features.staging.propose (kind='core_write',
-source='session_close') — ревью-тир применяет, прямых L4-записей нет.
+On session close, session texts (ctx['session_texts'] or the L1 ring) are
+scanned for preference / experience / lesson (anti-pattern) phrases; each
+match → features.staging.propose (kind='core_write', source='session_close')
+— the review tier applies them, there are no direct L4 writes.
 
-E6: error_pattern — это typed schema, НЕ MemoryKind (в shared.memory_types
-13 kinds, error_pattern среди них нет). Lesson-записи идут kind='fact'
-префиксом ключа lesson: + теги lesson/error_pattern в payload —
-консолидация/минеры поднимут typed schema из тегов.
+E6: error_pattern is a typed schema, NOT a MemoryKind (shared.memory_types
+has 13 kinds, error_pattern is not among them). Lesson records go with
+kind='fact' plus a lesson: key prefix and lesson/error_pattern tags in the
+payload — consolidation/miners will lift the typed schema from the tags.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def _slug(sentence: str, ptype: str) -> str:
 
 
 def match_patterns(text: str) -> list[tuple[str, str]]:
-    """[(ptype, sentence)] — максимум одно совпадение на предложение."""
+    """Return [(ptype, sentence)] — at most one match per sentence."""
     out: list[tuple[str, str]] = []
     for sentence in _sentences(text):
         low = sentence.lower()
@@ -51,10 +51,10 @@ def match_patterns(text: str) -> list[tuple[str, str]]:
 
 
 async def extract_and_stage(mem: Any, user_id: str, session_texts: list[str]) -> dict[str, Any]:
-    """Паттерны A5 → staging propose (source='session_close'). Best-effort.
+    """Stage A5 pattern matches via propose (source='session_close'). Best-effort.
 
-    mem не используется напрямую (propose пишет через connection_manager) —
-    параметр оставлен для сигнатуры вызова из хуков.
+    ``mem`` is not used directly (propose writes via connection_manager) —
+    the parameter is kept for the hook call-site signature.
     """
     from features.staging import propose
 
@@ -73,7 +73,7 @@ async def extract_and_stage(mem: Any, user_id: str, session_texts: list[str]) ->
             try:
                 await propose("session_close", "core_write", user_id, "user", payload)
                 patterns[ptype] += 1
-            except Exception as exc:  # S112: best-effort — сбой стейджинга не роняет сессию
+            except Exception as exc:  # S112: best-effort — a staging failure must not crash the session
                 logger.debug("session_close propose failed: %s", exc)
                 continue
     return {"staged": sum(patterns.values()), "patterns": patterns}

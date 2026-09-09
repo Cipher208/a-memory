@@ -1,8 +1,8 @@
 """S18 gap-registry (3M Find Gap): open questions → nightly registry.
 
-L3-эпизоды с тегом question = незакрытые вопросы; плюс повторные
-zero-result-запросы (S17-журнал) = провалы recall. Registry — плоская
-таблица для proactive acquisition; потребитель — ночной отчёт.
+L3 episodes tagged question = open questions; plus repeated
+zero-result queries (the S17 journal) = recall failures. The registry is a flat
+table for proactive acquisition; the consumer is the nightly report.
 """
 
 from __future__ import annotations
@@ -44,9 +44,9 @@ def _gap_hash(text: str) -> str:
 
 
 async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]:
-    """Собрать свежие question-эпизоды + zero-result-хвосты → registry. Best-effort.
+    """Collect fresh question episodes + zero-result tails into the registry. Best-effort.
 
-    Идемпотентно по gap_hash: повторный ночной прогон не пишет дубликаты.
+    Idempotent by gap_hash: a repeated nightly run writes no duplicates.
     """
     cm = connection_manager
     await _ensure_table(cm)
@@ -55,7 +55,7 @@ async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]
     cutoff = time.time() - _GAP_MAX_AGE_DAYS * 86400
 
     async def _insert_gap(user_id: str, text: str, origin: str) -> None:
-        """Idempotent insert (check-then-write; rowcount/total_changes ненадёжны)."""
+        """Idempotent insert (check-then-write; rowcount/total_changes are unreliable)."""
         h = _gap_hash(text)
         dup = await (await conn.execute("SELECT 1 FROM memory_gaps WHERE gap_hash=?", (h,))).fetchone()
         if dup:
@@ -68,8 +68,8 @@ async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]
         written += 1
 
     try:
-        # L3-вопросы: ночной срез по ВСЕМ пользователям (search_by_tag —
-        # per-user API, registry — кросс-пользовательский агрегат).
+        # L3 questions: a nightly slice across ALL users (search_by_tag is a
+        # per-user API; the registry is a cross-user aggregate).
         q_rows = await (
             await conn.execute(
                 "SELECT user_id, summary FROM episodes"
@@ -97,8 +97,8 @@ async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]
                 await _insert_gap(str(r["user_id"]), text, "zero_result")
         await conn.commit()
     except Exception:
-        # recall_zero_results — lazy-ensure таблица (минер S17); до первого
-        # ночного прогона её нет — zero-result ветка просто молчит.
+        # recall_zero_results is a lazy-ensure table (the S17 miner); until the
+        # first nightly run it does not exist — the zero-result branch just stays silent.
         logger.debug("gap registry zero-result scan skipped: no journal yet")
     rows = await (await conn.execute("SELECT ts, user_id, gap, origin FROM memory_gaps ORDER BY id DESC LIMIT ?", (limit,))).fetchall()
     return {"gaps": [dict(r) for r in rows], "written": written}

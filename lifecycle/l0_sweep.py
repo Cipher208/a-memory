@@ -1,7 +1,7 @@
 """TTL sweep: soft-expiry of expired L4 facts (expires_at < now) with B5 protections.
 
-S5 (Memanto): истечение мягкое — expired-строки не уничтожаются, а архивируются
-в archived_memories (restorable через ForgettingSystem.restore_entries).
+S5 (Memanto): expiry is soft — expired rows are not destroyed but archived
+into archived_memories (restorable via ForgettingSystem.restore_entries).
 
 Protections (never touch more than is safe):
 - min_remain: never shrink a layer below min_remain live rows — the batch is
@@ -66,8 +66,8 @@ async def sweep_expired(
         await _journal(summary, layer)
         return summary
 
-    # S5: архивируем (restorable), не стираем — contract для TTL-тестов тот же
-    # (строки уходят из core_memory), но данные остаются в archived_memories.
+    # S5: archive (restorable) instead of erasing — the TTL-test contract is
+    # unchanged (rows leave core_memory), but the data stays in archived_memories.
     from lifecycle.forgetting import ForgettingSystem
 
     ids_rows = await (

@@ -28,13 +28,13 @@ async def _pending_proposals(user_id: str = "default", limit: int = 5) -> list[A
 
 
 def _apply_kind_policy(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Per-kind caps + precedence (G6, отложено из F).
+    """Per-kind caps + precedence (G6, deferred from F).
 
-    Config `inject.kind_caps` — {kind: max_blocks} (важные ≤N, разрыв ≤M);
-    `inject.kind_order` — явный порядок kind'ов: стабильные (rehydrate/important)
-    остаются до маркера, динамика после, в заданном порядке. Без конфига —
-    поведение без изменений. Caps применяются ПОСЛЕ budget-учёта: вытесненные
-    блоки не возвращают токены в бюджет (верхняя граница бюджета соблюдена).
+    Config `inject.kind_caps` — {kind: max_blocks} (important <= N, gaps <= M);
+    `inject.kind_order` — an explicit kind order: stable kinds (rehydrate/important)
+    stay before the marker, dynamic ones after, in the given order. Without the
+    config — behavior unchanged. Caps are applied AFTER the budget accounting:
+    displaced blocks do not return tokens to the budget (the budget upper bound holds).
     """
     from config import config
 
@@ -58,8 +58,8 @@ def _apply_kind_policy(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def _rank(b: dict[str, Any]) -> int:
         return rank.get(str(b.get("kind", "")), len(rank))
 
-    # E9-маркер уже вставлен вызывающим кодом — сохраняем его позицию
-    # (между стабильными и динамическими), пересортировывая каждую группу.
+    # The E9 marker was already inserted by the calling code — keep its position
+    # (between stable and dynamic), re-sorting each group.
     stable = [b for b in blocks if b["kind"] in ("rehydrate", "important")]
     dynamic = [b for b in blocks if b["kind"] not in ("rehydrate", "important", "cache_break")]
     markers = [b for b in blocks if b["kind"] == "cache_break"]
@@ -80,7 +80,7 @@ async def build_inject_blocks(
 
     from shared.tokens import estimate_tokens
 
-    # S18 D6: per-block cap — один длинный факт/хит не съедает бюджет.
+    # S18 D6: per-block cap — one long fact/hit does not eat the budget.
     max_chars = int(config.get("inject", "max_chars", default=400))
 
     def _cap(content: str) -> str:
@@ -216,8 +216,8 @@ async def build_inject_blocks(
         if cost <= remaining:
             blocks.append({"kind": "important", "content": content, "score": max(f.importance for f in important)})
 
-    # C8 pinned block: pinned-факты инжектятся всегда (stable prefix, E9),
-    # независимо от важности и бюджетной конкуренции.
+    # C8 pinned block: pinned facts are always injected (stable prefix, E9),
+    # regardless of importance and budget competition.
     try:
         pinned = await mem.l4.get_pinned(user_id, 10)
     except Exception as exc:

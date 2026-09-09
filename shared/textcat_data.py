@@ -1,7 +1,7 @@
 """S19.2: collect 2-class training data from live core_memory (read-only).
 
-Стабильные kind'ы (decay ≤ 0.005) → 'stable'; событийные → 'ephemeral'.
-Единый сборщик для train-скрипта: все инстансы ~/.mcp-ariel-memory*.
+Stable kinds (decay <= 0.005) → 'stable'; episodic → 'ephemeral'.
+Single collector for the train script: all ~/.mcp-ariel-memory* instances.
 """
 
 from __future__ import annotations
@@ -14,14 +14,14 @@ EPHEMERAL_KINDS = {"fact", "observation", "hypothesis", "question", "context", "
 
 
 def instance_dbs() -> list[Path]:
-    """Все живые data-dir'ы инстансов (read-only источники)."""
+    """All live per-instance data dirs (read-only sources)."""
     out: list[Path] = []
     for p in sorted(Path.home().glob(".mcp-ariel-memory*")):
         if p.is_dir():
             db = p / "memory.db"
             if db.is_file() and p.name != ".mcp-ariel-memory-mimocode":
-                out.append(db)  # mimocode = хост этого агента, обучение на нём тоже честно — включаем ниже
-    # включаем и mimocode: факт не зависит от того, кто записал
+                out.append(db)  # mimocode = this agent's host; training on it is fair too — included below
+    # include mimocode as well: a fact does not depend on who wrote it
     host = Path.home() / ".mcp-ariel-memory-mimocode" / "memory.db"
     if host.is_file() and host not in out:
         out.insert(0, host)
@@ -29,7 +29,7 @@ def instance_dbs() -> list[Path]:
 
 
 def collect_rows(min_len: int = 20) -> list[tuple[str, str]]:
-    """(text, label) из L4 всех инстансов; label ∈ {stable, ephemeral}."""
+    """(text, label) pairs from L4 of all instances; label ∈ {stable, ephemeral}."""
     rows: list[tuple[str, str]] = []
     seen: set[str] = set()
     for db in instance_dbs():

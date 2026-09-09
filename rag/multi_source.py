@@ -46,17 +46,17 @@ def _kind_weight(kind: str | None) -> float:
 
 
 _ACTR_FLOOR = 1.0
-_ACTR_CEIL = 1.3  # текущий максимум (1 + 0.3 * actr) сохраняется для top-факта
+_ACTR_CEIL = 1.3  # current maximum (1 + 0.3 * actr) is preserved for the top fact
 
 
 def _minmax_actr(activations: list[float]) -> list[float]:
-    """Per-query min-max ACT-R множителей в [_ACTR_FLOOR, _ACTR_CEIL] (S18, v17 #5).
+    """Scale per-query min-max ACT-R multipliers into [_ACTR_FLOOR, _ACTR_CEIL] (S18, v17 #5).
 
-    Без min-max факт с actr=0 и actr=1 различаются в 1.3× только в одном
-    множителе поверх разных importance — разброс немасштабируем. Min-max
-    держит span [1.0, 1.3] относительно ЛУЧШЕГО факта выдачи: топ всегда
-    получает максимум, худший — 1.0 (нейтрально, без наказания).
-    Вырожденный случай (все равны / пусто) → нейтральный 1.0.
+    Without min-max, a fact with actr=0 and one with actr=1 differ only 1.3× in
+    a single multiplier stacked on different importance values — the spread is
+    not scalable. Min-max keeps the span [1.0, 1.3] relative to the BEST fact
+    of the result set: the top fact always gets the maximum, the worst gets
+    1.0 (neutral, no penalty). Degenerate case (all equal / empty) → neutral 1.0.
     """
     if not activations:
         return []
@@ -190,7 +190,7 @@ class MultiSourceRAG:
         from rag.actr import actr_activation
 
         now = time.time()
-        # S18 п.1: per-query min-max ACT-R — топ-эпизод получает ceil, худший 1.0.
+        # S18 item 1: per-query min-max ACT-R — top episode gets ceil, worst gets 1.0.
         acts = [actr_activation(now, episode.created_at, 1) for episode in episodes]
         mult = _minmax_actr(acts)
         return [
@@ -229,8 +229,8 @@ class MultiSourceRAG:
             )
             freq = {int(r["target_id"]): int(r["c"]) for r in await cur.fetchall()}
 
-        # S18 п.1: per-query min-max ACT-R — топ-факт получает ceil (1.3),
-        # худший нейтральный floor (1.0) относительно этой выдачи.
+        # S18 item 1: per-query min-max ACT-R — top fact gets ceil (1.3), worst
+        # gets the neutral floor (1.0) relative to this result set.
         acts = [actr_activation(now, f.get("updated_at", now), freq.get(int(f.get("entry_id", 0)), 0)) for f in facts]
         actr_mult = _minmax_actr(acts)
 
@@ -287,7 +287,7 @@ class MultiSourceRAG:
         for tok in _TOKEN_RE.findall(query.lower()):
             if len(tok) < 4 or (tok not in syn and not any(tok in vs for vs in syn.values())):
                 continue
-            # класс токена — тот же набор, из которого canonical_form берёт минимум
+            # the token's class is the same set canonical_form takes its minimum from
             members |= {tok, *syn.get(tok, []), *(k for k, vs in syn.items() if tok in vs)}
         if not members:
             return []
@@ -318,8 +318,8 @@ class MultiSourceRAG:
         confidence) under source="graph_expand". Primary results pass through
         untouched; no-op without a cm or without graph hits.
 
-        S19: edge_exclude — имена heuristic-происхождения (tokens/tags/...):
-        рёбра с тегом heuristic:<name> не разворачиваются. None = статус-кво.
+        S19: edge_exclude — names of heuristic origin (tokens/tags/...): edges
+        tagged heuristic:<name> are not expanded. None = status quo.
         """
         if not self.cm:
             return results
@@ -338,8 +338,8 @@ class MultiSourceRAG:
         where_extra = ""
         params: list[Any] = [*node_ids, *node_ids, user_id]
         if edge_exclude:
-            # epi_edges.tags — JSON-массив строк ('["heuristic:tokens"]'):
-            # фильтр по подстроке каждого exclude-имени.
+            # epi_edges.tags — a JSON array of strings ('["heuristic:tokens"]'):
+            # filter by substring for each exclude name.
             like_conds = " AND ".join(["e.tags NOT LIKE ?" for _ in edge_exclude])
             where_extra = f" AND ({like_conds})"
             params.extend(f'%"heuristic:{name}"%' for name in edge_exclude)

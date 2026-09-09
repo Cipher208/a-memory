@@ -55,8 +55,8 @@ async def dispatch_event(
 ) -> dict[str, Any]:
     """Validate + fire one external event. Raises ValueError on unknown event.
 
-    Вход защищён middleware-пайплайном (S13): rate-limit/дедуп/аудит на
-    внешних событиях — единственном пути без собственных защит тул-слоя.
+    The input is protected by the middleware pipeline (S13): rate-limit/dedup/
+    audit on external events — the only path without the tool layer's own defenses.
     """
     if event not in KNOWN_EVENTS:
         raise ValueError(f"unknown event: {event!r}. Must be one of {sorted(KNOWN_EVENTS)}")
@@ -94,7 +94,7 @@ async def auto_save_text(
 ) -> dict[str, Any]:
     """evaluate_importance → threshold-gated saves + one memory_dispatch_log row.
 
-    score >= EMA threshold (S17: adaptive_threshold, F2 — «EMA + rules») →
+    score >= EMA threshold (S17: adaptive_threshold, F2 — "EMA + rules") →
     L3 episodic + graph node; score >= 0.8 → also L4 core. Never raises past
     the caller (fire catches).
 
@@ -126,8 +126,8 @@ async def auto_save_text(
 
     l0_id: int | None = await capture(event, "user", user_id, text, source_msg_id=source_msg_id)
 
-    # G0 privacy: secrets/PII → typed placeholders (reverse map не персистится).
-    # NER недоступен/упал → regex-тир внутри sanitize всё равно отработал.
+    # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
+    # NER unavailable/crashed → the regex tier inside sanitize still ran.
     from mcp_server.utils.privacy import sanitize
 
     text, _priv_map = sanitize(text)
@@ -180,8 +180,8 @@ async def auto_save_text(
             logger.debug("memory_dispatch_log insert failed: %s", _e)
         return result
 
-    # S17 (F2): EMA-гейт вернулся в auto_save — adaptive_threshold.gate читает
-    # порог и кормит EMA тем же контрактом, что и importance_gate-хендлеры.
+    # S17 (F2): the EMA gate is back in auto_save — adaptive_threshold.gate reads
+    # the threshold and feeds the EMA with the same contract as the importance_gate handlers.
     # D1.9 rules engine: declarative user rules adjust the write gate.
     from features.rules import apply_rules
     from shared.adaptive import adaptive_threshold
@@ -196,8 +196,8 @@ async def auto_save_text(
     if verdict["bypass"]:
         return result
 
-    # G1 distiller: atomize → canonical key → kind-routing (инварианты→L4,
-    # события→L3 через mem.l3.save). Граф не пишем напрямую — наполняют минеры.
+    # G1 distiller: atomize → canonical key → kind-routing (invariants → L4,
+    # events → L3 via mem.l3.save). The graph is not written directly — the miners fill it.
     from lifecycle.distiller import distill_and_route
 
     route_stats = await distill_and_route(mem, graph, user_id, text, score, event=event, extra_tags=rule_out["tags"], source_rid=l0_id)
@@ -206,7 +206,7 @@ async def auto_save_text(
     result["routes"] = route_stats
     if route_stats["l4_saved"] > 0:
         result["saved_l4"] = True
-    # S17 A2-advisory: near-dup/конфликт-ключи — агент сам решает переформулировать.
+    # S17 A2-advisory: near-dup/conflict keys — the agent decides itself whether to rephrase.
     similar_to: list[str] = list(route_stats.get("similar_to") or [])
     if similar_to:
         result["similar_to"] = similar_to

@@ -30,8 +30,8 @@ class AgentHooks:
     async def _nightly(self, ctx: dict[str, Any]) -> dict[str, Any]:
         """Agent-layer nightly maintenance (mirror user_hooks._nightly).
 
-        graph_enrich + wiki-graph на agent-слое; compact/sweep/bridge делает
-        backup_cron для обоих слоёв — здесь agent-специфика.
+        graph_enrich + wiki-graph run on the agent layer; compact/sweep/bridge
+        is done by backup_cron for both layers — here only agent specifics.
         """
         result: dict[str, Any] = {"action": "agent_nightly"}
         with contextlib.suppress(Exception):
@@ -83,11 +83,12 @@ class AgentHooks:
         return await adaptive_threshold.gate(min(1.0, score))
 
     async def _capture_route(self, mem: Any, event: str, text: str, score: float) -> dict[str, Any]:
-        """F-T9 single-entry: L0 capture (журнал) → distill-маршрут.
+        """F-T9 single-entry: L0 capture (journal) → distill route.
 
-        Прямой add_node из хуков убран: граф наполняет дистиллятор (_wire_atoms)
-        и минеры — тот же путь, что и у user-layer auto_save_text. mem недоступен
-        (registry не передал) → остаётся только capture, ночи/дистиллятор допишут.
+        Direct add_node from hooks is removed: the distiller (_wire_atoms) and
+        miners populate the graph — the same path as user-layer auto_save_text.
+        mem is unavailable (registry did not pass it) → only capture remains,
+        the nightly/distiller will complete the write.
         """
         from shared.l0 import capture
 

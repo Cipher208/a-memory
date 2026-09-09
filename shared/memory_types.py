@@ -2,8 +2,8 @@
 
 14 types: instruction, fact, decision, goal, preference, commitment,
 relationship, observation, rule, todo, question, hypothesis, context,
-procedural (S17, ENGRAM: «как сделать X» — data-фундамент behavior-аннотаций
-Stage 2).
+procedural (S17, ENGRAM: "how to do X" — the data foundation for Stage 2
+behavior annotations).
 
 Each type has its own:
 - default_importance (auto-fill on save)

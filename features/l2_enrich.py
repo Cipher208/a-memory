@@ -1,9 +1,9 @@
-"""F-T7 L2 enrichment: пересборка summaries из фактических текстов L0.
+"""F-T7 L2 enrichment: rebuild summaries from the actual L0 texts.
 
-L0-строки окна (raw_type='user-message') биндятся к sessions по времени:
-ближайшая сессия с started_at <= ts, открытая на ts (ended_at IS NULL
-или ended_at >= ts). Summary пересобирается из первых N тем-строк,
-state_deltas/topics/quality не трогаются.
+L0 rows of the window (raw_type='user-message') bind to sessions by time:
+the nearest session with started_at <= ts that was open at ts (ended_at IS
+NULL or ended_at >= ts). The summary is rebuilt from the first N topic
+lines; state_deltas/topics/quality are left untouched.
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ _TOP_LINES = 5
 
 
 def _topic_lines(texts: list[str], limit: int = _TOP_LINES) -> list[str]:
-    # ponytail: тема = нормализованная строка текста; token-frequency апгрейд,
-    # когда первых N строк перестанет различать сессии.
+    # ponytail: topic = normalized text line; token-frequency upgrade once the
+    # first N lines stop telling sessions apart.
     lines: list[str] = []
     seen: set[str] = set()
     for t in texts:
@@ -34,7 +34,7 @@ def _topic_lines(texts: list[str], limit: int = _TOP_LINES) -> list[str]:
 
 
 async def enrich_sessions(*, days: int = 1) -> dict[str, int]:
-    """Пересобрать summaries сессий окна из L0-текстов. Возврат счётчиков."""
+    """Rebuild summaries of the window's sessions from L0 texts. Returns counters."""
     from core.session import SessionStore
 
     await SessionStore(cm=connection_manager)._init_db()  # self-healing schema

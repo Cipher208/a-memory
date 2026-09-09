@@ -1,4 +1,4 @@
-"""L0 raw intake — единственный вход конвейера (append-only, best-effort)."""
+"""L0 raw intake — the pipeline's single entry point (append-only, best-effort)."""
 
 from __future__ import annotations
 
@@ -24,21 +24,21 @@ async def capture(
     decisions: list[dict[str, Any]] | None = None,
     ts_override: float | None = None,
 ) -> int | None:
-    """Append-only intake. Никогда не бросает — сбой L0 не блокирует поток.
+    """Append-only intake. Never raises — an L0 failure must not block the flow.
 
-    S17 #5: SHA-256 дедуп блоков — повторный вывод команды (тот же текст
-    layer/user, колонка content_hash) не создаёт строку, возвращается rid
-    первой записи. Hash-chain v2 ведётся для КАЖДОЙ попытки capture (в т.ч.
-    дедуп-хита), tamper-evidence не зависит от дедупа.
+    S17 #5: SHA-256 block dedup — re-emitting the same output (same text and
+    layer/user, content_hash column) does not create a row; the rid of the
+    first record is returned. Hash-chain v2 is maintained for EVERY capture
+    attempt (including dedup hits), so tamper-evidence does not depend on dedup.
     """
     try:
         conn = await connection_manager.get(DB_NAME)
         ts = ts_override or time.time()
         rt = raw_type or classify_raw(text)
         content_hash = hashlib.sha256(f"{layer}|{user_id}|{text}".encode()).hexdigest()
-        # S17 #5: дедуп уже сохранённого блока — повтор не создаёт строку,
-        # возвращается rid первоисточника (ссылка на первую запись). Колонки
-        # content_hash нет (БД до миграции g23) → дедуп неактивен, пишем как есть.
+        # S17 #5: dedup of an already-stored block — a repeat does not create a row;
+        # the rid of the original record is returned (link to the first entry). No
+        # content_hash column (pre-g23-migration DB) → dedup inactive, we write as is.
         try:
             prior = await (
                 await conn.execute(
@@ -50,8 +50,8 @@ async def capture(
             prior = None
         if prior is not None:
             return int(prior["id"])
-        # S1 order_key: fractional-индекс после последней записи. Колонки может
-        # не быть в живых БД до миграции — тогда пишем без order_key.
+        # S1 order_key: fractional index after the last row. The column may be absent
+        # in live pre-migration DBs — then we write without order_key.
         prev: Any | None = None
         try:
             prev = await (await conn.execute("SELECT hash_self, order_key FROM l0_journal ORDER BY id DESC LIMIT 1")).fetchone()
@@ -60,7 +60,7 @@ async def capture(
                 prev = await (await conn.execute("SELECT hash_self FROM l0_journal ORDER BY id DESC LIMIT 1")).fetchone()
         prev_key: str | None = None
         if prev is not None:
-            with contextlib.suppress(IndexError):  # fallback-SELECT без order_key
+            with contextlib.suppress(IndexError):  # fallback SELECT without order_key
                 prev_key = prev[1]
         order_key: str | None = None
         with contextlib.suppress(Exception):
@@ -72,16 +72,16 @@ async def capture(
                 " VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?)",
                 (*params, order_key, content_hash),
             )
-        except Exception:  # колонки content_hash/order_key ещё нет (БД до миграции) — пишем без них
+        except Exception:  # content_hash/order_key columns not present yet (pre-migration DB) — write without them
             cur = await conn.execute(
                 "INSERT INTO l0_journal (ts, event, source_msg_id, layer, user_id, text, raw_type, status, decisions)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?)",
                 params,
             )
         rid = int(cur.lastrowid or 0)
-        # hash-chain (S1, tamper-evidence): сбой цепочки не блокирует запись.
-        # v2: полный текст (обрезка [:200] позволяла коллизии записей с общим
-        # началом); v1 — исторический формат, verify_chain принимает оба.
+        # hash-chain (S1, tamper-evidence): a chain failure does not block the write.
+        # v2: full text (the [:200] truncation allowed collisions between records with
+        # a shared prefix); v1 is the historical format, verify_chain accepts both.
         hash_prev = (prev[0] if prev is not None else "") or ""
         digest = hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}".encode()).hexdigest()[:16]
         await conn.execute("UPDATE l0_journal SET hash_prev=?, hash_self=? WHERE id=?", (hash_prev, digest, rid))
@@ -92,7 +92,7 @@ async def capture(
 
 
 def _chain_digest(hash_prev: str, rt: str, ts: float, text: str) -> str:
-    """hash_self записи. v2 — полный текст; v1 — обрезка [:200] (исторический)."""
+    """Compute the record's hash_self. v2 — full text; v1 — [:200] truncation (historical)."""
     return hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}".encode()).hexdigest()[:16]
 
 
@@ -101,12 +101,12 @@ def _chain_digest_v1(hash_prev: str, rt: str, ts: float, text: str) -> str:
 
 
 async def verify_chain() -> list[dict[str, Any]]:
-    """Пересчитать hash-chain по всем записям l0_journal → битые записи.
+    """Recompute the hash-chain over all l0_journal rows → broken records.
 
-    Тампер одной записи ломает пересчёт у неё и у всех последующих
-    (chain-природа), так что здесь обрезаем до первой битой. Принимаются
-    оба формата: v2 (полный текст, текущий) и v1 (обрезка [:200], записи
-    до устранения криптослабости).
+    Tampering with one record breaks the recomputation for it and for every
+    subsequent record (chain nature), so the scan stops at the first broken
+    entry. Both formats are accepted: v2 (full text, current) and v1
+    ([:200] truncation, records predating the removal of the crypto weakness).
     """
     try:
         conn = await connection_manager.get(DB_NAME)

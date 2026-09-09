@@ -480,10 +480,10 @@ async def memory_search(
     include_wiki = sources in ("all", "wiki")
 
     if sources == "all" and retrieval_mode() != "rrf":
-        # Phase H C1: dual-route в prod-recall. route_query — пре-дверь,
-        # 5-source RRF внутри multi_source — генератор кандидатов, EDM/ITS —
-        # re-rank. 'rrf' — статус-кво, сырой путь; фильтр sources — тоже
-        # (route_query не выражает include-флаги).
+        # Phase H C1: dual-route in prod-recall. route_query is the gateway,
+        # the 5-source RRF inside multi_source is the candidate generator, EDM/ITS
+        # is the re-rank. 'rrf' is the status-quo raw path; the sources filter is too
+        # (route_query does not express include-flags).
         from rag.dual_route import route_query
 
         results = await route_query(app.user_multi, query, user_id=user_id, limit=limit, cm=connection_manager)
@@ -743,7 +743,7 @@ async def memory_proposals(
     "propose" (E17b producer: stage a deliberate mutation — kind='wiki_write'
     {title, content, wiki_type?} or 'core_write' {key, value, importance};
     requires the review tier so agents stage instead of writing directly) |
-    "conflict" (S18 п.8: 3-option conflict contract — resolve one memory_conflicts
+    "conflict" (S18 item 8: 3-option conflict contract — resolve one memory_conflicts
     group with decision supersede/retain/annotate).
     The apply path executes the exact write the direct path would have done;
     every decision is audit-logged.
@@ -764,17 +764,17 @@ async def memory_proposals(
         if not group_id or decision not in ("supersede", "retain", "annotate"):
             return {"status": "error", "error": "need group_id + decision in supersede/retain/annotate"}
         if decision in ("supersede", "retain"):
-            # supersede: новая запись побеждает, старая уходит (группа закрыта,
-            # проигравший архивируется резолвером). retain: обе правды, группа
-            # закрыта так же — семантика различается агентским интентом.
+            # supersede: the new record wins, the old one goes away (group closed,
+            # the loser is archived by the resolver). retain: both truths, group
+            # closed the same way — the semantics differ in the agent's intent.
             keep_id = int(p.get("keep_id") or 0)
             if not keep_id:
                 return {"status": "error", "error": "keep_id required for supersede/retain"}
             ok = await ConflictResolver().resolve(group_id, keep_id)
             return {"status": "resolved" if ok else "error", "decision": decision}
-        # annotate: обе записи остаются — аннотация связывает их в metadata
-        # старой стороны конфликта (первая строка группы = ранняя; её ключ —
-        # та же _canonical_key-связка, что и в дистиллере _mark_earlier_scope).
+        # annotate: both records stay — the annotation links them in the metadata
+        # of the older side of the conflict (first row of the group = earlier; its
+        # key is the same _canonical_key binding as in the distiller's _mark_earlier_scope).
         annotation = str(p.get("annotation") or "")
         if not annotation:
             return {"status": "error", "error": "annotation required for annotate"}

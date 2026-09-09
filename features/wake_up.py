@@ -1,9 +1,9 @@
-"""Stage 2-C: wake_up (E10, MemoryPalace) — атомарный подъём памяти одной командой.
+"""Stage 2-C: wake_up (E10, MemoryPalace) — one-shot memory lift.
 
-Склейка двух существующих read-агрегаторов (без LLM, детерминизм):
-  memory_recap (D1.2 recovery pack: сессия → pending → markers → day)
+Glues two existing read aggregators (no LLM, deterministic):
+  memory_recap (D1.2 recovery pack: session → pending → markers → day)
   inject critical set (S5: rehydrate/important/pinned/recent)
-Один общий бюджет, один ответ — «я проснулась, что я знаю».
+One shared budget, one answer — "I have woken up, here is what I know".
 """
 
 from __future__ import annotations
@@ -17,10 +17,11 @@ async def wake_up_blocks(
     user_id: str,
     budget: int = 2000,
 ) -> dict[str, Any]:
-    """{recap: [блоки continuity], inject: [блоки critical set], budget}.
+    """{recap: [continuity blocks], inject: [critical-set blocks], budget}.
 
-    Бюджет общий: recap берёт не более половины (session-факты не съедают
-    inject-критику), остаток — critical set. Пустые стороны опускаются.
+    The budget is shared: recap takes at most half (session facts must not eat
+    the inject-critical set), the remainder goes to the critical set. Empty
+    sides are omitted.
     """
     from features.continuity import session_recap
     from features.inject import build_inject_blocks
@@ -41,7 +42,7 @@ async def wake_up_blocks(
 
 
 def render_wake_up_md(assembly: dict[str, Any]) -> str:
-    """Markdown: recap-блоки с [axis], inject-блоки с [kind], cache:break между."""
+    """Markdown: recap blocks with [axis], inject blocks with [kind], cache:break between."""
     parts: list[str] = []
     for b in assembly.get("recap", []):
         content = str(b.get("content", "")).strip()

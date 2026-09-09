@@ -1,12 +1,12 @@
 """S19.2 textcat pilot: binary clause-stability classifier (stable vs ephemeral).
 
-Двухклассовая TextCategorizer-модель (scripts/train_textcat.py, self-labels из
-live core_memory) разрешает маршрут клаузы, которую keyword-мапа НЕ распознала:
-стабильные statements (decay ≤ 0.005) не должны умирать в L3-эпизодах.
+A two-class TextCategorizer model (scripts/train_textcat.py, self-labels from
+live core_memory) resolves the route of a clause the keyword map did NOT
+recognize: stable statements (decay <= 0.005) must not die in L3 episodes.
 
-Инвариант (spacy-integration.md): модель НИКОГДА не единственный источник
-решения — keyword-матчи не трогаются, ниже порога уверенности → None (статус-
-кво), сбой загрузки → breaker + None. Pilot: `rag.textcat` default OFF.
+Invariant (spacy-integration.md): the model is NEVER the sole decision source
+— keyword matches are untouched, below the confidence threshold → None (the
+status quo), a load failure → breaker + None. Pilot: `rag.textcat` default OFF.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from shared.circuit_breaker import breaker_registry
 logger = logging.getLogger(__name__)
 
 _nlp: Any | None = None
-_resolved: bool = False  # False = ещё не пробовали; True = синглтон resolving завершён
+_resolved: bool = False  # False = not tried yet; True = the singleton resolving is done
 
 BREAKER_NAME = "textcat_model"
 
@@ -33,7 +33,7 @@ def _config_get(section: str, key: str, default: Any) -> Any:
 
 
 def _model() -> Any | None:
-    """Lazy-load модели; None = отключена/нет артефакта/сломана (breaker)."""
+    """Lazy-load the model; None = disabled / no artifact / broken (breaker)."""
     global _nlp, _resolved
     if _resolved:
         return _nlp
@@ -61,7 +61,7 @@ def _model() -> Any | None:
 
 
 def reset_textcat() -> None:
-    """Test helper: сброс синглтона (следующий classify перечитает config/модель)."""
+    """Test helper: reset the singleton (the next classify re-reads config/model)."""
     global _nlp, _resolved
     _nlp = None
     _resolved = False
@@ -90,5 +90,5 @@ def classify(text: str) -> str | None:
 
 
 def route_promote_stable(text: str) -> bool:
-    """Distiller hook: промоутить keyword-unmatched FACT в L4? Только 'stable'."""
+    """Distiller hook: promote a keyword-unmatched FACT to L4? Only 'stable'."""
     return classify(text) == "stable"

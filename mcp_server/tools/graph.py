@@ -73,11 +73,11 @@ async def memory_graph_add(
     if node_type in SOCIAL_NODE_TYPES:
         node_id, created = await graph.find_or_add_entity(user_id, content, entity_type=node_type, tags=tags)
     else:
-        # Провенанс материализуем: confidence в колонку, source — тегом
-        # provenance:<source> (миграции epi_nodes не требуется).
+        # Materialize provenance: confidence into the column, source as a
+        # provenance:<source> tag (no epi_nodes migration needed).
         node_tags = list(tags or [])
         node_tags.append(f"provenance:{source}")
-        assert confidence is not None  # валидация выше для не-social узлов
+        assert confidence is not None  # validated above for non-social nodes
         node_id = await graph.add_node(user_id, content, node_type, node_tags, float(confidence))
 
     if relates_to:

@@ -1,14 +1,15 @@
-"""S18-хвост offload: тяжёлые tool-логи → work_notes/refs-*.md, контекст видит ref.
+"""S18 tail offload: heavy tool logs → work_notes/refs-*.md, the context sees a ref.
 
-TencentDB v2-паттерн (competitive-intel-2): сотни тысяч токенов логов не живут
-в контексте/графе — доказательства оффлоадятся в Markdown-файл, а в графе/
-контексте остаётся compact-ссылка (сотни токенов вместо сотен тысяч).
+TencentDB v2 pattern (competitive-intel-2): hundreds of thousands of log tokens
+do not live in context/graph — the evidence is offloaded to a Markdown file,
+while a compact link (hundreds of tokens instead of hundreds of thousands)
+remains in graph/context.
 
-refs живут как work_notes-страницы с префиксом `refs-` (НЕ новый wiki_type —
-surface/types не расширяются). Графовый узел НЕ создаётся руками: wiki-страница
-становится epi_node через wiki_graph_builder (F-T9 single-entry, AST-инвариант
-test_grep_invariant_no_bypass_add_node) — «Mermaid-канвас с node_id» получается
-штатно, без bypass записи.
+refs live as work_notes pages with the `refs-` prefix (NOT a new wiki_type —
+surface/types are not extended). The graph node is NOT created by hand: the
+wiki page becomes an epi_node via wiki_graph_builder (F-T9 single-entry,
+AST-invariant test_grep_invariant_no_bypass_add_node) — the "Mermaid canvas
+with node_id" appears through the standard path, with no write bypass.
 """
 
 from __future__ import annotations
@@ -17,12 +18,12 @@ import re
 import time
 from typing import Any
 
-REFS_THRESHOLD_CHARS = 4000  # тяжелее — оффлоадим
+REFS_THRESHOLD_CHARS = 4000  # heavier than this — offload
 _SLUG_RE = re.compile(r"[^a-z0-9а-яё]+")
 
 
 def slugify(tool: str, ts: float) -> str:
-    """refs-<date>-<tool>-<hhmmss> — детерминированно, без коллизий в секунду."""
+    """Build refs-<date>-<tool>-<hhmmss> — deterministic, collision-free within a second."""
     t = time.strftime("%Y%m%d", time.gmtime(ts)) + "-" + time.strftime("%H%M%S", time.gmtime(ts))
     base = _SLUG_RE.sub("-", tool.lower()).strip("-")[:40] or "tool"
     return f"refs-{t}-{base}"
@@ -36,13 +37,13 @@ async def offload_tool_log(
     *,
     summary: str = "",
 ) -> dict[str, Any] | None:
-    """Оффлоад одного тяжёлого tool-лога. None = текст не тяжёлый (статус-кво).
+    """Offload one heavy tool log. None = the text is not heavy (status quo).
 
-    1. wiki.add(work_notes, refs-<slug>, полный лог) — доказательства в Markdown
-       (FTS-поиск по логу работает через wiki-поверхность);
-    2. графовый узел появится через wiki_graph_builder (wiki_page-узел с
-       content=file_path) — «Mermaid-канвас с node_id» штатно;
-    3. ref_path возвращается вызывавшему (drill-down: wm.get(ref_path)).
+    1. wiki.add(work_notes, refs-<slug>, full log) — the evidence lands in
+       Markdown (FTS search over the log works via the wiki surface);
+    2. the graph node will appear via wiki_graph_builder (a wiki_page node with
+       content=file_path) — the "Mermaid canvas with node_id", standard path;
+    3. ref_path is returned to the caller (drill-down: wm.get(ref_path)).
     """
     text = log_text.strip()
     if len(text) <= REFS_THRESHOLD_CHARS:
@@ -56,6 +57,6 @@ async def offload_tool_log(
         f"{len(text)} chars · by {user_id}\n\n```\n{text}\n```\n"
     )
     abs_path = str(await wiki.add("work_notes", title, body))
-    # wiki.add возвращает абсолютный путь файла; наружу — переносимый refs-путь
+    # wiki.add returns the absolute file path; externally we expose a portable refs path
     ref_path = f"work_notes/{title}.md"
     return {"ref_path": ref_path, "abs_path": abs_path, "chars": len(text), "head": head}

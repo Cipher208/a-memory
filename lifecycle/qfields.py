@@ -1,15 +1,15 @@
-"""Q-fields enrichment (CLACK exp3, 2026-09-08): doc2query для rag-юнитов.
+"""Q-fields enrichment (CLACK exp3, 2026-09-08): doc2query for rag units.
 
-Ночная джоба: для rag_pages без qfields_json LLM генерирует 3 гипотетических
-запроса, которые должен находить этот юнит. Буст |qt ∩ qf| добавляется в
-rag/dual_route (вес retrieval.qfields.weight, CLACK qb=2.0).
+Nightly job: for rag_pages without qfields_json, an LLM generates 3 hypothetical
+queries this unit should answer. The |qt ∩ qf| boost is added in rag/dual_route
+(weight retrieval.qfields.weight, CLACK qb=2.0).
 
-Инварианты честности (спека exp3 §3):
-- вход LLM — ТОЛЬКО текст юнита (без eval-вопросов и истории запросов);
-- идемпотентность: юниты с qfields_json пропускаются;
-- cost-cap: не более retrieval.qfields.max_units_per_night за прогон;
-- конфиг-only флаг retrieval.qfields.enabled (без env-оверрайдов);
-- failures = результаты: сбой LLM на юните фиксируется, не роняет джобу.
+Honesty invariants (exp3 spec §3):
+- LLM input is ONLY the unit text (no eval questions, no query history);
+- idempotency: units that already have qfields_json are skipped;
+- cost cap: at most retrieval.qfields.max_units_per_night per run;
+- config-only flag retrieval.qfields.enabled (no env overrides);
+- failures are results: an LLM failure on a unit is recorded, it never crashes the job.
 """
 
 import json
@@ -33,7 +33,7 @@ _TIMEOUT_S = 30
 
 
 def _load_llm_config(path: str) -> dict[str, str] | None:
-    """api_config.json → {base_url, api_key, model}; None = джоба спит."""
+    """Parse api_config.json → {base_url, api_key, model}; None = the job sleeps."""
     if not path:
         return None
     try:
@@ -47,7 +47,7 @@ def _load_llm_config(path: str) -> dict[str, str] | None:
 
 
 def _call_llm(cfg: dict[str, str], text: str) -> list[str]:
-    """3 запроса из тела юнита; enable_thinking:false (думающая модель съедает токены)."""
+    """Extract 3 queries from the unit body; enable_thinking:false (a thinking model eats tokens)."""
     body = {
         "model": cfg["model"],
         "messages": [{"role": "user", "content": _QF_PROMPT % text[:3000]}],
@@ -55,7 +55,7 @@ def _call_llm(cfg: dict[str, str], text: str) -> list[str]:
         "temperature": 0.2,
         "enable_thinking": False,
     }
-    req = urllib.request.Request(  # noqa: S310 — https-only base_url из конфига владельца
+    req = urllib.request.Request(  # noqa: S310 — https-only base_url from the owner's config
         cfg["base_url"].rstrip("/") + "/chat/completions",
         data=json.dumps(body).encode(),
         headers={"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json"},
@@ -69,7 +69,7 @@ def _call_llm(cfg: dict[str, str], text: str) -> list[str]:
 
 
 async def qfield_enrich(layer: str = "user") -> dict[str, Any]:
-    """Ночная джоба: догенерировать q-fields для юнитов без них. Отчёт dict."""
+    """Nightly job: backfill q-fields for units that lack them. Returns a report dict."""
     result: dict[str, Any] = {"generated": 0, "skipped_done": 0, "failed": 0, "asleep": True}
     if not bool(config.get("retrieval", "qfields", "enabled", default=False)):
         return result
@@ -111,10 +111,10 @@ async def qfield_enrich(layer: str = "user") -> dict[str, Any]:
 
 
 async def apply_qfield_boost(cm: Any, hits: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-    """Лексический мост запрос→юнит (CLACK score0-член): score += weight·|qt∩qf|.
+    """Lexical query→unit bridge (CLACK score0 term): score += weight·|qt∩qf|.
 
-    Правит score ДО edm_rerank — rrf (minmax) видит буст так же, как score0
-    видел qfield-член в exp3 (hit@5 0.08→0.46). Нет cm/поля/веса → passthrough.
+    Adjusts score BEFORE edm_rerank — rrf (minmax) sees the boost the same way
+    score0 saw the qfield term in exp3 (hit@5 0.08→0.46). No cm/column/weight → passthrough.
     """
     weight = float(config.get("retrieval", "qfields", "weight", default=2.0))
     if not hits or cm is None or weight <= 0:

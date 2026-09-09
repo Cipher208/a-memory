@@ -3,7 +3,7 @@
 Rules file: <data_dir>/rules.yaml:
     rules:
       - name: release-facts
-        when_content_contains: ["release", "релиз"]
+        when_content_contains: ["release", "reliz"]
         importance_boost: 0.1
         tags: ["release"]
 Applied in auto_save_text (the external write gate): matched rules add an

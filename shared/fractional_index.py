@@ -1,7 +1,7 @@
-"""Fractional index keys (S1 order_key) — CC0 fractional-indexing паттерн на hex-цифрах.
+"""Fractional index keys (S1 order_key) — the CC0 fractional-indexing pattern on hex digits.
 
-Ключ — строка hex-цифр; лексикографический порядок строк = порядок записей.
-Без внешних зависимостей (S12: vendor-минимум вместо пакета).
+A key is a string of hex digits; the lexicographic order of strings = record order.
+No external dependencies (S12: vendored minimum instead of a package).
 """
 
 from __future__ import annotations
@@ -12,16 +12,16 @@ _MID = "8"
 
 
 def midpoint(a: str | None = None, b: str | None = None) -> str:
-    """Ключ, лексикографически следующий после ``a`` и перед ``b``.
+    """Return the key lexicographically after ``a`` and before ``b``.
 
-    - midpoint(None, None) — стартовый ключ;
-    - midpoint(a, None) — следующий за a (монотонный append);
-    - midpoint(None, b) — предыдущий перед b;
-    - midpoint(a, b) — между a и b при a < b; при исчерпании глубины
-      ключ расширяется (a + "8"), а не вырождается.
+    - midpoint(None, None) — the start key;
+    - midpoint(a, None) — the one after a (monotonic append);
+    - midpoint(None, b) — the one before b;
+    - midpoint(a, b) — between a and b when a < b; when the depth is
+      exhausted the key is extended (a + "8") rather than degenerating.
 
     Raises:
-        ValueError: a >= b либо пустой интервал (a — префикс b из нулей).
+        ValueError: a >= b or an empty interval (a is a prefix of b made of zeros).
 
     """
     if not a and not b:
@@ -38,16 +38,16 @@ def midpoint(a: str | None = None, b: str | None = None) -> str:
         db = _DIGITS.index(b[i]) if i < len(b) else 0
         if db > da:
             if db - da >= 2:
-                # a[:i] дополнен нулями, когда i за концом a (a — префикс b)
+                # a[:i] padded with zeros when i is past the end of a (a is a prefix of b)
                 return a[:i].ljust(i, "0") + _DIGITS[(da + db) // 2]
-            # соседние цифры: уходим на уровень глубже за концом a
+            # adjacent digits: go one level deeper past the end of a
             return a + _MID
     msg = f"no key between {a!r} and {b!r} (adjacent zero-prefixes)"
     raise ValueError(msg)
 
 
 def _increment(a: str) -> str:
-    """Следующий за a: бамп последней цифры; хвост из 'f' → расширение строки."""
+    """Return the key after a: bump the last digit; a tail of 'f' → extend the string."""
     if not a:
         return _START
     if a[-1] != "f":
@@ -56,7 +56,7 @@ def _increment(a: str) -> str:
 
 
 def _decrement(b: str) -> str:
-    """Предыдущий перед b; у пола ('0'-хвост) поднимаемся на цифру выше."""
+    """Return the key before b; at the floor ('0' tail) step up one digit."""
     if not b:
         msg = "cannot decrement empty key"
         raise ValueError(msg)

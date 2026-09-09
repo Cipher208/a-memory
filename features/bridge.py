@@ -1,10 +1,11 @@
-"""A8 MEMORY.md-бридж — человекочитаемый файл топ-фактов + drain-приём.
+"""A8 MEMORY.md bridge — a human-readable file of top facts + drain intake.
 
-regenerate_bridge: топ-20 инвариантных фактов (importance ≥ 0.6) →
-bridge_<layer>.md (atomic write, паттерн core/reflex.py). Всё ниже маркера
-AUTO-DRAIN переживает регенерацию — заметки пользователя не затираются.
-ingest_drain: текст ниже маркера → L0 capture (event='bridge_drain') →
-G1 distill_and_route → ниже маркера файл очищается до инструкции-комментария.
+regenerate_bridge: top-20 invariant facts (importance >= 0.6) →
+bridge_<layer>.md (atomic write, core/reflex.py pattern). Everything below the
+AUTO-DRAIN marker survives regeneration — the user's notes are not wiped.
+ingest_drain: text below the marker → L0 capture (event='bridge_drain') →
+G1 distill_and_route → below the marker the file is cleared to the
+instruction comment.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 
 async def regenerate_bridge(user_id: str, layer: str = "agent", base_path: str | None = None) -> Path:
-    """Топ-инварианты → bridge-файл. Drain-секция ниже маркера сохраняется."""
+    """Write top invariants to the bridge file. The drain section below the marker is preserved."""
     path = _resolve(base_path, layer)
     conn = await connection_manager.get(DB_NAME)
     placeholders = ",".join("?" * len(INVARIANT_KINDS))
@@ -75,7 +76,7 @@ async def regenerate_bridge(user_id: str, layer: str = "agent", base_path: str |
 
 
 async def ingest_drain(user_id: str, layer: str = "agent", base_path: str | None = None) -> dict[str, Any]:
-    """Текст ниже drain-маркера → L0 → distill; ниже маркера — только инструкция."""
+    """Send text below the drain marker through L0 → distill; below the marker only the instruction remains."""
     path = _resolve(base_path, layer)
     routes: dict[str, int] = dict(_ZERO_ROUTES)
     if not path.exists():
@@ -93,10 +94,10 @@ async def ingest_drain(user_id: str, layer: str = "agent", base_path: str | None
         from shared.l0 import capture
 
         bridge_rid = await capture("bridge_drain", layer, user_id, drain, raw_type="user-message")
-        # Аудит 05.09 (P1): capture успешен → контент уже в L0 (сортировочная
-        # станция). Маркер чистим ДО дистилляции: падение distill больше не
-        # плодит дубли при повторном ingest — недодистиллированное добирает
-        # replay (строка остаётся 'received').
+        # Audit 05.09 (P1): capture succeeded → the content is already in L0 (the
+        # sorting station). The marker is cleared BEFORE distillation: a distill
+        # failure no longer breeds duplicates on a repeated ingest — the
+        # under-distilled remainder is picked up by replay (the row stays 'received').
         _atomic_write(path, top + _tail(""))
         mem = MemoryManager(cm=connection_manager).get_layer(layer, user_id)
         graph = EpistemicGraph(cm=connection_manager, layer=layer)

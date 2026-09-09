@@ -1,9 +1,9 @@
-"""S17 доп.11: HDBSCAN clustering over MIB embedding vectors (role 3).
+"""S17 addendum 11: HDBSCAN clustering over MIB embedding vectors (role 3).
 
-Сверка с louvain-комьюнити: эмбеддинг-кластеры подтверждают графовые, если
-пары узлов кластера лежат в одном louvain-сообществе (доля таких пар).
-Отчёт graph_enrich; consumer — ночной digest. Best-effort: sklearn
-отсутствует / мало узлов → пустой отчёт с reason.
+Cross-check against louvain communities: embedding clusters confirm the graph
+clusters when node pairs of a cluster lie in the same louvain community (the
+share of such pairs). Reported to graph_enrich; consumer is the nightly
+digest. Best-effort: sklearn absent / too few nodes → empty report with reason.
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
 
-_MIN_CLUSTER_NODES = 12  # HDBSCAN устойчив от ~2×min_cluster_size; ниже — шум
+_MIN_CLUSTER_NODES = 12  # HDBSCAN is stable from ~2x min_cluster_size; below that — noise
 _MIN_CLUSTER_SIZE = 2
-_BIT_DIM = 384  # MIB dim (hash-фолбэк и e5-small совпадают; drift поймает quantize)
+_BIT_DIM = 384  # MIB dim (hash fallback and e5-small agree; quantize will catch drift)
 
 
 def _hamming(a: int, b: int) -> int:
@@ -35,7 +35,7 @@ def _bits_from_blob(blob: bytes) -> int:
 
 
 async def _load_bits(conn: Any, layer: str) -> tuple[list[int], list[int]]:
-    """(node_ids, bits) узлов слоя с кэшированными ненулевыми MIB-векторами."""
+    """Return (node_ids, bits) of layer nodes with cached non-zero MIB vectors."""
     rows = await (
         await conn.execute(
             "SELECT n.node_id, n.content FROM epi_nodes n WHERE n.layer=? AND n.content NOT LIKE '[{%' AND n.content NOT LIKE '%tool_use_id%'",
@@ -58,7 +58,7 @@ async def _load_bits(conn: Any, layer: str) -> tuple[list[int], list[int]]:
             continue
         blob = bytes(cached[0])
         if not blob:
-            continue  # junk-вектор (доп.10) — в кластеризацию не берём
+            continue  # junk vector (addendum 10) — not taken into clustering
         b = _bits_from_blob(blob)
         if b:
             ids.append(nid)
@@ -67,7 +67,7 @@ async def _load_bits(conn: Any, layer: str) -> tuple[list[int], list[int]]:
 
 
 def _louvain_partition(edges: list[tuple[int, int]], ids: list[int]) -> dict[int, int]:
-    """louvain-сообщества по рёбрам между узлами слоя (networkx из lockfile)."""
+    """Compute louvain communities over edges between layer nodes (networkx from the lockfile)."""
     import networkx as nx  # type: ignore[import-untyped]
 
     g = nx.Graph()
@@ -86,11 +86,11 @@ async def cluster_embeddings(
     layer: str = "user",
     user_id: str = "default",
 ) -> dict[str, Any]:
-    """HDBSCAN по нормированным Хэмминг-дистанциям MIB-битов + сверка с louvain.
+    """Run HDBSCAN over normalized Hamming distances of MIB bits + cross-check with louvain.
 
     Returns {"clusters": [{"size": N, "nodes": [id…], "louvain_agreement": F}],
-    "node_count": M, "skipped": reason?}. Best-effort: пусто при отсутствии
-    sklearn или малом числе кэшированных векторов.
+    "node_count": M, "skipped": reason?}. Best-effort: empty when sklearn is
+    absent or the number of cached vectors is too small.
     """
     cm = cm or connection_manager
     conn = await cm.get(DB_NAME)
@@ -99,12 +99,12 @@ async def cluster_embeddings(
         return {"clusters": [], "node_count": len(ids), "skipped": f"<{_MIN_CLUSTER_NODES} cached vectors"}
     try:
         from sklearn.cluster import HDBSCAN  # type: ignore[import-untyped]
-    except ImportError as exc:  # pragma: no cover — sklearn в dev-extra
+    except ImportError as exc:  # pragma: no cover — sklearn lives in dev-extra
         logger.debug("sklearn absent — HDBSCAN skipped: %s", exc)
         return {"clusters": [], "node_count": len(ids), "skipped": "no sklearn"}
 
     n = len(ids)
-    # квадратная матрица попарных нормированных Хэмминг-дистанций (precomputed)
+    # square matrix of pairwise normalized Hamming distances (precomputed)
     dist = [[0.0] * n for _ in range(n)]
     for i in range(n):
         for j in range(i + 1, n):

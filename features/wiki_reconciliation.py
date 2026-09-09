@@ -1,14 +1,14 @@
-"""S13 file↔DB reconciliation: wiki .md-файлы vs wiki_index.
+"""S13 file↔DB reconciliation: wiki .md files vs wiki_index.
 
-WikiManager пишет пару (файл, строка wiki_index); расхождение появляется при
-ручных правках/удалениях. reconcile() — read-only аудит:
-  (a) orphan md — файл есть, индекс-строки нет (ручное создание, упавший save);
-  (b) stale index — индекс-строка есть, файла нет (ручное удаление).
+WikiManager writes the pair (file, wiki_index row); drift appears after manual
+edits/deletions. reconcile() is a read-only audit:
+  (a) orphan md — the file exists, no index row (manual creation, failed save);
+  (b) stale index — the index row exists, no file (manual deletion).
 
-# ponytail: hash-мисматч (файл правлен руками после индексации) не проверяем —
-# базы хэшей несогласованы: add() хэширует raw content, update() — весь
-# отрендеренный .md (wiki/manager.py), дешёвого однозначного сравнения нет.
-# Upgrade path: единый hash-базис в менеджере → сравнение content_hash здесь.
+# ponytail: hash mismatch (file edited by hand after indexing) is not checked —
+# the hash bases are inconsistent: add() hashes the raw content, update() the
+# whole rendered .md (wiki/manager.py), so there is no cheap unambiguous comparison.
+# Upgrade path: a single hash basis in the manager → compare content_hash here.
 """
 
 from __future__ import annotations
@@ -17,18 +17,19 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
-# Авто-генераты, которые пишутся на диск без индексации (wiki/manager.py
-# _write_moc, wiki/lint INDEX-stub) — не orphans.
+# Auto-generated files written to disk without indexing (wiki/manager.py
+# _write_moc, wiki/lint INDEX-stub) — not orphans.
 _AUTO_GENERATED = {"INDEX.md"}
 
 
 async def reconcile(user_id: str = "default", layer: str = "user") -> dict[str, Any]:
-    """Сверка wiki-файлов и wiki_index: {'orphans': [paths], 'stale': [paths], 'checked': N}.
+    """Reconcile wiki files against wiki_index: {'orphans': [paths], 'stale': [paths], 'checked': N}.
 
-    checked = число сверённых пар (md-файлы + индекс-строки слоя). user_id —
-    совместимость сигнатуры memory_audit: wiki_index не юзер-скоуплен, аудит
-    идёт по (layer, file_path). Каталог wiki берётся из connection_manager
-    (тот же data dir, что у WikiManager — wiki/manager.py docstring).
+    checked = number of reconciled pairs (md files + index rows of the layer).
+    user_id — signature compatibility with memory_audit: wiki_index is not
+    user-scoped, the audit runs over (layer, file_path). The wiki directory
+    comes from connection_manager (same data dir as WikiManager —
+    wiki/manager.py docstring).
     """
     from shared.connection import connection_manager
     from shared.constants import DB_NAME
@@ -47,7 +48,7 @@ async def reconcile(user_id: str = "default", layer: str = "user") -> dict[str, 
                     if f.name in _AUTO_GENERATED or f.name.startswith("MOC_"):
                         continue
                     files.append(f)
-        stale = sorted(p for p in db_paths if not Path(p).exists())  # ASYNC240: pathlib в потоке
+        stale = sorted(p for p in db_paths if not Path(p).exists())  # ASYNC240: pathlib in a thread
         return files, stale
 
     md_files, stale = await asyncio.to_thread(_scan)
