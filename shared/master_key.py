@@ -1,0 +1,190 @@
+"""Master key resolution + envelope encryption for JSON secrets.
+
+Canonical home of the master-key chain (keyring -> .env -> config ->
+MCP_MASTER_KEY with argon2id KDF) and the encrypt/decrypt wrappers.
+features/secrets.py is a backward-compat shim re-exporting these names.
+
+Master key resolution order:
+1. OS keychain (keyring library) — recommended for production
+2. .env file in the data dir (MCP_MASTER_KEY=...); legacy repo-root .env is still read
+3. crypto.master_key_hex in config.yaml
+4. MCP_MASTER_KEY environment variable (argon2id KDF)
+5. Fail loud if none available
+"""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from shared.crypto import decrypt_json as _decrypt_json
+from shared.crypto import encrypt_json as _encrypt_json
+from shared.crypto import is_encrypted_blob as _is_encrypted_blob
+
+logger = logging.getLogger(__name__)
+
+try:
+    from nacl.pwhash import argon2id
+
+    _HAS_NACL = True
+except ImportError:
+    _HAS_NACL = False
+
+
+_KEYRING_SERVICE = "mcp-ariel-memory"
+_KEYRING_USERNAME = "master-key"
+_ENV_VAR = "MCP_MASTER_KEY"
+_KDF_SALT = b"ariel-memory-v1\x00"
+_MASTER_KEY_LEN = 32
+
+
+def _dotenv_path() -> Path:
+    """Canonical .env location: the data dir, not CWD.
+
+    A repo root or web-servable directory is the wrong place to
+    persist a master key.
+    """
+    data_dir = os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")
+    return Path(data_dir) / ".env"
+
+
+def _load_dotenv() -> None:
+    """Load .env values if MCP_MASTER_KEY is not already set.
+
+    Reads both the canonical data-dir path and the legacy repo-root
+    path (older installs auto-generated their key there).
+    """
+    if os.environ.get(_ENV_VAR):
+        return
+    for env_path in (_dotenv_path(), Path(".env")):
+        if not env_path.exists():
+            continue
+        try:
+            with Path(env_path).open() as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        key, _, value = line.partition("=")
+                        key = key.strip()
+                        value = value.strip().strip("\"'")
+                        if key and key not in os.environ:
+                            os.environ[key] = value
+        except Exception:
+            logger.exception("Failed to load .env at %s", env_path)
+
+
+def _save_dotenv(key: str, value: str) -> None:
+    """Save a key-value pair to the data-dir .env file."""
+    env_path = _dotenv_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(Exception), env_path.open("a") as f:
+        f.write(f"\n{key}={value}\n")
+
+
+def _load_master_key() -> bytes:
+    """Load or derive master key from keyring, .env, config, or environment.
+
+    If no key is found, auto-generates one and saves to .env for dev convenience.
+    """
+    if not _HAS_NACL:
+        raise ImportError("pynacl is required for encryption. Install with: pip install pynacl")
+
+    # Try OS keychain first (recommended for production)
+    with contextlib.suppress(Exception):
+        import keyring
+
+        stored = keyring.get_password(_KEYRING_SERVICE, _KEYRING_USERNAME)
+        if stored:
+            return bytes.fromhex(stored)
+
+    # Try .env file
+    _load_dotenv()
+
+    # Try config
+    with contextlib.suppress(Exception):
+        from config import config
+
+        cfg_key = config.get("crypto", "master_key_hex", default="")
+        if cfg_key:
+            return bytes.fromhex(cfg_key)
+
+    # Try environment variable with argon2id KDF
+    env_seed = os.environ.get(_ENV_VAR)
+    if env_seed:
+        # The KDF salt is a fixed constant by design: it makes keys portable
+        # (same seed + same data file decrypt on any machine). This is safe
+        # for high-entropy seeds — the auto-generated ones are 256-bit. It
+        # does NOT protect weak user-chosen seeds from cross-install
+        # precomputation, so warn loudly about those instead of pretending.
+        if len(env_seed) < 32:
+            logger.warning(
+                "MCP_MASTER_KEY is shorter than 32 chars — a low-entropy seed is "
+                "vulnerable to precomputed attacks (argon2id hardens but cannot "
+                "salvage weak seeds). Prefer the auto-generated key or keyring."
+            )
+        res_kdf = argon2id.kdf(
+            size=_MASTER_KEY_LEN,
+            password=env_seed.encode("utf-8"),
+            salt=_KDF_SALT,
+            opslimit=argon2id.OPSLIMIT_MODERATE,
+            memlimit=argon2id.MEMLIMIT_MODERATE,
+        )
+        return bytes(res_kdf)
+
+    # Auto-generate key for dev convenience
+    import secrets as _secrets
+
+    auto_key = _secrets.token_hex(32)
+    logger.warning(
+        "No master key found. Auto-generating key and saving to %s. For production, use keyring or set MCP_MASTER_KEY explicitly.", _dotenv_path()
+    )
+    _save_dotenv(_ENV_VAR, auto_key)
+    res_auto = argon2id.kdf(
+        size=_MASTER_KEY_LEN,
+        password=auto_key.encode("utf-8"),
+        salt=_KDF_SALT,
+        opslimit=argon2id.OPSLIMIT_MODERATE,
+        memlimit=argon2id.MEMLIMIT_MODERATE,
+    )
+    return bytes(res_auto)
+
+
+_master_cache: dict[str, bytes] = {}
+
+
+def _get_master_key() -> bytes:
+    """Get cached master key."""
+    key = _master_cache.get("k")
+    if key is None:
+        key = _load_master_key()
+        _master_cache["k"] = key
+    return key
+
+
+def encrypt_json(data: dict[str, Any] | list[Any]) -> bytes:
+    """Encrypt JSON data. Returns nonce(24) || ciphertext."""
+    return _encrypt_json(data, _get_master_key())
+
+
+def decrypt_json(blob: bytes) -> Any:
+    """Decrypt blob back to JSON."""
+    return _decrypt_json(blob, _get_master_key())
+
+
+def is_encrypted_blob(path: Path) -> bool:
+    """Check if file is encrypted (not plain JSON).
+
+    Heuristic: encrypted blobs start with random 24 bytes (nonce),
+    JSON starts with { or [.
+    """
+    if not path.exists():
+        return False
+    # Path is verified to be within app data dir by caller, safe.
+    with path.open("rb") as f:
+        head = f.read(1)
+    return bool(_is_encrypted_blob(head))

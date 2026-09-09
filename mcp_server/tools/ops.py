@@ -434,13 +434,19 @@ async def memory_lucidity_purge(
     ).dict()
 
 
+# Whitelisted purge targets — never accept caller-supplied identifiers.
+_PURGEABLE_TABLES = frozenset({"core_memory", "episodes", "audit_log", "epi_nodes"})
+_PURGEABLE_TS_COLUMNS = frozenset({"created_at", "timestamp"})
+
+
 async def _purge_table(cm: Any, table: str, user_id: str, cutoff: float, timestamp_col: str = "created_at") -> int:
     """Consolidated table purge logic to eliminate code clones."""
+    if table not in _PURGEABLE_TABLES or timestamp_col not in _PURGEABLE_TS_COLUMNS:
+        raise ValueError(f"Invalid purge target: {table}.{timestamp_col}")
     if not cm:
         return 0
     conn = await cm.get(DB_NAME)
     try:
-        # Table names are static in this context, validated by internal callers.
         sql = f"DELETE FROM {table} WHERE user_id=? AND {timestamp_col} > ?"
         cursor = await conn.execute(sql, (user_id, cutoff))
         result = int(cursor.rowcount)

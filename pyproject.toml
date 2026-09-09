@@ -200,6 +200,13 @@ ignore_missing_imports = true
 [tool.coverage.run]
 omit = ["demo.py", "__main__.py"]
 
+[tool.skylos]
+# SKY-D260 (cyrillic homoglyphs) is disabled project-wide: RU text here is
+# product data (classification keywords, synonyms, RU morphology) and a
+# deliberate language policy, not obfuscated code. Revisit only if a
+# homoglyph-attack audit is actually needed.
+ignore = ["SKY-D260"]
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"

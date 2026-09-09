@@ -200,7 +200,7 @@ class Saga:
                 return None
             result_blob = row["result_json"]
             if isinstance(result_blob, (bytes, bytearray)):
-                from features.secrets import decrypt_json
+                from shared.master_key import decrypt_json
 
                 res: Any = decrypt_json(bytes(result_blob))
                 return dict(res) if isinstance(res, dict) else None
@@ -215,7 +215,7 @@ class Saga:
         conn = await connection_manager.get("memory.db")
         try:
             if storage._HAS_ENCRYPTION:
-                from features.secrets import encrypt_json
+                from shared.master_key import encrypt_json
 
                 encrypted = encrypt_json(result)
             else:

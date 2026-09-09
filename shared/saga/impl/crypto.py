@@ -13,7 +13,7 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from features.secrets import decrypt_json, encrypt_json
+from shared.master_key import decrypt_json, encrypt_json
 from shared.crypto import is_encrypted_blob as _is_crypto_encrypted_blob
 
 logger = logging.getLogger(__name__)
