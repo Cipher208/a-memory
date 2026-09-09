@@ -1,18 +1,19 @@
 """Dual-route retrieval (Phase G Task 6): question-type router + S2 exhaustive + D-Mem escalation.
 
-Маршруты (classify_query по маркерам и длине):
-- factual    → RRF/EDM без graph-expand (HippoRAG2: graph-augmented проигрывает
-               dense на single-hop) + ITS gating;
-- enumerative («все/список/перечисли/list all») → S2-exhaustive (Mnemis):
-               категория (wiki_type / node_type) → полный сбор детей БЕЗ top-k;
-- multi-hop  → RRF/EDM; при низком dense-confidence (< 0.3) — D-Mem escalation:
-               второй проход с включённым graph-источником (graph-rerank).
+Routes (classify_query by markers and length):
+- factual    → RRF/EDM without graph-expand (HippoRAG2: graph-augmented loses
+               to dense on single-hop) + ITS gating;
+- enumerative (RU markers 'vse/spisok/perechisli' + 'list all', see _ENUMERATIVE_RE)
+              → S2-exhaustive (Mnemis):
+               category (wiki_type / node_type) → full child collection WITHOUT top-k;
+- multi-hop  → RRF/EDM; on low dense-confidence (< 0.3) — D-Mem escalation:
+               second pass with the graph source enabled (graph-rerank).
 
-RRF — recall-first генератор; EDM/ITS — post-процессор (rag/edm.py).
+RRF — recall-first generator; EDM/ITS — post-processor (rag/edm.py).
 
-Phase G Task 7: RETRIEVAL_MODE (env) / retrieval.mode (config.yaml) переключает
-arm абляции (rag/ablation.py): 'rrf' | 'dense_per_kind' | 'gated' | 'full'.
-Дефолт 'full' — существующее поведение не меняется.
+Phase G Task 7: RETRIEVAL_MODE (env) / retrieval.mode (config.yaml) switches
+the ablation arm (rag/ablation.py): 'rrf' | 'dense_per_kind' | 'gated' | 'full'.
+Default 'full' — existing behavior is unchanged.
 """
 
 from __future__ import annotations
@@ -33,23 +34,23 @@ _MULTIHOP_RE = re.compile(r"(почему|из-за|привело|влияет|
 
 _S2_CATEGORY_RE = re.compile(r"(?:все(?:\s+|х)|список\s+(?:все\w*\s+)?|list\s+all\s+|перечисл\w*\s+(?:все\w*\s+)?)([а-яёa-z0-9_]+)")
 
-# S2 compression constraint (Task C6, Mnemis): категория с < n детьми не
-# проходит — ветка терминируется (|слой i+1| ≤ |слой i| соблюдён структурно:
-# дети всегда подмножество родительского каталога).
+# S2 compression constraint (Task C6, Mnemis): a category with < n children
+# fails — the branch is terminated (|layer i+1| ≤ |layer i| holds structurally:
+# children are always a subset of the parent catalog).
 S2_MIN_CHILDREN = 2
 
-# Tenure counter-signal aliases (S17 п.7): пессимизация хита, чей контент
-# содержит superseded-имя без текущего (переименование). Не дроп — хит
-# остаётся в выдаче с пониженным score.
+# Tenure counter-signal aliases (S17 item 7): demote a hit whose content
+# contains a superseded name without the current one (renaming). Not a drop —
+# the hit stays in the output with a lowered score.
 _COUNTER_FACTOR = 0.7
 
 
 def _apply_counter_signals(hits: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-    """Пессимизировать хиты по superseded-именам (config rag.counter_signals).
+    """Demote hits by superseded names (config rag.counter_signals).
 
-    Хит пессимизируется, если контент содержит старое имя и НЕ содержит
-    текущего; запрос, явно спрашивающий про старое имя, не штрафуется
-    (запрос-биекция релевантен старой записи).
+    A hit is demoted if its content contains the old name and does NOT contain
+    the current one; a query explicitly asking about the old name is not
+    penalized (a query in bijection with the old record is relevant to it).
     """
     try:
         from rag.synonyms import load_counter_signals
@@ -76,9 +77,10 @@ def _apply_counter_signals(hits: list[dict[str, Any]], query: str) -> list[dict[
 def classify_query(query: str) -> str:
     """Question-type router: factual | enumerative | multi-hop.
 
-    enumerative — маркеры полноты («все/список/перечисли/list all»);
-    multi-hop — каузальные маркеры или длинный составной вопрос (≥ 10 слов);
-    иначе factual.
+    enumerative — exhaustiveness markers (RU 'vse/spisok/perechisli' + 'list all',
+    see _ENUMERATIVE_RE);
+    multi-hop — causal markers or a long compound question (≥ 10 words);
+    otherwise factual.
     """
     q = (query or "").strip().lower()
     if not q:
@@ -98,16 +100,17 @@ async def s2_exhaustive(
     user_id: str = "default",
     layer: str = "user",
 ) -> list[dict[str, Any]]:
-    """S2-exhaustive (Mnemis): категория → полный сбор детей БЕЗ top-k.
+    """S2-exhaustive (Mnemis): category → full child collection WITHOUT top-k.
 
-    Иерархический спуск: wiki.list_all → фильтр по категории (wiki_type или
-    заголовок); эпи-граф — полный сбор узлов совпавшего node_type. Категория —
-    слово после маркера полноты («перечисли все правила» → rules); без
-    совпадений — весь активный каталог (exhaustive fallback).
+    Hierarchical descent: wiki.list_all → filter by category (wiki_type or
+    title); epi-graph — full collection of nodes of the matched node_type. The
+    category is the word after the exhaustiveness marker (query 'perechisli vse
+    pravila' → category 'rules'); with
+    no matches — the entire active catalog (exhaustive fallback).
 
-    C6 compression constraint: собранная категория с < S2_MIN_CHILDREN детьми
-    терминируется (возвращается пусто) — вырожденные ветки не всплывают как
-    «списки», потомку доверять не на чем.
+    C6 compression constraint: a collected category with < S2_MIN_CHILDREN
+    children is terminated (returns empty) — degenerate branches do not
+    surface as «lists»: there is no basis to trust the child set.
     """
     category = ""
     m = _S2_CATEGORY_RE.search((query or "").lower())
@@ -152,14 +155,14 @@ async def s2_exhaustive(
     if not hits:
         logger.debug("s2_exhaustive: no children for category %r", category)
     if category and 0 < len(hits) < S2_MIN_CHILDREN:
-        # Mnemis: категория с < n детьми не проходит — терминирование слоя.
+        # Mnemis: a category with < n children fails — layer termination.
         logger.debug("s2_exhaustive: category %r degenerate (%d < %d children) — terminated", category, len(hits), S2_MIN_CHILDREN)
         return []
     return hits
 
 
 def _graph_cm(rag: Any, cm: Any | None) -> Any | None:
-    """Cm для G-члена: явный аргумент, иначе cm рага (если у него есть .get)."""
+    """Cm for the G-member: explicit argument, otherwise the rag's cm (if it has .get)."""
     if cm is not None:
         return cm
     candidate = getattr(rag, "cm", None)
@@ -177,14 +180,14 @@ async def route_query(
     layer: str = "user",
     cm: Any | None = None,
 ) -> list[dict[str, Any]]:
-    """Router dispatch: classify_query → маршрут → EDM/ITS post-процессор.
+    """Router dispatch: classify_query → route → EDM/ITS post-processor.
 
-    rag — MultiSourceRAG (5-source RRF) или совместимый: search(query, ...,
-    include_graph=bool). factual: graph-expand OFF; multi-hop: эскалация при
-    low dense-confidence; enumerative: S2 с откатом на factual-путь.
+    rag — MultiSourceRAG (5-source RRF) or compatible: search(query, ...,
+    include_graph=bool). factual: graph-expand OFF; multi-hop: escalation on
+    low dense-confidence; enumerative: S2 with fallback to the factual path.
     """
-    # Task 7 ablation arms: 'full' (дефолт) — текущий dual-route ниже;
-    # 'rrf'/'dense_per_kind'/'gated' — альтернативные армы для №11-eval.
+    # Task 7 ablation arms: 'full' (default) — the current dual-route below;
+    # 'rrf'/'dense_per_kind'/'gated' — alternative arms for №11-eval.
     mode = retrieval_mode()
     if mode == "rrf":
         pool = await rag.search(query, user_id=user_id, limit=limit, include_graph=True)
@@ -195,21 +198,21 @@ async def route_query(
         graph_cm = _graph_cm(rag, cm)
         if graph_cm is not None:
             return await dense_per_kind_search(graph_cm, query, user_id=user_id, layer=layer, limit=limit)
-        # нет cm (двойники без БД) → деградация к полному пути ниже
+        # no cm (twins without a DB) → degrade to the full path below
 
     qtype = classify_query(query)
     if qtype == "enumerative":
         hits = await s2_exhaustive(getattr(rag, "wiki", None), _graph_cm(rag, cm), query, user_id=user_id, layer=layer)
         if hits:
             return hits
-        # категория не опознана → откат на dense/EDM (recall-first)
+        # category not recognized → fall back to dense/EDM (recall-first)
 
-    # D-Mem: dense-first для factual И multi-hop (graph-augmented проигрывает
-    # dense); эскалация — только gated: низкий dense-confidence → graph-rerank.
-    # S17 pre-gate: {} когда retrieval.pregate off (статус-кво), иначе урезанный
-    # fan-out по фичам запроса — cost down + шум down, N_eff отражает урезание.
+    # D-Mem: dense-first for factual AND multi-hop (graph-augmented loses to
+    # dense); escalation is gated-only: low dense-confidence → graph-rerank.
+    # S17 pre-gate: {} when retrieval.pregate is off (status quo), otherwise a
+    # trimmed fan-out by query features — cost down + noise down, N_eff reflects the trimming.
     pool = await rag.search(query, user_id=user_id, limit=100, include_graph=False, **pre_gate_flags(query))
-    # CLACK exp3: q-fields boost (score += w·|qt∩qf|) до EDM — флаг config-only.
+    # CLACK exp3: q-fields boost (score += w·|qt∩qf|) before EDM — config-only flag.
     if bool(config.get("retrieval", "qfields", "enabled", default=False)):
         from lifecycle.qfields import apply_qfield_boost
 
@@ -223,9 +226,9 @@ async def route_query(
         seen = {h.get("id") for h in hits}
         hits = [*hits, *(e for e in esc if e.get("id") not in seen)]
 
-    # FOK-gate (Task C6, SYNAPSE τ=FOK_TAU): гейт по СЫРОЙ активации (до
-    # minmax) — minmax на дегенеративном пуле даёт слабому 1.0; если
-    # raw_activation нет (легаси), fallback на score.
+    # FOK-gate (Task C6, SYNAPSE τ=FOK_TAU): gate on the RAW activation (before
+    # minmax) — minmax on a degenerate pool gives the weakest hit 1.0; if
+    # raw_activation is absent (legacy), fall back to score.
     top = hits[0] if hits else {}
     raw_val = top.get("raw_activation")
     score_val = top.get("score")
@@ -234,8 +237,8 @@ async def route_query(
         logger.debug("route_query: FOK-gate reject (raw activation %.3f < τ=%.2f)", activation, FOK_TAU)
         return []
 
-    # Tenure counter-signal aliases (S17 п.7): superseded-имена с негативной
-    # ролью (пессимизация, не drop) — после ITS, перед выдачей.
+    # Tenure counter-signal aliases (S17 item 7): superseded names with a negative
+    # role (demotion, not drop) — after ITS, before output.
     hits = _apply_counter_signals(hits, query)
 
     return [{**h, "kind": str(h.get("source") or "relevant")} for h in hits[:limit]]

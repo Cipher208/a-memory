@@ -25,22 +25,22 @@ logger = logging.getLogger(__name__)
 Miner = Callable[[AsyncConnectionManager, str], Awaitable[dict[str, int]]]
 
 _TOKEN_RE = re.compile(r"[а-яёa-z0-9]+")
-# Служебные слова без топик-сигнала (RU+EN); len>=4 дополнительно отсекает мусор.
+# Non-topic service words (RU+EN); len>=4 additionally filters noise.
 _STOP_TOKENS = {"и", "но", "в", "на", "с", "для", "это", "что", "the", "a", "an", "is", "are", "of", "to"}
 
-_SESSION_GAP = 1800.0  # L0-строки ближе 30 мин — одна сессия
-_NODE_WINDOW = 300.0  # узел в сессии, если created_at в ±5 мин от строки L0
-_BIND_SHARED = 2  # или ≥2 общих канон-токенов с текстами сессии
+_SESSION_GAP = 1800.0  # L0 rows within 30 min belong to one session
+_NODE_WINDOW = 300.0  # node is in-session if created_at is within ±5 min of an L0 row
+_BIND_SHARED = 2  # or >=2 shared canon-tokens with session texts
 
 
 async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, heuristic: str) -> int:
     """UPSERT into epi_edges; returns rows actually written (re-run → 0).
 
-    Аудит 05.09 (P1): INSERT OR IGNORE замораживал вес — повторный прогон
-    минера не усиливал связь. Теперь upsert берёт max(weight) (сильнейшее
-    свидетельство живёт), created_at обновляется. После вставки heuristic-ребра
-    применяется lateral inhibition (G5, SYNAPSE): слабое ребро гасится
-    кластером более сильных соседей узла.
+    Audit 05.09 (P1): INSERT OR IGNORE froze the weight — a miner re-run
+    never strengthened a link. The upsert now takes max(weight) (strongest
+    evidence wins) and refreshes created_at. After a heuristic edge is
+    inserted, lateral inhibition applies (G5, SYNAPSE): a weak edge is
+    suppressed by the cluster of stronger neighbors around the node.
     """
     cur = await conn.execute(
         """INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)
@@ -52,26 +52,26 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
     if written:
         from lifecycle.graph_sanitation import lateral_inhibition
 
-        with contextlib.suppress(Exception):  # ингибиция не должна ронять минер
+        with contextlib.suppress(Exception):  # inhibition must never crash the miner
             await lateral_inhibition(conn, a)
             await lateral_inhibition(conn, b)
     return written
 
 
 def _canon(w: str, syn: dict[str, list[str]]) -> str:
-    """Каноническая форма токена: делегирует в rag.synonyms.canonical_form (двусторонний разворот класса)."""
+    """Canonical form of a token: delegates to rag.synonyms.canonical_form (two-way class expansion)."""
     from rag.synonyms import canonical_form
 
     return canonical_form(w, syn)
 
 
 def _canon_tokens(text: str, syn: dict[str, list[str]] | None = None) -> set[str]:
-    """Редкие токены текста: [а-яёa-z0-9]+ lowercase, len>=4, не стоп-слова, канонизированные.
+    """Rare tokens of a text: [_TOKEN_RE] tokens lowercase, len>=4, not stop-words, canonicalized.
 
-    S19-хвост (Эли ошиблась — стемминга не было): `rag.lemmatize` → RU-леммы
-    pymorphy3 схлопывают словоизменение («зарплаты» → «зарплата»), topic_overlap
-    перестаёт терять морфологию. Кэш-ключ ингестора сеется по raw-content —
-    лемматизация здесь не смещает существующие векторы.
+    S19 tail (Eli missed it — no stemming existed): `rag.lemmatize` → pymorphy3
+    RU lemmas collapse inflection ('zarplaty' → 'zarplata'), so topic_overlap
+    stops losing morphology. The ingestor cache key is seeded from raw content —
+    lemmatization here does not shift existing vectors.
     """
     if syn is None:
         from rag.synonyms import load_synonyms
@@ -86,7 +86,7 @@ def _canon_tokens(text: str, syn: dict[str, list[str]] | None = None) -> set[str
             from shared.morph import normal_form
 
             lemma = normal_form(w)
-            if lemma and len(lemma) >= 4:  # короткая лемма = смысл теряется, остаёмся на токене
+            if lemma and len(lemma) >= 4:  # a short lemma loses the meaning; stay on the token
                 w = lemma
         out.add(_canon(w, syn))
     return out
@@ -99,7 +99,7 @@ def _lemmatize_enabled() -> bool:
 
 
 async def _layer_nodes(conn: Any, layer: str) -> list[tuple[int, str]]:
-    """Узлы слоя без мусорного JSON/tool_use_id-контента (фильтр как в graph_enrich)."""
+    """Nodes of the layer, without junk JSON / tool_use_id content (same filter as graph_enrich)."""
     rows = await (
         await conn.execute(
             "SELECT node_id, content FROM epi_nodes WHERE layer=? AND content NOT LIKE '[{%' AND content NOT LIKE '%tool_use_id%'",
@@ -110,7 +110,7 @@ async def _layer_nodes(conn: Any, layer: str) -> list[tuple[int, str]]:
 
 
 async def miner_tags(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#1: общие epi_tags → `tagged`, weight = min(0.3 + 0.1*shared, 0.6)."""
+    """#1: shared epi_tags → `tagged`, weight = min(0.3 + 0.1*shared, 0.6)."""
     conn = await cm.get(DB_NAME)
     rows = await (
         await conn.execute(
@@ -133,11 +133,11 @@ async def miner_tags(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
 
 
 async def miner_tokens(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#2: ≥2 общих редких токена и Jaccard ≥ порога → `topic_overlap`, weight = Jaccard.
+    """#2: >=2 shared rare tokens and Jaccard >= threshold → `topic_overlap`, weight = Jaccard.
 
-    Порог = max(0.3, mad_threshold(jaccards)) — MAD-порог (G2 sanitation) поднимает
-    cutoff только когда распределение действительно смещено вверх; floor 0.3
-    сохраняет историческое поведение на разреженных слоях.
+    Threshold = max(0.3, mad_threshold(jaccards)) — the MAD threshold (G2
+    sanitation) raises the cutoff only when the distribution is genuinely
+    shifted upward; the 0.3 floor preserves historical behavior on sparse layers.
     """
     from lifecycle.graph_sanitation import mad_threshold
 
@@ -172,11 +172,11 @@ async def miner_tokens(cm: AsyncConnectionManager, layer: str) -> dict[str, int]
 
 
 async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#4: факты одной сессии → `same_session`, weight = 0.3.
+    """#4: facts of one session → `same_session`, weight = 0.3.
 
-    Кластеризация L0 user-message по близкому ts (или общему source_msg_id);
-    узел привязан к кластеру по ts-окну от строк L0 либо по ≥2 общим
-    канон-токенам с текстами кластера (синоним-канонизация).
+    L0 user-message rows are clustered by close ts (or shared source_msg_id);
+    a node binds to a cluster via the ts window from L0 rows or via >=2 shared
+    canon-tokens with cluster texts (synonym canonicalization).
     """
     conn = await cm.get(DB_NAME)
     l0 = await (
@@ -209,7 +209,7 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
             merged.append(c)
 
     nodes = await (await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
-    assigned: dict[int, set[int]] = {}  # node_id → индексы кластеров
+    assigned: dict[int, set[int]] = {}  # node_id → cluster indexes
     for idx, c in enumerate(merged):
         for r in nodes:
             nid, ts = int(r["node_id"]), float(r["created_at"])
@@ -228,12 +228,13 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
 
 
 async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#3: словарь синонимов (канон-классы, обе стороны) + spaCy NER (латиница ORG/GPE) → `co_mentions` 0.4.
+    """#3: synonym dictionary (canon classes, both sides) + spaCy NER (Latin ORG/GPE) → `co_mentions` 0.4.
 
-    S17 B6 post-eval (2026-09-06, цифры в диздоке): false-merge не обнаружен
-    (0 дублей на 3 инстансах), зато разрастание реально — multi-topic dump с
-    11 классами собрал 109 co_mentions из 137 (hermes). Лимит степени
-    `_CO_MENTIONS_TOPK` на узел режет хабы (паттерн _EMBED_TOPK минера #9).
+    S17 B6 post-eval (2026-09-06, numbers in the design doc): no false-merge
+    found (0 duplicates across 3 instances), but hub growth is real — a
+    multi-topic dump with 11 canon classes gathered 109 of 137 co_mentions
+    (hermes). The `_CO_MENTIONS_TOPK` per-node degree cap trims the hubs
+    (same pattern as miner #9's _EMBED_TOPK).
     """
     conn = await cm.get(DB_NAME)
     nodes = await _layer_nodes(conn, layer)
@@ -253,7 +254,7 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
             if ents[i] & ents[j]:
                 a, b = nodes[i][0], nodes[j][0]
                 if degree.get(a, 0) >= _CO_MENTIONS_TOPK or degree.get(b, 0) >= _CO_MENTIONS_TOPK:
-                    continue  # B6: лимит активных сущностей — анти-хаб
+                    continue  # B6: active-entity cap — anti-hub
                 edges += await _insert_edge(conn, a, b, "co_mentions", 0.4, "entities")
                 degree[a] = degree.get(a, 0) + 1
                 degree[b] = degree.get(b, 0) + 1
@@ -262,10 +263,10 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
 
 
 def _entities(text: str, syn: dict[str, list[str]], nlp: Any = None) -> set[str]:
-    """Сущности текста: канон-классы словаря синонимов + spaCy ORG/GPE (латиница).
+    """Entities of a text: synonym-dictionary canon classes + spaCy ORG/GPE (Latin).
 
-    Канонизация через _canon — полный класс в обе стороны: «Лили»/«Lily»/
-    «лисёныш» схлопываются в одну сущность.
+    Canonicalization via _canon — full class in both directions: 'Lili'/'Lily'/
+    'lisenyonshchik' collapse into one entity.
     """
     vocab = set(syn) | {v for vs in syn.values() for v in vs}
     found = {_canon(w, syn) for w in _TOKEN_RE.findall(text.lower()) if w in vocab}
@@ -280,7 +281,7 @@ _ner = None
 
 
 def _get_ner() -> Any:
-    """Lazy spaCy NER; None если модель не установлена — словарного слоя достаточно."""
+    """Lazy spaCy NER; None if the model is not installed — the dictionary layer suffices."""
     global _ner
     if _ner is None:
         try:
@@ -292,17 +293,17 @@ def _get_ner() -> Any:
     return _ner or None
 
 
-# Задача G3: журнал co-retrieval. hits из FTS5 — это rag_pages.id, из графа —
-# epi_nodes.node_id: разные пространства. Компромисс — пишем пары ЛЮБЫХ hit-id
-# с префиксом типа ('f:5', 'g:12'); минер #7 минерит g:-пары напрямую, а f:-пары
-# через маппинг rag_pages.path → wiki-узел (node_type='wiki_page',
-# lifecycle/wiki_graph_builder.py). Смешанные g/f-пары не минерятся.
+# Task G3: co-retrieval journal. FTS5 hits carry rag_pages.id; graph hits carry
+# epi_nodes.node_id — two different id spaces. Compromise: log pairs of ANY hit
+# ids with a type prefix ('f:5', 'g:12'); miner #7 mines g:-pairs directly, and
+# f:-pairs via the rag_pages.path → wiki-node mapping (node_type='wiki_page',
+# lifecycle/wiki_graph_builder.py). Mixed g/f pairs are not mined.
 _G_PREFIX = "g:"
 _F_PREFIX = "f:"
 
 
 async def ensure_co_pairs(cm: AsyncConnectionManager) -> None:
-    """Idempotent schema for the co-retrieval journal (как ConflictResolver.ensure)."""
+    """Idempotent schema for the co-retrieval journal (like ConflictResolver.ensure)."""
     await cm.execute_script(
         DB_NAME,
         """
@@ -319,19 +320,19 @@ async def ensure_co_pairs(cm: AsyncConnectionManager) -> None:
 
 
 def _hit_ref(hit: dict[str, Any]) -> str | None:
-    """hit-id → типизированная ссылка ('g:<node_id>' / 'f:<page_id>'); None → не журналируется."""
+    """hit-id → typed reference ('g:<node_id>' / 'f:<page_id>'); None → not journaled."""
     hid = hit.get("id")
     if not isinstance(hid, int) or hid == 0:
         return None
-    if hid < -3_000_000:  # rag.multi_source._ID_OFFSET_GRAPH: графовое пространство (отрицательные)
+    if hid < -3_000_000:  # rag.multi_source._ID_OFFSET_GRAPH: graph id space (negatives)
         return f"{_G_PREFIX}{-hid - 3_000_000}"
     return f"{_F_PREFIX}{hid}"
 
 
 async def log_co_pairs(cm: AsyncConnectionManager, query: str, hits: list[dict[str, Any]]) -> int:
-    """Записать пары (node_a, node_b) всех хитов успешного recall. Возвращает число пар."""
+    """Record (node_a, node_b) pairs of all hits from a successful recall. Returns the pair count."""
     refs = [r for r in (_hit_ref(h) for h in hits) if r]
-    await ensure_co_pairs(cm)  # даже при <2 ref: recall_events-стиль ensure всегда
+    await ensure_co_pairs(cm)  # even with <2 refs: recall_events-style ensure always
     if len(refs) < 2:
         return 0
     conn = await cm.get(DB_NAME)
@@ -351,11 +352,11 @@ async def log_co_pairs(cm: AsyncConnectionManager, query: str, hits: list[dict[s
 
 
 async def miner_provenance(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#5: metadata.parents 'episode:N' → узел эпизода → `sourced_from` ребро на факт-узел.
+    """#5: metadata.parents 'episode:N' → episode node → `sourced_from` edge to the fact node.
 
-    Факт-узел ищется по точному content == core_memory.value (создаёт его
-    mcp fact-add); узел эпизода find_or_add по content 'episode:N'.
-    Wiki [[fact:]]-связей пока нет — только прямые parents.
+    The fact node is matched by exact content == core_memory.value (created by
+    mcp fact-add); the episode node is find_or_add by content 'episode:N'.
+    Wiki [[fact:]] links are not wired yet — direct parents only.
     """
     conn = await cm.get(DB_NAME)
     rows = await (await conn.execute("SELECT user_id, value, metadata FROM core_memory WHERE layer=?", (layer,))).fetchall()
@@ -400,13 +401,14 @@ async def miner_provenance(cm: AsyncConnectionManager, layer: str) -> dict[str, 
 
 
 async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """Ночные провенанс-мосты wiki↔L4 (S5, аудит 05.09).
+    """Nightly provenance bridges wiki↔L4 (S5, audit 05.09).
 
-    [[fact:key]] в wiki_index.content → ребро между wiki_page-узлом и
-    fact-узлом записи.
+    [[fact:key]] in wiki_index.content → an edge between the wiki_page node
+    and the record's fact node.
 
-    fact-узел ищется как в miner_provenance: node_type='fact', content == value.
-    Запись без узла или страница без wiki-узла пропускаются.
+    The fact node is matched as in miner_provenance: node_type='fact',
+    content == value. Records without a node and pages without a wiki node
+    are skipped.
     """
     conn = await cm.get(DB_NAME)
     import re as _re
@@ -437,8 +439,8 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
         if page is None:
             continue
         for key in keys:
-            # [[fact:backup_enc]] → ключ может быть с kind-префиксом
-            # (fact:backup_enc) или без — пробуем оба, как пишут в wiki.
+            # [[fact:backup_enc]] → the key may carry a kind prefix
+            # (fact:backup_enc) or not — try both, as wiki authors write it.
             fact_row = None
             for cand in (key, f"fact:{key}"):
                 fact_row = await (
@@ -460,8 +462,8 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
             if fact is None:
                 continue
             edges += await _insert_edge(conn, int(page["node_id"]), int(fact["node_id"]), "wiki_fact_link", 0.5, "provenance")
-            # S19: backlink L4→wiki — page node_id мёржится в metadata.wiki_ids
-            # (idempotent set; no-op save, если уже там — не раздуваем LEDGER).
+            # S19: backlink L4→wiki — the page node_id is merged into metadata.wiki_ids
+            # (idempotent set; no-op save if already there — do not bloat the LEDGER).
             from core.memory import CoreMemory, _load_meta
 
             meta = _load_meta(fact_row["metadata"])
@@ -485,11 +487,12 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
 
 
 async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#7: co-retrieval journal, count>=2 → `co_recalled` edges (g:-пары + f:-пары).
+    """#7: co-retrieval journal, count>=2 → `co_recalled` edges (g:-pairs + f:-pairs).
 
-    g:<node_id> — прямое ребро между узлами слоя. f:<page_id> — wiki/rag-страница:
-    маппинг через rag_pages.path → epi_nodes.content (node_type='wiki_page',
-    создаёт lifecycle/wiki_graph_builder.py). Страница без wiki-узла пропускается.
+    g:<node_id> — a direct edge between layer nodes. f:<page_id> — a wiki/rag
+    page: mapped via rag_pages.path → epi_nodes.content (node_type='wiki_page',
+    created by lifecycle/wiki_graph_builder.py). Pages without a wiki node are
+    skipped.
     """
     await ensure_co_pairs(cm)
     conn = await cm.get(DB_NAME)
@@ -509,7 +512,7 @@ async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str
     for a, b, c in rows:
         na, nb = int(str(a)[2:]), int(str(b)[2:])
         existing = await (await conn.execute("SELECT 1 FROM epi_nodes WHERE node_id IN (?, ?) AND layer=?", (na, nb, layer))).fetchall()
-        if len(existing) < 2:  # узлы не из этого слоя/удалены — ребро не строим
+        if len(existing) < 2:  # nodes are not from this layer / deleted — no edge
             continue
         edges += await _insert_edge(conn, min(na, nb), max(na, nb), "co_recalled", min(0.3 + 0.1 * int(c), 0.6), "co_retrieval")
     edges += await _f_pair_edges(conn, layer, frows)
@@ -518,11 +521,12 @@ async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str
 
 
 async def _f_pair_edges(conn: Any, layer: str, rows: list[Any]) -> int:
-    """f:-пары → co_recalled рёбра между wiki-узлами (rag_pages.path → epi_nodes).
+    """f:-pairs → co_recalled edges between wiki nodes (rag_pages.path → epi_nodes).
 
-    Маппинг: rag_pages.path == epi_nodes.content при node_type='wiki_page'
-    (инвариант wiki_graph_builder._ensure_node). Пара минерится только когда
-    ОБЕ страницы имеют wiki-узел этого слоя — иначе ребро некуда повесить.
+    Mapping: rag_pages.path == epi_nodes.content with node_type='wiki_page'
+    (the wiki_graph_builder._ensure_node invariant). A pair is mined only when
+    BOTH pages have a wiki node of this layer — otherwise there is nothing to
+    hang the edge on.
     """
     edges = 0
     node_cache: dict[str, int | None] = {}
@@ -551,27 +555,28 @@ async def _f_pair_edges(conn: Any, layer: str, rows: list[Any]) -> int:
 
 
 _EMBED_JACCARD = 0.7
-_EMBED_TOPK = 15  # не более 15 рёбер semantic_overlap на узел от этого минера
+_EMBED_TOPK = 15  # at most 15 semantic_overlap edges per node from this miner
 _SEMANTIC_WEIGHT = 0.5
-# B6 post-eval: лимит co_mentions-рёбер на узел — multi-topic dump (саммари с
-# 11 синоним-классами) собирал 109 рёбер из 137; хабы топят entity-RRF.
+# B6 post-eval: the per-node co_mentions cap — a multi-topic dump (a summary
+# with 11 synonym classes) gathered 109 of 137 edges; hubs drown entity-RRF.
 _CO_MENTIONS_TOPK = 12
-# S17 доп.9: подтверждающий слой — keyword-сигнал (общие теги/канон-токены)
-# соглашается с embedding-сходством → вес 0.6, противоречит → ребро отбрасывается.
+# S17 addendum 9: confirming layer — a keyword signal (shared tags/canon-tokens)
+# agreeing with embedding similarity → weight 0.6; disagreeing → edge dropped.
 _SEMANTIC_CONFIRMED_WEIGHT = 0.6
-# S17 доп.10: anomalous-vector — |вектор| == 0 или все компоненты равны (бит-
-# вырожденность) = мусорный узел, флаг `anomaly:junk_vector` в epi_tags.
+# S17 addendum 10: anomalous vector — |vector| == 0 or all components equal
+# (bit-degeneracy) = junk node, flagged `anomaly:junk_vector` in epi_tags.
 
-# #6: маркер-словарь причинно-следственного перехода (план G4b, Step 4).
+# #6: marker lexicon for causal transitions (plan G4b, Step 4).
 _MARKERS = re.compile(r"починила|исправила|теперь работает|сломалось|переделали|решено|закрыто")
-_MARKER_MIN, _MARKER_MAX = 300.0, 30 * 86400.0  # дельта ts в [5 мин, 30 дней]
+_MARKER_MIN, _MARKER_MAX = 300.0, 30 * 86400.0  # ts delta within [5 min, 30 days]
 
 
 async def miner_markers(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#6: пары узлов с общим канон-токеном, ts-дельта в окне, в позднем — маркер → `led_to` 0.3.
+    """#6: node pairs sharing a canon-token with ts delta in-window and a marker on the later one → `led_to` 0.3.
 
-    Направление A→B (A раньше, B с маркером «починила/сломалось/…»): ранний узел
-    про X, поздний — исход по X. Без общего токена или вне окна ребра нет.
+    Direction A→B (A earlier, B carrying a 'fixed/broke/…' marker): the early
+    node is about X, the later one is the outcome for X. Without a shared
+    token or outside the window — no edge.
     """
     conn = await cm.get(DB_NAME)
     from rag.synonyms import load_synonyms
@@ -586,7 +591,7 @@ async def miner_markers(cm: AsyncConnectionManager, layer: str) -> dict[str, int
         for b, tb, m, tb_ts in parsed[i + 1 :]:
             if not m or not ta & tb:
                 continue
-            lo, hi = (a, b) if ta_ts <= tb_ts else (b, a)  # ребро из раннего в поздний (маркерный)
+            lo, hi = (a, b) if ta_ts <= tb_ts else (b, a)  # edge from the earlier to the later (marker) node
             delta = abs(tb_ts - ta_ts)
             if _MARKER_MIN <= delta <= _MARKER_MAX:
                 edges += await _insert_edge(conn, lo, hi, "led_to", 0.3, "marker")
@@ -595,14 +600,15 @@ async def miner_markers(cm: AsyncConnectionManager, layer: str) -> dict[str, int
 
 
 async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#8: структурные инварианты — co-citation, belief propagation, louvain-мосты.
+    """#8: structural invariants — co-citation, belief propagation, louvain bridges.
 
-    - co-citation: два узла слоя цитируются третьим (не-эвристические рёбра) →
-      `co_cited` 0.3 (эвристические рёбра-цитаты исключены: график не замыкается сам на себя).
-    - belief propagation: confidence(B) += 0.1·conf(A)·w для входящих рёбер с
-      conf(A) ≥ 0.8 — одноразовый буст (только узлы с дефолтной 0.5, не рекурсивный).
-    - community bridge: пары внутри louvain-сообщества БЕЗ прямого ребра, но с
-      общим epi_tag → `community_bridge` 0.2.
+    - co-citation: two layer nodes are cited by a third (non-heuristic edges) →
+      `co_cited` 0.3 (heuristic citation edges are excluded: the graph must not
+      close on itself).
+    - belief propagation: confidence(B) += 0.1·conf(A)·w for incoming edges with
+      conf(A) >= 0.8 — a one-shot boost (only default-0.5 nodes, non-recursive).
+    - community bridge: pairs inside a louvain community WITHOUT a direct edge
+      but sharing an epi_tag → `community_bridge` 0.2.
     """
     conn = await cm.get(DB_NAME)
     edges = 0
@@ -625,7 +631,7 @@ async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, 
     for a, b, c in rows:
         edges += await _insert_edge(conn, int(a), int(b), "co_cited", min(0.3 + 0.05 * (int(c) - 1), 0.6), "co_citation")
 
-    # --- belief propagation: одноразовый буст целей рёбер от conf(A) >= 0.8 ---
+    # --- belief propagation: one-shot boost of edge targets from conf(A) >= 0.8 ---
     boosted = 0
     rows = await (
         await conn.execute(
@@ -653,7 +659,7 @@ async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, 
             await conn.execute("UPDATE epi_nodes SET confidence = confidence + ? WHERE node_id = ?", (gain, int(target)))
             boosted += 1
 
-    # --- louvain-мосты: пары в одном сообществе, без прямого ребра, с общим тегом ---
+    # --- louvain bridges: pairs in one community, no direct edge, sharing a tag ---
     communities = await _node_communities(conn, layer)
     if communities:
         tagged: dict[int, set[str]] = {}
@@ -677,10 +683,10 @@ async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, 
 
 
 async def _node_communities(conn: Any, layer: str) -> list[set[int]]:
-    """louvain-сообщества узлов слоя по их рёбрам (A1.6, networkx); [] при пустом графе.
+    """Louvain communities of layer nodes over their edges (A1.6, networkx); [] for an empty graph.
 
-    G5 hub exclusion: MOC-хабы/auto-indexes исключены из графа сообществ —
-    иначе один MOC склеивает всё в одно сообщество.
+    G5 hub exclusion: MOC hubs / auto-indexes are excluded from the community
+    graph — otherwise a single MOC glues everything into one community.
     """
     try:
         import networkx as nx  # type: ignore[import-untyped]
@@ -730,12 +736,12 @@ def _bit_jaccard(a: int, b: int) -> float:
 
 
 async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#9: rich embedding (content+tags) → MIB-биты → попарный Jaccard ≥0.7 → `semantic_overlap`.
+    """#9: rich embedding (content+tags) → MIB bits → pairwise Jaccard >=0.7 → `semantic_overlap`.
 
-    A-MEM rich embedding: кодируется «content + теги из epi_tags» с
-    синоним-канонизацией токенов (_canon из T2). Мусорный фильтр — как в
-    graph_enrich ([{…-JSON / tool_use_id). O(n²) на текущих масштабах ок
-    (~200 узлов = 20k пар); top-k=15 на узел.
+    A-MEM rich embedding: encodes "content + tags from epi_tags" with synonym
+    token canonicalization (_canon from T2). Junk filter — same as graph_enrich
+    ([{…-JSON / tool_use_id). O(n²) is fine at the current scale
+    (~200 nodes = 20k pairs); top-k=15 per node.
     """
     conn = await cm.get(DB_NAME)
     nodes = await _layer_nodes(conn, layer)
@@ -756,24 +762,25 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     for r in tag_rows:
         tags.setdefault(int(r["node_id"]), []).append(_canon(str(r["tag"]), syn))
     token_sets = [_canon_tokens(content, syn) for _, content in nodes]
-    # S17 доп.9: подтверждающий слой (graph.embedding_crosscheck, default off).
+    # S17 addendum 9: confirming layer (graph.embedding_crosscheck, default off).
     from config import config
 
     crosscheck = bool(config.get("graph", "embedding_crosscheck", default=False))
 
     try:
-        # A-MEM rich embedding: f"{content} {tags}"; канонизация (_canon из T2) —
-        # на тегах, чтобы варианты имени/технологии попадали в один кэш-ключ смысла.
-        # Ключ кэша = raw content — переиспользует векторы, посеянные ingestor'ом.
-        # anomaly:*-теги (доп.10) в текст не попадают — флаг не меняет вектор узла.
+        # A-MEM rich embedding: f"{content} {tags}"; canonicalization (_canon from T2)
+        # applies to tags so that name/technology variants land in one meaning
+        # cache key. Cache key = raw content — reuses vectors seeded by the ingestor.
+        # anomaly:* tags (addendum 10) never enter the text — a flag does not
+        # change the node's vector.
         vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
         bits = [_bits_int(embed_to_binary(v, dim=len(v))) for v in vecs]
     except Exception:
-        return {"edges": 0}  # эмбеддинг-бэкенд недоступен (нет numpy/модели) — минер пропускается
+        return {"edges": 0}  # embedding backend unavailable (no numpy/model) — miner skipped
 
-    # S17 доп.10: бит-вырожденные векторы (0 бит — текст без значимых токенов,
-    # мусор из L3-дампов) → флаг `anomaly:junk_vector`, кандидат на чистку.
-    # anomaly:*-теги в rich-embed текст не попадают (см. ниже) — самозагрязнения нет.
+    # S17 addendum 10: bit-degenerate vectors (0 bits — text without significant
+    # tokens, junk from L3 dumps) → flagged `anomaly:junk_vector`, cleanup candidate.
+    # anomaly:* tags never enter the rich-embed text (see above) — no self-pollution.
     flagged = 0
     for (nid, _), b in zip(nodes, bits, strict=True):
         if b == 0:
@@ -795,11 +802,11 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     for _, i, j in sorted(cands, reverse=True):
         a, b = nodes[i][0], nodes[j][0]
         if degree.get(a, 0) >= _EMBED_TOPK or degree.get(b, 0) >= _EMBED_TOPK:
-            continue  # top-k=15 на узел
+            continue  # top-k=15 per node
         if crosscheck:
-            # доп.9: keyword-голос — общие канон-токены ИЛИ общие теги;
-            # «похоже по вектору, но ни лексического, ни тегового следа» на
-            # hash-векторах = шум → ребро не пишется (доп.9 «отбрасывается»).
+            # addendum 9: keyword vote — shared canon-tokens OR shared tags;
+            # "vector-similar but with no lexical or tag trace" on hash
+            # vectors = noise → the edge is not written (addendum 9 "dropped").
             lex_agree = bool(token_sets[i] & token_sets[j]) or bool(set(tags.get(a, [])) & set(tags.get(b, [])))
             if not lex_agree:
                 continue
@@ -813,7 +820,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
 
 
 async def _find_or_add_node(conn: Any, layer: str, user_id: str, node_type: str, content: str) -> int:
-    """find_or_add по (layer, user_id, node_type, content) — как record_causal._node."""
+    """find_or_add by (layer, user_id, node_type, content) — like record_causal._node."""
     row = await (
         await conn.execute(
             "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=? AND content=? LIMIT 1",
@@ -830,12 +837,13 @@ async def _find_or_add_node(conn: Any, layer: str, user_id: str, node_type: str,
 
 
 async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#10: l0_journal tool_use+tool_result пары (по tool_use_id) → триплеты query→tool→outcome.
+    """#10: l0_journal tool_use+tool_result pairs (by tool_use_id) → query→tool→outcome triplets.
 
-    Узлы: query (текст из tool_use.input), action 'tool:<name>', outcome — сводка
-    результата; is_error у tool_result → outcome узел node_type='error_outcome'.
-    Рёбра query_tool / tool_outcome, weight=0.5, tags heuristic:triplets
-    (idempotent: INSERT OR IGNORE + find_or_add). Висячие/битые блоки скипаются.
+    Nodes: query (text from tool_use.input), action 'tool:<name>', outcome — a
+    summary of the result; tool_result is_error → outcome node with
+    node_type='error_outcome'. Edges query_tool / tool_outcome, weight=0.5,
+    tags heuristic:triplets (idempotent: INSERT OR IGNORE + find_or_add).
+    Dangling/broken blocks are skipped.
     """
     from lifecycle.tool_stats import _SNIP, scan_tool_pairs, tool_query_text, tool_result_text
 
@@ -859,11 +867,11 @@ async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str) -> dict[st
 
 
 async def wire_new_node(cm: AsyncConnectionManager, layer: str, node_id: int, content: str, tags: list[str] | None = None) -> int:
-    """Инкрементальный режим (G4): рёбра НОВОГО узла vs существующие — сразу при записи.
+    """Incremental mode (G4): edges of a NEW node vs existing ones — wired at write time.
 
-    Лёгкие сигналы: общие теги (tagged), ≥2 общих канон-токенов + Jaccard ≥0.3
-    (topic_overlap), общая сущность словаря/NER (co_mentions). Тяжёлое
-    (embedding/sessions) остаётся ночному graph_enrich. Возвращает число рёбер.
+    Light signals: shared tags (tagged), >=2 shared canon-tokens + Jaccard >=0.3
+    (topic_overlap), shared dictionary/NER entity (co_mentions). Heavy signals
+    (embedding/sessions) stay with the nightly graph_enrich. Returns the edge count.
     """
     conn = await cm.get(DB_NAME)
     from rag.synonyms import load_synonyms
@@ -897,7 +905,7 @@ async def wire_new_node(cm: AsyncConnectionManager, layer: str, node_id: int, co
 
 
 async def ensure_zero_result(cm: AsyncConnectionManager) -> None:
-    """S17 #6: idempotent schema журнала провальных запросов (open-index-минер)."""
+    """S17 #6: idempotent schema of the zero-result journal (open-index miner)."""
     await cm.execute_script(
         DB_NAME,
         """
@@ -915,7 +923,7 @@ async def ensure_zero_result(cm: AsyncConnectionManager) -> None:
 
 
 async def log_zero_result(cm: AsyncConnectionManager, layer: str, user_id: str, query: str) -> None:
-    """Провальный запрос (0 хитов) → минер-сигнал «что смоделировать следующим»."""
+    """Log a failed query (0 hits) as a miner signal "what to model next"."""
     await ensure_zero_result(cm)
     conn = await cm.get(DB_NAME)
     qhash = hashlib.sha1(query.encode("utf-8", "ignore")).hexdigest()[:16]
@@ -927,14 +935,14 @@ async def log_zero_result(cm: AsyncConnectionManager, layer: str, user_id: str, 
 
 
 async def miner_zero_results(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
-    """#12 zero-result минер (S17 #6, open-index): повторные провальные запросы → вопрос-узлы.
+    """#12 zero-result miner (S17 #6, open-index): repeated failed queries → question nodes.
 
-    Один и тот же запрос (query_hash, per-user) падал ≥2 раз → find_or_add
-    question-узла с текстом запроса: граф получает явный маркер зазора
-    «что смоделировать следующим» (open-index: +9.4% recall на аналогичном
-    сигнале). find_or_add идемпотентен — узел-гэп не плодится ночами.
-    Возвращаемый счётчик — question-узлы поверх журнала (MINERS-контракт —
-    единый ключ edges, graph_enrich reports как есть).
+    The same query (query_hash, per-user) failed >=2 times → find_or_add a
+    question node with the query text: the graph gets an explicit gap marker
+    "what to model next" (open-index: +9.4% recall on a similar signal).
+    find_or_add is idempotent — the gap node is not duplicated night after
+    night. The returned counter is question nodes on top of the journal (the
+    MINERS contract is the single `edges` key; graph_enrich reports it as is).
     """
     await ensure_zero_result(cm)
     conn = await cm.get(DB_NAME)

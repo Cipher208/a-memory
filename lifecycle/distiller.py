@@ -1,10 +1,10 @@
-"""G1 distiller: atomize → type → canonical key → route (инвариант→L4, событие→L3).
+"""G1 distiller: atomize → type → canonical key → route (invariant→L4, event→L3).
 
-F-G1: текст сообщения режется на атомарные клаузы, каждая типизируется
-(kind_for_text), получает канонический ключ (синонимы схлопываются в одну
-форму) и маршрутизируется по TypePolicy.decay_rate: инварианты (<= 0.005) →
-L4 core_memory, события → L3 episodic. Противоречия ловит ConflictResolver:
-запись не затирает старую, а помечается provenance `:contradiction`.
+F-G1: the message text is split into atomic clauses, each typed
+(kind_for_text), given a canonical key (synonyms collapse into a single
+form) and routed by TypePolicy.decay_rate: invariants (<= 0.005) →
+L4 core_memory, events → L3 episodic. Contradictions are caught by ConflictResolver:
+the record does not overwrite the old one but is marked with provenance `:contradiction`.
 """
 
 from __future__ import annotations
@@ -34,39 +34,39 @@ def _canonical_key(clause: str, kind: MemoryKind) -> str:
     for w in words:
         if len(w) <= 2:
             continue
-        # S18: counter-signal пара канонизируется к ТЕКУЩЕМУ имени —
-        # переименование падает в тот же ключ, C4 строит superseded-цепочку сам.
+        # S18: a counter-signal pair canonicalizes to the CURRENT name —
+        # renames fall into the same key, C4 builds the superseded chain itself.
         if w in counters:
             w = counters[w]
-        # S19-хвост: лемма схлопывает словоизменение («зарплаты» → «зарплата»);
-        # drift-риск задокументирован в config.yaml — старые ключи не пере-хэшируются.
+        # S19 tail: the lemma collapses inflection ('zarplaty' -> 'zarplata');
+        # drift risk is documented in config.yaml — old keys are not re-hashed.
         if lemmatize and len(w) > 2:
             lemma = normal_form(w)
             if lemma and len(lemma) > 2:
                 w = lemma
-        # синонимы → одна каноническая форма (алфавитно-первая), postgres/postgresql/psql → postgres
+        # synonyms → one canonical form (alphabetically first), postgres/postgresql/psql → postgres
         canon.append(canonical_form(w, syn))
         if len(canon) == 4:
             break
     return f"{kind.value}:" + "_".join(canon) if canon else f"{kind.value}:misc"
 
 
-# C8 novelty-gate: paraphrase-Jaccard против уже сохранённых same-key фактов;
-# выше порога — дубликат, skip (не плодим near-dup L4-ключи).
+# C8 novelty-gate: paraphrase-Jaccard against already-saved same-key facts;
+# above the threshold — duplicate, skip (no proliferation of near-dup L4 keys).
 NOVELTY_JACCARD_MAX = 0.85
 
-# S18 п.5: 3-й сигнал дедупа (после exact-SHA на L0 и Jaccard novelty) —
-# косинус против существующих same-kind фактов. Config memory.semantic_dedup.
+# S18 item 5: 3rd dedup signal (after exact-SHA on L0 and Jaccard novelty) —
+# cosine against existing same-kind facts. Config memory.semantic_dedup.
 _SEMANTIC_DEDUP_MAX = 0.92
 
 
 async def _semantic_duplicate(cm: Any, clause: str, kind: MemoryKind, user_id: str, layer: str) -> str | None:
-    """Key существующего L4-факта с косинусом > _SEMANTIC_DEDUP_MAX, иначе None.
+    """Key of an existing L4 fact with cosine > _SEMANTIC_DEDUP_MAX, else None.
 
-    Флаг memory.semantic_dedup (default off — включается после №11-eval).
-    Эмбеддинги недоступны (breaker/hash off/сбой) → None: dedup деградирует,
-    сохранение не блокируется. Сравнение в пределах kind — факты разных
-    типов не конфликтуют.
+    Flag memory.semantic_dedup (default off — enabled after the No.11-eval).
+    Embeddings unavailable (breaker/hash off/failure) → None: dedup degrades,
+    saving is not blocked. Comparison is within kind — facts of different
+    types do not conflict.
     """
     from config import config
 
@@ -96,7 +96,7 @@ async def _semantic_duplicate(cm: Any, clause: str, kind: MemoryKind, user_id: s
 
 
 def _merged_meta(raw: Any, source_rid: int) -> dict[str, Any]:
-    """S6a-4: metadata L4-строки с вмерженным source_raw_id (не затирая остальное)."""
+    """S6a-4: L4-row metadata with source_raw_id merged in (without wiping the rest)."""
     try:
         meta = json.loads(raw) if raw else {}
     except (TypeError, ValueError):
@@ -108,7 +108,7 @@ def _merged_meta(raw: Any, source_rid: int) -> dict[str, Any]:
 
 
 def _is_novel(clause: str, existing_values: list[str]) -> bool:
-    """Вернуть True, если clause не парафраз существующих значений ключа (LLM-free)."""
+    """Return True if clause is not a paraphrase of the key's existing values (LLM-free)."""
     if not existing_values:
         return True
     from rag.edm import tokens
@@ -124,7 +124,7 @@ def _is_novel(clause: str, existing_values: list[str]) -> bool:
     return True
 
 
-# C8 topic-классификация: словарные маркеры → тег для epi_tags/wiki-типа (LLM-free).
+# C8 topic classification: dictionary markers → tag for epi_tags/wiki-type (LLM-free).
 _TOPIC_MARKERS: dict[str, tuple[str, ...]] = {
     "deploy": ("деплой", "deploy", "release", "выкатил", "мигр"),
     "error": ("ошибк", "error", "exception", "упал", "fail", "npe", "traceback"),
@@ -150,17 +150,17 @@ def atomize(text: str) -> list[str]:
 
 
 def route_kind(kind: MemoryKind) -> str:
-    """Инвариант→l4, событие→l3 — по TypePolicy.decay_rate (0 = никогда не умирает)."""
+    """Invariant→l4, event→l3 — by TypePolicy.decay_rate (0 = never dies)."""
     return "l4" if get_policy(kind).decay_rate <= 0.005 else "l3"
 
 
 def score_text(text: str, event: str = "new_message") -> float:
-    """Важность текста через ImportanceScorer (8 сигналов) — вместо хардкода 0.6.
+    """Text importance via ImportanceScorer (8 signals) — instead of hardcoding 0.6.
 
-    Аудит 05.09: replay/bridge/import дистиллируют с константой — скоринг не
-    вызывался нигде, где сырьё реально дистиллируется. Здесь — единая точка.
-    Ошибка скорера не глушит сохранение: деградация к 0.6 (историческое
-    значение).
+    Audit 05.09: replay/bridge/import distill with a constant — scoring was
+    not called anywhere raw material is actually distilled. Here is the single
+    entry point. A scorer error does not silence saving: degrade to 0.6 (the
+    historical value).
     """
     try:
         from shared.importance import ImportanceScorer
@@ -183,41 +183,42 @@ async def distill_and_route(
     extra_tags: tuple[str, ...] | list[str] = (),
     source_rid: int | None = None,
 ) -> dict[str, Any]:
-    """Разложить text на атомы и развести по слоям.
+    """Atomize text and route the atoms across layers.
 
-    G4: после сохранения каждый атом попадает в граф узлом (find_or_add fact)
-    и сразу обвязывается лёгкими минерами — инкрементальный режим, ночной
-    batch не ждём. mem.l3.save — дверь для событий, CoreMemory — для инвариантов.
-    Ошибки не глушатся: auto_save_text уже стоит за fire-контрактом registry.
-    source_rid (S6a-4): id строки l0_journal-источника — пишется в metadata
-    L4-записей (source_raw_id) и тегом raw:<rid> на L3-эпизодах → drill-down
-    до исходного сырья.
+    G4: after saving, each atom enters the graph as a node (find_or_add fact)
+    and is immediately wired with the light miners — incremental mode, no
+    waiting for the nightly batch. mem.l3.save is the door for events,
+    CoreMemory for invariants. Errors are not silenced: auto_save_text already
+    sits behind the registry's fire-contract.
+    source_rid (S6a-4): id of the l0_journal source row — written into the
+    metadata of L4 records (source_raw_id) and as a raw:<rid> tag on L3
+    episodes → drill-down to the original raw material.
     """
     from core.memory import CoreMemory
     from rag.conflict import ConflictResolver
 
     cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="user")
-    await cmem._init_db()  # self-healing schema, как ConflictResolver.check — fixture может быть без миграций
+    await cmem._init_db()  # self-healing schema, like ConflictResolver.check — the fixture may lack migrations
     stats: dict[str, Any] = {
         "l4_saved": 0,
         "l3_saved": 0,
         "conflicts": 0,
         "novelty_skipped": 0,
-        "semantic_skipped": 0,  # S18 п.5: cosine>0.92 дедуп
-        "similar_to": [],  # S17 A2-advisory: ключи, с которыми клауза пересеклась (near-dup/конфликт)
+        "semantic_skipped": 0,  # S18 item 5: cosine>0.92 dedup
+        "similar_to": [],  # S17 A2-advisory: keys the clause intersected with (near-dup/conflict)
     }
-    # S17 ENGRAM: procedural («как сделать X») — agent-self track, L4 агентского слоя.
+    # S17 ENGRAM: procedural («how to do X»-style) — agent-self track, L4 of the agent layer.
     agent_cmem: CoreMemory | None = None
     resolver = ConflictResolver()
     saved: list[str] = []
     for clause in atomize(text):
         kind = kind_for_text(clause)
         key = _canonical_key(clause, kind)
-        # ENGRAM procedural: how-to живёт в L4-namespace агента, не юзера.
+        # ENGRAM procedural: how-to lives in the agent's L4-namespace, not the user's.
         target: CoreMemory = cmem
-        # S19.2 textcat: keyword-unmatched FACT (decay 0.010 → l3) с уверенным
-        # 'stable' не должна умирать в эпизодах — промоут в L4 (kind=FACT).
-        # Keyword-матчи не трогаются; флаг rag.textcat default OFF (pilot).
+        # S19.2 textcat: a keyword-unmatched FACT (decay 0.010 → l3) with a confident
+        # 'stable' must not die in episodes — promote to L4 (kind=FACT).
+        # Keyword matches are not touched; flag rag.textcat default OFF (pilot).
         route = route_kind(kind)
         if route == "l3" and kind == MemoryKind.FACT:
             from shared.textcat import route_promote_stable
@@ -230,7 +231,7 @@ async def distill_and_route(
                 await agent_cmem._init_db()
             target = agent_cmem
         if route_kind(kind) == "l4":
-            # C8 novelty-gate: парафраз уже сохранённых same-key фактов — skip.
+            # C8 novelty-gate: a paraphrase of already-saved same-key facts — skip.
             conn = await cmem._cm.get("memory.db")
             rows = await (
                 await conn.execute(
@@ -240,10 +241,10 @@ async def distill_and_route(
             ).fetchall()
             if not _is_novel(clause, [str(r["value"]) for r in rows]):
                 stats["novelty_skipped"] += 1
-                stats["similar_to"].append(key)  # A2-advisory: парафраз этого ключа уже хранится
+                stats["similar_to"].append(key)  # A2-advisory: a paraphrase of this key is already stored
                 continue
-            # S18 п.5: semantic dedup — 3-й сигнал, до conflict-check (близкий
-            # парафрай не должен рождать конфликт-пару, он просто дубликат).
+            # S18 item 5: semantic dedup — 3rd signal, before the conflict-check (a close
+            # paraphrase must not spawn a conflict pair; it is simply a duplicate).
             sem_dup = await _semantic_duplicate(cmem._cm, clause, kind, user_id, cmem.layer)
             if sem_dup is not None:
                 stats["semantic_skipped"] += 1
@@ -253,11 +254,11 @@ async def distill_and_route(
         has_conflict = bool(conflict.get("is_conflict"))
         if route == "l4":
             if has_conflict:
-                # C4 condition-splitting: противоречие — не затирание и не
-                # молчаливый contradiction-only, а ДВЕ условные записи.
-                # Ранняя помечается metadata {'scope': 'earlier'}, новая —
-                # {'scope': 'later', 'contradicts': first_key}; обе с
-                # importance ×0.9 (конфликт снижает уверенность).
+                # C4 condition-splitting: a contradiction is neither an overwrite
+                # nor a silent contradiction-only record, but TWO conditional
+                # records. The earlier one is marked metadata {'scope': 'earlier'},
+                # the new one — {'scope': 'later', 'contradicts': first_key};
+                # both with importance ×0.9 (conflict lowers confidence).
                 stats["conflicts"] += 1
                 first_key = await _mark_earlier_scope(target, user_id, conflict)
                 meta_new: dict[str, Any] = _merged_meta(rows[0]["metadata"] if rows else None, source_rid) if source_rid is not None else {}
@@ -265,12 +266,12 @@ async def distill_and_route(
                 meta_new["contradiction"] = True
                 if first_key:
                     meta_new["contradicts"] = first_key
-                # S17 A2-advisory: агент решает сам — переформулировать или осознанно дописать.
+                # S17 A2-advisory: the agent decides itself — rephrase or deliberately append.
                 stats["similar_to"].append(first_key or key)
-                # Аудит 05.09 (P0): save — upsert по UNIQUE(layer,user,key);
-                # запись later под тем же канон-ключом молча затёрла бы
-                # существующую строку (и earlier, и любую same-key). Ключ
-                # занят → версонируем ::vN, чтобы обе записи жили.
+                # Audit 05.09 (P0): save is an upsert on UNIQUE(layer,user,key);
+                # a later record under the same canonical key would silently wipe
+                # the existing row (both earlier and any same-key one). The key
+                # is taken → version it ::vN so both records survive.
                 later_key = key
                 if rows:
                     vcur = await (
@@ -299,8 +300,8 @@ async def distill_and_route(
             stats["l4_saved"] += 1
             saved.append(clause)
         else:
-            # C8 topic-классификация: словарный топик → epi_tags эпизода.
-            # S6a-4: у episodes нет metadata-колонки — провенанс уходит тегом raw:<rid>.
+            # C8 topic classification: dictionary topic → epi_tags of the episode.
+            # S6a-4: episodes have no metadata column — provenance goes as a raw:<rid> tag.
             l3_tags = [*extra_tags, event, kind.value, f"topic:{_topic_of(clause)}"]
             if source_rid is not None:
                 l3_tags.append(f"raw:{source_rid}")
@@ -310,19 +311,19 @@ async def distill_and_route(
             if has_conflict:
                 stats["conflicts"] += 1
     stats["wired_edges"] = await _wire_atoms(cmem._cm, user_id, saved)
-    # A2-advisory: уникальные ключи в порядке встречи.
+    # A2-advisory: unique keys in order of first occurrence.
     stats["similar_to"] = list(dict.fromkeys(stats["similar_to"]))
     return stats
 
 
 async def _mark_earlier_scope(cmem: Any, user_id: str, conflict: dict[str, Any]) -> str | None:
-    """C4: пометить раннюю сторону конфликта scope='earlier' (importance ×0.9).
+    """C4: mark the earlier side of the conflict with scope='earlier' (importance ×0.9).
 
-    ConflictResolver хранит content обеих сторон в memory_conflicts — по
-    conflicts_with_id достаём ранний текст, восстанавливаем его канонический
-    ключ (тот же _canonical_key, что при первой записи) и пере-сохраняем через
-    cmem.save (LEDGER + bi-temporal). Возврат ключа — для связи contradicts
-    у поздней записи; None, если ранняя сторона не найдена в L4.
+    ConflictResolver stores the content of both sides in memory_conflicts — via
+    conflicts_with_id we fetch the earlier text, restore its canonical key
+    (the same _canonical_key as at first save) and re-save via cmem.save
+    (LEDGER + bi-temporal). The returned key is used for the contradicts link
+    on the later record; None if the earlier side is not found in L4.
     """
     from shared.constants import DB_NAME
 
@@ -363,12 +364,12 @@ async def _mark_earlier_scope(cmem: Any, user_id: str, conflict: dict[str, Any])
 
 
 async def _wire_atoms(cm: Any, user_id: str, clauses: list[str]) -> int:
-    """Инкрементальный режим (G4): узел графа для каждого сохранённого атома + рёбра vs существующие.
+    """Incremental mode (G4): a graph node for each saved atom + edges vs existing ones.
 
-    Лёгкие минеры (tags/entities/tokens) по НОВОМУ узлу срабатывают сразу при
-    записи — ночной batch (graph_enrich) не нужен для свежих соседей.
-    Best-effort: distill_and_route стоит в prod-пути — сбой минеров не глушит
-    сохранение памяти, скатывается в ночной batch.
+    The light miners (tags/entities/tokens) fire on the NEW node immediately at
+    write time — the nightly batch (graph_enrich) is not needed for fresh neighbors.
+    Best-effort: distill_and_route sits in the prod path — a miner failure does not
+    silence memory saving; it degrades to the nightly batch.
     """
     if not clauses:
         return 0

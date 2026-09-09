@@ -1,19 +1,19 @@
-"""Retrieval ablation arms (Phase G Task 7) — для №11-eval сравнения retrieval-стратегий.
+"""Retrieval ablation arms (Phase G Task 7) — for №11-eval comparison of retrieval strategies.
 
-RETRIEVAL_MODE (env) / retrieval.mode (config.yaml), дефолт 'full':
-- 'rrf'            — статус-кво: один 5-source RRF-поиск без EDM/ITS и роутинга;
-- 'dense_per_kind' — ENGRAM-упрощение: один поиск per memory-kind (kind_for_text
-                     запроса или все kinds) через FTS5+Hamming (+ kind-скоуп
-                     core_memory), set-merge без RRF-фьюжена;
-- 'gated'          — Adaptive RAG (упрощённо): query-features (длина запроса,
-                     вопросительное слово, маркеры «list all», entity-имена из
-                     словаря синонимов) решают, какие источники фаерить;
-- 'full'           — dual-route (classify_query → S2/EDM/ITS/D-Mem) — дефолт,
-                     существующее поведение Task 6, прод не меняет.
+RETRIEVAL_MODE (env) / retrieval.mode (config.yaml), default 'full':
+- 'rrf'            — status quo: a single 5-source RRF search without EDM/ITS and routing;
+- 'dense_per_kind' — ENGRAM simplification: one search per memory-kind (kind_for_text
+                     of the query or all kinds) via FTS5+Hamming (+ kind-scoped
+                     core_memory), set-merge without RRF fusion;
+- 'gated'          — Adaptive RAG (simplified): query features (query length,
+                     question word, «list all» markers, entity names from the
+                     synonyms dictionary) decide which sources to fire;
+- 'full'           — dual-route (classify_query → S2/EDM/ITS/D-Mem) — default,
+                     existing Task 6 behavior, production unchanged.
 
-Это НЕ полноценный ENGRAM (без spaCy/13 типов) — упрощения достаточно для
-абляции. rag_chunks.memory_kind: ingestor пока не тегирует kind, NULL → 'fact';
-для честной абляции eval-harness может бэкфиллить колонку.
+This is NOT full ENGRAM (no spaCy/13 types) — the simplification suffices for
+the ablation. rag_chunks.memory_kind: the ingestor does not tag kind yet, NULL → 'fact';
+for a fair ablation the eval harness may backfill the column.
 """
 
 from __future__ import annotations
@@ -38,18 +38,18 @@ DEFAULT_MODE = "full"
 ENV_RETRIEVAL_MODE = "RETRIEVAL_MODE"
 
 _TOKEN_RE = re.compile(r"[а-яёa-z0-9]+")
-# маркеры полноты — та же семантика, что _ENUMERATIVE_RE в dual_route
-# (копия, а не импорт: dual_route импортирует этот модуль — цикл недопустим)
+# exhaustiveness markers — same semantics as _ENUMERATIVE_RE in dual_route
+# (a copy, not an import: dual_route imports this module — a cycle is unacceptable)
 _ENUMERATIVE_RE = re.compile(r"(?:\bвсе(?:х|м|е|ё)?\b|\bсписок\b|перечисл\w*|list\s+all|\benumerate\b)", re.IGNORECASE)
 _QUESTION_WORDS = ("почему", "как", "зачем", "why", "how")
 _SHORT_QUERY_WORDS = 4
 
 
 def retrieval_mode() -> str:
-    """Активный arm: env RETRIEVAL_MODE → config retrieval.mode → 'full'.
+    """Active arm: env RETRIEVAL_MODE → config retrieval.mode → 'full'.
 
-    Невалидное значение (env или yaml) деградирует к дефолту 'full' — армы
-    абляции никогда не ломают прод.
+    An invalid value (env or yaml) degrades to the default 'full' — ablation
+    arms never break production.
     """
     env = os.environ.get(ENV_RETRIEVAL_MODE, "").strip().lower()
     if env in RETRIEVAL_MODES:
@@ -62,9 +62,9 @@ def retrieval_mode() -> str:
 
 
 def query_features(query: str, synonyms: dict[str, list[str]] | None = None) -> dict[str, Any]:
-    """Полный query-feature вектор (S17 AdaptiveRAG pre-gate): 27 фич, 7 групп, LLM-free.
+    """Full query-feature vector (S17 AdaptiveRAG pre-gate): 27 features, 7 groups, LLM-free.
 
-    Группы (сверка v28 #5 — длина/тип/даты/вопросительная форма):
+    Groups (checked against v28 #5 — length/type/dates/question form):
       1. shape      (4): length, chars, is_short, is_long
       2. question   (4): is_question, has_question_mark, is_imperative, is_negated
       3. entity     (4): has_entity, n_capitalized, has_numbers, has_code
@@ -73,9 +73,9 @@ def query_features(query: str, synonyms: dict[str, list[str]] | None = None) -> 
       6. intent     (4): is_enumerative, is_comparison, is_followup, is_greeting
       7. hint       (4): has_url, has_quote, wants_wiki, wants_episodic
 
-    Первые 4 ключа (length/is_question/has_entity/is_enumerative) — исторический
-    контракт gated-арма, семантика не менялась. Питает gate_sources; в full-арме
-    пул после прегейта меньше → CAMA N_eff/abstention отражают урезанный fan-out.
+    The first 4 keys (length/is_question/has_entity/is_enumerative) are the historical
+    contract of the gated arm; the semantics never changed. Feeds gate_sources; in the
+    full arm the pool after pre-gating is smaller → CAMA N_eff/abstention reflect the trimmed fan-out.
     """
     q = (query or "").strip()
     tl = q.lower()
@@ -150,7 +150,7 @@ def query_features(query: str, synonyms: dict[str, list[str]] | None = None) -> 
     }
 
 
-# S17 pre-gate лексиконы (LLM-free, token/substring-уровень)
+# S17 pre-gate lexicons (LLM-free, token/substring level)
 _IMPERATIVE_WORDS = frozenset(
     {
         "сделай",
@@ -196,11 +196,12 @@ _STOPWORDS = frozenset(
 
 
 def pre_gate_flags(query: str) -> dict[str, bool]:
-    """S17 pre-gate для full-арма: {} когда выключен, иначе include-флаги gate_sources.
+    """S17 pre-gate for the full arm: {} when disabled, otherwise the include-flags for gate_sources.
 
-    Дешёвый skip-тир поверх RRF (cost down + шум down): гейт решает по фичам,
-    какие источники фаерить, ДО fan-out. Default off (config retrieval.pregate) —
-    включение в проде после №11-абляции; урезанный пул сам питает N_eff/abstention.
+    A cheap skip tier on top of RRF (cost down + noise down): the gate decides
+    by features which sources to fire, BEFORE the fan-out. Default off
+    (config retrieval.pregate) — enabled in production after the №11 ablation;
+    the trimmed pool itself feeds N_eff/abstention.
     """
     from config import config
 
@@ -216,12 +217,12 @@ def pre_gate_flags(query: str) -> dict[str, bool]:
 
 
 def gate_sources(feat: dict[str, Any]) -> dict[str, bool]:
-    """Матрица «фичи запроса → какие источники фаерить» (упрощённый Adaptive RAG).
+    """Matrix «query features → which sources to fire» (simplified Adaptive RAG).
 
-    enumerative («list all») → каталог wiki + typed-хранилища, dense-rag выключен;
-    короткий невопросный запрос → быстрый путь rag+core;
-    entity-имя в запросе → +граф (co_mentions/канон сущностей);
-    длинный/вопросный → полный fan-out.
+    enumerative («list all») → wiki catalog + typed stores, dense-rag off;
+    a short non-question query → fast path rag+core;
+    an entity name in the query → +graph (co_mentions/entity canon);
+    long/question → full fan-out.
     """
     if feat["is_enumerative"]:
         return {"rag": False, "wiki": True, "episodic": False, "core": True, "graph": True}
@@ -229,22 +230,22 @@ def gate_sources(feat: dict[str, Any]) -> dict[str, bool]:
         return {"rag": True, "wiki": False, "episodic": False, "core": True, "graph": False}
     if feat["has_entity"]:
         return {"rag": True, "wiki": True, "episodic": False, "core": True, "graph": True}
-    # S17-дополнения (после исторических правил — контракт матрицы стабилен):
+    # S17 additions (after the historical rules — the matrix contract is stable):
     if feat.get("has_code") or feat.get("has_url"):
-        # код/URL-запрос — FTS-корпус и документация, эпизоды/граф не релевантны
+        # code/URL query — FTS corpus and documentation, episodic/graph not relevant
         return {"rag": True, "wiki": True, "episodic": False, "core": True, "graph": False}
     if feat.get("wants_episodic") or (feat.get("has_relative_time") and feat["is_question"]):
-        # «что мы делали / когда перестало работать» — биографический запрос
+        # "what were we doing / when did it stop working" — a biographical query
         return {"rag": True, "wiki": False, "episodic": True, "core": True, "graph": False}
     return {"rag": True, "wiki": True, "episodic": True, "core": True, "graph": True}
 
 
 async def gated_search(rag: Any, query: str, *, user_id: str = "default", limit: int = 10) -> list[dict[str, Any]]:
-    """Gated arm: query-features → включение/выключение источников 5-source RAG.
+    """Gated arm: query features → enabling/disabling sources of the 5-source RAG.
 
-    include_*-флаги MultiSourceRAG.search используются как есть (не модифицируются);
-    фьюжен — обычный RRF по фаернутым источникам; EDM/ITS не применяется
-    (его вклад изолирует arm 'full').
+    The include_* flags of MultiSourceRAG.search are used as-is (not modified);
+    fusion is plain RRF over the fired sources; EDM/ITS is not applied
+    (arm 'full' isolates its contribution).
     """
     flags = gate_sources(query_features(query))
     hits = await rag.search(
@@ -269,13 +270,13 @@ async def dense_per_kind_search(
     kinds: Sequence[str] | None = None,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
-    """Dense-per-kind arm (ENGRAM-упрощение): один поиск per memory-kind, set-merge.
+    """Dense-per-kind arm (ENGRAM simplification): one search per memory-kind, set-merge.
 
-    По умолчанию kind один — kind_for_text(query) (роутинг запроса → тип памяти);
-    kinds=[...] перечисляет несколько. Каждый kind-поиск: L4 core
-    (core_memory.memory_kind, токен-LIKE) + rag-корпус (FTS5 + Hamming по
-    bin_embedding, kind через rag_chunks.memory_kind, NULL → 'fact'). Результаты
-    объединяются set-merge'ом (дедуп по (title, content-prefix)) БЕЗ RRF-фьюжена.
+    By default the kind is single — kind_for_text(query) (query routing → memory type);
+    kinds=[...] lists several. Each kind search: L4 core
+    (core_memory.memory_kind, token-LIKE) + the rag corpus (FTS5 + Hamming over
+    bin_embedding, kind via rag_chunks.memory_kind, NULL → 'fact'). Results are
+    merged with a set-merge (dedup by (title, content-prefix)) WITHOUT RRF fusion.
     """
     if kinds is None:
         kinds = [kind_for_text(query).value]
@@ -293,13 +294,13 @@ async def dense_per_kind_search(
 
 
 async def _kind_hits(cm: Any, kind: str, query: str, *, user_id: str, layer: str, limit: int) -> list[dict[str, Any]]:
-    """Per-kind поиск: L4 core (memory_kind) + rag-корпус (FTS5/Hamming, kind-скоуп)."""
+    """Per-kind search: L4 core (memory_kind) + rag corpus (FTS5/Hamming, kind-scoped)."""
     toks = [t for t in _TOKEN_RE.findall((query or "").lower()) if len(t) >= 3]
     if not toks:
         return []
     hits: list[dict[str, Any]] = []
 
-    # 1) L4 core — типизированное хранилище фактов (memory_kind заполнен всегда)
+    # 1) L4 core — typed fact store (memory_kind is always populated)
     try:
         conn = await cm.get(DB_NAME)
         like = " OR ".join(["(key LIKE ? OR value LIKE ?)"] * len(toks))
@@ -326,26 +327,26 @@ async def _kind_hits(cm: Any, kind: str, query: str, *, user_id: str, layer: str
     except Exception:
         logger.debug("dense_per_kind: core branch skipped", exc_info=True)
 
-    # 2) rag-корпус: kind страницы через rag_chunks.memory_kind (NULL → 'fact')
+    # 2) rag corpus: page kind via rag_chunks.memory_kind (NULL → 'fact')
     try:
         conn = await cm.get(DB_NAME)
         cur = await conn.execute("SELECT DISTINCT page_id FROM rag_chunks WHERE COALESCE(memory_kind, 'fact') = ?", (kind,))
         kind_pages = {int(r["page_id"]) for r in await cur.fetchall()}
     except Exception:
-        return hits  # rag-таблиц нет (init_rag_db не вызывался) → только core-ветка
+        return hits  # no rag tables (init_rag_db never called) → core branch only
     if not kind_pages:
         return hits
 
     from rag.search import search_binary, search_fts5
 
-    # FTS5 (lexical-dense): search_fts5 сам деградирует в LIKE при отсутствии FTS5
+    # FTS5 (lexical-dense): search_fts5 itself degrades to LIKE when FTS5 is unavailable
     try:
         fts_hits = await search_fts5(cm, query, user_id, limit * 3, True, layer=layer)
         hits.extend({**h, "memory_kind": kind} for h in fts_hits if h.get("id") in kind_pages)
     except Exception:
         logger.debug("dense_per_kind: fts branch skipped", exc_info=True)
 
-    # Hamming (dense по bin_embedding) — исчерпывающий скан, фильтр по kind-страницам
+    # Hamming (dense over bin_embedding) — exhaustive scan, filtered by kind pages
     try:
 
         def _bin_for(emb: list[float]) -> bytes:

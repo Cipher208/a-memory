@@ -1,18 +1,18 @@
 """EDM re-rank + ITS gating (Phase G Task 6): dual-route post-processor.
 
-RRF-фьюжен (search_rrf / 5-source) остаётся recall-first генератором кандидатов;
-EDM/ITS переранжируют top-100, а не заменяют recall:
+RRF fusion (search_rrf / 5-source) remains the recall-first candidate generator;
+EDM/ITS re-rank the top-100 rather than replace recall:
 
 EDM(m|q,S) = α·R(m,q) + β·N(m,S) + γ·G(m,q,S) − δ·K(m,S)
-  R — нормализованный RRF-score (SYNAPSE-inhibition → per-query min-max → [0,1]);
-  N — novelty: доля токенов запроса, которые m ДОБАВЛЯЕТ к уже выбранным
-      (marginal-покрытие set-операциями) — повышает восполняющий блок;
-  G — 0.3, если блок связан led_to-ребром с уже выбранным (завершение цепочки);
-  K — max cosine с уже выбранными (semantic-dedup).
-α/γ/δ = 1.0, β = 0.8 — стартовые; калибровка — Phase H №11.
+  R — normalized RRF-score (SYNAPSE-inhibition → per-query min-max → [0,1]);
+  N — novelty: the share of query tokens that m ADDS to the already selected
+      (marginal coverage via set operations) — boosts the complementary block;
+  G — 0.3 if the block is connected by a led_to edge to an already selected one (chain completion);
+  K — max cosine against the already selected (semantic-dedup).
+α/γ/δ = 1.0, β = 0.8 — starting values; calibration — Phase H No.11.
 
-Итоговый EDM-score per-query min-max → [0,1]; ITS threshold 0.05: блоки ниже
-не возвращаются; k ≤ 100 (ITS_K_CAP).
+Final EDM-score is per-query min-max → [0,1]; ITS threshold 0.05: blocks below
+it are not returned; k ≤ 100 (ITS_K_CAP).
 """
 
 from __future__ import annotations
@@ -32,23 +32,23 @@ ITS_THRESHOLD = 0.05
 ITS_K_CAP = 100
 CHAIN_BONUS = 0.3
 DMEM_MIN_CONFIDENCE = 0.3
-FOK_TAU = 0.12  # SYNAPSE FOK-gate (C6): топ-кандидат ниже τ — отказ до LLM (цель FRR < 2.5%)
-CAMA_NEFF_MIN = 1.5  # CAMA (C6): ниже — evidence фактически из одного источника → abstain
+FOK_TAU = 0.12  # SYNAPSE FOK-gate (C6): top candidate below τ — refuse before the LLM (target FRR < 2.5%)
+CAMA_NEFF_MIN = 1.5  # CAMA (C6): below — evidence is effectively from a single source → abstain
 
 _TOKEN_RE = re.compile(r"[а-яёa-z0-9]+")
 
 
 def tokens(text: str | None) -> set[str]:
-    """Словесные токены (len ≥ 3) — set-операции для novelty/coverage."""
+    """Word tokens (len ≥ 3) — set operations for novelty/coverage."""
     return {t for t in _TOKEN_RE.findall((text or "").lower()) if len(t) >= 3}
 
 
 def inhibit_scores(scores: list[float], beta: float = INHIBITION_BETA, top_m: int = INHIBITION_TOP_M) -> list[float]:
-    """Lateral inhibition pre-step (SYNAPSE, формула G5) поверх кандидатов.
+    """Lateral inhibition pre-step (SYNAPSE, formula G5) over the candidates.
 
-    û_i = max(0, u_i − β·Σ_{k∈T_M}(u_k−u_i)·𝕀[u_k>u_i]), до M=7 соседей строго
-    сильнее. In-memory версия lifecycle.graph_sanitation.lateral_inhibition:
-    та же формула, но без записи в epi_edges — только переранжирование.
+    û_i = max(0, u_i − β·Σ_{k∈T_M}(u_k−u_i)·𝕀[u_k>u_i]), up to M=7 neighbors strictly
+    stronger. In-memory version of lifecycle.graph_sanitation.lateral_inhibition:
+    same formula, but without writing to epi_edges — re-ranking only.
     """
     out: list[float] = []
     for i, u in enumerate(scores):
@@ -58,7 +58,7 @@ def inhibit_scores(scores: list[float], beta: float = INHIBITION_BETA, top_m: in
 
 
 def minmax(values: list[float]) -> list[float]:
-    """Per-query min-max в [0,1]. Вырожденный случай (все равны) → все 1.0 (гейт не режет)."""
+    """Per-query min-max into [0,1]. Degenerate case (all equal) → all 1.0 (the gate cuts nothing)."""
     if not values:
         return []
     lo, hi = min(values), max(values)
@@ -68,10 +68,10 @@ def minmax(values: list[float]) -> list[float]:
 
 
 def _minmax_floor(scores: list[float], positive: list[float]) -> list[float]:
-    """Zero-floor min-max: negatives (K-штраф перевесил) клампятся в 0, positive → s/max.
+    """Zero-floor min-max: negatives (the K penalty outweighed) are clamped to 0, positive → s/max.
 
-    Отрицательные хвосты не сжимают масштаб — первый блок остаётся 1.0,
-    мусор без evidence уходит в 0 и режется ITS-порогом.
+    Negative tails do not compress the scale — the top block stays 1.0,
+    evidence-free junk goes to 0 and is cut by the ITS threshold.
     """
     hi = max(positive)
     if hi <= 0:
@@ -80,7 +80,7 @@ def _minmax_floor(scores: list[float], positive: list[float]) -> list[float]:
 
 
 def graph_node_id(cand: dict[str, Any]) -> int | None:
-    """node_id для graph/graph_expand-кандидатов (id = −node_id − 3_000_000), иначе None."""
+    """node_id for graph/graph_expand candidates (id = −node_id − 3_000_000), else None."""
     rid = cand.get("id")
     if isinstance(rid, int) and rid <= -_ID_OFFSET_GRAPH:
         return -rid - _ID_OFFSET_GRAPH
@@ -88,7 +88,7 @@ def graph_node_id(cand: dict[str, Any]) -> int | None:
 
 
 def make_s2_hit(entry_id: int, title: str, content: str, wiki_type: str, score: float) -> dict[str, Any]:
-    """Результат S2-маршрута в формате search-hit (отрицательный wiki-id)."""
+    """Build an S2-route result in search-hit format (negative wiki-id)."""
     return {
         "id": -int(entry_id) - _ID_OFFSET_WIKI,
         "title": title,
@@ -100,9 +100,9 @@ def make_s2_hit(entry_id: int, title: str, content: str, wiki_type: str, score: 
 
 
 async def _led_to_neighbors(cm: Any, node_ids: list[int], layer: str, user_id: str) -> dict[int, set[int]]:
-    """led_to-соседства кандидатов из epi_edges (только active-рёбра, окно G5).
+    """led_to-neighborhoods of the candidates from epi_edges (active edges only, G5 window).
 
-    Симметрично: завершение цепочки — «блок связан led_to с уже выбранным».
+    Symmetric: chain completion is «a block connected by led_to to an already selected one».
     """
     if cm is None or not node_ids:
         return {}
@@ -122,7 +122,7 @@ async def _led_to_neighbors(cm: Any, node_ids: list[int], layer: str, user_id: s
         )
         rows = await cur.fetchall()
     except Exception:
-        return {}  # G-член недоступен → degrade до R/N/K, не падать
+        return {}  # G-member unavailable → degrade to R/N/K, do not crash
     neigh: dict[int, set[int]] = {}
     for r in rows:
         neigh.setdefault(int(r["source_id"]), set()).add(int(r["target_id"]))
@@ -136,15 +136,15 @@ async def _embed(texts: list[str]) -> list[list[float]]:
     try:
         return await embed_texts(texts)
     except Exception:
-        return []  # embeddings недоступны → K-член выключен (dedup degrade)
+        return []  # embeddings unavailable → K-member disabled (dedup degrade)
 
 
 def neff_hill(finals: list[float], alpha: float = 2.0) -> float:
     """CAMA N_eff (Task C6): N_eff = exp(log(Σ p_j^α)/(1−α)) — Hill diversity.
 
-    p_j = final_j / Σ final (final ≥ 0 после zero-floor). α=2 → N_eff = 1/Σp²
-    (обратный индекс Симпсона): монокультура → 1.0, k равных источников → k.
-    α=1 — вырожденный случай формулы → 0.0 (abstain).
+    p_j = final_j / Σ final (final ≥ 0 after the zero-floor). α=2 → N_eff = 1/Σp²
+    (inverse Simpson index): monoculture → 1.0, k equal sources → k.
+    α=1 is the degenerate case of the formula → 0.0 (abstain).
     """
     total = sum(f for f in finals if f > 0)
     if total <= 0 or abs(alpha - 1.0) < 1e-9:
@@ -168,16 +168,16 @@ async def edm_rerank(
     k_cap: int = ITS_K_CAP,
     deterministic: bool | None = None,
 ) -> list[dict[str, Any]]:
-    """EDM re-rank + ITS gating. Пул 5-source RRF подаётся как есть (recall-first).
+    """EDM re-rank + ITS gating. The 5-source RRF pool is fed as-is (recall-first).
 
-    Greedy MMR: на каждом шаге выбирается argmax EDM(m | S) среди оставшихся —
-    N и K пересчитываются против уже выбранных; итог per-query min-max → [0,1],
-    блоки ниже threshold отрезаются, cap k_cap.
+    Greedy MMR: at each step, the argmax of EDM(m | S) among the remaining is picked —
+    N and K are recomputed against the already selected; the result is per-query min-max → [0,1],
+    blocks below threshold are cut off, capped at k_cap.
 
     S17 deterministic_retrieval (default off, config retrieval.deterministic):
-    регламентированные сценарии получают порядок чистого min-max без ингибиции
-    и K-члена (эмбеддинги машинно-зависимы) — воспроизводимый результат при
-    том же пуле.
+    regulated scenarios get a pure min-max order without inhibition
+    or the K-member (embeddings are machine-dependent) — a reproducible result for
+    the same pool.
     """
     if not cands:
         return []
@@ -190,7 +190,7 @@ async def edm_rerank(
     rrf = minmax(raw if deterministic else inhibit_scores(raw))
     qtok = tokens(query)
     texts = [f"{c.get('content') or ''} {c.get('title') or ''}" for c in pool]
-    # K-член — semantic dedup по CONTENT (разные титулы не делают блоки разными)
+    # K-member — semantic dedup on CONTENT (different titles do not make blocks different)
     ktexts = [str(c.get("content") or "") for c in pool]
     node_ids = [graph_node_id(c) for c in pool]
     led = await _led_to_neighbors(cm, [n for n in node_ids if n is not None], layer, user_id)
@@ -204,8 +204,8 @@ async def edm_rerank(
     selected_nodes: set[int] = set()
     covered: set[str] = set()
     edm_scores = [0.0] * len(pool)
-    # CAMA max-presence (Task C6): e_j = max_i z_ij — коррелированные записи
-    # (общий контент/chain-узел) не накачивают evidence, засчитан один.
+    # CAMA max-presence (Task C6): e_j = max_i z_ij — correlated records
+    # (shared content/chain node) do not pump up evidence; one is counted.
     presence: dict[int, int] = {i: i for i in range(len(pool))}
     while remaining:
         best_i, best_s = remaining[0], -1e18
@@ -218,10 +218,10 @@ async def edm_rerank(
             if vecs and selected and not chained:
                 from shared.embeddings import similarity
 
-                # K-член — штраф дедупликации, кламп в [0,1]: отрицательный
-                # косинус = «не дубликат» (hash-эмбеддинги дают отрицательные
-                # косинусы); chain-linked пары дедуп не глушит (G-член —
-                # завершение цепочки, а не повтор).
+                # K-member — the dedup penalty, clamped to [0,1]: a negative
+                # cosine = "not a duplicate" (hash embeddings produce negative
+                # cosines); chain-linked pairs are not silenced by dedup (the G-member is
+                # chain completion, not repetition).
                 dup = max([0.0, *(similarity(vecs[i], vecs[j]) for j in selected)])
             s = alpha * rrf[i] + beta * novelty + gamma * chain - delta * dup
             if s > best_s:
@@ -234,8 +234,8 @@ async def edm_rerank(
         if nid is not None:
             selected_nodes.add(nid)
 
-    # CAMA max-presence: e_j = max_i z_ij → записи с идентичным контентом
-    # коррелированы, их evidence мержится в лидера группы (не суммируется).
+    # CAMA max-presence: e_j = max_i z_ij → records with identical content
+    # are correlated; their evidence merges into the group leader (not summed).
     if vecs:
         from shared.embeddings import similarity
 
@@ -245,24 +245,24 @@ async def edm_rerank(
                     presence[i] = presence[j]
                     break
 
-    # zero-floor: отрицательные хвосты (K-штраф перевесил) клампятся в 0 и
-    # не сжимают масштаб min-max — первый блок остаётся 1.0
+    # zero-floor: negative tails (the K penalty outweighed) are clamped to 0 and
+    # do not compress the min-max scale — the top block stays 1.0
     pos = [s for s in edm_scores if s > 0]
     final = [max(0.0, s) for s in _minmax_floor(edm_scores, pos)] if pos else [0.0] * len(edm_scores)
 
-    # CAMA N_eff: эффективное число различимых источников (max-presence поле).
-    # РЕШЕНИЕ (аудит 05.09): abstain остаётся метаданными для eval-съезда —
-    # потребитель на уровне ответа (отказ отвечать) решается Stage 2 после
-    # ablation'а: форсировать abstention до числовой вердикта — преждевременно.
+    # CAMA N_eff: the effective number of distinguishable sources (max-presence field).
+    # DECISION (audit 05.09): abstain stays metadata for the eval offsite —
+    # the answer-level consumer (refusing to answer) is decided at Stage 2 after
+    # the ablation: forcing abstention before a numeric verdict is premature.
     presence_finals = [0.0] * len(pool)
     for i, f in enumerate(final):
         presence_finals[presence[i]] = max(presence_finals[presence[i]], f)
     n_eff = neff_hill(presence_finals)
     abstain = len(pos) > 0 and n_eff < CAMA_NEFF_MIN
 
-    # Сырая активация (ингибированный RRF ДО minmax): minmax на дегенеративном
-    # пуле даёт слабому 1.0 — FOK-гейт обязан смотреть сырой сигнал.
-    # S17 deterministic-режим: ингибиция bypass-нута — активация = сырой RRF.
+    # Raw activation (the inhibited RRF BEFORE minmax): minmax on a degenerate
+    # pool gives the weakest 1.0 — the FOK gate must look at the raw signal.
+    # S17 deterministic mode: inhibition is bypassed — activation = raw RRF.
     inhibited = raw if deterministic else inhibit_scores(raw)
 
     out: list[dict[str, Any]] = []
@@ -281,11 +281,11 @@ async def edm_rerank(
 
 
 async def dense_confidence(cands: list[dict[str, Any]], query: str) -> float:
-    """D-Mem dense-confidence: доля токенов запроса, покрытая top-10 кандидатов.
+    """D-Mem dense-confidence: the share of query tokens covered by the top-10 candidates.
 
-    Lexical-прокси [0,1]: детерминирован и без модели (hash-embeddings дают
-    шумный косинус). Апгрейд-путь — e5-косинус query↔candidates, когда модель
-    доступна; порог 0.3 остаётся тем же.
+    Lexical proxy [0,1]: deterministic even without a model (hash embeddings give
+    a noisy cosine). Upgrade path — e5 cosine query↔candidates once a model
+    is available; the 0.3 threshold stays the same.
     """
     qtok = tokens(query)
     if not qtok or not cands:
