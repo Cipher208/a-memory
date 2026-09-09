@@ -84,6 +84,15 @@ async def drill_down(entry_id: int | str, user_id: str, layer: str = "user") -> 
             return early
         entry_id = int(row_meta["entry_id"])
         row = row_meta
+    elif isinstance(entry_id, str) and not entry_id.isdigit():
+        # Bare fact key (not a numeric id, not a URI) — resolve by key.
+        # Pre-existing crash: int(entry_id) raised ValueError on key strings.
+        row = await (
+            await conn.execute(
+                "SELECT key, value, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+                (layer, user_id, entry_id),
+            )
+        ).fetchone()
     else:
         row = await (
             await conn.execute(
@@ -120,8 +129,14 @@ async def drill_down(entry_id: int | str, user_id: str, layer: str = "user") -> 
 
 
 def _provenance_result(entry_id: Any, row: Any, rid: int, raw: Any, *, archived: bool) -> dict[str, Any]:
+    # entry_id may be a numeric id or a bare fact key (string) — keep the
+    # caller's form instead of crashing on int() coercion.
+    try:
+        eid: int | str = int(entry_id)
+    except (TypeError, ValueError):
+        eid = str(entry_id)
     result = {
-        "entry_id": int(entry_id),
+        "entry_id": eid,
         "key": str(row["key"]),
         "value": str(row["value"]),
         "source_raw_id": int(rid),
