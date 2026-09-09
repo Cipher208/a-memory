@@ -47,6 +47,16 @@ LAYER_TYPES = {
 }
 
 
+def _sanitize_title(title: str) -> str:
+    """Filesystem-safe page title.
+
+    Keep alnum/underscore/space/dash, collapse the rest to '_', trim and
+    join spaces as underscores. Shared by add(), _sync_one_file() and
+    promote_from_core().
+    """
+    return "".join(c if c.isalnum() or c in " _-" else "_" for c in title).strip().replace(" ", "_")
+
+
 class WikiManager:
     """Unified wiki orchestrator: coordinates WikiParser (I/O) and WikiIndex (DB)."""
 
@@ -121,7 +131,7 @@ class WikiManager:
         # Length cap: a 300-char title must not raise OSError "File name too
         # long" (chaos-test finding). Collision risk handled by content-hash
         # suffix only when truncation actually bites.
-        safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in title).strip().replace(" ", "_")
+        safe_title = _sanitize_title(title)
         if len(safe_title) > 80:
             import hashlib as _hashlib
 
@@ -148,28 +158,7 @@ class WikiManager:
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         await self.index.save(entry, content_hash)
 
-        # Schema lint (warning-only by default; opt-in auto_fix on the manager)
-        try:
-            from .lint import lint_entry, lint_missing_index, _write_index_stub
-
-            enabled = self._get_enabled_types()
-            findings = lint_entry(
-                entry,
-                all_titles=set(),  # no full index here; wikilinks skipped
-                enabled_types=enabled,
-            )
-            for f in findings:
-                logger.warning("wiki lint [%s] %s: %s", wiki_type, f.code, f.message)
-            if self._auto_fix:
-                type_dir = self._type_dir(wiki_type)
-                if lint_missing_index(type_dir) is not None:
-                    _write_index_stub(type_dir, wiki_type, set())
-            from .secrets import scan_secrets
-
-            for fnd in scan_secrets(content):
-                logger.warning("wiki secret [%s] %s detected in %s", wiki_type, fnd.kind, file_path)
-        except Exception as exc:
-            logger.warning("wiki lint failed for %s: %s", file_path, exc)
+        self._lint_and_secret_scan(entry, content, self._get_enabled_types(), file_path)
 
         # Auto-link [[wikilinks]] to resolvable pages (non-fatal)
         try:
@@ -187,6 +176,34 @@ class WikiManager:
         await self._ingest_into_rag(entry)
 
         return str(file_path)
+
+    def _lint_and_secret_scan(self, entry: WikiEntry, content: str, enabled_types: list[str], log_target: Any) -> None:
+        """Run schema lint + secret scan after a page write.
+
+        Warning-only by default; opt-in auto_fix on the manager. Non-fatal:
+        any lint machinery failure is logged, never raised. Shared by add()
+        and _sync_one_file().
+        """
+        try:
+            from .lint import lint_entry, lint_missing_index, _write_index_stub
+
+            findings = lint_entry(
+                entry,
+                all_titles=set(),  # no full index here; wikilinks skipped
+                enabled_types=enabled_types,
+            )
+            for f in findings:
+                logger.warning("wiki lint [%s] %s: %s", entry.wiki_type, f.code, f.message)
+            if self._auto_fix:
+                type_dir = self._type_dir(entry.wiki_type)
+                if lint_missing_index(type_dir) is not None:
+                    _write_index_stub(type_dir, entry.wiki_type, set())
+            from .secrets import scan_secrets
+
+            for fnd in scan_secrets(content):
+                logger.warning("wiki secret [%s] %s detected in %s", entry.wiki_type, fnd.kind, log_target)
+        except Exception as exc:
+            logger.warning("wiki lint failed for %s: %s", log_target, exc)
 
     async def _write_moc(self, wiki_type: str) -> None:
         """A1.1: auto index hub per wiki type — regenerated on every add/update.
@@ -443,7 +460,7 @@ class WikiManager:
             wiki_type = self._promote_type_for(kind, layer)
             existing_titles = {e.title for e in await self.list_by_type(wiki_type, limit=500)}
             for r in rows:
-                title = "".join(c if c.isalnum() or c in " _-" else "_" for c in str(r["key"])).strip().replace(" ", "_")
+                title = _sanitize_title(str(r["key"]))
                 if title in existing_titles:
                     skipped += 1
                     continue
@@ -460,38 +477,11 @@ class WikiManager:
         """Re-index all .md files from disk to DB using batching and hash checks."""
         result = {"indexed": 0, "skipped": 0, "errors": 0}
 
-        md_files = []
         enabled_types = self._get_enabled_types()
-
-        def _collect_files() -> list[Path]:
-            files: list[Path] = []
-            for wiki_type in enabled_types:
-                type_dir = self.base_dir / wiki_type
-                if type_dir.exists() and type_dir.is_dir():
-                    files.extend(list(type_dir.glob("*.md")))
-            return files
-
-        md_files = await asyncio.to_thread(_collect_files)
-
-        async def _process_file(f: Path) -> str:
-            try:
-                text = await asyncio.to_thread(f.read_text, encoding="utf-8")
-                entry = self.parser.parse(text, f)
-                content_hash = hashlib.sha256(entry.content.encode()).hexdigest()
-
-                # Check hash in DB before saving
-                existing = await self.index.get_by_path(str(f))
-                if existing and existing.get("content_hash") == content_hash:
-                    return "skipped"
-
-                await self.index.save(entry, content_hash)
-                return "indexed"
-            except Exception:
-                logger.exception(f"Error reindexing {f}")
-                return "error"
+        md_files = await asyncio.to_thread(self._collect_md_files, enabled_types)
 
         # Batch processing
-        tasks = [_process_file(f) for f in md_files]
+        tasks = [self._reindex_file(f) for f in md_files]
         if tasks:
             outcomes = await asyncio.gather(*tasks)
             for o in outcomes:
@@ -499,28 +489,38 @@ class WikiManager:
 
         return result
 
+    def _collect_md_files(self, enabled_types: list[str]) -> list[Path]:
+        files: list[Path] = []
+        for wiki_type in enabled_types:
+            type_dir = self.base_dir / wiki_type
+            if type_dir.exists() and type_dir.is_dir():
+                files.extend(list(type_dir.glob("*.md")))
+        return files
+
+    async def _reindex_file(self, f: Path) -> str:
+        try:
+            text = await asyncio.to_thread(f.read_text, encoding="utf-8")
+            entry = self.parser.parse(text, f)
+            content_hash = hashlib.sha256(entry.content.encode()).hexdigest()
+
+            # Check hash in DB before saving
+            existing = await self.index.get_by_path(str(f))
+            if existing and existing.get("content_hash") == content_hash:
+                return "skipped"
+
+            await self.index.save(entry, content_hash)
+            return "indexed"
+        except Exception:
+            logger.exception(f"Error reindexing {f}")
+            return "error"
+
     async def sync_external(self, external_dirs: list[str] | None = None) -> dict[str, int]:
         """Import external .md files with concurrency control and optimization."""
         dirs = external_dirs or self.get_external_dirs()
         result = {"imported": 0, "skipped": 0, "errors": 0}
         enabled_types = self._get_enabled_types()
 
-        # E7 least privilege: external roots are read-only mirrors. A dir that
-        # resolves inside the instance data dir would let wiki import capture
-        # its own data (backups, exports, DB-adjacent files) — reject it.
-        from shared.connection import connection_manager as _cm
-
-        def _resolve_roots() -> tuple[Path | None, list[Path]]:
-            root = Path(str(_cm.base_dir)).resolve() if _cm.base_dir else None
-            return root, [Path(d).expanduser().resolve() for d in dirs]
-
-        data_root, resolved_dirs = await asyncio.to_thread(_resolve_roots)
-        for dir_path, resolved in zip(dirs, resolved_dirs, strict=True):
-            if data_root and (data_root == resolved or data_root in resolved.parents):
-                raise ValueError(
-                    f"external dir {resolved} is inside the data directory {data_root} — "
-                    "wiki external roots are read-only mirrors, not data-dir content (E7)"
-                )
+        await self._validate_external_roots(dirs)
 
         # Concurrency control: max 10 files at a time to prevent DB/FS locks
         sem = asyncio.Semaphore(10)
@@ -544,6 +544,27 @@ class WikiManager:
 
         return result
 
+    async def _validate_external_roots(self, dirs: list[str]) -> None:
+        """Reject external dirs that resolve inside the instance data dir.
+
+        E7 least privilege: external roots are read-only mirrors. A dir that
+        resolves inside the data dir would let wiki import capture its own
+        data (backups, exports, DB-adjacent files).
+        """
+        from shared.connection import connection_manager as _cm
+
+        def _resolve_roots() -> tuple[Path | None, list[Path]]:
+            root = Path(str(_cm.base_dir)).resolve() if _cm.base_dir else None
+            return root, [Path(d).expanduser().resolve() for d in dirs]
+
+        data_root, resolved_dirs = await asyncio.to_thread(_resolve_roots)
+        for dir_path, resolved in zip(dirs, resolved_dirs, strict=True):
+            if data_root and (data_root == resolved or data_root in resolved.parents):
+                raise ValueError(
+                    f"external dir {resolved} is inside the data directory {data_root} — "
+                    "wiki external roots are read-only mirrors, not data-dir content (E7)"
+                )
+
     async def _sync_one_file(self, f: Path, enabled_types: list[str]) -> str:
         """Perform internal helper for single file synchronization."""
         try:
@@ -554,7 +575,7 @@ class WikiManager:
             if wiki_type not in enabled_types:
                 return "skipped"
 
-            safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in parsed_entry.title).strip().replace(" ", "_")
+            safe_title = _sanitize_title(parsed_entry.title)
             dest = self._type_dir(wiki_type) / f"{safe_title}.md"
 
             # Check if exists and same hash
@@ -572,27 +593,8 @@ class WikiManager:
             # A2.3: sync writes chunk too (same fail-soft contract as add())
             await self._ingest_into_rag(parsed_entry)
 
-            # Schema lint (same pattern as add())
-            try:
-                from .lint import lint_entry, lint_missing_index, _write_index_stub
-
-                findings = lint_entry(
-                    parsed_entry,
-                    all_titles=set(),
-                    enabled_types=enabled_types,
-                )
-                for fnd in findings:
-                    logger.warning("wiki lint [%s] %s: %s", wiki_type, fnd.code, fnd.message)
-                if self._auto_fix:
-                    type_dir = self._type_dir(wiki_type)
-                    if lint_missing_index(type_dir) is not None:
-                        _write_index_stub(type_dir, wiki_type, set())
-                from .secrets import scan_secrets
-
-                for sfnd in scan_secrets(content):
-                    logger.warning("wiki secret [%s] %s detected in %s", wiki_type, sfnd.kind, f)
-            except Exception as exc:
-                logger.warning("wiki lint failed for %s: %s", f, exc)
+            # Schema lint (shared with add())
+            self._lint_and_secret_scan(parsed_entry, content, enabled_types, f)
 
             return "imported"
         except Exception:
