@@ -133,6 +133,86 @@ async def memory_context(
     return result
 
 
+async def _inject_consolidate(layer: str, user_id: str) -> tuple[int, float]:
+    """Run the inline consolidation step of context_inject.
+
+    The "inject" stage of the dream cycle pipeline: drain high-weight L3
+    episodes into L4 right before we read L4, so the context the agent sees
+    is freshly curated. Failures are non-fatal.
+    Returns (consolidated count, last_consolidation_ts).
+    """
+    last_consolidation_ts = time.time()
+    try:
+        from config import config as _cfg
+        from lifecycle.consolidation import ConsolidationEngine
+
+        min_weight = float(_cfg.get_forgetting("consolidate_weight_threshold") or 0.7)
+        consolidated = await ConsolidationEngine(layer=layer).consolidate_episodes(
+            user_id=user_id,
+            min_weight=min_weight,
+        )
+        _invalidate_cache(layer, user_id)
+        return int(consolidated), last_consolidation_ts
+    except Exception as exc:
+        logger.warning("memory_context_inject: consolidation failed: %s", exc)
+        return 0, last_consolidation_ts
+
+
+def _assemble_inject_text(facts_text: str, recent_text: str, wiki_text: str, episodes_text: str) -> tuple[str, bool]:
+    """Build the injection text from the collected source texts, budget-truncated."""
+    context_parts = []
+    if facts_text:
+        context_parts.append("CORE FACTS (most important — remember these): " + facts_text)
+    if recent_text:
+        context_parts.append("RECENT: " + recent_text)
+    if wiki_text:
+        context_parts.append("WIKI: " + wiki_text)
+    if episodes_text:
+        context_parts.append("EPISODES: " + episodes_text)
+    if facts_text:
+        context_parts.append("REMEMBER: " + facts_text)
+    context_text = "\n".join(context_parts)
+    context_text, was_truncated = _truncate_to_budget(context_text, DEFAULT_TOKEN_BUDGET)
+    return context_text, was_truncated
+
+
+async def _persist_context_md(
+    layer: str,
+    user_id: str,
+    context_text: str,
+    consolidated: int,
+    last_consolidation_ts: float,
+    l4_facts: list[Any],
+    l3_episodes: list[Any],
+    l1_recent: list[Any],
+    wiki_entries: list[Any],
+    l3_for_snapshot: list[Any],
+) -> str | None:
+    """Write the CONTEXT.md snapshot; failures are non-fatal (returns None)."""
+    try:
+        # _validate_layer already narrowed layer at runtime; cast for mypy.
+        layer_lit = cast("Literal['user', 'agent']", layer)
+        body = await _build_context_md(
+            layer=layer_lit,
+            user_id=user_id,
+            context_text=context_text,
+            consolidated=consolidated,
+            last_consolidation_ts=last_consolidation_ts,
+            l4_count=len(l4_facts),
+            l3_count=len(l3_episodes),
+            l1_count=len(l1_recent),
+            wiki_count=len(wiki_entries),
+            episodes=l3_for_snapshot,
+        )
+        path = _context_md_path(layer)
+        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(path.write_text, body, encoding="utf-8")
+        return str(path)
+    except Exception as exc:
+        logger.warning("memory_context_inject: CONTEXT.md write failed: %s", exc)
+        return None
+
+
 async def memory_context_inject(
     layer: str = "user",
     user_id: str = "default",
@@ -150,24 +230,7 @@ async def memory_context_inject(
         return {**cached, "cached": True}
 
     app = _get_ctx(ctx)
-
-    # Inline consolidation step (the "inject" stage of the dream cycle pipeline):
-    # drain high-weight L3 episodes into L4 right before we read L4, so the
-    # context the agent sees is freshly curated. Failures are non-fatal.
-    consolidated = 0
-    last_consolidation_ts = time.time()
-    try:
-        from config import config as _cfg
-        from lifecycle.consolidation import ConsolidationEngine
-
-        min_weight = float(_cfg.get_forgetting("consolidate_weight_threshold") or 0.7)
-        consolidated = await ConsolidationEngine(layer=layer).consolidate_episodes(
-            user_id=user_id,
-            min_weight=min_weight,
-        )
-        _invalidate_cache(layer, user_id)
-    except Exception as exc:
-        logger.warning("memory_context_inject: consolidation failed: %s", exc)
+    consolidated, last_consolidation_ts = await _inject_consolidate(layer, user_id)
 
     mem = _get_memory(app, layer, user_id)
     wiki = _get_wiki(app, layer)
@@ -193,45 +256,22 @@ async def memory_context_inject(
     wiki_entries = await wiki.list_all(3)
     wiki_text = "; ".join([f"[{w.wiki_type}] {w.title}" for w in wiki_entries])
 
-    context_parts = []
-    if facts_text:
-        context_parts.append("CORE FACTS (most important — remember these): " + facts_text)
-    if recent_text:
-        context_parts.append("RECENT: " + recent_text)
-    if wiki_text:
-        context_parts.append("WIKI: " + wiki_text)
-    if episodes_text:
-        context_parts.append("EPISODES: " + episodes_text)
-    if facts_text:
-        context_parts.append("REMEMBER: " + facts_text)
-
-    context_text = "\n".join(context_parts)
-    context_text, was_truncated = _truncate_to_budget(context_text, DEFAULT_TOKEN_BUDGET)
+    context_text, was_truncated = _assemble_inject_text(facts_text, recent_text, wiki_text, episodes_text)
 
     # CONTEXT.md persistence: 3-section snapshot written per-agent to
     # <MCP_MEMORY_DATA_DIR>/<layer>/CONTEXT.md. Failures are non-fatal.
-    context_md_path: str | None = None
-    try:
-        # _validate_layer already narrowed layer at runtime; cast for mypy.
-        layer_lit = cast("Literal['user', 'agent']", layer)
-        body = await _build_context_md(
-            layer=layer_lit,
-            user_id=user_id,
-            context_text=context_text,
-            consolidated=consolidated,
-            last_consolidation_ts=last_consolidation_ts,
-            l4_count=len(l4_facts),
-            l3_count=len(l3_episodes),
-            l1_count=len(l1_recent),
-            wiki_count=len(wiki_entries),
-            episodes=l3_for_snapshot,
-        )
-        path = _context_md_path(layer)
-        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(path.write_text, body, encoding="utf-8")
-        context_md_path = str(path)
-    except Exception as exc:
-        logger.warning("memory_context_inject: CONTEXT.md write failed: %s", exc)
+    context_md_path = await _persist_context_md(
+        layer,
+        user_id,
+        context_text,
+        consolidated,
+        last_consolidation_ts,
+        l4_facts,
+        l3_episodes,
+        l1_recent,
+        wiki_entries,
+        l3_for_snapshot,
+    )
 
     result = {
         "context": context_text,
@@ -620,6 +660,151 @@ def _validate_predicate(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _watch_list(db_path: Path, enabled_only: bool) -> dict[str, Any]:
+    """Watch list: all rules (or enabled-only) with 24h dispatch-hit counts."""
+    sql = "SELECT id, name, trigger, predicate, action, enabled, created_at FROM watch_rules"
+    params: tuple[Any, ...] = ()
+    if enabled_only:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY id"
+    with _sqlite3.connect(str(db_path)) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    rules: list[dict[str, Any]] = []
+    for r in rows:
+        rid, rname, rtrig, rpred, ract, renabled, _rcreated = r
+        try:
+            pred_obj = _json.loads(rpred)
+        except Exception:
+            pred_obj = {"raw": rpred}
+        cutoff = _time.time() - 86400
+        with _sqlite3.connect(str(db_path)) as conn:
+            hit = conn.execute(
+                "SELECT count(*) FROM memory_dispatch_log WHERE event = ? AND created_at >= ?",
+                (rtrig, cutoff),
+            ).fetchone()
+        rules.append(
+            {
+                "id": int(rid),
+                "name": rname,
+                "trigger": rtrig,
+                "predicate": pred_obj,
+                "action": ract,
+                "enabled": bool(renabled),
+                "hits_24h": int(hit[0]) if hit else 0,
+            }
+        )
+    return {"status": "ok", "rules": rules}
+
+
+def _watch_add(db_path: Path, name: str, trigger: str, predicate_json: str, action_kind: str) -> dict[str, Any]:
+    """Watch add: insert a new rule row after predicate validation."""
+    if not name or not trigger or not predicate_json or not action_kind:
+        raise ValueError("add requires name, trigger, predicate_json, action_kind")
+    try:
+        pred_obj = _json.loads(predicate_json)
+    except Exception as e:
+        raise ValueError(f"predicate_json is not valid JSON: {e}") from e
+    if not isinstance(pred_obj, dict):
+        raise ValueError("predicate must be a JSON object")  # noqa: TRY004 — surface-freeze: ValueError is the established tool contract
+    _validate_predicate(pred_obj)
+    with _sqlite3.connect(str(db_path)) as conn:
+        cur = conn.execute(
+            "INSERT INTO watch_rules (name, trigger, predicate, action, enabled, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+            (name, trigger, _json.dumps(pred_obj, ensure_ascii=False), action_kind, _time.time()),
+        )
+        conn.commit()
+        return {"status": "ok", "id": int(cur.lastrowid or 0)}
+
+
+def _watch_toggle_or_delete(db_path: Path, action: str, rule_id: int) -> dict[str, Any]:
+    """Watch disable/delete: operator-visible state change by rule_id."""
+    if not rule_id:
+        raise ValueError(f"{action} requires rule_id")
+    with _sqlite3.connect(str(db_path)) as conn:
+        if action == "disable":
+            conn.execute("UPDATE watch_rules SET enabled = 0 WHERE id = ?", (rule_id,))
+        else:
+            conn.execute("DELETE FROM watch_rules WHERE id = ?", (rule_id,))
+        conn.commit()
+    return {"status": "ok"}
+
+
+async def _proposals_conflict(layer: str, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """S18 item 8: 3-option conflict contract — resolve one memory_conflicts group."""
+    from rag.conflict import ConflictResolver
+    from shared.constants import DB_NAME
+
+    group_id = str(payload.get("group_id") or "")
+    decision = str(payload.get("decision") or "")
+    if not group_id or decision not in ("supersede", "retain", "annotate"):
+        return {"status": "error", "error": "need group_id + decision in supersede/retain/annotate"}
+    if decision in ("supersede", "retain"):
+        # supersede: the new record wins, the old one goes away (group closed,
+        # the loser is archived by the resolver). retain: both truths, group
+        # closed the same way — the semantics differ in the agent's intent.
+        keep_id = int(payload.get("keep_id") or 0)
+        if not keep_id:
+            return {"status": "error", "error": "keep_id required for supersede/retain"}
+        ok = await ConflictResolver().resolve(group_id, keep_id)
+        return {"status": "resolved" if ok else "error", "decision": decision}
+    # annotate: both records stay — the annotation links them in the metadata
+    # of the older side of the conflict (first row of the group = earlier; its
+    # key is the same _canonical_key binding as in the distiller's _mark_earlier_scope).
+    annotation = str(payload.get("annotation") or "")
+    if not annotation:
+        return {"status": "error", "error": "annotation required for annotate"}
+    from core.memory import CoreMemory, _load_meta
+    from lifecycle.distiller import _canonical_key
+    from shared.memory_types import kind_for_text
+
+    conn = await connection_manager.get(DB_NAME)
+    try:
+        rows = await (
+            await conn.execute("SELECT id, content FROM memory_conflicts WHERE conflict_group_id=? ORDER BY id LIMIT 1", (group_id,))
+        ).fetchall()
+    except Exception:  # no conflicts table yet == group never existed
+        return {"status": "error", "error": f"unknown group {group_id}"}
+    cmem = CoreMemory(cm=connection_manager, layer=layer)
+    key = _canonical_key(str(rows[0][1]), kind_for_text(str(rows[0][1])))
+    row = await (
+        await conn.execute(
+            "SELECT value, importance, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+            (layer, user_id, key),
+        )
+    ).fetchone()
+    if row is None:
+        return {"status": "error", "error": "no matching L4 fact to annotate"}
+    merged = _load_meta(row[2])
+    merged["annotated"] = annotation
+    await cmem.save(
+        user_id,
+        key,
+        str(row[0]),
+        importance=float(row[1]),
+        memory_kind=kind_for_text(str(rows[0][1])).value,
+        source="consolidation:annotate",
+        metadata=merged,
+    )
+    return {"status": "resolved", "decision": "annotate", "annotated_key": key}
+
+
+def _report_card_integrity(vrows: list[Any]) -> dict[str, Any]:
+    """E5: integrity score — D1.5 verify aggregates logged per recall."""
+    v_total = {"verified": 0, "dropped": 0}
+    for (details,) in vrows:
+        try:
+            d = _json.loads(details or "{}")
+            v_total["verified"] += int(d.get("verified", 0))
+            v_total["dropped"] += int(d.get("dropped", 0))
+        except (_json.JSONDecodeError, TypeError, ValueError, AttributeError):
+            continue
+    v_sum = v_total["verified"] + v_total["dropped"]
+    return {
+        "score": round(100.0 * v_total["verified"] / v_sum, 1) if v_sum else None,
+        **v_total,
+    }
+
+
 async def memory_watch(
     action: str,
     *,
@@ -647,73 +832,11 @@ async def memory_watch(
         raise RuntimeError("watch_rules table not initialized; run alembic upgrade head")
 
     if action == "list":
-        sql = "SELECT id, name, trigger, predicate, action, enabled, created_at FROM watch_rules"
-        params: tuple[Any, ...] = ()
-        if enabled_only:
-            sql += " WHERE enabled = 1"
-        sql += " ORDER BY id"
-        with _sqlite3.connect(str(db_path)) as conn:
-            rows = conn.execute(sql, params).fetchall()
-        rules: list[dict[str, Any]] = []
-        for r in rows:
-            rid, rname, rtrig, rpred, ract, renabled, _rcreated = r
-            try:
-                pred_obj = _json.loads(rpred)
-            except Exception:
-                pred_obj = {"raw": rpred}
-            cutoff = _time.time() - 86400
-            with _sqlite3.connect(str(db_path)) as conn:
-                hit = conn.execute(
-                    "SELECT count(*) FROM memory_dispatch_log WHERE event = ? AND created_at >= ?",
-                    (rtrig, cutoff),
-                ).fetchone()
-            rules.append(
-                {
-                    "id": int(rid),
-                    "name": rname,
-                    "trigger": rtrig,
-                    "predicate": pred_obj,
-                    "action": ract,
-                    "enabled": bool(renabled),
-                    "hits_24h": int(hit[0]) if hit else 0,
-                }
-            )
-        return {"status": "ok", "rules": rules}
-
+        return _watch_list(db_path, enabled_only)
     if action == "add":
-        if not name or not trigger or not predicate_json or not action_kind:
-            raise ValueError("add requires name, trigger, predicate_json, action_kind")
-        try:
-            pred_obj = _json.loads(predicate_json)
-        except Exception as e:
-            raise ValueError(f"predicate_json is not valid JSON: {e}") from e
-        if not isinstance(pred_obj, dict):
-            raise ValueError("predicate must be a JSON object")
-        _validate_predicate(pred_obj)
-        with _sqlite3.connect(str(db_path)) as conn:
-            cur = conn.execute(
-                "INSERT INTO watch_rules (name, trigger, predicate, action, enabled, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-                (name, trigger, _json.dumps(pred_obj, ensure_ascii=False), action_kind, _time.time()),
-            )
-            conn.commit()
-            return {"status": "ok", "id": int(cur.lastrowid or 0)}
-
-    if action == "disable":
-        if not rule_id:
-            raise ValueError("disable requires rule_id")
-        with _sqlite3.connect(str(db_path)) as conn:
-            conn.execute("UPDATE watch_rules SET enabled = 0 WHERE id = ?", (rule_id,))
-            conn.commit()
-        return {"status": "ok"}
-
-    if action == "delete":
-        if not rule_id:
-            raise ValueError("delete requires rule_id")
-        with _sqlite3.connect(str(db_path)) as conn:
-            conn.execute("DELETE FROM watch_rules WHERE id = ?", (rule_id,))
-            conn.commit()
-        return {"status": "ok"}
-
+        return _watch_add(db_path, name, trigger, predicate_json, action_kind)
+    if action in ("disable", "delete"):
+        return _watch_toggle_or_delete(db_path, action, rule_id)
     raise ValueError(f"unknown action: {action!r}")
 
 
@@ -754,65 +877,7 @@ async def memory_proposals(
 
         return {"status": "ok", "proposals": await list_pending(user_id, limit)}
     if action == "conflict":
-        from shared.constants import DB_NAME
-
-        from rag.conflict import ConflictResolver
-
-        p = payload or {}
-        group_id = str(p.get("group_id") or "")
-        decision = str(p.get("decision") or "")
-        if not group_id or decision not in ("supersede", "retain", "annotate"):
-            return {"status": "error", "error": "need group_id + decision in supersede/retain/annotate"}
-        if decision in ("supersede", "retain"):
-            # supersede: the new record wins, the old one goes away (group closed,
-            # the loser is archived by the resolver). retain: both truths, group
-            # closed the same way — the semantics differ in the agent's intent.
-            keep_id = int(p.get("keep_id") or 0)
-            if not keep_id:
-                return {"status": "error", "error": "keep_id required for supersede/retain"}
-            ok = await ConflictResolver().resolve(group_id, keep_id)
-            return {"status": "resolved" if ok else "error", "decision": decision}
-        # annotate: both records stay — the annotation links them in the metadata
-        # of the older side of the conflict (first row of the group = earlier; its
-        # key is the same _canonical_key binding as in the distiller's _mark_earlier_scope).
-        annotation = str(p.get("annotation") or "")
-        if not annotation:
-            return {"status": "error", "error": "annotation required for annotate"}
-        from core.memory import CoreMemory
-        from lifecycle.distiller import _canonical_key
-        from shared.memory_types import kind_for_text
-
-        conn = await connection_manager.get(DB_NAME)
-        try:
-            rows = await (
-                await conn.execute("SELECT id, content FROM memory_conflicts WHERE conflict_group_id=? ORDER BY id LIMIT 1", (group_id,))
-            ).fetchall()
-        except Exception:  # no conflicts table yet == group never existed
-            return {"status": "error", "error": f"unknown group {group_id}"}
-        cmem = CoreMemory(cm=connection_manager, layer=layer)
-        key = _canonical_key(str(rows[0][1]), kind_for_text(str(rows[0][1])))
-        row = await (
-            await conn.execute(
-                "SELECT value, importance, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
-                (layer, user_id, key),
-            )
-        ).fetchone()
-        if row is None:
-            return {"status": "error", "error": "no matching L4 fact to annotate"}
-        from core.memory import _load_meta
-
-        merged = _load_meta(row[2])
-        merged["annotated"] = annotation
-        await cmem.save(
-            user_id,
-            key,
-            str(row[0]),
-            importance=float(row[1]),
-            memory_kind=kind_for_text(str(rows[0][1])).value,
-            source="consolidation:annotate",
-            metadata=merged,
-        )
-        return {"status": "resolved", "decision": "annotate", "annotated_key": key}
+        return await _proposals_conflict(layer, user_id, payload or {})
     if action == "propose":
         from features.staging import propose
 
@@ -850,7 +915,6 @@ async def memory_report_card(
     """Operator digest: what automation did to memory in the window (C1.14 S5)."""
     if ctx is not None:
         _get_ctx(ctx)  # strict when called over MCP; CLI/one-liners pass ctx=None
-    import json as _json
     import sqlite3 as _sqlite3
     import time as _time
 
@@ -917,19 +981,7 @@ async def memory_report_card(
         "saved_graph": int(drow[3] or 0),
     }
     card["dream_markers"] = int(dreams[0] or 0)
-    v_total = {"verified": 0, "dropped": 0}
-    for (details,) in vrows:
-        try:
-            d = _json.loads(details or "{}")
-            v_total["verified"] += int(d.get("verified", 0))
-            v_total["dropped"] += int(d.get("dropped", 0))
-        except (_json.JSONDecodeError, TypeError, ValueError, AttributeError):
-            continue
-    v_sum = v_total["verified"] + v_total["dropped"]
-    card["integrity"] = {
-        "score": round(100.0 * v_total["verified"] / v_sum, 1) if v_sum else None,
-        **v_total,
-    }
+    card["integrity"] = _report_card_integrity(vrows)
     try:
         from features.diff import compute_session_gaps
         from mcp_server.context import AppContext
