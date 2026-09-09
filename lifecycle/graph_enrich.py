@@ -23,15 +23,15 @@ logger = logging.getLogger(__name__)
 # Content markers of raw-harness junk that must never live as graph nodes.
 _JUNK_LIKE = ("[{%", "%tool_use_id%", "%[ariel recall]%")
 
-# --- C6: трёхфазный dream (SYNAPSE §5) ---
-NREM_DECAY = 0.01  # −0.01 неактивным heuristic-рёбрам старше 30 дней
-NREM_BOOST = 0.05  # +0.05 свежим со-сработавшим (моложе суток)
-NREM_FLOOR = 0.05  # вес ниже floor — ребро не пережило сон (prune)
+# --- C6: three-phase dream (SYNAPSE §5) ---
+NREM_DECAY = 0.01  # -0.01 for inactive heuristic edges older than 30 days
+NREM_BOOST = 0.05  # +0.05 for freshly co-fired ones (younger than a day)
+NREM_FLOOR = 0.05  # weight below floor — the edge did not survive the sleep (prune)
 NREM_STALE_DAYS = 30.0
 NREM_FRESH_DAYS = 1.0
-REM_SIM_THRESHOLD = 0.7  # similarity изолированного узла к похожему
-REM_WEIGHT_SCALE = 0.3  # weight моста = sim × 0.3
-INSIGHT_MAX = 10  # абстракций за один сон
+REM_SIM_THRESHOLD = 0.7  # similarity of an isolated node to a similar one
+REM_WEIGHT_SCALE = 0.3  # bridge weight = sim × 0.3
+INSIGHT_MAX = 10  # abstractions per sleep
 
 
 async def _rows(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
@@ -40,9 +40,9 @@ async def _rows(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
 
 
 async def _dream_nrem(conn: Any, now: float) -> dict[str, int]:
-    """NREM spreading activation pass.
+    """Run the NREM spreading activation pass.
 
-    Свежие со-сработавшие heuristic-рёбра +0.05, старые неактивные −0.01;
+    Freshly co-fired heuristic edges +0.05, stale inactive ones −0.01;
     weight < floor — prune.
     """
     decayed = pruned = boosted = 0
@@ -65,11 +65,11 @@ async def _dream_nrem(conn: Any, now: float) -> dict[str, int]:
 
 
 async def _dream_rem(conn: Any, layer: str, now: float) -> int:
-    """REM: мосты изолированных узлов к похожим несвязанным, weight = sim × 0.3.
+    """Build REM bridges: isolated nodes to similar unlinked ones, weight = sim × 0.3.
 
-    Similarity — token Jaccard (len ≥ 3, rag.edm.tokens): детерминирован и не
-    зависит от hash-фолбэка эмбеддингов (случайные векторы ≠ поhash — модельные
-    косинусы на near-dup непредсказуемы).
+    Similarity — token Jaccard (len ≥ 3, rag.edm.tokens): deterministic and
+    independent of the embedding hash fallback (random vectors never match by
+    hash — model cosines on near-dups are unpredictable).
     """
     from rag.edm import tokens
 
@@ -117,10 +117,10 @@ async def _dream_rem(conn: Any, layer: str, now: float) -> int:
 
 
 async def _dream_insight(conn: Any, layer: str) -> int:
-    """Insight-абстракции из BFS-комьюнити.
+    """Build insight abstractions from BFS communities.
 
-    Связные компоненты → узлы node_type='insight' с частотным топ-токенами
-    summary, связанные с членами ребром 'insight_of'.
+    Connected components become node_type='insight' nodes with a top-token
+    frequency summary, linked to their members via 'insight_of' edges.
     """
     from collections import Counter
 
@@ -191,10 +191,10 @@ import time
 
 
 async def _dream(conn: Any, layer: str) -> dict[str, int]:
-    """Трёхфазный сон: NREM → REM → Insight.
+    """Run the three-phase sleep: NREM → REM → Insight.
 
-    NREM — spreading activation, REM — мосты, Insight — материализованные
-    абстракции.
+    NREM — spreading activation, REM — bridges, Insight — materialized
+    abstractions.
     """
     nrem = await _dream_nrem(conn, time.time())
     rem = await _dream_rem(conn, layer, time.time())
@@ -203,16 +203,16 @@ async def _dream(conn: Any, layer: str) -> dict[str, int]:
     return {"nrem_decayed": nrem["decayed"] + nrem["boosted"], "nrem_pruned": nrem["pruned"], "rem_bridged": rem, "insights": insights}
 
 
-# S18 п.4 (Memora cue-anchor prune): grace-окно якорей — минер мог ещё не добежать.
+# S18 item 4 (Memora cue-anchor prune): grace window for anchors — the miner may not have reached them yet.
 _ORPHAN_MIN_AGE_DAYS = 7
 
 
 async def _orphan_anchor_gc(conn: Any, layer: str) -> int:
-    """S18 п.4: derived-якоря 'episode:N' (fact/question) без рёбер старше 7д.
+    """Prune derived anchors 'episode:N' (fact/question) that are edge-less and older than 7d (S18 item 4).
 
-    Минеры создают узлы-якоря (provenance 'episode:N', zero-result question);
-    если source-запись вычищена, узел висит без входящих рёбер — мусор.
-    Узлы с любым ребром выживают; свежие (<7д) не трогаются.
+    Miners create anchor nodes (provenance 'episode:N', zero-result question);
+    when the source record is cleaned up, the node dangles with no incoming
+    edges — junk. Nodes with any edge survive; fresh ones (<7d) are untouched.
     """
     cutoff = time.time() - _ORPHAN_MIN_AGE_DAYS * 86400
     cur = await conn.execute(
@@ -263,13 +263,13 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
             res = await miner(cm, layer)
             miners[name] = {"edges": int(res.get("edges", 0))}
         except Exception as exc:
-            # Аудит 05.09 (P0): молчаливый сбой минера = граф тихо недополучает
-            # рёбра. Логируем и отражаем в отчёте, чтобы diagnose это видел.
+            # Audit 05.09 (P0): a silently failed miner means the graph quietly
+            # misses edges. Log it and reflect it in the report so diagnose sees it.
             logger.warning("miner %s failed: %s", name, exc)
-            miners[name] = {"edges": -1, "error": str(exc)[:200]}  # -1 = сбой (edges не отрицательные)
+            miners[name] = {"edges": -1, "error": str(exc)[:200]}  # -1 = failure (edge counts are non-negative)
 
-    # S17 доп.11: HDBSCAN-кластеры MIB-векторов + сверка с louvain — отчётная
-    # секция за флагом (graph.embed_clusters, default off — shape отчёта стабилен).
+    # S17 addendum 11: HDBSCAN clusters of MIB vectors + cross-check against louvain — a
+    # report section behind a flag (graph.embed_clusters, default off — the report shape stays stable).
     from config import config
 
     if bool(config.get("graph", "embed_clusters", default=False)):
@@ -280,13 +280,13 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
             if cluster_report.get("clusters"):
                 miners["embedding"]["clusters"] = cluster_report["clusters"]
 
-    # G5 sanitation: validity recheck (рёбра вне окна → status='expired').
+    # G5 sanitation: validity recheck (edges outside the window → status='expired').
     from lifecycle.graph_sanitation import validate_edges
 
     expired = await validate_edges(conn)
 
-    # G5 sanitation valence: факт-узлы классифицируются по валентности их рёбер
-    # (classify_fact) → тег 'valence:<bucket>' (primary не тегируется — по умолчанию).
+    # G5 sanitation valence: fact nodes are classified by the valence of their edges
+    # (classify_fact) → 'valence:<bucket>' tag ('primary' is not tagged — the default).
     valence_tagged = 0
     try:
         from lifecycle.graph_sanitation import classify_fact
@@ -313,7 +313,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     except Exception as exc:
         logger.warning("valence tagging failed: %s", exc)
 
-    # G5 sanitation centrality: топ-степень слоя без MOC/auto_index-хабов (Ar9av) — в ночной отчёт.
+    # G5 sanitation centrality: top degree of the layer excluding MOC/auto_index hubs (Ar9av) — for the nightly report.
     centrality_top: list[int] = []
     try:
         from lifecycle.graph_sanitation import centrality_candidates
@@ -322,19 +322,19 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     except Exception as exc:
         logger.warning("centrality top failed: %s", exc)
 
-    # S6b behavior-аннотации: per-tool статистика в отчёте (Stage 2 hints).
+    # S6b behavior annotations: per-tool statistics in the report (Stage 2 hints).
     from lifecycle.tool_stats import tool_behavior_stats
 
     behavior: dict[str, dict[str, float]] = {}
     with contextlib.suppress(Exception):
         behavior = await tool_behavior_stats()
 
-    # S18 п.4 orphan-anchor GC — ПЕРЕД dream: REM мостит изолированные узлы
-    # (якоря 'episode:N' токенизируются одинаково → Jaccard 1.0 → мост),
-    # поэтому безрёберные якоря надо убрать до фазы сна.
+    # S18 item 4 orphan-anchor GC — BEFORE the dream: REM bridges isolated nodes
+    # (anchors 'episode:N' tokenize identically → Jaccard 1.0 → a bridge),
+    # so edge-less anchors must be removed before the sleep phase.
     orphaned = await _orphan_anchor_gc(conn, layer)
 
-    # S18 п.9 gap-registry: question-эпизоды + zero-result хвосты (best-effort).
+    # S18 item 9 gap-registry: question episodes + zero-result tails (best-effort).
     gap_written = 0
     try:
         from lifecycle.gap_registry import build_registry
@@ -343,12 +343,12 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     except Exception as exc:
         logger.debug("gap registry skipped: %s", exc)
 
-    # C6: трёхфазный dream — NREM decay/prune → REM bridge → Insight abstracts.
+    # C6: three-phase dream — NREM decay/prune → REM bridge → Insight abstracts.
     dream: dict[str, int] = {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0}
     with contextlib.suppress(Exception):
         dream = await _dream(conn, layer)
 
-    # C8 segment-consolidation: Lychee boundary-карта суточного L0 (отчёт).
+    # C8 segment-consolidation: Lychee boundary map of the daily L0 (report).
     segment_map: dict[str, Any] = {}
     try:
         from lifecycle.segment_consolidation import segment_l0
@@ -357,8 +357,8 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     except Exception as exc:
         logger.debug("segment map skipped: %s", exc)
 
-    # A1.6 wiki-комьюнити (louvain по wiki_page-узлам) — в ночной отчёт
-    # для MOC-подсказок. networkx отсутствует → деградирует тихо.
+    # A1.6 wiki communities (louvain over wiki_page nodes) — into the nightly
+    # report for MOC hints. Degrades silently when networkx is missing.
     communities: list[dict[str, Any]] = []
     try:
         from lifecycle.wiki_communities import detect_communities

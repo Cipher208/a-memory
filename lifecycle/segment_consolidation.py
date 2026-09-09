@@ -1,20 +1,20 @@
-"""LycheeMemory V2 boundary detection (draft v37, Eq1-4) — L0-сегментация.
+"""LycheeMemory V2 boundary detection (draft v37, Eq1-4) — L0 segmentation.
 
-LLM-free сегментатор L0-журнала: записи группируются в семантически-связные
-сегменты на границах surprise/cohesion:
+LLM-free segmenter of the L0 journal: records are grouped into semantically
+coherent segments at surprise/cohesion boundaries:
 
-- Eq1: s_t = 1 − max(sim(e_t, c_k), sim(e_t, h_k)) — surprise против центроида
-  сегмента И последнего элемента;
-- Eq3: d_t = max(0, Coh(S_k) − Coh(S_k ∪ {x_t})) — падение когезии при
-  добавлении записи;
-- Eq2(σ-форма): p_t = σ(b + w_s·s_t + w_c·d_t + w_l·L_t) — вероятность границы;
-  cut при p_t > δ=0.50 или token cap (сегмент ≤ cap токенов / ≤ max_turns записей).
+- Eq1: s_t = 1 − max(sim(e_t, c_k), sim(e_t, h_k)) — surprise against the
+  segment centroid AND the last element;
+- Eq3: d_t = max(0, Coh(S_k) − Coh(S_k ∪ {x_t})) — cohesion drop when a
+  record is added;
+- Eq2 (σ-form): p_t = σ(b + w_s·s_t + w_c·d_t + w_l·L_t) — boundary probability;
+  cut at p_t > δ=0.50 or token cap (segment ≤ cap tokens / ≤ max_turns records).
 
-Similarity — token-Jaccard (детерминированный, без зависимости от hash-фолбэка
-эмбеддингов; тот же выбор, что в graph_enrich REM). Константы (b, w_s, w_c, w_l)
-— приближение Table 10 статьи; δ=0.50 и cap'ы 300/600/900 взяты дословно.
-Партиционирование фиксированной ширины даёт 82.40 (fixed-window ablation),
-boundary detection — 89.22 LoCoMo: границы не фигня.
+Similarity is token-Jaccard (deterministic, no dependence on the hash fallback
+of embeddings; the same choice as in graph_enrich REM). Constants (b, w_s, w_c, w_l)
+approximate Table 10 of the paper; δ=0.50 and the caps 300/600/900 are taken verbatim.
+Fixed-width partitioning gives 82.40 (fixed-window ablation), boundary detection —
+89.22 LoCoMo: the boundaries are not noise.
 """
 
 from __future__ import annotations
@@ -24,10 +24,10 @@ from typing import Any
 
 from shared.constants import DB_NAME
 
-DELTA = 0.50  # порог границы (статья Table 10)
-SEGMENT_TOKEN_CAP = 900  # cap сегмента (300/600/900 в статье; крупный для L0)
-MAX_TURNS = 10  # max записей на сегмент
-# σ-константы (приближение Table 10: surprise доминирует, cohesion-дроп второй)
+DELTA = 0.50  # boundary threshold (paper Table 10)
+SEGMENT_TOKEN_CAP = 900  # segment cap (300/600/900 in the paper; the large one for L0)
+MAX_TURNS = 10  # max records per segment
+# σ-constants (approximation of Table 10: surprise dominates, cohesion drop second)
 SIG_B, W_S, W_C, W_L = -2.0, 2.0, 1.0, 0.5
 
 
@@ -37,7 +37,7 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 
 def _cohesion(segments_tokens: list[set[str]]) -> float:
-    """Coh(S) = средняя попарная Jaccard-похожесть токенов сегмента (0 для <2)."""
+    """Return Coh(S), the mean pairwise token-Jaccard similarity of the segment (0 for <2 items)."""
     n = len(segments_tokens)
     if n < 2:
         return 0.0
@@ -55,7 +55,7 @@ def _sigmoid(x: float) -> float:
 
 
 def detect_boundaries(records: list[tuple[int, str]], token_cap: int = SEGMENT_TOKEN_CAP) -> list[list[int]]:
-    """Eq1-4: [l0_id, text] → список сегментов (списки l0_id, порядок сохранён)."""
+    """Apply Eq1-4 to [l0_id, text] records -> list of segments (l0_id lists, order preserved)."""
     if not records:
         return []
     from rag.edm import tokens
@@ -66,9 +66,9 @@ def detect_boundaries(records: list[tuple[int, str]], token_cap: int = SEGMENT_T
     cur_tokens_total = 0
     for rid, text in records:
         toks = tokens(text)
-        est = len(text) // 4 or 1  # грубая токен-оценка для cap
+        est = len(text) // 4 or 1  # rough token estimate for the cap
         if cur_ids:
-            # Eq1: surprise против центроида и последнего элемента
+            # Eq1: surprise against the centroid and the last element
             centroid: set[str] = set().union(*cur_tokens) if cur_tokens else set()
             sim_last = _jaccard(toks, cur_tokens[-1])
             sim_centroid = _jaccard(toks, centroid)
@@ -90,11 +90,12 @@ def detect_boundaries(records: list[tuple[int, str]], token_cap: int = SEGMENT_T
 
 
 async def segment_l0(since_hours: float = 24.0, layer: str = "user") -> dict[str, Any]:
-    """Сегментировать недавние L0-записи (nightly-оператор). Возвращает статистику.
+    """Segment recent L0 records (nightly operator). Returns statistics.
 
-    Сегментация сейчас — отчётная (карта связных батчей для консолидации);
-    этап «один LLM-вызов на сегмент» в a-memory не нужен: дистиллятор уже
-    LLM-free, сегменты потребляет ночной graph_enrich как группировку.
+    Segmentation is currently report-only (a map of coherent batches for
+    consolidation); the "one LLM call per segment" stage is not needed in
+    a-memory: the distiller is already LLM-free, and the nightly graph_enrich
+    consumes the segments as a grouping.
     """
     from shared.connection import connection_manager
 

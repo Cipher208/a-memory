@@ -18,6 +18,13 @@ HOT_FILES = [
     "lifecycle/distiller.py",
     "rag/dual_route.py",
     "rag/ablation.py",
+    "lifecycle/graph_enrich.py",
+    "lifecycle/graph_sanitation.py",
+    "mcp_server/utils/privacy.py",
+    "mcp_server/annotations.py",
+    "core/memory.py",
+    "lifecycle/l0_tiers.py",
+    "lifecycle/segment_consolidation.py",
 ]
 
 ROOT = Path(__file__).resolve().parents[1]

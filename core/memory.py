@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def _load_meta(raw: Any) -> dict[str, Any]:
-    """Metadata — JSON-строка в колонке; битый/чужой формат → {} (не роняем чтение)."""
+    """Load metadata from a JSON string column; malformed/foreign format -> {} (reads never crash)."""
     try:
         parsed = json.loads(raw) if raw else {}
     except (TypeError, ValueError):
@@ -41,7 +41,7 @@ class CoreEntry:
     memory_kind: str
     created_at: float
     updated_at: float
-    expired: bool = False  # S5 (Memanto): expires_at < now на момент чтения
+    expired: bool = False  # S5 (Memanto): expires_at < now at read time
 
 
 class CoreMemory:
@@ -71,7 +71,7 @@ class CoreMemory:
             CREATE INDEX IF NOT EXISTS idx_core_importance ON core_memory(layer, user_id, importance DESC);
         """,
         )
-        # C8 self-healing: колонка visibility для живых БД (миграция g21).
+        # C8 self-healing: add visibility column to live DBs (g21 migration).
         with contextlib.suppress(Exception):
             conn = await self._cm.get(DB_NAME)
             await conn.execute("ALTER TABLE core_memory ADD COLUMN visibility TEXT NOT NULL DEFAULT 'visible'")
@@ -296,8 +296,8 @@ class CoreMemory:
     async def get_intervals(self, user_id: str, key: str, changed_since: float | None = None) -> list[dict[str, Any]]:
         """A2.1: the full value interval chain for a key (oldest first).
 
-        S18 (Memanto): changed_since → только интервалы с valid_from >= порога
-        (дельта-поллинг «что изменилось с X»); None — вся цепочка как раньше.
+        S18 (Memanto): changed_since returns only intervals with valid_from >= the threshold
+        (delta polling of "what has changed since X"); None returns the whole chain as before.
         """
         conn = await self._cm.get(DB_NAME)
         sql = "SELECT value, importance, memory_kind, valid_from, valid_to FROM core_memory_temporal WHERE layer=? AND user_id=? AND key=?"
@@ -324,15 +324,15 @@ class CoreMemory:
         )
         rows = await cursor.fetchall()
         entries = [self._row_to_entry(r, now=now) for r in rows]
-        # S5 (Memanto): мягкое истечение — expired остаются recallable с меткой
-        # [EXPIRED] (значение в БД не трогается, полем expired читается точно).
+        # S5 (Memanto): soft expiry — expired entries stay recallable with an
+        # [EXPIRED] prefix (DB value untouched, expired flag still reads exactly).
         for e in entries:
             if e.expired:
                 e.value = "[EXPIRED] " + e.value
         return entries
 
     async def get_pinned(self, user_id: str, limit: int = 10) -> list[CoreEntry]:
-        """C8: pinned-факты — всегда в inject, независимо от важности/бюджет-конкуренции."""
+        """C8: pinned facts are always injected, regardless of importance/budget competition."""
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "SELECT * FROM core_memory WHERE layer=? AND user_id=? AND visibility='pinned' ORDER BY updated_at DESC LIMIT ?",
@@ -376,11 +376,11 @@ class CoreMemory:
         matched-word count then importance. Single-word queries behave
         exactly like the old whole-phrase LIKE.
 
-        B2 is_current-view: earlier-сторона conflict-split пары скрыта, если
-        later-версия существует ГЛОБАЛЬНО (key '::vN' по C4-версионированию
-        или same-key с scope=later) — даже когда пара не сошлась на одной
-        странице выдачи. include_superseded=True возвращает скрытые строки
-        (is_current=False); каждый item несёт is_current.
+        B2 is_current view: the earlier side of a conflict-split pair is hidden if
+        a later version exists GLOBALLY (key '::vN' per C4 versioning, or same-key
+        with scope=later) — even when the pair does not land on the same result
+        page. include_superseded=True returns hidden rows (is_current=False);
+        every item carries is_current.
         """
         layer = layer or self.layer
         conn = await self._cm.get(DB_NAME)
@@ -393,7 +393,7 @@ class CoreMemory:
         for t in tokens:
             like_params.extend([f"%{t}%", f"%{t}%"])
         # Overfetch so Python-side ranking can prefer more-matching rows.
-        # C8: private-факты не покидают стор через recall (inject pinned-блок их не читает).
+        # C8: private facts never leave the store via recall (the inject pinned block does not read them).
         sql = f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND visibility != 'private' AND ({like_conds}) ORDER BY importance DESC LIMIT ?"
         cursor = await conn.execute(sql, (layer, user_id, *like_params, max(limit * 10, 50)))
         rows = await cursor.fetchall()
@@ -408,17 +408,17 @@ class CoreMemory:
 
         now = time.time()
         picked = scored[:limit]
-        # S2 read-time fusion (приоритетнее gate-time): если в выдаче сошлась
-        # пара condition-splitting (metadata scope 'earlier' + 'later') —
-        # 'earlier' скрывается из выдачи, 'later' аннотируется
-        # superseded_context. Строки в БД остаются — история не теряется.
+        # S2 read-time fusion (takes priority over gate-time): if a
+        # condition-splitting pair (metadata scope 'earlier' + 'later') met in the
+        # results — the 'earlier' row is hidden from the output, the 'later' one is
+        # annotated superseded_context. Rows stay in the DB — history is not lost.
         picked_metas = [(_load_meta(r["metadata"]), str(r["key"])) for _, _, r in picked]
-        superseded_keys: set[str] = set()  # ключи earlier-строк, скрытых парой
-        fused_later: set[int] = set()  # индексы later-строк в picked
+        superseded_keys: set[str] = set()  # keys of earlier rows hidden by a pair
+        fused_later: set[int] = set()  # indices of later rows in picked
         for i, (meta, key) in enumerate(picked_metas):
             if meta.get("scope") != "later":
                 continue
-            # пара: по contradicts-ссылке на ключ ранней, иначе same-key
+            # pair: via the contradicts reference to the earlier key, else same-key
             ref = meta.get("contradicts")
             ref_key = str(ref) if ref is not None else key
             for j, (meta_j, key_j) in enumerate(picked_metas):
@@ -426,10 +426,10 @@ class CoreMemory:
                     superseded_keys.add(key_j)
                     fused_later.add(i)
                     break
-        # B2 is_current: off-page пара. earlier скрыта, если later существует
-        # глобально — по C4-версионированию ключа (key '::vN') или same-key
-        # с scope=later (SQL key=? не матчит саму earlier-строку с scope=
-        # earlier; метаданные парсим Python-ом — json_extract не нужен).
+        # B2 is_current: off-page pair. earlier is hidden if later exists
+        # globally — via C4 key versioning (key '::vN') or same-key with
+        # scope=later (SQL key=? does not match the earlier row itself with
+        # scope=earlier; metadata is parsed in Python — json_extract not needed).
         for meta, key in picked_metas:
             if meta.get("scope") != "earlier" or key in superseded_keys:
                 continue
@@ -447,7 +447,7 @@ class CoreMemory:
         for i, (_, _, r) in enumerate(picked):
             meta, key = picked_metas[i]
             if meta.get("scope") == "earlier" and key in superseded_keys and not include_superseded:
-                continue  # скрыта fusion'ом/B2 — осталась в core_memory
+                continue  # hidden by fusion/B2 — still stored in core_memory
             item: dict[str, Any] = {
                 "key": key,
                 "value": str(r["value"]),
@@ -460,8 +460,8 @@ class CoreMemory:
             }
             if i in fused_later:
                 item["superseded_context"] = {"scope": "later", "has_earlier": True}
-            # S5 (Memanto): мягкое истечение — expired остаётся в выдаче с
-            # меткой [EXPIRED] и restorable-провенансом имени правила.
+            # S5 (Memanto): soft expiry — expired stays in results with an
+            # [EXPIRED] prefix and restorable provenance of the rule name.
             if r["expires_at"] is not None and float(r["expires_at"]) < now:
                 item["value"] = "[EXPIRED] " + item["value"]
                 item["expired"] = True

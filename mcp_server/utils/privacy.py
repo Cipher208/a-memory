@@ -35,7 +35,7 @@ def strip_secrets(text: str, replacement: str = "[REDACTED]") -> str:
 
 # G0 privacy gate: secrets/PII → stable typed placeholders ⟨KIND_N⟩.
 _NER_LABELS = {"PERSON", "ORG", "GPE", "LOC"}
-# ru_core_news_sm (S19): PER/ORG/LOC вместо en-овских PERSON/ORG/GPE/LOC.
+# ru_core_news_sm (S19): PER/ORG/LOC instead of the en-model's PERSON/ORG/GPE/LOC.
 _RU_NER_LABELS = {"PER", "ORG", "LOC"}
 
 _PII_PATTERNS: list[tuple[str, Pattern[str]]] = [
@@ -50,7 +50,7 @@ _ner_breaker = None
 
 
 def _get_nlp() -> Any:
-    """Lazy process-wide spaCy NER (en_core_web_sm; ru-проза не парсится — ок)."""
+    """Lazy process-wide spaCy NER (en_core_web_sm; Cyrillic prose is not parsed — fine)."""
     global _nlp
     if _nlp is None:
         import spacy
@@ -60,10 +60,10 @@ def _get_nlp() -> Any:
 
 
 def _ru_ner_enabled() -> bool:
-    """S19: ru_core_news_sm на privacy-гейте.
+    """S19: ru_core_news_sm on the privacy gate.
 
-    Default on — при падении breaker деградирует к en-модели/regex;
-    отключение — config rag.ru_ner=false.
+    Default on — on failure the breaker degrades to the en-model/regex;
+    disable via config rag.ru_ner=false.
     """
     from config import config
 
@@ -71,11 +71,11 @@ def _ru_ner_enabled() -> bool:
 
 
 def _get_ru_nlp() -> Any:
-    """Lazy ru_core_news_sm + circuit breaker (паттерн _embedding_breaker).
+    """Lazy ru_core_news_sm + circuit breaker (_embedding_breaker pattern).
 
-    3 подряд сбоя загрузки/прогона → breaker открыт 60с, sanitize живёт на
-    en-модели + словаре + regex. Модель не установлена → None без сбоев
-    (деградация — нормальный режим, не поломка).
+    3 load/run failures in a row → breaker open for 60s; sanitize then runs
+    on the en-model + dictionary + regex. Model not installed → None without
+    failures (degradation is a normal mode, not a breakage).
     """
     global _ru_nlp, _ner_breaker
     if _ru_nlp is not None:
@@ -92,19 +92,19 @@ def _get_ru_nlp() -> Any:
         _ru_nlp = spacy.load("ru_core_news_sm")
         _ner_breaker.record_success()
     except Exception:
-        # Не установлен или сломан — breaker копит сбои, повторная попытка
-        # только после recovery_timeout (не на каждом сообщении).
+        # Not installed or broken — breaker accumulates failures, retry only
+        # after recovery_timeout (not on every message).
         _ner_breaker.record_failure()
         _ru_nlp = None
     return _ru_nlp
 
 
 def _ru_personas() -> frozenset[str]:
-    """Словарь персон проекта: config rag.ru_personas + классы rag.synonyms.
+    """Project persona dictionary: config rag.ru_personas + rag.synonyms classes.
 
-    Каждая персона расширяется синонимами в ОБЕ стороны (тот же _canon-класс,
-    что в graph_miners: «Лили»/«Lily»/«лисёныш» → одна персона). Config —
-    единственный источник имён; в коде ничего не хардкодится.
+    Each persona is expanded with synonyms in BOTH directions (same _canon
+    class as in graph_miners: "Lili"/"Lily"/"lisyonysh" → one persona). The
+    config is the single source of names; nothing is hardcoded in code.
     """
     from config import config
     from rag.synonyms import load_synonyms
@@ -113,7 +113,7 @@ def _ru_personas() -> frozenset[str]:
     syn = load_synonyms()
     for name in list(personas):
         low = name.lower()
-        # обе стороны: собственные синонимы + все ключи, чьим синонимом является имя
+        # both directions: own synonyms + all keys for which the name is a synonym
         personas |= set(syn.get(low, []))
         personas |= {k for k, vs in syn.items() if low in (v.lower() for v in vs)}
     return frozenset(personas)
@@ -123,7 +123,7 @@ _ru_re_cache: tuple[frozenset[str], Pattern[str]] | None = None
 
 
 def _ru_persona_re(personas: frozenset[str]) -> Pattern[str]:
-    r"""Word-boundary regex по словарю (re.UNICODE — \b работает и на кириллице)."""
+    r"""Word-boundary regex over the dictionary (re.UNICODE — \b works on Cyrillic too)."""
     global _ru_re_cache
     if _ru_re_cache is None or _ru_re_cache[0] != personas:
         alts = "|".join(sorted((re.escape(p) for p in personas), key=len, reverse=True))
@@ -132,7 +132,7 @@ def _ru_persona_re(personas: frozenset[str]) -> Pattern[str]:
 
 
 def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
-    """Replace secrets/PII with stable typed placeholders. Reverse map не персистится."""
+    """Replace secrets/PII with stable typed placeholders. Reverse map is not persisted."""
     if not text:
         return text, {}
 
@@ -156,9 +156,10 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
 
         out = pattern.sub(_sub, out)
 
-    # ru-persona tier: структурный словарь ДЕШЕВЛЕ spaCy и ловит то, что
-    # en-NER пропускает (sentence-initial кириллические имена) — поэтому ДО NER.
-    # Работает и при use_ner=False (словарь не зависит от NER-доступности).
+    # ru-persona tier: the structured dictionary is CHEAPER than spaCy and
+    # catches what en-NER misses (sentence-initial Cyrillic names) — hence
+    # BEFORE NER. Also works with use_ner=False (dictionary does not depend
+    # on NER availability).
     try:
         personas = _ru_personas()
         if personas:
@@ -167,14 +168,14 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
                 return _placeholder("PERSON_RU", match.group(0))
 
             out = _ru_persona_re(personas).sub(_sub_ru, out)
-    except Exception:  # noqa: S110 — словарь недоступен: следующие тиры отработают
+    except Exception:  # noqa: S110 — dictionary unavailable: the next tiers will handle it
         pass
 
     if use_ner:
-        # S19: ru-NER на кириллице (ru_core_news_sm), en-NER на латинице.
-        # Garbage guard ru-модели (S19-спека: ru-NER шумит на коротких текстах):
-        # PER/ORG/LOC ≤ 4 токенов И ≥ 2 символов; 1-символьные и чисто-цифровые
-        # спаны — шум токенизатора, не персона. Отказ ru-модели → en-путь как есть.
+        # S19: ru-NER for Cyrillic (ru_core_news_sm), en-NER for Latin script.
+        # ru-model garbage guard (S19 spec: ru-NER is noisy on short texts):
+        # PER/ORG/LOC ≤ 4 tokens AND ≥ 2 chars; 1-char and all-digit spans
+        # are tokenizer noise, not a person. ru-model failure → en-path as is.
         has_cyr_input = any("\u0400" <= ch <= "\u04ff" for ch in out)
         ru_doc = None
         if has_cyr_input and _ru_ner_enabled():
@@ -186,10 +187,11 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
             try:
                 taken = [(m.start(), m.end()) for m in re.finditer("⟨[^⟩]*⟩", out)]
                 for ent in reversed(ru_doc.ents):
-                    # Garbage guard (S19, спена «ru-NER шумит»): PER без фамилии —
-                    # почти всегда нарицательное с заглавной («Кисонька вышла»);
-                    # настоящие имена ru-модель даёт 2-3 токенами. ORG/LOC
-                    # одиночные легитимны (Baltschug, Москва) — держим.
+                    # Garbage guard (S19, spec "ru-NER is noisy"): PER without
+                    # a surname is almost always a capitalized common noun
+                    # ("Kisonka vyshla"); real names the ru-model gives as
+                    # 2-3 tokens. Single-token ORG/LOC are legitimate
+                    # (Baltschug, Moskva) — keep them.
                     is_noisy_per = ent.label_ == "PER" and len(ent) < 2
                     if (
                         ent.label_ in _RU_NER_LABELS
@@ -201,22 +203,23 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
                     ):
                         key = _placeholder(ent.label_, ent.text)
                         out = out[: ent.start_char] + key + out[ent.end_char :]
-            except Exception:  # noqa: S110 — ru-NER прогон не удался: следующий тир отработает
+            except Exception:  # noqa: S110 — ru-NER run failed: the next tier will handle it
                 pass
-        # en-NER только на латинице: чисто-кириллический текст en-модель парсит
-        # мусором (guard всё фильтровал, но инференс был waste) — skip.
+        # en-NER only on Latin script: purely Cyrillic text gets parsed by
+        # the en-model into garbage (the guard filtered it all out, but the
+        # inference was wasted) — skip.
         has_latin = any(ch.isascii() and ch.isalpha() for ch in out)
         if has_latin:
             try:
                 doc = _get_nlp()(out)
-                # span'ы уже вставленных ⟨...⟩ placeholder'ов — NER их не перезатирает
+                # spans of already-inserted ⟨...⟩ placeholders — NER must not overwrite them
                 taken = [(m.start(), m.end()) for m in re.finditer("⟨[^⟩]*⟩", out)]
-                # reversed: спаны справа не смещают офсеты слева
+                # reversed: spans on the right do not shift offsets on the left
                 for ent in reversed(doc.ents):
-                    # Garbage guard: на ru/lorem-тексте en-модель выдаёт мусорные
-                    # спаны (целая фраза, "D"*200) — маскируем только короткие.
-                    # Кириллический спан >1 токена — проза, за которую en-модель
-                    # берётся после вставки placeholder'ов — тоже мусор.
+                    # Garbage guard: on ru/lorem text the en-model emits garbage
+                    # spans (a whole phrase, "D"*200) — mask only short ones.
+                    # A Cyrillic span of >1 token is prose that the en-model
+                    # grabs after placeholder insertion — garbage too.
                     has_cyr = any("\u0400" <= ch <= "\u04ff" for ch in ent.text)
                     if (
                         ent.label_ in _NER_LABELS
@@ -227,6 +230,6 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
                     ):
                         key = _placeholder(ent.label_, ent.text)
                         out = out[: ent.start_char] + key + out[ent.end_char :]
-            except Exception:  # noqa: S110 — NER недоступен: regex-тир уже отработал
+            except Exception:  # noqa: S110 — NER unavailable: the regex tier already ran
                 pass
     return out, mapping

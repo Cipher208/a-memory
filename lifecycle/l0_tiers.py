@@ -1,14 +1,15 @@
-"""S6 — три тира l0_journal: горячий / тёплый / холодный (+ CLACK-экспорт).
+"""S6 — three tiers of l0_journal: hot / warm / cold (+ CLACK export).
 
-- горячий 0–30д: нетронут;
-- тёплый 30–180д (обработанные): text → extractive-превью (первые ~2
-  предложения), полный текст уезжает в text_z BLOB (zlib, lossless);
-- холодный >180д (обработанные): перенос в l0_cold_archive с PLAINTEXT
-  полным текстом (LLM читает напрямую, без распаковки), строка удаляется
-  из l0_journal; месяц записи выгружается в <data_dir>/l0_cold/<month>.clack.jsonl
-  (CLACK: одна строка = один JSON-блок = мета decision-vector + plaintext).
+- hot 0–30d: untouched;
+- warm 30–180d (processed): text -> extractive preview (first ~2
+  sentences), full text moves into the text_z BLOB (zlib, lossless);
+- cold >180d (processed): moved to l0_cold_archive with the PLAINTEXT
+  full text (the LLM reads it directly, no decompression), and the row is
+  deleted from l0_journal; the record's month is exported to
+  <data_dir>/l0_cold/<month>.clack.jsonl
+  (CLACK: one line = one JSON block = decision-vector meta + plaintext).
 
-received-статус НИКОГДА не архивируется и не режется. Гейт: l0.tiers_enabled.
+The received status is NEVER archived or truncated. Gate: l0.tiers_enabled.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from config import config
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
-# Обработанные статусы (S1): received → один из этих. received не тирится никогда.
+# Processed statuses (S1): received is one of these. received is never tiered.
 _PROCESSED = ("promoted_l4", "saved_l3", "gated_out")
 _PLACEHOLDERS = ",".join("?" * len(_PROCESSED))
 
@@ -37,13 +38,13 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…。])\s+")
 
 
 def _preview(text: str) -> str:
-    """Extractive-превью: первые ~2 предложения (жёсткий cap по символам)."""
+    """Build an extractive preview: first ~2 sentences (hard cap on characters)."""
     parts = _SENTENCE_SPLIT.split(text.strip(), maxsplit=_PREVIEW_SENTENCES)
     return " ".join(parts[:_PREVIEW_SENTENCES]).strip()[:_PREVIEW_CAP]
 
 
 async def _ensure_schema(cm: Any) -> None:
-    """Idempotent schema setup — зеркало миграции g22 для живых БД до неё."""
+    """Create the schema idempotently — mirror of migration g22 for live DBs before it runs."""
     conn = await cm.get(DB_NAME)
     await conn.execute(
         """CREATE TABLE IF NOT EXISTS l0_cold_archive (
@@ -62,7 +63,7 @@ async def _ensure_schema(cm: Any) -> None:
         "ALTER TABLE l0_journal ADD COLUMN tier TEXT",
         "ALTER TABLE l0_journal ADD COLUMN text_z BLOB",
     ):
-        with contextlib.suppress(Exception):  # колонка уже есть
+        with contextlib.suppress(Exception):  # column already exists
             await conn.execute(ddl)
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_cold_ts ON l0_cold_archive(ts)")
 
@@ -79,10 +80,10 @@ async def tier_l0(
     now: float | None = None,
     cm: Any | None = None,
 ) -> dict[str, Any]:
-    """Ночной проход по тирам. Возвращает счётчики для отчёта backup_cron.
+    """Run the nightly tiering pass. Returns counters for the backup_cron report.
 
-    received не трогается; обработанные 30–180д → warm (превью + zlib),
-    обработанные >180д → cold archive (plaintext) + удаление из журнала.
+    received is untouched; processed 30–180d -> warm (preview + zlib),
+    processed >180d -> cold archive (plaintext) + deletion from the journal.
     """
     if not config.get("l0", "tiers_enabled", default=True):
         return {"warm": 0, "cold": 0, "skipped": "disabled"}
@@ -94,7 +95,7 @@ async def tier_l0(
     cold_cutoff = ts_now - 180 * 86400
     archived_at = time.time()
 
-    # --- холодный тир: >180д, обработанные → l0_cold_archive + удаление ---
+    # --- cold tier: >180d, processed -> l0_cold_archive + deletion ---
     cold_rows = list(
         await (
             await conn.execute(
@@ -112,7 +113,7 @@ async def tier_l0(
         if text_z:
             with contextlib.suppress(Exception):
                 full = zlib.decompress(bytes(text_z)).decode("utf-8")
-        # id явно = PK архива: повторный прогон идемпотентен (OR IGNORE), дублей нет
+        # id is explicitly the archive PK: re-runs are idempotent (OR IGNORE), no duplicates
         await conn.execute(
             """INSERT OR IGNORE INTO l0_cold_archive
                (id, ts, event, raw_type, layer, user_id, decisions, archived_at, text)
@@ -122,7 +123,7 @@ async def tier_l0(
         await conn.execute("DELETE FROM l0_journal WHERE id = ?", (rid,))
         months.add(time.strftime("%Y-%m", time.gmtime(ts)))
 
-    # --- тёплый тир: 30–180д, обработанные, ещё не тёплые → превью + zlib ---
+    # --- warm tier: 30–180d, processed, not yet warm -> preview + zlib ---
     warm_rows = list(
         await (
             await conn.execute(
@@ -144,10 +145,10 @@ async def tier_l0(
 
 
 async def read_cold(since_days: float, *, cm: Any | None = None) -> list[dict[str, Any]]:
-    """Мета-блоки (decision vector) из холодного архива за окно since_days.
+    """Return meta blocks (decision vector) from the cold archive for the since_days window.
 
-    Потребитель решает по мете {id, ts, event, raw_type, layer, user_id,
-    decisions, archived_at, brief} без вызовов; text — полный plaintext.
+    The consumer decides from the meta {id, ts, event, raw_type, layer, user_id,
+    decisions, archived_at, brief} without calls; text is the full plaintext.
     """
     cm = cm or connection_manager
     conn = await cm.get(DB_NAME)
@@ -184,15 +185,15 @@ def _write_file(path: Path, content: str) -> None:
 
 
 async def export_clack(month: str, *, cm: Any | None = None) -> str:
-    """CLACK-файл месяца: data_dir/l0_cold/<month>.clack.jsonl.
+    """Write the month's CLACK file: data_dir/l0_cold/<month>.clack.jsonl.
 
-    Одна строка = один JSON-блок (полная мета + plaintext text) — формат
-    читается любой LLM как есть, без распаковки; файл перезаписывается
-    целиком (идемпотентно, полная выгрузка месяца из архива).
+    One line = one JSON block (full meta + plaintext text) — the format is
+    readable by any LLM as is, without decompression; the file is rewritten
+    in full (idempotently, a full export of the month from the archive).
     """
     cm = cm or connection_manager
     y, m = (int(p) for p in month.split("-"))
-    start = datetime(y, m, 1, tzinfo=timezone.utc).timestamp()  # ValueError на кривом месяце
+    start = datetime(y, m, 1, tzinfo=timezone.utc).timestamp()  # ValueError on a bad month
     end = datetime(y + 1, 1, 1, tzinfo=timezone.utc).timestamp() if m == 12 else datetime(y, m + 1, 1, tzinfo=timezone.utc).timestamp()
     conn = await cm.get(DB_NAME)
     rows = list(

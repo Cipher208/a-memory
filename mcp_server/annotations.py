@@ -1,14 +1,14 @@
 """Stage 2 Plan B: MCP behavior annotations — readOnlyHint/destructiveHint/idempotentHint.
 
-Один статический реестр на все 65 тулов; сервер прокидывает `annotations=`
-в mcp.tool() при регистрации. Семантика MCP:
-  readOnlyHint      — не мутирует состояние (деградация не санкционируется)
-  destructive_hint  — может необратимо удалять (default true в MCP!)
-  idempotent_hint   — повтор с теми же аргументами → тот же эффект
+One static registry for all 65 tools; the server passes `annotations=`
+into mcp.tool() at registration. MCP semantics:
+  readOnlyHint      — does not mutate state (degradation is not sanctioned)
+  destructive_hint  — may irreversibly delete (default true in MCP!)
+  idempotent_hint   — repeating with the same arguments → same effect
 
-Все три хинта — HINTS (не гарантии); клиент может их игнорировать.
-Тулы, отсутствующие в карте → консервативный default (не read-only,
-destructive=true) — никогда не промоутем write-тул к безопасным по умолчанию.
+All three hints are HINTS (not guarantees); a client may ignore them.
+Tools missing from the map → conservative default (not read-only,
+destructive=true) — write tools are never promoted to safe by default.
 """
 
 from __future__ import annotations
@@ -19,11 +19,11 @@ from typing import Any
 
 @dataclass(frozen=True)
 class ToolHints:
-    """MCP default: destructive_hint=True, read_only=False — консервативно.
+    """MCP default: destructive_hint=True, read_only=False — conservative.
 
-    Явно выставляем read_only/destructive в карте; неизвестный тул получает
-    дефолт (не read-only, destructive) — промоутем write-тул к безопасным
-    быть не может.
+    read_only/destructive are set explicitly in the map; an unknown tool
+    gets the default (not read-only, destructive) — write tools can never
+    be promoted to safe.
     """
 
     read_only: bool = False
@@ -31,7 +31,7 @@ class ToolHints:
     idempotent: bool = False
 
 
-# Read-only: только читают. idempotent — там, где повтор безопасен по природе.
+# Read-only: only read. idempotent — where a repeat is safe by nature.
 _ANNOTATIONS: dict[str, ToolHints] = {
     # ── primitives ──
     "think": ToolHints(),
@@ -73,7 +73,7 @@ _ANNOTATIONS: dict[str, ToolHints] = {
     "memory_search": ToolHints(read_only=True, destructive=False, idempotent=True),
     "memory_history": ToolHints(
         read_only=True, destructive=False, idempotent=True
-    ),  # list/get — read; rollback внутри payload → консервативно не destructive (ledger-traced)
+    ),  # list/get — read; rollback inside payload → conservatively not destructive (ledger-traced)
     "memory_load_rules": ToolHints(read_only=True, destructive=False, idempotent=True),  # default action=list
     "daily_brief": ToolHints(read_only=True, destructive=False, idempotent=True),
     # ── write tier ──
@@ -84,9 +84,9 @@ _ANNOTATIONS: dict[str, ToolHints] = {
     "memory_scratchpad": ToolHints(),
     "memory_counterfactual": ToolHints(),
     "memory_procedure": ToolHints(),
-    "memory_branch": ToolHints(),  # create/merge — ветки данных, не удаление
+    "memory_branch": ToolHints(),  # create/merge — data branches, not deletion
     "memory_stash": ToolHints(),
-    "memory_standing": ToolHints(),  # save/delete query-спек
+    "memory_standing": ToolHints(),  # save/delete query spec
     "memory_skill_promote": ToolHints(),
     # ── wiki / brief / review ──
     "wiki_add": ToolHints(),
@@ -98,13 +98,13 @@ _ANNOTATIONS: dict[str, ToolHints] = {
     "wiki_query": ToolHints(read_only=True, destructive=False, idempotent=True),
     "wiki_reflect": ToolHints(read_only=True, destructive=False, idempotent=True),
     "wiki_summarize": ToolHints(read_only=True, destructive=False, idempotent=True),
-    # ── review / ops (destructive явно помечены) ──
-    "memory_proposals": ToolHints(),  # decide/apply — мутации по контракту
+    # ── review / ops (destructive flagged explicitly) ──
+    "memory_proposals": ToolHints(),  # decide/apply — mutations by contract
     "memory_heal": ToolHints(destructive=True),  # remigrate/purge_invalid_l1
     "memory_cleanup": ToolHints(destructive=True),
     "memory_lucidity_purge": ToolHints(destructive=True),
-    "memory_backup": ToolHints(),  # restore перезаписывает
-    "memory_data": ToolHints(destructive=True),  # wipe-ветки
+    "memory_backup": ToolHints(),  # restore overwrites
+    "memory_data": ToolHints(destructive=True),  # wipe branches
     "memory_sync_replica": ToolHints(),
     "memory_api_key": ToolHints(destructive=True),  # revoke
     "memory_saga": ToolHints(destructive=True),  # rollback
@@ -119,7 +119,7 @@ _ANNOTATIONS: dict[str, ToolHints] = {
 
 
 def hints_for(name: str) -> ToolHints:
-    """Консервативный fallback: неизвестный тул ≠ read-only, destructive=True."""
+    """Conservative fallback: unknown tool ≠ read-only, destructive=True."""
     return _ANNOTATIONS.get(name, ToolHints())
 
 
