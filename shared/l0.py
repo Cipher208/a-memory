@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -11,6 +12,12 @@ from typing import Any
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 from shared.fractional_index import midpoint
+
+# Serializes capture() across asyncio tasks AND processes: the hash-chain
+# read-head + insert + chain-write must be atomic, or concurrent writers
+# fork the chain (chaos-probe finding: two writers chained from the same
+# head → verify_chain reported a broken link).
+_capture_lock = asyncio.Lock()
 
 
 async def capture(
@@ -32,6 +39,26 @@ async def capture(
     attempt (including dedup hits), so tamper-evidence does not depend on dedup.
     """
     try:
+        # In-process serialization; cross-process safety comes from
+        # BEGIN IMMEDIATE below (SQLite single-writer) plus the CAS-style
+        # chain write (UPDATE only applies if the chain head is unchanged).
+        async with _capture_lock:
+            return await _capture_inner(event, layer, user_id, text, source_msg_id, raw_type, decisions, ts_override)
+    except Exception:
+        return None
+
+
+async def _capture_inner(
+    event: str,
+    layer: str,
+    user_id: str,
+    text: str,
+    source_msg_id: int | None,
+    raw_type: str | None,
+    decisions: list[dict[str, Any]] | None,
+    ts_override: float | None,
+) -> int | None:
+    try:
         conn = await connection_manager.get(DB_NAME)
         ts = ts_override or time.time()
         rt = raw_type or classify_raw(text)
@@ -52,6 +79,11 @@ async def capture(
             return int(prior["id"])
         # S1 order_key: fractional index after the last row. The column may be absent
         # in live pre-migration DBs — then we write without order_key.
+        # BEGIN IMMEDIATE: take the write lock BEFORE reading the chain head so
+        # concurrent processes cannot chain from the same head (chaos finding).
+        # If a transaction is already open (pre-migration callers) this is a no-op.
+        with contextlib.suppress(Exception):
+            await conn.execute("BEGIN IMMEDIATE")
         prev: Any | None = None
         try:
             prev = await (await conn.execute("SELECT hash_self, order_key FROM l0_journal ORDER BY id DESC LIMIT 1")).fetchone()
@@ -82,12 +114,16 @@ async def capture(
         # hash-chain (S1, tamper-evidence): a chain failure does not block the write.
         # v2: full text (the [:200] truncation allowed collisions between records with
         # a shared prefix); v1 is the historical format, verify_chain accepts both.
+        # Inside the BEGIN IMMEDIATE window, so head-read and chain-write are atomic
+        # across processes.
         hash_prev = (prev[0] if prev is not None else "") or ""
         digest = hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}".encode()).hexdigest()[:16]
         await conn.execute("UPDATE l0_journal SET hash_prev=?, hash_self=? WHERE id=?", (hash_prev, digest, rid))
         await conn.commit()
         return rid
     except Exception:
+        with contextlib.suppress(Exception):
+            await conn.execute("ROLLBACK")  # release the IMMEDIATE lock on any failure
         return None
 
 
