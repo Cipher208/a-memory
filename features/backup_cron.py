@@ -43,6 +43,7 @@ class BackupCron:
         self._running = False
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
         self._last_backup = 0.0
         self._last_wiki_sync = 0.0
         self._state_file = self.base_dir / ".backup_cron_state.json"
@@ -70,6 +71,7 @@ class BackupCron:
         if os.environ.get("BACKUP_CRON_DISABLED"):
             return
         self._running = True
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         jitter_info = f" (+{self.jitter_seconds}s jitter)" if self.jitter_seconds else ""
@@ -93,6 +95,7 @@ class BackupCron:
 
     def stop(self) -> None:
         self._running = False
+        self._stop_event.set()  # interrupt jitter / tick sleeps immediately
         if self._thread:
             self._thread.join(timeout=5)
 
@@ -100,10 +103,10 @@ class BackupCron:
         while self._running:
             try:
                 self._tick()
-                time.sleep(60)
+                self._stop_event.wait(60)
             except Exception:
                 logger.exception("Backup cron error")
-                time.sleep(300)
+                self._stop_event.wait(300)
 
     def _tick(self) -> None:
         now = time.time()
@@ -118,7 +121,9 @@ class BackupCron:
         jitter = random.randint(0, self.jitter_seconds) if self.jitter_seconds else 0
         if jitter:
             logger.info(f"Backup jitter: waiting {jitter}s")
-            time.sleep(jitter)
+            self._stop_event.wait(jitter)
+            if not self._running:  # stopped inside the jitter window
+                return
 
         self._do_backup()
         self._cleanup_old()

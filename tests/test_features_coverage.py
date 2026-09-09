@@ -322,6 +322,30 @@ def test_backup_cron_start_stop(tmp_path):
     assert bc._running is True
     bc.stop()
     assert bc._running is False
+    assert not bc._thread.is_alive(), "stop() must not leave a zombie cron thread"
+
+
+def test_backup_cron_stop_interrupts_jitter(tmp_path):
+    """Shutdown landing inside the jitter window must stop the thread promptly.
+
+    time.sleep(jitter) was uninterruptible: stop() joined with timeout=5 and
+    gave up, leaving a daemon thread parked for up to jitter_seconds that
+    still performed a backup + nightly hooks after the stop.
+    """
+    import os
+
+    from features.backup_cron import BackupCron
+
+    os.environ.pop("BACKUP_CRON_DISABLED", None)
+    bc = BackupCron(base_dir=str(tmp_path))
+    bc.jitter_seconds = 3600  # worst case: stop lands inside the jitter sleep
+    bc.start()
+    try:
+        assert bc._thread is not None
+        bc.stop()
+        assert not bc._thread.is_alive(), "stop() must interrupt the jitter wait"
+    finally:
+        bc.stop()
 
 
 def test_backup_cron_status():
