@@ -22,7 +22,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 SCHEME = "ariel://"
-STORES = ("fact", "wiki", "graph/node", "episode", "l0")
+# Valid store segments are validated inline in parse_uri ("graph", not
+# "graph/node" — the tuple below was a stale doc-as-code duplicate).
 RESERVED_PREFIXES = ("peer/",)
 
 

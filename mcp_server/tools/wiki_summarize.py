@@ -36,15 +36,6 @@ PERSPECTIVE_TO_TYPE: dict[str, tuple[Literal["user", "agent"], str]] = {
     "metacognitive": ("agent", "principle_log"),  # rules, self-model
 }
 
-Perspective = Literal[
-    "practical",
-    "epistemic",
-    "psychological",
-    "social",
-    "temporal",
-    "metacognitive",
-]
-
 
 def _validate_perspective(perspective: str) -> str:
     if perspective not in PERSPECTIVE_TO_TYPE:

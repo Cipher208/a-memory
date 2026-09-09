@@ -129,7 +129,3 @@ def annotations_for(name: str) -> Any:
 
     h = hints_for(name)
     return ToolAnnotations(read_only_hint=h.read_only, destructive_hint=h.destructive, idempotent_hint=h.idempotent)
-
-
-def annotated_count() -> int:
-    return len(_ANNOTATIONS)

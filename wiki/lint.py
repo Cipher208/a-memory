@@ -261,25 +261,9 @@ def lint_wiki_layer(
 
 # ── Auto-fix ─────────────────────────────────────────────────────────
 
-# Codes that auto_fix handles. Content-level fixes are deliberately NOT here.
-_AUTO_FIXABLE_CODES = frozenset({"missing_index"})
-
-
-def auto_fix_entry(
-    entry: WikiEntry,
-    findings: list[Finding],
-) -> tuple[WikiEntry, list[str]]:
-    """Apply safe auto-fixes.
-
-    Currently only creates missing INDEX.md (which is per-type-dir, not
-    per-entry, so this is a no-op for entries). Kept as an extension
-    point for future per-entry fixes.
-
-    Returns (possibly-mutated entry, list of fix descriptions).
-    """
-    fixes: list[str] = []
-    # Per-entry: no current fixable checks (missing_index is per-type-dir)
-    return entry, fixes
+# Codes that auto-fix handles. Content-level fixes are deliberately NOT here.
+# Per-entry auto-fix was removed as a YAGNI no-op; the real flow is
+# auto_fix_type_dirs (missing_index is per-type-dir, not per-entry).
 
 
 def _write_index_stub(type_dir: Path, wiki_type: str, titles: set[str]) -> None:

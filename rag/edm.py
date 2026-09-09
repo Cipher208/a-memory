@@ -87,14 +87,6 @@ def graph_node_id(cand: dict[str, Any]) -> int | None:
     return None
 
 
-def wiki_entry_id(cand: dict[str, Any]) -> int | None:
-    """entry_id для wiki-кандидатов (id = −entry_id − 1_000_000), иначе None."""
-    rid = cand.get("id")
-    if isinstance(rid, int) and -_ID_OFFSET_GRAPH < rid <= -_ID_OFFSET_WIKI:
-        return -rid - _ID_OFFSET_WIKI
-    return None
-
-
 def make_s2_hit(entry_id: int, title: str, content: str, wiki_type: str, score: float) -> dict[str, Any]:
     """Результат S2-маршрута в формате search-hit (отрицательный wiki-id)."""
     return {

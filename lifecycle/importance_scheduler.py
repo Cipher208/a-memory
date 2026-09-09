@@ -163,17 +163,6 @@ class ImportanceScheduler:
             )
             stats["rescored"] += 1
 
-    @staticmethod
-    async def _lookup_retrieval_count(conn: Any, source: str, source_id: int) -> int:
-        row = await (
-            await conn.execute(
-                """SELECT COUNT(*) c FROM audit_log
-                   WHERE action='recall_useful' AND layer=? AND target_id=?""",
-                (source, str(source_id)),
-            )
-        ).fetchone()
-        return int(row["c"]) if row else 0
-
 
 # Singleton
 importance_scheduler = ImportanceScheduler()

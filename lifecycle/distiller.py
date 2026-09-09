@@ -12,21 +12,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
 from typing import Any
 
 from shared.memory_types import MemoryKind, get_policy, kind_for_text
 
 logger = logging.getLogger(__name__)
 _CLAUSE_SPLIT = re.compile(r"[,;]?\s+(?:и|но|причём|а|хотя)\s+|\.\s+")
-
-
-@dataclass
-class Atom:
-    clause: str
-    kind: MemoryKind
-    importance: float
-    key: str
 
 
 def _canonical_key(clause: str, kind: MemoryKind) -> str:

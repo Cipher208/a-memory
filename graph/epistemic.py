@@ -56,8 +56,9 @@ SOCIAL_NODE_TYPES = {"person", "organization"}
 SOCIAL_RELATIONS = {"knows", "works_with", "family_of", "friend_of", "met", "mentions"}
 
 # B1.7 Causal memory: action → outcome links. Weight = causal strength.
+# Node types "action"/"outcome"/"error_outcome" are created by miners as
+# literals; no registry — a restricted set here would drift (error_outcome).
 CAUSAL_RELATIONS = {"caused", "led_to", "prevented"}
-CAUSAL_NODE_TYPES = {"action", "outcome"}
 
 
 class EpistemicGraph:
@@ -66,7 +67,6 @@ class EpistemicGraph:
     SOCIAL_NODE_TYPES = SOCIAL_NODE_TYPES
     SOCIAL_RELATIONS = SOCIAL_RELATIONS
     CAUSAL_RELATIONS = CAUSAL_RELATIONS
-    CAUSAL_NODE_TYPES = CAUSAL_NODE_TYPES
 
     def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user") -> None:
         self._cm = cm or connection_manager
