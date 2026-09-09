@@ -418,7 +418,7 @@ async def memory_cleanup(
     mc = MemoryCompressor()
     at = AuditTrail()
     dream_buf = DreamBuffer()
-    archive_dir = str(Path.home() / ".mcp-ariel-memory" / "archives")
+    archive_dir = str(Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives")
 
     # Parallel dispatch
     results = await asyncio.gather(

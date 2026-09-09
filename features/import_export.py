@@ -8,6 +8,7 @@ import asyncio
 import json
 import re
 import time
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,7 @@ class ImportExport:
     @property
     def base_dir(self) -> Path:
         res: Any = self._cm.base_dir
-        return Path(res) if res else Path.home() / ".mcp-ariel-memory"
+        return Path(res) if res else Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory"))
 
     async def export_user(self, user_id: str, mm: Any | None = None) -> str:
         if not _USER_ID_RE.match(user_id):

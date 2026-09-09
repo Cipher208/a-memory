@@ -1,9 +1,10 @@
+import os
 from pathlib import Path
 from features.auth.api_key import APIKeyAuth
 from features.auth.bearer import BearerAuth
 
 # Default paths for singletons as per spec [S5]
-DEFAULT_KEYS_FILE = Path.home() / ".mcp-ariel-memory" / "api_keys.json"
+DEFAULT_KEYS_FILE = Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "api_keys.json"
 DEFAULT_TOKEN_FILE = Path.home() / ".mcp-ariel-memory" / "bearer_token.json"
 
 # Initialize and export singletons

@@ -5,6 +5,7 @@ ReadOnlyReplica — async read-only DB copy for dashboard/metrics
 """
 
 import logging
+import os
 import shutil
 import sqlite3
 import threading
@@ -16,8 +17,11 @@ logger = logging.getLogger(__name__)
 
 class ReadOnlyReplica:
     def __init__(self, source_dir: str | None = None, replica_dir: str | None = None):
-        self.source_dir = Path(source_dir or str(Path.home() / ".mcp-ariel-memory"))
-        self.replica_dir = Path(replica_dir or str(Path.home() / ".mcp-ariel-memory" / "replica"))
+        # Same default as AsyncConnectionManager._DEFAULT_DIR — respects
+        # MCP_MEMORY_DATA_DIR so the replica never mirrors another instance's DB.
+        default_dir = os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")
+        self.source_dir = Path(source_dir or default_dir)
+        self.replica_dir = Path(replica_dir or os.path.join(default_dir, "replica"))
         self.replica_dir.mkdir(parents=True, exist_ok=True)
         self._running = False
         self._thread: threading.Thread | None = None

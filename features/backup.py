@@ -7,6 +7,7 @@ Backup — async backup/restore of all databases
 import contextlib
 import json
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -40,7 +41,10 @@ def snapshot_sqlite(src: Path, dest: Path) -> None:
 
 class BackupManager:
     def __init__(self, base_dir: str | None = None):
-        self.base_dir = Path(base_dir or str(Path.home() / ".mcp-ariel-memory"))
+        # Same default as AsyncConnectionManager._DEFAULT_DIR — respects
+        # MCP_MEMORY_DATA_DIR so instances never cross-contaminate backups.
+        default_dir = os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")
+        self.base_dir = Path(base_dir or default_dir)
         self.backup_dir = self.base_dir / BACKUP_DIR_NAME
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 

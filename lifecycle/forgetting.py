@@ -7,6 +7,7 @@ Forgetting System — type-aware decay, archiving, compression
 import contextlib
 import logging
 import time
+import os
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ARCHIVE_DIR = Path.home() / ".mcp-ariel-memory" / "archives"
+ARCHIVE_DIR = Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives"
 
 
 class ForgettingSystem:
