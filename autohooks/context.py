@@ -1,9 +1,10 @@
-"""S18-хвост context_assembly: pre-response сборка контекста — одна CLI-точка.
+"""S18 tail context_assembly: pre-response context assembly — a single CLI entry point.
 
-Контракт (Автохуки.md §3, Эли): адаптер вызывает `autohooks context --text <msg>`
-ДО ответа агента и получает готовый inject — агента не думает об инжекте.
-Сборка: top-5 релевантных воспоминаний (recall_protocol, оси markers→session→
-semantic→expand→day) + свежие L1 (непрерывность диалога), бюджет-capped.
+Contract (Avtohuki.md §3, Eli): the adapter calls `autohooks context --text <msg>`
+BEFORE the agent answers and receives a ready inject — the agent does not think
+about injection. Assembly: top-5 relevant memories (recall_protocol, axes
+markers→session→semantic→expand→day) + fresh L1 (dialog continuity),
+budget-capped.
 """
 
 from __future__ import annotations
@@ -13,10 +14,10 @@ from typing import Any
 
 
 async def _collect_recent_l1(mem: Any, limit: int = 3) -> list[str]:
-    """Свежие L1-записи для непрерывности; ошибок не роняют (best-effort).
+    """Fresh L1 records for dialog continuity; errors are swallowed (best-effort).
 
-    get_recent может быть sync или async в зависимости от mem-объекта —
-    поддерживаем оба (asyncio-корутина awaited, sync-результат как есть).
+    get_recent may be sync or async depending on the mem object —
+    both are supported (asyncio coroutine awaited, sync result as is).
     """
     try:
         getter = getattr(mem.l1, "get_recent", None) if hasattr(mem, "l1") else None
@@ -43,10 +44,11 @@ async def assemble_context(
     *,
     top_k: int = 5,
 ) -> dict[str, Any]:
-    """{relevant: [блоки recall_protocol], recent: [L1-строки], budget}.
+    """{relevant: [recall_protocol blocks], recent: [L1 lines], budget}.
 
-    Recall-блоки уже dedup'нуты по контенту и budget-capped внутри протокола;
-    top_k — усечение до 5 релевантных по контракту (оси отдали больше).
+    Recall blocks are already deduped by content and budget-capped inside the
+    protocol; top_k truncates to 5 relevant blocks per the contract (the axes
+    returned more).
     """
     from features.recall import recall_protocol
     from shared.tokens import estimate_tokens
@@ -61,7 +63,7 @@ async def assemble_context(
 
 
 def render_context_md(assembly: dict[str, Any]) -> str:
-    """Markdown для вставки в контекст; пустой сбор → '—' (конвенция inject)."""
+    """Markdown for context insertion; empty assembly → '—' (the inject convention)."""
     parts: list[str] = []
     for b in assembly.get("relevant", []):
         content = str(b.get("content", "")).strip()

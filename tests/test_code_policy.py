@@ -25,6 +25,8 @@ HOT_FILES = [
     "core/memory.py",
     "lifecycle/l0_tiers.py",
     "lifecycle/segment_consolidation.py",
+    "autohooks/context.py",
+    "autohooks/__main__.py",
 ]
 
 ROOT = Path(__file__).resolve().parents[1]

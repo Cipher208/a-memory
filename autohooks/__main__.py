@@ -139,8 +139,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if ns.command == "context":
-        # S18-хвост context_assembly: pre-response сборка (top-5 релевантных +
-        # recent L1) — адаптер вызывает ДО ответа агента и вставляет вывод.
+        # S18 tail context_assembly: pre-response assembly (top-5 relevant +
+        # recent L1) — the adapter calls it BEFORE the agent answers and
+        # inserts the output.
         from autohooks.context import assemble_context, render_context_json, render_context_md
 
         assembly = asyncio.run(assemble_context(mem, rag, cfg.user_id, text=ns.text, budget=int(ns.budget)))
