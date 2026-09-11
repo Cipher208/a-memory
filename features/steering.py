@@ -10,6 +10,18 @@ from __future__ import annotations
 
 _HINT_CAP = 3
 
+
+def _proposals_use_hint() -> str:
+    """Return the steering route for the review surface.
+
+    Shaped for the active mode (flat tools vs ARIEL_META dispatchers —
+    routes are built at import time, so this resolves once per process).
+    """
+    from features.staging import decision_hint
+
+    return decision_hint()
+
+
 ROUTE_TABLE: tuple[dict[str, str], ...] = (
     {
         "when": "recover context in a new session",
@@ -56,7 +68,7 @@ ROUTE_TABLE: tuple[dict[str, str], ...] = (
     {
         "when": "review staged memory mutations",
         "match": "proposal|staged|на согласовании|pending review",
-        "use": "memory_proposals(action='list' or 'decide')",
+        "use": _proposals_use_hint(),
         "instead": "direct writes bypassing review",
         "why": "staging is the C1.11 contract",
     },

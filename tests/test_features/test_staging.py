@@ -87,6 +87,45 @@ async def test_propose_and_list_pending(ensure_schema: Path) -> None:
     assert pending[0]["status"] == "pending"
 
 
+async def test_propose_dedup_updates_pending_same_key(ensure_schema: Path) -> None:
+    """2026-09-11 flood lesson: same (source, kind, key) pending → update payload,
+    latest wins, no second row."""
+    pid1 = await staging.propose("dream", "core_write", "u1", "user", {"key": "fact", "value": "v1", "importance": 0.95})
+    pid2 = await staging.propose("dream", "core_write", "u1", "user", {"key": "fact", "value": "v2", "importance": 0.95})
+    assert pid2 == pid1, "dedup returns the existing proposal id"
+    pending = await staging.list_pending("u1")
+    assert len(pending) == 1
+    assert pending[0]["payload"]["value"] == "v2", "latest payload wins"
+
+
+async def test_propose_dedup_respects_identity(ensure_schema: Path) -> None:
+    """Different key / user / kind → separate proposals (dedup is per-identity)."""
+    a = await staging.propose("dream", "core_write", "u1", "user", {"key": "k1", "value": "v", "importance": 0.95})
+    b = await staging.propose("dream", "core_write", "u1", "user", {"key": "k2", "value": "v", "importance": 0.95})
+    c = await staging.propose("dream", "core_write", "u2", "user", {"key": "k1", "value": "v", "importance": 0.95})
+    d = await staging.propose("dream", "wiki_write", "u1", "user", {"title": "k1", "content": "c"})
+    assert len({a, b, c, d}) == 4
+    assert len(await staging.list_pending("u1")) == 3, "core k1 + core k2 + wiki k1 — kind enters the identity"
+
+
+def test_decision_hint_matches_surface() -> None:
+    """The review hint must teach the call shape the agent can actually make
+    (flat tool vs meta dispatcher — the 2026-09-11 steering-gap lesson)."""
+    import os
+
+    from features.staging import decision_hint
+
+    os.environ.pop("ARIEL_META", None)
+    flat = decision_hint()
+    assert "memory_proposals(action='decide'" in flat
+    os.environ["ARIEL_META"] = "1"
+    try:
+        meta = decision_hint()
+        assert "review(action='memory_proposals'" in meta
+    finally:
+        os.environ.pop("ARIEL_META", None)
+
+
 async def test_expire_stale_flips_old_pending(ensure_schema: Path) -> None:
     pid = await staging.propose("forgetting", "archive", "u1", "user", {"ids": [1, 2]})
     conn = sqlite3.connect(ensure_schema / "memory.db")

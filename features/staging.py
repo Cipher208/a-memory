@@ -30,9 +30,35 @@ def _expire_days() -> int:
 
 
 async def propose(source: str, kind: str, user_id: str, layer: str, payload: dict[str, Any]) -> int:
-    """Record one proposal. Returns its id."""
+    """Record one proposal. Returns its id.
+
+    Dedup-guard: a PENDING proposal with the same identity (source, kind,
+    user, layer, payload key/title) absorbs the new payload — latest wins,
+    expires_at refreshed — instead of adding an indistinguishable row
+    (2026-09-11: 52 same-key auto_save proposals drowned the review queue).
+    Distinct identities (different key/user/kind) always create new rows,
+    so dream markers and consolidation stay granular.
+    """
     now = time.time()
     conn = await connection_manager.get(DB_NAME)
+    dedup_key = payload.get("key") or payload.get("title")
+    if dedup_key is not None:
+        cur = await conn.execute(
+            "SELECT id, payload FROM mutation_proposals WHERE status = 'pending' AND source = ? AND kind = ? AND user_id = ? AND layer = ?",
+            (source, kind, user_id, layer),
+        )
+        for row in await cur.fetchall():
+            try:
+                existing = json.loads(row["payload"])
+            except Exception:
+                existing = {}
+            if (existing.get("key") or existing.get("title")) == dedup_key:
+                await conn.execute(
+                    "UPDATE mutation_proposals SET payload = ?, proposed_at = ?, expires_at = ? WHERE id = ?",
+                    (json.dumps(payload, ensure_ascii=False), now, now + _expire_days() * 86400, row["id"]),
+                )
+                await conn.commit()
+                return int(row["id"])
     cur = await conn.execute(
         "INSERT INTO mutation_proposals (source, kind, user_id, layer, payload, status, proposed_at, expires_at)"
         " VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
@@ -40,6 +66,23 @@ async def propose(source: str, kind: str, user_id: str, layer: str, payload: dic
     )
     await conn.commit()
     return int(cur.lastrowid or 0)
+
+
+def decision_hint() -> str:
+    """Return the review-call hint matching the active surface.
+
+    Flat tool vs meta dispatcher: under ARIEL_META=1 the flat
+    `memory_proposals` name is not exposed — teaching it to agents
+    reproduces the blind-args failures.
+    """
+    import os
+
+    if os.environ.get("ARIEL_META") == "1":
+        return (
+            "review(action='memory_proposals', args={'action': 'decide', 'proposal_id': <id>, "
+            "'approve': true|false}); list via review(action='memory_proposals', args={'action': 'list'})"
+        )
+    return "memory_proposals(action='decide', proposal_id=<id>, approve=true|false)"
 
 
 async def expire_stale() -> int:

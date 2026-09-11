@@ -177,13 +177,15 @@ async def build_inject_blocks(
     except Exception:
         pending = []
     if pending:
+        from features.staging import decision_hint
+
         lines = []
         for p in pending[:5]:
             payload = p.get("payload", {})
             gist = str(payload.get("value") or payload.get("ids") or payload.get("items") or "")[:80]
             age_days = (time.time() - float(p.get("proposed_at", time.time()))) / 86400
             lines.append(f"#{p['id']} {p['kind']}: {gist} ({age_days:.0f}d)")
-        header = f"{len(pending)} staged mutation(s) await review (expire in 7d). Decide: memory_proposals(action='decide', proposal_id=…, approve=true|false)"
+        header = f"{len(pending)} staged mutation(s) await review (expire in 7d). Decide: {decision_hint()}"
         content = header + "\n" + "\n".join(lines)
         content = _cap(content)
         cost = estimate_tokens(content)
