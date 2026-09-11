@@ -21,7 +21,10 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
+    { name = "en-core-web-sm" },
     { name = "mcp", extra = ["cli"] },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -31,6 +34,9 @@ dependencies = [
     { name = "pynacl" },
     { name = "python-frontmatter" },
     { name = "pyyaml" },
+    { name = "ru-core-news-sm" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scikit-learn", version = "1.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "spacy" },
     { name = "starlette" },
     { name = "uvicorn" },
@@ -93,6 +99,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "aiosqlite", marker = "extra == 'win'", specifier = ">=0.21.0,!=0.22.0" },
     { name = "alembic", specifier = ">=1.19.0" },
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "hnswlib", marker = "extra == 'ann'", specifier = ">=0.7" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=2,<3" },
@@ -100,6 +107,7 @@ requires-dist = [
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.24" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
+    { name = "networkx", specifier = ">=3.0" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "numpy", marker = "extra == 'binary'", specifier = ">=1.24" },
     { name = "prometheus-client", specifier = ">=0.26.0" },
@@ -113,7 +121,9 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.0" },
     { name = "python-frontmatter", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "ru-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/ru_core_news_sm-3.8.0/ru_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
+    { name = "scikit-learn", specifier = ">=1.6" },
     { name = "sentence-transformers", marker = "extra == 'embeddings'", specifier = ">=3.0" },
     { name = "spacy", specifier = ">=3.8.16" },
     { name = "sqlite-vec", marker = "extra == 'vec'", specifier = ">=0.1" },
@@ -880,6 +890,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2d/03/85171ce1e59088237aebf21943d1136463f6422820f096ac8cf9322aa851/dawg2_python-0.9.0.tar.gz", hash = "sha256:adea0312acd1a958659e8448ce6899046c0858d0b6c8949a51eebdeb5a113e4a", size = 10278, upload-time = "2025-02-17T13:22:24.261Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/84/3b/7fb4c1a8df59cb80f5f7ecb9646280e000f9ba2ccff8710205dc9aa4604f/dawg2_python-0.9.0-py3-none-any.whl", hash = "sha256:4fab6fc097bd176cd783cd8421b757348ea5a460789e53b0f6bb64831380bab5", size = 9331, upload-time = "2025-02-17T13:22:22.858Z" },
+]
+
+[[package]]
+name = "en-core-web-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl", hash = "sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85" },
 ]
 
 [[package]]
@@ -3212,6 +3230,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f6/40/02355f0e134f783a8f9814c4680a1bd311d37671577a5964ea838573ff37/rpds_py-2026.6.3-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:ca6546b66be9dc4738b1b043d5ebd5488c66c578c5ff0fd0e8065313fe3afb76", size = 623138, upload-time = "2026-06-30T07:17:49.355Z" },
     { url = "https://files.pythonhosted.org/packages/10/85/48f0abdcef5cce4e034c7a5b0ceeceba0b01bf0d942824f4bb720afe2dec/rpds_py-2026.6.3-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:8e65860d238379ed982fd9ba690579b5e95af2f4840f99c772816dbe573cb826", size = 586486, upload-time = "2026-06-30T07:17:51.141Z" },
 ]
+
+[[package]]
+name = "ru-core-news-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/ru_core_news_sm-3.8.0/ru_core_news_sm-3.8.0-py3-none-any.whl" }
+dependencies = [
+    { name = "pymorphy3" },
+]
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/ru_core_news_sm-3.8.0/ru_core_news_sm-3.8.0-py3-none-any.whl", hash = "sha256:69978d47b43e2c4f329bebdb155e8e9d3861bba1a58ba25551419dae7d7e07fc" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pymorphy3", specifier = ">=1.0.0" }]
 
 [[package]]
 name = "ruff"

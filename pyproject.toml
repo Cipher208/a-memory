@@ -2,6 +2,9 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [project]
 name = "a-memory"
 version = "1.11.0"
@@ -39,6 +42,15 @@ dependencies = [
     "numpy>=2.2.6",
     "spacy>=3.8.16",
     "pymorphy3>=2.0.6",
+    # lifecycle/ uses both at runtime (best-effort imports); they previously
+    # arrived transitively via the embeddings extra — declared explicitly
+    # now that the embeddings extra is optional (remote indexer service).
+    "scikit-learn>=1.6",
+    "networkx>=3.0",
+    # spaCy NER models — privacy gate (hooks ingest) and graph miners.
+    # Previously installed as unmanaged wheels; declared so uv sync keeps them.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    "ru-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/ru_core_news_sm-3.8.0/ru_core_news_sm-3.8.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]

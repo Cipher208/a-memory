@@ -67,6 +67,21 @@ _model = None
 _model_name = None
 
 
+def _remote_url() -> str:
+    """Return the remote embeddings endpoint.
+
+    Read from ``embeddings.url`` (e.g. the shared e5 indexer service).
+    Empty/unset → local sentence-transformers or hash.
+    """
+    from config import config
+
+    return str(config.get("embeddings", "url") or "").strip()
+
+
+def _remote_active() -> bool:
+    return bool(_remote_url()) and not os.environ.get("ARIEL_HASH_EMBEDDINGS")
+
+
 _fallback_warned = False
 
 
@@ -111,9 +126,12 @@ class EmbeddingCache:
 
         Hash-fallback vectors must never be stored under the real model's
         name — otherwise installing sentence-transformers later would serve
-        stale hash garbage as genuine model embeddings.
+        stale hash garbage as genuine model embeddings. Remote service
+        vectors ARE genuine model vectors (same model, out-of-process).
         """
-        return self.model_name if model is not None else f"hash-fallback/{self.model_name}"
+        if model is not None or _remote_active():
+            return self.model_name
+        return f"hash-fallback/{self.model_name}"
 
     async def ensure(self) -> None:
         """Lazy one-time schema setup so any consumer works without prior init."""
@@ -180,16 +198,17 @@ class EmbeddingCache:
         )
         await conn.commit()
 
-    async def embed(self, texts: list[str]) -> list[list[float]]:
+    async def embed(self, texts: list[str]) -> list[float] | list[list[float]]:
         if not texts:
             return []
 
-        model = _get_model()
+        remote = _remote_active()
+        model = None if remote else _get_model()
         cache_tag = self._cache_model_tag(model)
         results, to_compute = await self._get_results_from_cache(texts, cache_tag)
 
         if to_compute:
-            computed = await self._compute_missing_embeddings(to_compute, cache_tag, model is not None)
+            computed = await self._compute_missing_embeddings(to_compute, cache_tag, remote or model is not None)
             for idx, emb in computed.items():
                 results[idx] = emb
 
@@ -206,6 +225,39 @@ class EmbeddingCache:
                 to_compute.append((i, text))
         return results, to_compute
 
+    async def _remote_embed(self, texts: list[str]) -> list[list[float]]:
+        """POST /v1/embeddings to the configured embeddings.url.
+
+        Response is model-tagged with the configured model name, so cache
+        rows are indistinguishable from local sentence-transformers output.
+        Breaker semantics identical to the local model path.
+        """
+        import json
+        import urllib.parse
+        import urllib.request
+
+        url = _remote_url()
+        scheme = urllib.parse.urlparse(url).scheme
+        if scheme not in ("http", "https"):
+            raise ValueError(f"embeddings.url must be http(s), got: {scheme or 'none'}")
+        payload = json.dumps({"model": self.model_name, "input": texts}).encode()
+        req = urllib.request.Request(  # noqa: S310 — scheme validated above
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        def _post() -> dict[str, Any]:
+            # Scheme is validated above (http/https only).
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+                return json.loads(resp.read())
+
+        data = await asyncio.to_thread(_post)
+        # OpenAI-compatible shape: {"data": [{"embedding": [...], "index": n}, ...]}
+        items = sorted(data["data"], key=lambda d: d.get("index", 0))
+        return [list(map(float, d["embedding"])) for d in items]
+
     async def _compute_missing_embeddings(self, to_compute: list[tuple[int, str]], cache_tag: str, has_model: bool) -> dict[int, list[float]]:
         computed: dict[int, list[float]] = {}
 
@@ -213,16 +265,20 @@ class EmbeddingCache:
         # fallback keeps recall serving; hash vectors cache under the
         # hash-fallback tag so they never masquerade as model embeddings.
         if has_model and _embedding_breaker.allow_request():
-            model = _get_model()
             compute_texts = [t for _, t in to_compute]
-            # encode() is CPU-bound sync work — keep it off the event loop
             try:
-                embeddings = await asyncio.to_thread(model.encode, compute_texts)
+                if _remote_active():
+                    # Remote indexer service: encode happens out-of-process.
+                    embeddings = await self._remote_embed(compute_texts)
+                else:
+                    # encode() is CPU-bound sync work — keep it off the event loop
+                    model = _get_model()
+                    embeddings = await asyncio.to_thread(model.encode, compute_texts)
+                    embeddings = embeddings.tolist()
             except Exception:
                 _embedding_breaker.record_failure()
                 raise
             _embedding_breaker.record_success()
-            embeddings = embeddings.tolist()
             for (idx, text), emb in zip(to_compute, embeddings, strict=False):
                 computed[idx] = emb
                 await self._cache(text, emb, cache_tag)
