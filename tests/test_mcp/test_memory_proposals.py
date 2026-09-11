@@ -145,3 +145,57 @@ async def test_conflict_decision_validation_errors(fresh_dir: Path) -> None:
     assert out3["status"] == "error"
     out4 = await _call(fresh_dir, action="conflict", payload={"group_id": "ghost-group", "decision": "annotate", "annotation": "x"})
     assert out4["status"] == "error", "неизвестная группа → error"
+
+
+# ── meta-tool dispatch path (2026-09-11 incident: review tier was unusable) ──
+
+
+async def test_list_without_ctx_serves_pending(ensure_schema: Path) -> None:
+    """action='list' не требует MCP-контекста: CLI/прямые вызовы с ctx=None работают."""
+    from features.staging import propose
+
+    from mcp_server.tools.ops import memory_proposals
+
+    await propose("auto_save", "core_write", "default", "user", {"key": "k-ctx-less", "value": "v", "importance": 0.9})
+    out = await memory_proposals("list", ctx=None)
+    assert out["status"] == "ok"
+    assert any(p["payload"].get("key") == "k-ctx-less" for p in out["proposals"])
+
+
+def test_dispatcher_ctx_annotation_is_context() -> None:
+    """ctx диспетчера должен быть Context-типизирован: SDK инжектит только
+    Context-аннотированные параметры (find_context_parameter). Any = нет инъекции."""
+    import inspect
+
+    from mcp_server.meta_tools import _make_dispatcher
+
+    dispatcher = _make_dispatcher("review", {"memory_proposals"}, {})
+    ann = inspect.signature(dispatcher).parameters["ctx"].annotation
+    assert "Context" in str(ann), f"ctx annotation lost Context typing: {ann!r}"
+
+
+async def test_meta_dispatch_list_without_ctx(ensure_schema: Path) -> None:
+    """R1+R2 end-to-end: review(action='memory_proposals', args={'action':'list'}, ctx=None)."""
+    from features.staging import propose
+
+    from mcp_server.meta_tools import _make_dispatcher
+    from mcp_server.tools.ops import memory_proposals
+
+    await propose("auto_save", "core_write", "default", "user", {"key": "k-meta", "value": "v", "importance": 0.9})
+    dispatcher = _make_dispatcher("review", {"memory_proposals"}, {"memory_proposals": memory_proposals})
+    out = await dispatcher("memory_proposals", {"action": "list", "user_id": "default"}, ctx=None)
+    assert out["status"] == "ok"
+    assert any(p["payload"].get("key") == "k-meta" for p in out["proposals"])
+
+
+def test_catalog_exposes_param_names() -> None:
+    """Каталог мета-tyла показывает имена параметров члена — модели не гадают
+    ('unexpected keyword argument context' был догадкой вслепую)."""
+    from mcp_server.meta_tools import _catalog
+    from mcp_server.tools.ops import memory_proposals
+
+    entries = _catalog({"memory_proposals"}, {"memory_proposals": memory_proposals})
+    params = entries["memory_proposals"]["params"]
+    assert "proposal_id" in params
+    assert "approve" in params
+    assert "ctx" not in params, "ctx — серверная инъекция, в схеме клиенту не светится"

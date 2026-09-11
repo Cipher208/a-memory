@@ -14,6 +14,11 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
+# Runtime import ON PURPOSE: find_context_parameter resolves annotations via
+# get_type_hints — a TYPE_CHECKING-only name would break resolution and
+# silently disable Context injection into dispatchers.
+from mcp.server.mcpserver.context import Context  # noqa: TC002 — needed at runtime
+
 from mcp_server.annotations import hints_for
 from mcp_server.slots import slot_of
 
@@ -29,11 +34,16 @@ def _catalog(tool_names: set[str], all_tools: dict[str, Callable[..., Any]]) -> 
             continue
         doc = inspect.getdoc(fn) or ""
         hints = hints_for(name)
+        # Parameter names (minus server-side ctx injection) so agents don't
+        # guess arg names against the free-form args dict (2026-09-11 incident:
+        # 'unexpected keyword argument context' was a blind guess).
+        params = [p for p in inspect.signature(fn).parameters if p != "ctx"]
         entries[name] = {
             "description": doc.split("\n")[0],
             "read_only": bool(hints.read_only),
             "destructive": bool(hints.destructive),
             "slot": slot_of(name),
+            "params": params,
         }
     return entries
 
@@ -73,7 +83,7 @@ def _make_dispatcher(
     async def dispatcher(
         action: str,
         args: dict[str, Any] | None = None,
-        ctx: Any = None,
+        ctx: Context[Any, Any] | None = None,
     ) -> dict[str, Any]:
         if action == "list":
             return {"tools": _catalog(names, tools)}

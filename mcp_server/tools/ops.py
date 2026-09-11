@@ -871,7 +871,13 @@ async def memory_proposals(
     The apply path executes the exact write the direct path would have done;
     every decision is audit-logged.
     """
-    app = _get_ctx(ctx)  # live AppContext — passed into decide for core_write apply
+    # ctx matters only for branches that execute mutations (decide/revert).
+    # list / propose / conflict / revert_transition work without context, so
+    # CLI calls and the meta dispatcher without injection don't explode
+    # (2026-09-11 incident).
+    app: Any = None
+    if action in ("decide", "revert"):
+        app = _get_ctx(ctx)
     if action == "list":
         from features.staging import list_pending
 
