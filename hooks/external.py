@@ -220,28 +220,13 @@ async def auto_save_text(
             await conn.commit()
         except Exception as _e:
             logger.debug("l0_journal watermark update failed: %s", _e)
-    if score >= 0.8:
-        if _staging_enabled():
-            try:
-                from features.staging import propose
-
-                await propose(
-                    "auto_save",
-                    "core_write",
-                    user_id,
-                    "user",
-                    {"key": "auto_save", "value": text[:500], "importance": score},
-                )
-                result["staged_l4"] = True
-            except Exception:
-                # Bookkeeping must never lose the memory: if the proposals table
-                # is missing (mis-migration), fall back to the direct write.
-                logger.exception("staging propose failed — falling back to direct L4 write")
-                await mem.remember("auto_save", text[:500], score)
-                result["saved_l4"] = True
-        else:
-            await mem.remember("auto_save", text[:500], score)
-            result["saved_l4"] = True
+    # 2026-09-11: the score>=0.8 auto_save staging branch is REMOVED.
+    # It staged raw chat text under the literal core key "auto_save" for
+    # manual review — 52 same-key proposals flooded the review queue in a
+    # week, none of them distinct decisions, and no code reads that key.
+    # L4 routing stays with the distiller above (canonical keys, dedup,
+    # conflict detection). Staging remains for deliberate mutations:
+    # dream markers, consolidation promotions, agent-side propose, conflicts.
 
     # C1.10: one log row per save path. Best-effort — failure here never
     # blocks the save (the dispatcher catches), but a missing log row silently

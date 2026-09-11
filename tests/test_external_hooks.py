@@ -110,12 +110,16 @@ async def test_auto_save_text_mid_score_saves_l3_and_graph() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_save_text_high_score_saves_l4_too() -> None:
-    """Score ≥ 0.8 reaches the L4 tier — staged by default since C1.11 (proposal, not direct write)."""
+async def test_auto_save_text_high_score_saves_l4_via_distiller() -> None:
+    """Score ≥ 0.8: L4 routing is the distiller's job (canonical keys).
+    The 2026-09-11 removal killed the raw-text staging branch — no proposals,
+    no "auto_save" core-key overwrites."""
     mem, graph = _FakeMem(), _FakeGraph()
     text = "?! важно " + "решил " + "x" * 120 + "\n\n\n"  # 0.9 >= 0.8
     result = await auto_save_text(mem, graph, "u1", text)
-    assert result["saved_l4"] is True or result.get("staged_l4") is True
+    assert not result.get("staged_l4"), "auto-save staging branch removed"
+    assert result["saved_l4"] is True, "distiller L4 routing still fires"
+    assert mem.saved == [], "no raw auto_save core-key writes"
 
 
 @pytest.mark.asyncio

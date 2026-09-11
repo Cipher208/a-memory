@@ -81,31 +81,32 @@ LONG_TEXT = (
 )
 
 
-async def test_high_score_creates_proposal_not_l4(ensure_schema: Path) -> None:
+async def test_high_score_never_creates_proposal(ensure_schema: Path) -> None:
+    """2026-09-11: auto_save staging branch removed — high-score text is routed
+    by the distiller (canonical keys, dedup) and NEVER lands in the review queue."""
     from hooks.external import auto_save_text
 
     mem = _FakeMem()
     result = await auto_save_text(mem, _FakeGraph(), user_id="u1", text=LONG_TEXT, event="new_message")
     assert result["score"] >= 0.8, "test text must reach the L4 band"
     assert result["saved_l3"] is True and result["saved_graph"] is True
-    assert result.get("staged_l4") is True
-    assert mem.remembered == [], "L4 write must be deferred to proposal apply"
+    assert not result.get("staged_l4"), "auto-save staging branch removed"
     conn = sqlite3.connect(connection_manager.base_dir / "memory.db")
     rows = conn.execute("SELECT kind, status, payload FROM mutation_proposals").fetchall()
     conn.close()
-    assert len(rows) == 1
-    assert rows[0][0] == "core_write" and rows[0][1] == "pending"
-    assert '"importance"' in rows[0][2]
+    assert rows == [], "auto-save must not create proposals — review queue is for deliberate mutations only"
 
 
-async def test_staging_disabled_writes_l4_directly(ensure_schema: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_auto_save_never_writes_raw_core_key(ensure_schema: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With staging on or off, no raw "auto_save" core-key write happens —
+    the old direct-write fallback polluted one L4 slot with chat snippets."""
     import hooks.external as ext
 
     mem = _FakeMem()
     monkeypatch.setattr(ext, "_staging_enabled", lambda: False)
     result = await ext.auto_save_text(mem, _FakeGraph(), user_id="u1", text=LONG_TEXT, event="new_message")
-    assert result["saved_l4"] is True
-    assert mem.remembered, "staging disabled → direct L4 write"
+    assert result["saved_l3"] is True, "distiller L3 routing unaffected"
+    assert all(key != "auto_save" for key, _, _ in mem.remembered), "raw auto_save key write removed"
     assert result.get("staged_l4") is None
 
 
