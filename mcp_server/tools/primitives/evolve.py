@@ -27,9 +27,13 @@ async def evolve(
     metrics.inc("tool_calls")
     metrics.inc("tool_evolve")
 
-    # Save to Agent's CoreMemory (L4)
+    # Save to Agent's CoreMemory (L4). Timestamped key: personality evolution
+    # is a TIMELINE — the literal "agent_evolution" key overwrote every prior
+    # shift, leaving only the last instruction (auto_save anti-pattern).
+    import time as _time
+
     mem = app.mm.agent_memory(user_id)
-    await mem.remember("agent_evolution", instruction, importance=1.0)
+    await mem.remember(f"evolution:{int(_time.time())}", instruction, importance=1.0)
 
     # Timeline: personality evolution is a first-class event
     if app.temporal:

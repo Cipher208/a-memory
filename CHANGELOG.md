@@ -5,6 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **MUSE §7.5 integration surface (2026-09-11).** `state_entered` / `state_exited` join KNOWN_EVENTS with agent-layer hook handlers: state lifecycle → L3 episodes tagged `muse_state` (payload: state/intensity/trigger/duration/summary). Available through all three transports (memory_hook tool, POST /api/hooks/{event}, autohooks dispatch) — one dispatcher, one registration. Per muse-engine-spec v1.1: L4 facts like "state X was useful for task Y" remain the agent's deliberate think() call; the hook only captures the event. Pre-existing v0 precursors (`state_delta`, `emotion_trigger`, layer=user) coexist untouched. `evolve` now writes timestamped `evolution:<unix>` L4 keys — personality evolution is a timeline, the literal `agent_evolution` key overwrote every prior shift (auto_save anti-pattern).
+
 ### Removed
 - **auto_save staging branch (`hooks/external.py`, 2026-09-11).** The score≥0.8 branch staged raw chat text under the literal core key `"auto_save"` for manual review — 52 same-key proposals flooded `mutation_proposals` in a week (288 total; review tier had also been broken, see Fixed), no code reads the `"auto_save"` core key, and approving any one would overwrite the slot with the next. L4 routing stays with the distiller (canonical keys, near-dup, conflict detection) — verified live: `routes.l4_saved=1`, zero `mem.remember` calls for the same input that previously staged. Staging remains for deliberate mutations only: dream markers, consolidation promotions, agent-side `propose`, conflict resolution. Backlog hygiene: the 52 live duplicates were rejected in bulk via the real `staging.decide` path (audit-logged); the 1 consolidation proposal stays pending for review.
 

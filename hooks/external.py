@@ -40,6 +40,11 @@ KNOWN_EVENTS: frozenset[str] = frozenset(
         "post_context_compression",
         "post_session_diff",
         "on_turn_end",
+        # MUSE §7.5 integration surface (muse-engine-spec v1.1): state
+        # lifecycle → L3 episodes tagged muse_state. L4 facts about a state
+        # being useful stay the agent's deliberate think() call.
+        "state_entered",
+        "state_exited",
     }
 )
 

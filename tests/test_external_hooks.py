@@ -22,6 +22,8 @@ def test_known_events_exact_set() -> None:
             "post_context_compression",
             "post_session_diff",  # C1.10
             "on_turn_end",  # E14
+            "state_entered",  # MUSE §7.5
+            "state_exited",  # MUSE §7.5
         }
     )
 

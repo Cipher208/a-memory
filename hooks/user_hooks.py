@@ -301,6 +301,52 @@ class UserHooks:
         """E14: turn-level capture — same pipeline as new_message, sync result to the caller."""
         return await self._new_message(ctx, mem=mem, graph=graph)
 
+    # ── MUSE §7.5 state lifecycle (muse-engine-spec v1.1) ──
+
+    @hook_registry.mark("state_entered", layer="agent")
+    async def _state_entered(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """MUSE state entered -> L3 episode (tag muse_state).
+
+        Payload: {state: str, intensity?: float, trigger?: str}. L4 facts like
+        "state X was useful for task Y" stay the agent's deliberate think()
+        call — the hook only captures the event.
+        """
+        state = str(ctx.get("state", "")).strip()
+        if not state:
+            return {"skipped": "no_state"}
+        if mem is None:
+            return {"skipped": "no_mem"}
+        user_id = ctx.get("user_id", self.user_id)
+        intensity = float(ctx.get("intensity") or 0.0)
+        trigger = str(ctx.get("trigger") or "").strip()
+        gist = f"state entered: {state} (intensity {intensity:.2f})" + (f" — {trigger}" if trigger else "")
+        await mem.l3.save(user_id, gist, 0.6, ["muse_state", state])
+        return {"status": "ok", "state": state, "episode_tag": "muse_state"}
+
+    @hook_registry.mark("state_exited", layer="agent")
+    async def _state_exited(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
+        """MUSE state exited -> L3 episode with the session outcome summary.
+
+        Payload: {state: str, duration_min?: float, summary?: str}.
+        Per MUSE 6.2 state_exited: ideas are preserved — the summary carries them.
+        """
+        state = str(ctx.get("state", "")).strip()
+        if not state:
+            return {"skipped": "no_state"}
+        if mem is None:
+            return {"skipped": "no_mem"}
+        user_id = ctx.get("user_id", self.user_id)
+        duration = ctx.get("duration_min")
+        summary = str(ctx.get("summary") or "").strip()
+        parts = [f"state exited: {state}"]
+        if duration is not None:
+            parts.append(f"lasted {float(duration):.0f} min")
+        if summary:
+            parts.append(summary[:200])
+        gist = " — ".join(parts)
+        await mem.l3.save(user_id, gist, 0.6, ["muse_state", state])
+        return {"status": "ok", "state": state, "episode_tag": "muse_state"}
+
     @hook_registry.mark("context_threshold", layer="user")
     async def _context_threshold(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         """Thin advice: eviction candidates = oldest staging entries. Decision stays harness-side."""
