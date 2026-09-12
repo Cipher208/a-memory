@@ -28,6 +28,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     sub.choices["inject"].add_argument("--text", default="", help="current message for relevance ranking")
     sub.choices["inject"].add_argument("--format", default="md", choices=["md", "json"])
     sub.choices["inject"].add_argument("--blocks", default="", help="comma-separated block kinds to keep (empty = all)")
+    sub.choices["inject"].add_argument(
+        "--with-recap", action="store_true", help="prepend the continuity pack (session_recap) before the critical set"
+    )
     sub.choices["context"].add_argument("--text", default="", help="current user message for relevance ranking")
     sub.choices["context"].add_argument("--format", default="md", choices=["md", "json"])
     sub.choices["context"].add_argument("--budget", default="2000", help="token budget")
@@ -165,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from autohooks.inject import run_inject
 
-    out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format, blocks=ns.blocks))
+    out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format, blocks=ns.blocks, with_recap=ns.with_recap))
     _close_ariel()
     print(out)
     return 0

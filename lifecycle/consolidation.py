@@ -91,6 +91,15 @@ class ConsolidationEngine:
                 skipped += 1
                 continue
 
+            # F1 2026-09-12: conversational register is not a durable fact
+            # (the review queue must not fill with greeting proposals either).
+            from lifecycle.distiller import _is_dialogic
+
+            if _is_dialogic(content):
+                logger.debug("skipping dialogic staging item from L4 promotion")
+                skipped += 1
+                continue
+
             # Type-aware threshold: instruction/rule/commitment pass at 0.3+
             effective_threshold = (
                 min_importance
@@ -161,7 +170,7 @@ class ConsolidationEngine:
             # context) must not become an eternal L4 fact. Facts with near-zero
             # decay (fact/decision/preference/relationship + never_archive)
             # are promoted as before — kind routing is consistent with the distiller.
-            from lifecycle.distiller import _canonical_key
+            from lifecycle.distiller import _canonical_key, _is_dialogic
             from shared.memory_types import kind_for_text
 
             kind = kind_for_text(summary)
@@ -169,6 +178,12 @@ class ConsolidationEngine:
                 logger.debug("episode %s is event-kind (%s), stays in L3", row["episode_id"], kind.value)
                 continue
             key = _canonical_key(summary, kind)
+            # F1 2026-09-12: the transcript + event-kind gates miss the
+            # conversational class — greetings/vocatives/questions promoted
+            # verbatim filled L4 with `fact:…` chat slugs (61 rows, one base).
+            if _is_dialogic(summary) or key.endswith(":misc"):
+                logger.debug("episode %s is conversational/unkeyable, stays in L3", row["episode_id"])
+                continue
             entry_id = await cm.save(
                 user_id,
                 key,

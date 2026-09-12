@@ -102,6 +102,34 @@ async def test_visibility_invalid_raises(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_resave_preserves_operator_visibility(tmp_path):
+    """A re-upsert on the same key must NOT resurrect an operator-hidden row.
+
+    F1 sanitation (2026-09-12): hidden garbage fact: rows came back 'visible'
+    because every auto_save rewrite of the same canonical key re-ran the
+    default `visibility='visible'`.
+    """
+    from core.memory import CoreMemory
+    from shared.connection import AsyncConnectionManager
+
+    manager = AsyncConnectionManager(base_dir=str(tmp_path))
+    cm = CoreMemory(cm=manager, layer="user")
+    await cm._init_db()
+    eid = await cm.save("u1", "fact:owner", "владелец сервера — Мурат", importance=0.5)
+    conn = await manager.get("memory.db")
+    await conn.execute("UPDATE core_memory SET visibility='hidden' WHERE entry_id=?", (eid,))
+    await conn.commit()
+
+    await cm.save("u1", "fact:owner", "владелец сервера — Мурат", importance=0.6)
+    row = await (await conn.execute("SELECT visibility FROM core_memory WHERE entry_id=?", (eid,))).fetchone()
+    assert row["visibility"] == "hidden", "re-save without the arg preserves the operator flag"
+
+    await cm.save("u1", "fact:owner", "владелец сервера — Мурат", importance=0.6, visibility="visible")
+    row = await (await conn.execute("SELECT visibility FROM core_memory WHERE entry_id=?", (eid,))).fetchone()
+    assert row["visibility"] == "visible", "an explicit visibility arg still overrides"
+
+
+@pytest.mark.asyncio
 async def test_inject_pinned_block(tmp_path):
     """pinned-факт попадает в inject даже при низкой важности."""
     from core.memory import CoreMemory

@@ -37,6 +37,7 @@ def ensure_schema(fresh_dir: Path) -> Path:
             saved_l3 INTEGER NOT NULL DEFAULT 0,
             saved_l4 INTEGER NOT NULL DEFAULT 0,
             saved_graph INTEGER NOT NULL DEFAULT 0,
+            text_preview TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL
         );
     """)
@@ -53,9 +54,6 @@ class _FakeL3:
         self.saved.append({"user_id": user_id, "summary": summary, "weight": weight, "tags": tags})
         return len(self.saved)
 
-    def get(self, source_msg_id: int) -> dict:
-        return {"content": f"preview for {source_msg_id}"}
-
 
 class _FakeMem:
     def __init__(self) -> None:
@@ -63,10 +61,13 @@ class _FakeMem:
 
 
 def _seed_log(tmp_path: Path, rows: list[tuple]) -> None:
+    """rows: (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at[, preview])"""
     conn = sqlite3.connect(tmp_path / "memory.db")
     for r in rows:
+        if len(r) == 8:
+            r = (*r, "seeded message preview")
         conn.execute(
-            "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at, text_preview) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             r,
         )
     conn.commit()
@@ -74,7 +75,7 @@ def _seed_log(tmp_path: Path, rows: list[tuple]) -> None:
 
 
 async def test_post_session_diff_handler_materializes_gap(ensure_schema: Path) -> None:
-    _seed_log(ensure_schema, [("new_message", 7, "u1", 0.6, 1, 0, 1, time.time())])
+    _seed_log(ensure_schema, [("new_message", 7, "u1", 0.6, 1, 0, 1, time.time(), "выбрали postgres 16")])
     from mcp_server.context import AppContext
 
     app = AppContext()
@@ -86,6 +87,26 @@ async def test_post_session_diff_handler_materializes_gap(ensure_schema: Path) -
     assert "diff_gap" in mem.l3.saved[0]["tags"]
     assert "auto_review" in mem.l3.saved[0]["tags"]
     assert "msg=7" in mem.l3.saved[0]["summary"]
+    assert "выбрали postgres 16" in mem.l3.saved[0]["summary"]
+
+
+async def test_post_session_diff_skips_empty_preview(ensure_schema: Path) -> None:
+    """Empty-preview rows are noise, not gaps (13k-marker regression, 2026-09-12)."""
+    _seed_log(
+        ensure_schema,
+        [
+            ("new_message", 7, "u1", 0.6, 1, 0, 1, time.time(), ""),
+            ("new_message", 8, "u1", 0.6, 1, 0, 1, time.time(), "   "),
+        ],
+    )
+    from mcp_server.context import AppContext
+
+    app = AppContext()
+    uh = app.user_hooks
+    mem = _FakeMem()
+    result = await uh._post_session_diff({"user_id": "u1", "since": 0, "until": time.time() + 1}, mem=mem)
+    assert result["gaps"] == 0
+    assert mem.l3.saved == []
 
 
 async def test_post_session_diff_with_no_log_yields_zero_gaps(ensure_schema: Path) -> None:

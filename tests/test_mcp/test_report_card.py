@@ -40,7 +40,8 @@ def ensure_schema(fresh_dir: Path) -> Path:
             id INTEGER PRIMARY KEY AUTOINCREMENT, event TEXT NOT NULL, source_msg_id INTEGER,
             layer TEXT NOT NULL DEFAULT 'user', user_id TEXT NOT NULL DEFAULT 'default',
             score REAL, saved_l3 INTEGER NOT NULL DEFAULT 0, saved_l4 INTEGER NOT NULL DEFAULT 0,
-            saved_graph INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL
+            saved_graph INTEGER NOT NULL DEFAULT 0, text_preview TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS audit_log (
             log_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, action TEXT NOT NULL,
@@ -59,8 +60,8 @@ def ensure_schema(fresh_dir: Path) -> Path:
         (now - 30, now + 86400),
     )
     conn.execute(
-        "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at)"
-        " VALUES ('new_message', 1, 'default', 0.6, 1, 0, 1, ?)",
+        "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
+        " VALUES ('new_message', 1, 'default', 0.6, 1, 0, 1, 'seed dispatch preview', ?)",
         (now - 120,),
     )
     conn.commit()

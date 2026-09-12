@@ -27,11 +27,11 @@ def _render_md(blocks: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for b in blocks:
         kind = b.get("kind", "memory")
-        content = str(b.get("content", "")).strip()
-        if not content:
-            continue
         if kind == "cache_break":
             lines.append("<cache:break>")  # E9: bare marker line, not a bullet
+            continue
+        content = str(b.get("content", "")).strip()
+        if not content:
             continue
         lines.append(f"- [{kind}] {content}")
     return "\n".join(lines) if lines else "—"
@@ -48,10 +48,14 @@ async def run_inject(
     dispatch: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     budget: int | None = None,
     blocks: str = "",
+    with_recap: bool = False,
 ) -> str:
     """Dispatch session_started (its handler builds the budget-capped critical set) and render it.
 
     `blocks` is a comma-separated kind filter (empty = all kinds).
+    `with_recap` prepends the D1.2 continuity pack (session_recap, half the
+    budget) plus a cache break — startup actuality before the stable critical
+    set, mirroring the wake_up tool's two-half layout.
     """
     from config import config
 
@@ -69,6 +73,14 @@ async def run_inject(
         rag,
     )
     blocks_list = _collect_blocks(result)
+    if with_recap:
+        from features.continuity import session_recap
+
+        recap_blocks = await session_recap(mem, cfg.user_id, budget=max(budget // 2, 0))
+        mapped = [{"kind": b["axis"], "content": b["content"], "score": float(b.get("score", 0.8))} for b in recap_blocks]
+        if mapped:
+            mapped.append({"kind": "cache_break", "content": "", "score": 1.0})
+        blocks_list = mapped + blocks_list
     if blocks:
         keep = {k.strip() for k in blocks.split(",") if k.strip()}
         blocks_list = [b for b in blocks_list if b.get("kind") in keep]

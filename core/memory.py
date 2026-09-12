@@ -95,15 +95,25 @@ class CoreMemory:
         now = time.time()
         memory_kind, importance, expires_at = self._prepare_save_params(value, memory_kind, importance, expires_at, now)
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+        if visibility is not None and visibility not in ("visible", "pinned", "private"):
+            raise ValueError(f"invalid visibility: {visibility!r}")
         vis = visibility or "visible"
-        if vis not in ("visible", "pinned", "private"):
-            raise ValueError(f"invalid visibility: {vis!r}")
 
         conn = await self._cm.get(DB_NAME)
         existing_id = await self._find_existing_id(conn, layer, user_id, key)
 
         if existing_id is not None:
             old = await self._fetch_row_by_id(conn, existing_id)
+            if visibility is None and old is not None:
+                # Preserve the stored flag: an auto-save re-upsert under the
+                # same canonical key must silently NOT undo operator-level
+                # visibility changes (a 'hidden' row re-saved with the same
+                # canonical key would otherwise be back to 'visible' — F1
+                # sanitation, 2026-09-12). _fetch_row_by_id uses a fixed
+                # column list, so visibility is read directly.
+                vrow = await (await conn.execute("SELECT visibility FROM core_memory WHERE entry_id=?", (existing_id,))).fetchone()
+                if vrow and vrow[0]:
+                    vis = str(vrow[0])
             await self._update_entry(conn, existing_id, value, importance, memory_kind, expires_at, source, metadata_json, now, vis)
             entry_id = existing_id
             new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)

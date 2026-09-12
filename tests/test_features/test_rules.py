@@ -118,8 +118,10 @@ async def test_auto_save_text_applies_rules(rules_dir):
     conn.close()
 
     mem = _FakeMem()
-    # base score ~0.9 (len, ?, !, keywords, newlines) + 0.2 boost → saves
-    text = "Изменил архитектуру памяти?\nТеперь это поэтапный план, который надо сделать!\nСначала прототип, потом тесты, иначе всё сломается — ты же помнишь, как я решил?"
+    # Single declarative clause carrying the decision marker + length.
+    # The dialogic guard (2026-09-12) drops question-ended chat from L4, and
+    # this test asserts the rules boost — it must not feed the guard.
+    text = "Я изменил архитектуру памяти — теперь это поэтапный план: сначала прототип, потом тесты, иначе всё сломается; я так решил."
     res = await auto_save_text(mem, _FakeGraph(), user_id="u1", text=text, event="new_message")
     assert res["rules"] == ["architecture"]
     assert res["score"] >= 0.5  # D1.9: importance_boost применился к гейту

@@ -56,14 +56,14 @@ async def _collect_markers(mem: Any, user_id: str, cutoff: float) -> tuple[str, 
                 if float(getattr(e, "created_at", 0) or 0) >= cutoff and str(getattr(e, "summary", "")).strip()
             )
         except Exception as exc:
-            logger.debug("recall axis failed: %s", exc)
+            logger.warning("recall axis failed: %s", exc)
         parts = [p for p in parts if p]
         if not parts:
             return None
         values = [f.value[:80] for f in marker_facts]
         return "; ".join(parts), tuple(parts) + tuple(values)
     except Exception as exc:
-        logger.debug("recall axis failed: %s", exc)
+        logger.warning("recall axis failed: %s", exc)
         return None
 
 
@@ -79,7 +79,7 @@ async def _collect_day(mem: Any, user_id: str, cutoff: float) -> str | None:
         if fresh:
             return " | ".join(fresh)
     except Exception as exc:
-        logger.debug("recall axis failed: %s", exc)
+        logger.warning("recall axis failed: %s", exc)
     return None
 
 
@@ -94,7 +94,7 @@ async def _collect_session(mem: Any, user_id: str, cutoff: float) -> list[tuple[
         if recent:
             out.append((0.5, "; ".join(f"{r.role}: {r.content[:80]}" for r in recent)))
     except Exception as exc:
-        logger.debug("recall axis failed: %s", exc)
+        logger.warning("recall axis failed: %s", exc)
     try:
         from core.session import SessionStore
 
@@ -103,7 +103,7 @@ async def _collect_session(mem: Any, user_id: str, cutoff: float) -> list[tuple[
         if summary and summary.strip() != "No sessions yet.":
             out.append((0.55, f"last session: {str(summary)[:160]}"))
     except Exception as exc:
-        logger.debug("recall axis failed: %s", exc)
+        logger.warning("recall axis failed: %s", exc)
     return out
 
 
@@ -116,7 +116,7 @@ async def _collect_triggered(user_id: str, query: str) -> list[str]:
         for hit in evaluate_disclosures(user_id, query):
             out.append(f"{hit['name']}: {hit['content']}")
     except Exception as exc:
-        logger.debug("disclosure axis failed: %s", exc)
+        logger.warning("disclosure axis failed: %s", exc)
     return out
 
 
@@ -175,7 +175,7 @@ async def _collect_semantic(rag: Any, user_id: str, query: str) -> list[_Candida
             if content:
                 out.append(("expand", float(h.get("score", 0.0)), content, ()))
     except Exception as exc:
-        logger.debug("recall axis failed: %s", exc)
+        logger.warning("recall axis failed: %s", exc)
     return out
 
 

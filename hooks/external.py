@@ -88,6 +88,34 @@ async def dispatch_event(
     return dict(result) if isinstance(result, dict) else {"results": result}
 
 
+_preview_column_ensured: set[str] = set()
+
+
+def _ensure_preview_column(db_path: Any) -> None:
+    """PRAGMA-first migration: text_preview on memory_dispatch_log (idempotent).
+
+    Written at dispatch time because compute_session_gaps can never recover
+    the text retroactively (source_msg_id is a harness conversation id, not
+    an L3 episode id — the old lookup produced 13k empty-preview markers).
+    Cached PER PATH: one process may touch several bases (tests, multi-agent
+    CLI runs); a global bool would silently skip the column on base #2.
+    """
+    import sqlite3
+
+    key = str(db_path)
+    if key in _preview_column_ensured:
+        return
+    try:
+        with sqlite3.connect(key) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(memory_dispatch_log)")}
+            if cols and "text_preview" not in cols:
+                conn.execute("ALTER TABLE memory_dispatch_log ADD COLUMN text_preview TEXT NOT NULL DEFAULT ''")
+                conn.commit()
+        _preview_column_ensured.add(key)
+    except Exception as _e:
+        logger.debug("text_preview column migration failed: %s", _e)
+
+
 async def auto_save_text(
     mem: Any,
     graph: Any,
@@ -174,11 +202,12 @@ async def auto_save_text(
         result["score"] = 0.95
         try:
             db_path = connection_manager.base_dir / "memory.db"
+            _ensure_preview_column(db_path)
             with _sqlite3.connect(str(db_path)) as _conn:
                 _conn.execute(
-                    "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (event, source_msg_id, "user", user_id, 0.95, 0, 0, 0, _time.time()),
+                    "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (event, source_msg_id, "user", user_id, 0.95, 0, 0, 0, text[:200], _time.time()),
                 )
                 _conn.commit()
         except Exception as _e:
@@ -238,10 +267,11 @@ async def auto_save_text(
     # disables memory_diff for this event.
     try:
         db_path = connection_manager.base_dir / "memory.db"
+        _ensure_preview_column(db_path)
         with _sqlite3.connect(str(db_path)) as _conn:
             _conn.execute(
-                "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     event,
                     source_msg_id,
@@ -251,6 +281,7 @@ async def auto_save_text(
                     int(result["saved_l3"]),
                     int(result["saved_l4"]),
                     int(result["saved_graph"]),
+                    text[:200],
                     _time.time(),
                 ),
             )

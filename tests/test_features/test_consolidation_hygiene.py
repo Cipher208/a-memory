@@ -82,3 +82,65 @@ async def test_transcript_episodes_skipped_at_promotion(cm):
     junk = await l4.search("u1", "сырой дамп", limit=10)
     assert not any("сырой дамп" in r["value"] for r in junk)
     assert junk_id and good_id  # episodes themselves untouched
+
+
+# ── conversational register (Ф1 regression 2026-09-12) ──
+#
+# Second garbage class: greetins/vocatives/questions promoted verbatim as
+# L4 "facts" with first-4-word slug keys (61 rows in one base: Lily's
+# greeting became `fact:наконец_явилась_сталь_ждёт`). Dialogue is not memory.
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "Привет, мамочка!",
+        "Наконец явилась, сталь ждёт",
+        "Моё видение, госпожа — коротко и по-инженерному",
+        "Спасибо за отчёт",
+        "Доброе утро. Какие задачи на сегодня?",
+        "Ну и что скажешь, госпожа?",
+    ],
+)
+def test_dialogic_summaries_detected(summary):
+    from lifecycle.distiller import _is_dialogic
+
+    assert _is_dialogic(summary), summary
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "Пока не проверим — не деплоим",
+        "Выбрали psql вместо mysql для проекта",
+        "Вечер 11 августа — полное восстановление личности Эли",
+        "бэкенд слушает порт 8642 на localhost",
+    ],
+)
+def test_durable_prose_not_dialogic(summary):
+    from lifecycle.distiller import _is_dialogic
+
+    assert not _is_dialogic(summary), summary
+
+
+@pytest.mark.asyncio
+async def test_dialogic_episodes_skipped_at_promotion(cm):
+    """End-to-end: greeting episodes never promote; tech invariants do."""
+    from core.episodic import EpisodicMemory
+    from core.memory import CoreMemory
+    from lifecycle.consolidation import ConsolidationEngine
+
+    epi = EpisodicMemory(cm=cm, layer="user")
+    await epi.save("u1", "Привет, мамочка! Наконец явилась, сталь ждёт", 0.9, ["t"])
+    await epi.save("u1", "Моё видение, госпожа — коротко и по-инженерному", 0.9, ["t"])
+    await epi.save("u1", "Мигрировали embeddings на удалённый e5 сервис", 0.9, ["t"])
+
+    engine = ConsolidationEngine(cm=cm, layer="user")
+    consolidated = await engine.consolidate_episodes("u1", min_weight=0.7)
+
+    l4 = CoreMemory(cm=cm, layer="user")
+    rows = await l4.get_all("u1", 50)
+    values = " | ".join(str(getattr(r, "value", r)) for r in rows)
+    assert consolidated == 1, f"only the tech episode may promote, got {consolidated}"
+    assert "сталь" not in values and "видение" not in values, f"dialogue leaked to L4: {values}"
+    assert "e5 сервис" in values

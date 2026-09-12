@@ -11,6 +11,7 @@ transports (endpoint / MCP tool / dispatcher caller) do the resolution.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Any
 
@@ -185,7 +186,13 @@ async def build_inject_blocks(
             gist = str(payload.get("value") or payload.get("ids") or payload.get("items") or "")[:80]
             age_days = (time.time() - float(p.get("proposed_at", time.time()))) / 86400
             lines.append(f"#{p['id']} {p['kind']}: {gist} ({age_days:.0f}d)")
-        header = f"{len(pending)} staged mutation(s) await review (expire in 7d). Decide: {decision_hint()}"
+        # HONEST expiry: the static "(expire in 7d)" showed the TOTAL term,
+        # not the remaining time — operators read "7 days left" when only
+        # 3.9 remained (Lucy's cron report, 2026-09-12). Show the remaining
+        # time of the OLDEST pending proposal instead.
+        oldest = min((float(p.get("expires_at", 0) or 0) for p in pending), default=0.0)
+        days_left = max(0, math.ceil((oldest - time.time()) / 86400)) if oldest else 0
+        header = f"{len(pending)} staged mutation(s) await review (oldest expires in {days_left}d). Decide: {decision_hint()}"
         content = header + "\n" + "\n".join(lines)
         content = _cap(content)
         cost = estimate_tokens(content)

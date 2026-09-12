@@ -26,7 +26,7 @@ def fresh_dir(tmp_path: Path) -> Path:
 
 
 def _seed_log(tmp_path: Path, rows: list[tuple]) -> None:
-    """rows: (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at)"""
+    """rows: (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at[, text_preview])"""
     conn = sqlite3.connect(tmp_path / "memory.db")
     conn.executescript("""
         CREATE TABLE memory_dispatch_log (
@@ -38,12 +38,15 @@ def _seed_log(tmp_path: Path, rows: list[tuple]) -> None:
             saved_l3 INTEGER NOT NULL DEFAULT 0,
             saved_l4 INTEGER NOT NULL DEFAULT 0,
             saved_graph INTEGER NOT NULL DEFAULT 0,
+            text_preview TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL
         );
     """)
     for r in rows:
+        if len(r) == 8:
+            r = (*r, "")
         conn.execute(
-            "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at, text_preview) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             r,
         )
     conn.commit()
@@ -52,7 +55,7 @@ def _seed_log(tmp_path: Path, rows: list[tuple]) -> None:
 
 class _FakeL3:
     def get(self, msg_id: int) -> dict:
-        return {"content": f"preview for {msg_id}"}
+        raise AssertionError("gap preview must come from the dispatch log, never L3 lookup")
 
 
 class _FakeMem:
@@ -61,13 +64,13 @@ class _FakeMem:
 
 
 def test_high_score_l3_only_is_gap_missing_l4(fresh_dir: Path) -> None:
-    """score 0.6, saved_l3=1, saved_l4=0 → gap with missing=['l4']."""
-    _seed_log(fresh_dir, [("new_message", 1, "u1", 0.6, 1, 0, 1, time.time())])
+    """score 0.6, saved_l3=1, saved_l4=0 → gap with missing=['l4'] and log preview."""
+    _seed_log(fresh_dir, [("new_message", 1, "u1", 0.6, 1, 0, 1, time.time(), "решили мигрировать базу")])
     gaps = compute_session_gaps(_FakeMem(), since=0, until=time.time() + 1)
     assert len(gaps) == 1
     g = gaps[0]
     assert g["missing"] == ["l4"]
-    assert "preview for 1" in g["text_preview"]
+    assert "решили мигрировать" in g["text_preview"]
 
 
 def test_high_score_full_save_is_not_a_gap(fresh_dir: Path) -> None:
@@ -84,10 +87,27 @@ def test_empty_log_yields_no_gaps(fresh_dir: Path) -> None:
 
 def test_no_saves_at_all_is_a_gap(fresh_dir: Path) -> None:
     """score 0.6 with saved_l3=0, saved_l4=0 → gap with missing=['l3','l4']."""
-    _seed_log(fresh_dir, [("new_message", 1, "u1", 0.6, 0, 0, 0, time.time())])
+    _seed_log(fresh_dir, [("new_message", 1, "u1", 0.6, 0, 0, 0, time.time(), "текст сообщения")])
     gaps = compute_session_gaps(_FakeMem(), since=0, until=time.time() + 1)
     assert len(gaps) == 1
     assert set(gaps[0]["missing"]) == {"l3", "l4"}
+
+
+def test_empty_preview_is_not_a_gap(fresh_dir: Path) -> None:
+    """Preview-less rows are noise markers, not gaps.
+
+    Prod evidence (2026-09-12): the broken retroactive L3 lookup made every
+    gap preview empty — 13,205 empty `diff_gap:` episodes in one base.
+    """
+    _seed_log(
+        fresh_dir,
+        [
+            ("new_message", 1, "u1", 0.6, 1, 0, 1, time.time(), ""),
+            ("new_message", 2, "u1", 0.6, 1, 0, 1, time.time(), "   "),
+        ],
+    )
+    gaps = compute_session_gaps(_FakeMem(), since=0, until=time.time() + 1)
+    assert gaps == []
 
 
 def test_other_events_ignored(fresh_dir: Path) -> None:

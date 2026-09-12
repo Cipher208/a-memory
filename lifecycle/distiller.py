@@ -19,6 +19,66 @@ from shared.memory_types import MemoryKind, get_policy, kind_for_text
 logger = logging.getLogger(__name__)
 _CLAUSE_SPLIT = re.compile(r"[,;]?\s+(?:и|но|причём|а|хотя)\s+|\.\s+")
 
+# Conversational-register markers (data: vocatives/greetings that chat
+# produces but memory must not store). The 2026-09-12 F1 audit: 61 L4 rows
+# of episode_promotion advancing chat verbatim. Word-boundary matching
+# keeps homograph adjectives/conjunctions (poka=until, khoroshaya=good,
+# dorogaya=dear) from false-positive hits.
+_DIALOGIC_WORDS = frozenset(
+    {
+        "госпожа",
+        "господин",
+        "мамочка",
+        "мама",
+        "мам",
+        "детка",
+        "привет",
+        "здравствуй",
+        "здравствуйте",
+        "приветствую",
+        "благодарю",
+        "спасибо",
+        "прощай",
+        "явилась",
+        "hello",
+        "hi",
+        "hey",
+        "thanks",
+        "thank",
+        "darling",
+    }
+)
+_DIALOGIC_PHRASES = (
+    "доброе утро",
+    "добрый день",
+    "добрый вечер",
+    "спокойной ночи",
+    "моя хорошая",
+    "моя милая",
+    "good morning",
+    "good evening",
+    "good night",
+    "thank you",
+)
+
+
+def _is_dialogic(clause: str) -> bool:
+    """Return True for conversational-register clauses — chat, never a durable fact.
+
+    Greetings, vocatives and questions describe the conversation itself;
+    episode_promotion once keyed the owner's greeting as an L4 fact row.
+    Residual risk: first-person poetic lines without any marker still pass
+    (importance tuning is a separate follow-up).
+    """
+    low = clause.lower()
+    # Trailing interrogative (punctuation tails tolerated); a leading "?!"
+    # is a scoring artifact in synthetic texts, not a question.
+    if low.rstrip().rstrip("!.…;:»\"'").endswith("?"):
+        return True
+    if set(re.findall(r"[а-яёa-z]+", low)) & _DIALOGIC_WORDS:
+        return True
+    return any(p in low for p in _DIALOGIC_PHRASES)
+
 
 def _canonical_key(clause: str, kind: MemoryKind) -> str:
     from config import config
@@ -205,6 +265,7 @@ async def distill_and_route(
         "conflicts": 0,
         "novelty_skipped": 0,
         "semantic_skipped": 0,  # S18 item 5: cosine>0.92 dedup
+        "guard_skipped": 0,  # F1 2026-09-12: dialogic/misc atoms never reach L4
         "similar_to": [],  # S17 A2-advisory: keys the clause intersected with (near-dup/conflict)
     }
     # S17 ENGRAM: procedural («how to do X»-style) — agent-self track, L4 of the agent layer.
@@ -230,6 +291,11 @@ async def distill_and_route(
                 agent_cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="agent")
                 await agent_cmem._init_db()
             target = agent_cmem
+        if route == "l4" and (_is_dialogic(clause) or key.endswith(":misc")):
+            # F1 2026-09-12: conversational register and unkeyable atoms are
+            # not durable facts — the raw text stays in L0/L3 where it belongs.
+            stats["guard_skipped"] += 1
+            continue
         if route_kind(kind) == "l4":
             # C8 novelty-gate: a paraphrase of already-saved same-key facts — skip.
             conn = await cmem._cm.get("memory.db")

@@ -6,6 +6,7 @@ Embeddings — async SQLite cache with multilingual model
 
 import asyncio
 import hashlib
+import logging
 import os
 import re
 import struct
@@ -83,6 +84,19 @@ def _remote_active() -> bool:
 
 
 _fallback_warned = False
+
+# Degraded-embedding telemetry (2026-09-12): hash fallback used to be
+# invisible — recall silently decayed to hash quality while every call
+# "succeeded" (exactly the class of bug the old ARIEL_HASH_EMBEDDINGS
+# default hid). Count every fallback for probes, log loud on the first and
+# then every 100th.
+_fallback_count = 0
+_fallback_logged_at = 0
+
+
+def hash_fallback_stats() -> dict[str, int]:
+    """hash-fallback fires in this process (for the daily probe / diagnostics)."""
+    return {"hash_fallback": _fallback_count}
 
 
 def _get_model(model_name: str | None = None) -> Any:
@@ -198,7 +212,7 @@ class EmbeddingCache:
         )
         await conn.commit()
 
-    async def embed(self, texts: list[str]) -> list[float] | list[list[float]]:
+    async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
 
@@ -251,7 +265,8 @@ class EmbeddingCache:
         def _post() -> dict[str, Any]:
             # Scheme is validated above (http/https only).
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                return json.loads(resp.read())
+                data: dict[str, Any] = json.loads(resp.read())
+                return data
 
         data = await asyncio.to_thread(_post)
         # OpenAI-compatible shape: {"data": [{"embedding": [...], "index": n}, ...]}
@@ -273,8 +288,10 @@ class EmbeddingCache:
                 else:
                     # encode() is CPU-bound sync work — keep it off the event loop
                     model = _get_model()
-                    embeddings = await asyncio.to_thread(model.encode, compute_texts)
-                    embeddings = embeddings.tolist()
+                    raw = await asyncio.to_thread(model.encode, compute_texts)
+                    # raw is a fresh local (no narrowing from the remote branch);
+                    # ndarray.tolist() → list[list[float]]
+                    embeddings = raw.tolist()
             except Exception:
                 _embedding_breaker.record_failure()
                 raise
@@ -283,6 +300,16 @@ class EmbeddingCache:
                 computed[idx] = emb
                 await self._cache(text, emb, cache_tag)
         else:
+            global _fallback_count, _fallback_logged_at
+            _fallback_count += 1
+            if _fallback_logged_at == 0 or _fallback_count - _fallback_logged_at >= 100:
+                _fallback_logged_at = _fallback_count
+                reason = "circuit breaker open" if has_model else "no model/remote configured"
+                logging.getLogger(__name__).warning(
+                    "embeddings: hash fallback x%d (%s) — recall quality degraded, check the e5 service :8710",
+                    _fallback_count,
+                    reason,
+                )
             for idx, text in to_compute:
                 emb = _hash_embedding(text)
                 computed[idx] = emb

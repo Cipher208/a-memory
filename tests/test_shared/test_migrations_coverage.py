@@ -41,3 +41,17 @@ async def test_migrate_returns_version_info(mm):
     assert "new_version" in result
     # For a fresh migrate, new_version is the head, current_version was None
     assert result["new_version"] is not None
+
+
+@pytest.mark.asyncio
+async def test_migrate_does_not_silence_existing_loggers(mm):
+    """Regression (2026-09-12): the stock alembic env.py called fileConfig,
+    whose default disable_existing_loggers=True silenced every pre-existing
+    ariel logger — production warnings vanished after the startup migration.
+    """
+    import logging
+
+    probe = logging.getLogger("ariel.probe.migration")
+    probe.disabled = False
+    await mm.migrate()
+    assert not probe.disabled, "migrations must not silence the application's loggers"

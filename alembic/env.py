@@ -1,5 +1,4 @@
 import os
-from logging.config import fileConfig
 from pathlib import Path
 
 from sqlalchemy import engine_from_config, pool
@@ -25,10 +24,13 @@ def get_url() -> str:
     return f"sqlite:///{db_path}"
 
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+# Logging: deliberately NO fileConfig() here. The stock Alembic template
+# calls logging.config.fileConfig(alembic.ini) whose default
+# disable_existing_loggers=True SILENCES every ariel logger that exists at
+# migration time — and migrations run inside the MCP server lifespan at
+# startup, so all production logging died quietly (found 2026-09-12 via the
+# hash-fallback telemetry being invisible in full-suite logs). Ariel owns
+# its logging config; alembic inherits it.
 
 # add your model's MetaData object here
 # for 'autogenerate' support

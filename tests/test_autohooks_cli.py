@@ -26,6 +26,36 @@ def test_parse_args_payload_and_blocks():
     assert ns2.blocks == "rehydrate"
     ns3 = cli._parse_args(["dispatch", "--config", "x.yaml", "--event", "new_message"])
     assert ns3.payload == "{}"
+    ns4 = cli._parse_args(["inject", "--config", "x.yaml", "--with-recap"])
+    assert ns4.with_recap is True
+
+
+@pytest.mark.asyncio
+async def test_run_inject_with_recap_merges(tmp_path, monkeypatch):
+    """with_recap: continuity pack FIRST, cache break, then the critical set."""
+
+    async def fake_dispatch(event, layer, user_id, payload, mem, graph, rag):
+        return {"results": [{"blocks": [{"kind": "important", "content": "critical fact", "score": 0.9}]}]}
+
+    async def fake_recap(mem, user_id, budget=1000):
+        return [
+            {"axis": "recap_checkpoint", "content": "checkpoint: DAY CLOSE migration", "score": 0.95},
+            {"axis": "recap_pending", "content": "staged proposals: 5 awaiting review", "score": 0.8},
+        ]
+
+    monkeypatch.setattr("features.continuity.session_recap", fake_recap)
+    from autohooks.inject import run_inject
+
+    out = await run_inject(_cfg(tmp_path), None, None, None, dispatch=fake_dispatch, with_recap=True)
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert lines[0].startswith("- [recap_checkpoint]")
+    assert lines[1].startswith("- [recap_pending]")
+    assert "<cache:break>" in lines
+    assert lines[-1] == "- [important] critical fact"
+
+    # --blocks filter still applies to the merged output
+    out_f = await run_inject(_cfg(tmp_path), None, None, None, dispatch=fake_dispatch, with_recap=True, blocks="recap_checkpoint")
+    assert "recap_checkpoint" in out_f and "critical fact" not in out_f
 
 
 @pytest.mark.asyncio

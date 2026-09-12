@@ -116,9 +116,13 @@ async def test_recap_zero_state_tail(compaction_free):
         l4=[SimpleNamespace(key="dream_fact_1", value="durable", importance=0.95)],
     )
     blocks = await session_recap(mem, "u1")
-    assert [b["axis"] for b in blocks] == ["markers", "day"]
-    assert "durable" in blocks[0]["content"]
-    assert "day digest fact" in blocks[1]["content"]
+    # The fixture DB has no sessions table → the session axis dies and must
+    # announce itself (fail-loud, 2026-09-12); the zero-state tail follows.
+    axes = [b["axis"] for b in blocks]
+    assert axes == ["recap_degraded", "markers", "day"], axes
+    assert "session:" in blocks[0]["content"]
+    assert "durable" in blocks[1]["content"]
+    assert "day digest fact" in blocks[2]["content"]
 
 
 @pytest.mark.asyncio
