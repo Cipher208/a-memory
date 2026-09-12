@@ -95,7 +95,7 @@ class CoreMemory:
         now = time.time()
         memory_kind, importance, expires_at = self._prepare_save_params(value, memory_kind, importance, expires_at, now)
         metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
-        if visibility is not None and visibility not in ("visible", "pinned", "private"):
+        if visibility is not None and visibility not in ("visible", "pinned", "private", "hidden"):
             raise ValueError(f"invalid visibility: {visibility!r}")
         vis = visibility or "visible"
 
@@ -404,7 +404,7 @@ class CoreMemory:
             like_params.extend([f"%{t}%", f"%{t}%"])
         # Overfetch so Python-side ranking can prefer more-matching rows.
         # C8: private facts never leave the store via recall (the inject pinned block does not read them).
-        sql = f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND visibility != 'private' AND ({like_conds}) ORDER BY importance DESC LIMIT ?"
+        sql = f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND visibility NOT IN ('private','hidden') AND ({like_conds}) ORDER BY importance DESC LIMIT ?"
         cursor = await conn.execute(sql, (layer, user_id, *like_params, max(limit * 10, 50)))
         rows = await cursor.fetchall()
 
@@ -447,7 +447,7 @@ class CoreMemory:
             ref_key = str(ref) if ref is not None else key
             later_rows = await (
                 await conn.execute(
-                    "SELECT key, metadata FROM core_memory WHERE layer=? AND user_id=? AND visibility != 'private' AND (key=? OR key LIKE ?) LIMIT 2",
+                    "SELECT key, metadata FROM core_memory WHERE layer=? AND user_id=? AND visibility NOT IN ('private','hidden') AND (key=? OR key LIKE ?) LIMIT 2",
                     (layer, user_id, ref_key, ref_key + "::v%"),
                 )
             ).fetchall()

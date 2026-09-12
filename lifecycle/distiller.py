@@ -239,6 +239,9 @@ async def distill_and_route(
             continue
         if route_kind(kind) == "l4":
             # C8 novelty-gate: a paraphrase of already-saved same-key facts — skip.
+            # NOTE on visibility: hidden rows DELIBERATELY stay in this select —
+            # 'hidden' is key-quarantine, so paraphrase attempts against a
+            # quarantined key must be suppressed by the novelty gate too.
             conn = await cmem._cm.get("memory.db")
             rows = await (
                 await conn.execute(

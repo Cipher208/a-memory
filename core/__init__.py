@@ -60,15 +60,19 @@ class MemoryLayer:
         importance: float = 0.5,
         source: str = "user_explicit",
         ttl_minutes: int = 0,
+        visibility: str | None = None,
     ) -> int:
         """Write an L4 fact.
 
         `source` carries the D1.6 provenance contract
         (user_explicit / staging_promotion / episode_promotion / manual).
         ttl_minutes > 0 sets expires_at = now + ttl*60 (0 = no TTL).
+        `visibility` ('visible'|'pinned'|'private'|'hidden') — None keeps the
+        stored flag on re-save (see CoreMemory.save), so 'hidden' works as a
+        key quarantine: future writes update the row but never un-hide it.
         """
         expires_at = time.time() + ttl_minutes * 60 if ttl_minutes > 0 else None
-        return await self.l4.save(self.user_id, key, value, importance, expires_at=expires_at, source=source)
+        return await self.l4.save(self.user_id, key, value, importance, expires_at=expires_at, source=source, visibility=visibility)
 
     async def recall(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         cache_key = f"recall:{self.user_id}:{query}:{limit}"

@@ -34,9 +34,14 @@ async def memory_remember(
     importance: float = 0.5,
     session_id: str = "",
     ttl_minutes: int = 0,
+    visibility: str = "",
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Save a fact to long-term memory (L4 CoreMemory). ttl_minutes > 0 sets expires_at."""
+    """Save a fact to long-term memory (L4 CoreMemory). ttl_minutes > 0 sets expires_at.
+
+    visibility='hidden' quarantines the key (invisible to search/recall,
+    re-saves keep the flag); '' = default visible-on-insert / preserve-on-update.
+    """
     value = strip_secrets(value)
     if session_id and _dedup_cache.is_duplicate(session_id, key, value):
         logger.info("Dedup: skipping identical remember key=%s user=%s", key, user_id)
@@ -70,10 +75,10 @@ async def memory_remember(
     if layer == "agent":
         # F-T9 single-entry: L4 only — the distiller/miners populate the graph
         # (dual-write here would duplicate every fact into epi_nodes).
-        entry_id = await mem.remember(key, value, importance, ttl_minutes=ttl_minutes)
+        entry_id = await mem.remember(key, value, importance, ttl_minutes=ttl_minutes, visibility=visibility or None)
         await _fire_post_remember_hooks(layer, user_id, key, value, mem)
     else:
-        entry_id = await mem.remember(key, value, importance, ttl_minutes=ttl_minutes)
+        entry_id = await mem.remember(key, value, importance, ttl_minutes=ttl_minutes, visibility=visibility or None)
         await _fire_hook("emotion_trigger", layer, {"text": value, "user_id": user_id, "key": key}, mem=mem)
         await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
 

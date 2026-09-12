@@ -130,6 +130,26 @@ async def test_resave_preserves_operator_visibility(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_hidden_first_class_excluded_from_search(tmp_path):
+    """'hidden' is a first-class operator state: explicit save accepts it, search drops it."""
+    from core.memory import CoreMemory
+    from shared.connection import AsyncConnectionManager
+
+    cm = CoreMemory(cm=AsyncConnectionManager(base_dir=str(tmp_path)), layer="user")
+    await cm._init_db()
+    await cm.save("u1", "fact:x", "мусорный факт", importance=0.9, visibility="hidden")
+    hits = await cm.search("u1", "мусорный", limit=10)
+    assert hits == [], "hidden must not surface through recall"
+
+    await cm.save("u1", "fact:x", "мусорный факт", importance=0.9, visibility="visible")
+    hits = await cm.search("u1", "мусорный", limit=10)
+    assert hits, "visible surfaces normally"
+    await cm.save("u1", "fact:x", "тот же ключ", importance=0.9, visibility="hidden")  # hide via explicit param
+    hits = await cm.search("u1", "тот же ключ", limit=10)
+    assert hits == []
+
+
+@pytest.mark.asyncio
 async def test_inject_pinned_block(tmp_path):
     """pinned-факт попадает в inject даже при низкой важности."""
     from core.memory import CoreMemory
