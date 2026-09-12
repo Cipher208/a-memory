@@ -14,70 +14,11 @@ import logging
 import re
 from typing import Any
 
+from shared.dialogue import is_dialogic as _is_dialogic
 from shared.memory_types import MemoryKind, get_policy, kind_for_text
 
 logger = logging.getLogger(__name__)
 _CLAUSE_SPLIT = re.compile(r"[,;]?\s+(?:и|но|причём|а|хотя)\s+|\.\s+")
-
-# Conversational-register markers (data: vocatives/greetings that chat
-# produces but memory must not store). The 2026-09-12 F1 audit: 61 L4 rows
-# of episode_promotion advancing chat verbatim. Word-boundary matching
-# keeps homograph adjectives/conjunctions (poka=until, khoroshaya=good,
-# dorogaya=dear) from false-positive hits.
-_DIALOGIC_WORDS = frozenset(
-    {
-        "госпожа",
-        "господин",
-        "мамочка",
-        "мама",
-        "мам",
-        "детка",
-        "привет",
-        "здравствуй",
-        "здравствуйте",
-        "приветствую",
-        "благодарю",
-        "спасибо",
-        "прощай",
-        "явилась",
-        "hello",
-        "hi",
-        "hey",
-        "thanks",
-        "thank",
-        "darling",
-    }
-)
-_DIALOGIC_PHRASES = (
-    "доброе утро",
-    "добрый день",
-    "добрый вечер",
-    "спокойной ночи",
-    "моя хорошая",
-    "моя милая",
-    "good morning",
-    "good evening",
-    "good night",
-    "thank you",
-)
-
-
-def _is_dialogic(clause: str) -> bool:
-    """Return True for conversational-register clauses — chat, never a durable fact.
-
-    Greetings, vocatives and questions describe the conversation itself;
-    episode_promotion once keyed the owner's greeting as an L4 fact row.
-    Residual risk: first-person poetic lines without any marker still pass
-    (importance tuning is a separate follow-up).
-    """
-    low = clause.lower()
-    # Trailing interrogative (punctuation tails tolerated); a leading "?!"
-    # is a scoring artifact in synthetic texts, not a question.
-    if low.rstrip().rstrip("!.…;:»\"'").endswith("?"):
-        return True
-    if set(re.findall(r"[а-яёa-z]+", low)) & _DIALOGIC_WORDS:
-        return True
-    return any(p in low for p in _DIALOGIC_PHRASES)
 
 
 def _canonical_key(clause: str, kind: MemoryKind) -> str:

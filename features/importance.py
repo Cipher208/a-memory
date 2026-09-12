@@ -43,8 +43,8 @@ _KEYWORDS = (
 )
 
 
-def evaluate_importance(text: str) -> float:
-    """Score raw text 0.0-1.0. Verbatim dump-3 spec; keyword counted once."""
+def structure_score(text: str) -> float:
+    """Dump-3 spec scoring WITHOUT the dialogic penalty (kept raw for A/B eval)."""
     if not text or len(text) < 20:
         return 0.0
     score = 0.0
@@ -64,6 +64,22 @@ def evaluate_importance(text: str) -> float:
     if has_question and has_keyword:
         score += 0.1
     return min(1.0, score)
+
+
+def evaluate_importance(text: str) -> float:
+    """Score raw text 0.0-1.0. Verbatim dump-3 spec + dialogic penalty (2026-09-12)."""
+    score = structure_score(text)
+    from shared.dialogue import is_dialogic
+
+    if is_dialogic(text) and len(text) < 120:
+        # Short dialogic messages are pure chat (greetings, thanks, vocative
+        # ping-pong) — cap below the default gate. LONG vocative-wrapped
+        # messages stay eligible: the scorer's unit is the whole message and
+        # Lily routinely embeds instructions in address ("Умница, мам. Обнови
+        # Headroom..."). The dialogic CLAUSES of those die later, in the
+        # distiller's per-clause guard — the right granularity.
+        score = min(score, 0.35)
+    return score
 
 
 _DREAM_RE = _re.compile(r"^\s*DREAM:\s*(memory|fact|skill):\s*(.+)", _re.IGNORECASE | _re.DOTALL)

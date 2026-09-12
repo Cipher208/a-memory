@@ -43,3 +43,34 @@ def test_all_rules_sum_and_cap_guard() -> None:
 def test_russian_and_english_keywords() -> None:
     for kw in ("важно", "релиз", "важно".upper(), "bug", "fix"):
         assert evaluate_importance(f"{kw} " + "x" * 30) >= 0.2
+
+
+# ── dialogic penalty (F1 follow-up, 2026-09-12) ──
+
+
+def test_dialogic_short_chat_capped_below_gate() -> None:
+    # vocative chat with structural bonuses (exclamation, keywords, newlines)
+    text = "Спасибо, мамочка! Важно! Нужно решить.\nПривет, дорогая! Важно! Спасибо!\nЕщё раз, важно!"
+    assert evaluate_importance(text) <= 0.35
+
+
+def test_address_embedded_in_long_content_not_capped() -> None:
+    # The F1 false-positive class: operational instruction wrapped in address.
+    # The scorer's unit is the whole message; clause-level dialogic dies in
+    # the distiller guard, not here.
+    text = (
+        "Умница, мам. Обнови Headroom: cache-read есть и у polza, и у plusvibe, "
+        "на них cowagent и hermes сейчас, mimocode идёт не через headroom, надо разобраться.\n"
+        "Дашборд тоже проверь заодно, там были вопросы по портам и провайдерам."
+    )
+    assert evaluate_importance(text) >= 0.4
+
+
+def test_durable_high_score_not_penalized() -> None:
+    text = (
+        "Важно: решили изменить архитектуру хранения.\n"
+        "Был баг в провайдере кэша, сделали фикс перед релизом.\n"
+        "Поняли причину ошибки, нужен патч и план миграции конфигов на проде."
+    )
+    score = evaluate_importance(text)
+    assert score >= 0.5, f"legit technical text capped: {score}"
