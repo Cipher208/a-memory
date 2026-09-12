@@ -123,7 +123,12 @@ async def s2_exhaustive(
             rows = await wiki.list_all(limit=100000)
         except Exception:
             rows = []
-        for r in rows:
+        # wiki/manager.list_all returns WikiEntry models; legacy test fakes
+        # return dicts. Normalize at the boundary so row access below never
+        # depends on the shape (regression 2026-09-12: "'WikiEntry' object
+        # has no attribute 'get'" — dict fakes masked the live path).
+        norm = [r if isinstance(r, dict) else r.model_dump() for r in rows]
+        for r in norm:
             wt = str(r.get("wiki_type") or "")
             if category and category not in wt and category not in str(r.get("title") or "").lower():
                 continue

@@ -4,10 +4,10 @@ RRF остаётся recall-first генератором; EDM переранжи
 EDM(m|q,S) = α·R + β·N + γ·G − δ·K, итог min-max → [0,1], ITS threshold 0.05.
 """
 
+import time
 from typing import Any
 
 import pytest
-
 from rag.edm import ITS_THRESHOLD, edm_rerank, inhibit_scores, minmax
 from rag.multi_source import _ID_OFFSET_GRAPH
 from shared.connection import connection_manager
@@ -205,6 +205,43 @@ async def test_s2_route_list_all_wiki() -> None:
     rows += [{"entry_id": 100, "title": "note", "content": "заметка", "wiki_type": "notes"}]
     out = await s2_exhaustive(FakeWiki(rows), None, "list all diary entries", user_id="u1")
     assert len(out) == 6, "полный сбор детей категории — без top-k"
+    assert all(r["source"] == "s2_exhaustive" for r in out)
+    assert all("diary" in str(r["wiki_type"]) for r in out)
+
+
+class FakeWikiModels:
+    """Live-parity fake: wiki/manager.list_all returns WikiEntry MODELS, not dicts.
+
+    The dict-based FakeWiki above masked a D-day bug (2026-09-12): dual_route
+    called r.get(...) on model rows -> "'WikiEntry' object has no attribute 'get'".
+    """
+
+    def __init__(self, entries: list[Any]):
+        self._entries = entries
+
+    async def list_all(self, limit: int = 50, status: str | None = "active") -> list[Any]:
+        return self._entries[:limit]
+
+
+async def test_s2_route_list_all_wiki_models() -> None:
+    from rag.dual_route import s2_exhaustive
+    from wiki.models import WikiEntry
+
+    now = time.time()
+    entries = [
+        WikiEntry(
+            wiki_type="diary",
+            title=f"diary-{i}",
+            content=f"запись {i}",
+            file_path=f"/tmp/diary-{i}.md",
+            entry_id=i,
+            created_at=now,
+            updated_at=now,
+        )
+        for i in range(6)
+    ]
+    out = await s2_exhaustive(FakeWikiModels(entries), None, "list all diary entries", user_id="u1")
+    assert len(out) == 6, "модельные строки нормализуются на границе — полный сбор без top-k"
     assert all(r["source"] == "s2_exhaustive" for r in out)
     assert all("diary" in str(r["wiki_type"]) for r in out)
 
