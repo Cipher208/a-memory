@@ -93,10 +93,12 @@ class ConsolidationEngine:
 
             # F1 2026-09-12: conversational register is not a durable fact
             # (the review queue must not fill with greeting proposals either).
+            # Status-broadcast follow-up: agent close-out reports are echoes.
+            from shared.broadcast import is_status_broadcast
             from shared.dialogue import is_dialogic
 
-            if is_dialogic(content):
-                logger.debug("skipping dialogic staging item from L4 promotion")
+            if is_dialogic(content) or is_status_broadcast(content):
+                logger.debug("skipping dialogic/broadcast staging item from L4 promotion")
                 skipped += 1
                 continue
 
@@ -171,6 +173,7 @@ class ConsolidationEngine:
             # decay (fact/decision/preference/relationship + never_archive)
             # are promoted as before — kind routing is consistent with the distiller.
             from lifecycle.distiller import _canonical_key
+            from shared.broadcast import is_status_broadcast
             from shared.dialogue import is_dialogic
             from shared.memory_types import kind_for_text
 
@@ -182,7 +185,8 @@ class ConsolidationEngine:
             # F1 2026-09-12: the transcript + event-kind gates miss the
             # conversational class — greetings/vocatives/questions promoted
             # verbatim filled L4 with `fact:…` chat slugs (61 rows, one base).
-            if is_dialogic(summary) or key.endswith(":misc"):
+            # Status-broadcast follow-up: close-out echoes are not facts either.
+            if is_dialogic(summary) or is_status_broadcast(summary) or key.endswith(":misc"):
                 logger.debug("episode %s is conversational/unkeyable, stays in L3", row["episode_id"])
                 continue
             entry_id = await cm.save(

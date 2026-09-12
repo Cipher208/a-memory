@@ -79,6 +79,15 @@ def evaluate_importance(text: str) -> float:
         # Headroom..."). The dialogic CLAUSES of those die later, in the
         # distiller's per-clause guard — the right granularity.
         score = min(score, 0.35)
+    from shared.broadcast import is_status_broadcast
+
+    if is_status_broadcast(text):
+        # Status-broadcast penalty (2026-09-12 F1 tail, spec S4): long agent
+        # close-out reports are rewarded structurally (dates, hashes, numbers)
+        # but are process echoes — durable truth lives in git/checkpoints.
+        # No length condition unlike the dialogic cap above: broadcasts are
+        # long by nature and the detector's whole-text rule is the point.
+        score = min(score, 0.35)
     return score
 
 

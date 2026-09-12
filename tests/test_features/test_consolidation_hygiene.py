@@ -144,3 +144,29 @@ async def test_dialogic_episodes_skipped_at_promotion(cm):
     assert consolidated == 1, f"only the tech episode may promote, got {consolidated}"
     assert "сталь" not in values and "видение" not in values, f"dialogue leaked to L4: {values}"
     assert "e5 сервис" in values
+
+
+@pytest.mark.asyncio
+async def test_broadcast_episode_skipped_at_promotion(cm):
+    """End-to-end: a close-out broadcast never promotes; tech facts do."""
+    from core.episodic import EpisodicMemory
+    from core.memory import CoreMemory
+    from lifecycle.consolidation import ConsolidationEngine
+
+    epi = EpisodicMemory(cm=cm, layer="user")
+    await epi.save(
+        "u1",
+        "Phase 1 DONE: Compose mode ported to upstream opencode (2026-09-11). gate 1697/0 + mypy 233 clean, commit f9eaeb6 pushed.",
+        0.9,
+        ["t"],
+    )
+    await epi.save("u1", "Мигрировали embeddings на удалённый e5 сервис", 0.9, ["t"])
+
+    engine = ConsolidationEngine(cm=cm, layer="user")
+    await engine.consolidate_episodes("u1", min_weight=0.7)
+
+    l4 = CoreMemory(cm=cm, layer="user")
+    rows = await l4.get_all("u1", 50)
+    values = " | ".join(str(getattr(r, "value", r)) for r in rows)
+    assert "f9eaeb6" not in values and "Phase 1" not in values, f"broadcast leaked to L4: {values}"
+    assert "e5 сервис" in values

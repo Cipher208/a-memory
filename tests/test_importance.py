@@ -74,3 +74,16 @@ def test_durable_high_score_not_penalized() -> None:
     )
     score = evaluate_importance(text)
     assert score >= 0.5, f"legit technical text capped: {score}"
+
+
+def test_broadcast_capped_below_gate() -> None:
+    """Status broadcast (fixture line): structural reward, penalty must remove it."""
+    from features.importance import structure_score
+
+    text = (
+        "STAGE 2 ПЛАН B SHIPPED (2026-09-07, push 3a41477..040fb34: 3a41477 Plan A "
+        "URIs уже был + annotations коммиты, gate 1499/0 + mypy 232 clean). "
+        "mcp_server/annotations получил read-only surface."
+    )
+    assert structure_score(text) >= 0.4
+    assert evaluate_importance(text) < 0.4
