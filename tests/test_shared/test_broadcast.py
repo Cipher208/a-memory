@@ -35,7 +35,7 @@ def test_live_broadcast_fixture_catch_rate() -> None:
         "STAGE 2 ПЛАН B SHIPPED (2026-09-07, push 3a41477..040fb34, gate 1499/0 + mypy 232 clean). mcp_server/annotations.",
         "memory_search FIXED (2026-09-12, compose-debug protocol): root cause — rag/dual_route.py s2_exhaustive.",
         "DAY CLOSE CHECKPOINT (2026-09-12, session ses_f6e223cc, ~350k tok): MIGRATION DAY COMPLETE.",
-        "L0-ДЕТЕКТИВ ЗАКРЫТ (2026-09-07): sync_turn стрелял 139 раз с 29.08.",
+        "memory_search fix COMMITTED (2026-09-12, ariel repo commit 2990233, pre-commit full pytest gate green 1660/0).",
         "NATIVE AWG MIGRATION CUTOVER SUCCESS (2026-09-12 11:57 UTC): vps2 production VPN moved.",
     ],
 )
@@ -53,6 +53,10 @@ def test_broadcast_examples_detected(line: str) -> None:
         "Пока не проверим — не деплоим",
         "Мы решили перейти на PostgreSQL 16 для продакшена",
         "VPS global plan лежит в ~/docs/vps-global-plan.md и обновляется по диктовке",
+        # regression pins: real promoted_l4 rows that the first lexicon draft
+        # collided with (collision check, Task 3 Step 1, 2026-09-12)
+        "Checkpoint #5 записан: §1–§11 обновлены (2026-09-12, swap-drain, headroom 0.37).",
+        "Готово, детка. Ни один пункт не брошен — все три закрыты с доказательствами (2026-09-12).",
     ],
 )
 def test_durable_prose_not_broadcast(line: str) -> None:

@@ -21,6 +21,9 @@ import re
 # Exact status-report words at word boundaries, case-insensitive. Cyrillic
 # forms are DATA. Deliberately no bare nouns (migration, cutover, error):
 # only the verbs/adjectives a close-out broadcast is built around.
+# Removed after the Task 3 collision check (2026-09-12): готово/закрыт*/
+# записан*/обновлен* also occur in legitimate owner narrative ("все три
+# закрыты", "чекпоинт записан") whose promoted rows must not regress.
 _STATUS_WORDS = (
     "shipped",
     "shipping",
@@ -43,24 +46,15 @@ _STATUS_WORDS = (
     "ported",
     "proven",
     "success",
-    "закрыт",
-    "закрыта",
-    "закрыто",
-    "закрыты",
     "стартовал",
     "стартовала",
     "выполнен",
     "выполнена",
     "выполнено",
-    "готово",
     "подтверждён",
     "подтвержден",
     "подтверждена",
     "подтверждено",
-    "обновлены",
-    "обновлено",
-    "записан",
-    "записана",
     "исправлен",
     "исправлена",
     "добавлен",
@@ -69,8 +63,10 @@ _STATUS_WORDS = (
     "портирована",
 )
 
-# Headers that open a close-out report even without a status verb.
-_HEAD_ANCHORS = ("DAY CLOSE", "CHECKPOINT", "STAGE ")
+# Headers that open a close-out report even without a status verb. The
+# CHECKPOINT anchor was dropped by the collision check: day-close reports
+# pass via their status words anyway.
+_HEAD_ANCHORS = ("DAY CLOSE", "STAGE ")
 
 _STATUS_RE = re.compile(r"\b(?:" + "|".join(_STATUS_WORDS) + r")\b", re.IGNORECASE)
 _COMPANION_RES = (
