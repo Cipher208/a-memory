@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import time
 from typing import Any, TYPE_CHECKING
 
@@ -17,6 +18,23 @@ from shared.constants import DB_NAME
 if TYPE_CHECKING:
     from wiki.models import WikiEntry
     from shared.connection import AsyncConnectionManager
+
+_FTS_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def _fts5_match_expr(query: str) -> str | None:
+    """Tokenize arbitrary user text into a safe FTS5 MATCH expression.
+
+    Each word token is double-quoted (inner quotes doubled); tokens stay ANDed
+    exactly like FTS5's implicit bare-word behavior. Returns None when the
+    query holds no word tokens — caller must return [] without issuing MATCH
+    (a bare comma/quote raises 'fts5: syntax error' — live incident 2026-09-13).
+    """
+    tokens = _FTS_TOKEN_RE.findall(str(query))
+    if not tokens:
+        return None
+    return " ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+
 
 logger = logging.getLogger(__name__)
 
@@ -206,24 +224,36 @@ class WikiIndex:
         """
         conn = await self._cm.get(DB_NAME)
         try:
-            status_sql = "AND wi.status = ?" if status else ""
-            params_list: list[Any] = [query, self.layer]
-            if status:
-                params_list.append(status)
-            params_list.append(limit)
-            cur = await conn.execute(
-                f"""SELECT wi.*, fts.rank
-                    FROM wiki_fts fts
-                    JOIN wiki_index wi ON fts.rowid = wi.entry_id
-                    WHERE wiki_fts MATCH ? AND wi.layer = ? {status_sql}
-                    ORDER BY fts.rank LIMIT ?""",
-                tuple(params_list),
-            )
-            rows = await cur.fetchall()
-            return [dict(r) for r in rows]
+            return await self._fts_search(conn, query, limit, status)
         except Exception:
-            logger.exception("Search failed for query '%s'", query)
-            return []
+            # FTS5 syntax error (stray , " ( * …): retry once with a safe
+            # tokenized expression (live incident 2026-09-13). No logging here
+            # — a punctuation query is normal user input, not a server fault.
+            safe_expr = _fts5_match_expr(query)
+            if safe_expr is None:
+                return []
+            try:
+                return await self._fts_search(conn, safe_expr, limit, status)
+            except Exception:
+                logger.exception("Search failed for query '%s'", query)
+                return []
+
+    async def _fts_search(self, conn: Any, match_expr: str, limit: int, status: str | None) -> list[dict[str, Any]]:
+        status_sql = "AND wi.status = ?" if status else ""
+        params_list: list[Any] = [match_expr, self.layer]
+        if status:
+            params_list.append(status)
+        params_list.append(limit)
+        cur = await conn.execute(
+            f"""SELECT wi.*, fts.rank
+                FROM wiki_fts fts
+                JOIN wiki_index wi ON fts.rowid = wi.entry_id
+                WHERE wiki_fts MATCH ? AND wi.layer = ? {status_sql}
+                ORDER BY fts.rank LIMIT ?""",
+            tuple(params_list),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
     async def list_by_type(self, wiki_type: str, limit: int = 20, status: str | None = "active") -> list[dict[str, Any]]:
         """List entries of a specific type (A1.2: default active only)."""

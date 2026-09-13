@@ -143,3 +143,28 @@ async def test_fts_update_cleanup(wiki_index):
     results_banana = await wiki_index.search("Banana")
     assert len(results_banana) == 1
     assert results_banana[0]["title"] == "Banana"
+
+
+@pytest.mark.asyncio
+async def test_search_punctuation_query_still_finds(wiki_index):
+    """FTS5 special chars must not drop real hits (comma crash, 2026-09-13 live recall)."""
+    entry = WikiEntry(
+        wiki_type="notes",
+        title="Greeting",
+        content="Привет мам эксперимент закрыт",
+        file_path="/tmp/greet.md",
+        created_at=time.time(),
+        updated_at=time.time(),
+    )
+    await wiki_index.save(entry, hashlib.sha256(entry.content.encode()).hexdigest())
+    results = await wiki_index.search("Привет, мам")
+    assert [r["title"] for r in results] == ["Greeting"]
+    # AND semantics preserved: an absent term still filters the page out.
+    assert await wiki_index.search("Привет, отсутствующее") == []
+
+
+@pytest.mark.asyncio
+async def test_search_special_chars_no_error_log(wiki_index, caplog):
+    """Operator-only queries yield no tokens: return [] early, no FTS5 exception."""
+    assert await wiki_index.search('""" ( ) * ?? ,,,') == []
+    assert "Search failed" not in caplog.text
