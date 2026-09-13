@@ -96,6 +96,24 @@ def evaluate_importance(text: str) -> float:
     return score
 
 
+def derive_domain(emotional: float, tech: float, clause: str) -> str:
+    """S10 record-only axis: content domain derived from EXISTING signals.
+
+    Not a gate input yet — becomes one only after replay numbers (spec S5).
+    Thresholds mirror the design table: intimate = emotional >= 0.5,
+    tech = tech_keyword >= 0.4, everyday = short dialogic clause.
+    """
+    from shared.dialogue import is_dialogic
+
+    if emotional >= 0.5:
+        return "intimate"
+    if tech >= 0.4:
+        return "tech"
+    if is_dialogic(clause):
+        return "everyday"
+    return "mixed"
+
+
 _DREAM_RE = _re.compile(r"^\s*DREAM:\s*(memory|fact|skill):\s*(.+)", _re.IGNORECASE | _re.DOTALL)
 
 

@@ -31,6 +31,21 @@ _KIND: dict[str, str] = {"preference": "preference", "experience": "observation"
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?;])\s+|\n+")
 
+# S10: one scorer per module load — domain is derived from its live signals.
+_DOMAIN_SCORER: Any | None = None
+
+
+def _domain_for(sentence: str) -> str:
+    global _DOMAIN_SCORER
+    from features.importance import derive_domain
+
+    if _DOMAIN_SCORER is None:
+        from shared.importance import ImportanceScorer
+
+        _DOMAIN_SCORER = ImportanceScorer()
+    r = _DOMAIN_SCORER.score(sentence)
+    return derive_domain(r.signals.emotional, r.signals.tech_keyword, sentence)
+
 
 def _sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENT_SPLIT.split(text) if len(s.strip()) >= 8]
@@ -72,6 +87,7 @@ async def extract_and_stage(mem: Any, user_id: str, session_texts: list[str]) ->
                 "value": sentence[:500],
                 "importance": _IMPORTANCE[ptype],
                 "memory_kind": _KIND[ptype],
+                "domain": _domain_for(sentence),
                 "tags": tags,
             }
             try:
