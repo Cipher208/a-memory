@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from autohooks.config import AgentConfig, load_config
+from autohooks.config import AgentConfig, dispatch_layer as _dispatch_layer, load_config
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -136,7 +136,19 @@ def main(argv: list[str] | None = None) -> int:
         from autohooks.source import SqliteSource
 
         source = SqliteSource.from_config(cfg)
-        asyncio.run(run_daemon(cfg, source, mem, graph, rag, max_iterations=1 if ns.once else None))
+        asyncio.run(
+            run_daemon(
+                cfg,
+                source,
+                mem,
+                graph,
+                rag,
+                max_iterations=1 if ns.once else None,
+                # S10: give the daemon a per-layer resolver for assistant-role
+                # persona dispatches.
+                resolve=lambda layer: resolve_layer(app, layer, cfg.user_id),
+            )
+        )
         _close_ariel()
         return 0
 
@@ -153,12 +165,15 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         since = float(ns.since) if ns.since else 0.0
         until = float(ns.until) if ns.until else 0.0
+        d_layer = _dispatch_layer(cfg, extra)
+        if d_layer != cfg.layer:
+            mem, graph, rag = resolve_layer(app, d_layer, cfg.user_id)
         result = asyncio.run(
             dispatch_event(
                 ns.event,
-                cfg.layer,
+                d_layer,
                 cfg.user_id,
-                {"since": since, "until": until, **extra},
+                {"since": since, "until": until, "persona_owner": cfg.persona_owner, **extra},
                 mem,
                 graph,
                 rag,

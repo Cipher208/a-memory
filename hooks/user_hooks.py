@@ -288,7 +288,18 @@ class UserHooks:
                     "auto_save": {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False},
                     "skipped": f"duplicate_source_msg_id={smid}",
                 }
-        result = await auto_save_text(mem, graph, ctx.get("user_id", self.user_id), text, source_msg_id=smid)
+        result = await auto_save_text(
+            mem,
+            graph,
+            ctx.get("user_id", self.user_id),
+            text,
+            source_msg_id=smid,
+            # S10 speaker axis — fields ride the dispatch payload (role),
+            # persona_owner comes from the client YAML (__main__ injects it).
+            role=str(ctx.get("role") or ""),
+            persona_owner=bool(ctx.get("persona_owner")),
+            kind=str(ctx.get("kind") or ""),
+        )
         return {"auto_save": result}
 
     @hook_registry.mark("auto_save_candidate", layer="user")

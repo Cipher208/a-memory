@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from features.inject import build_inject_blocks
 from hooks.external import KNOWN_EVENTS, auto_save_text, dispatch_event
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_known_events_exact_set() -> None:
@@ -122,6 +125,87 @@ async def test_auto_save_text_high_score_saves_l4_via_distiller() -> None:
     assert not result.get("staged_l4"), "auto-save staging branch removed"
     assert result["saved_l4"] is True, "distiller L4 routing still fires"
     assert mem.saved == [], "no raw auto_save core-key writes"
+
+
+@pytest.mark.asyncio
+async def test_auto_save_persona_owner_declared_lands_l4() -> None:
+    """S10+S4: persona_owner + declarable kind skips G1/G2 straight to L4."""
+    from shared import canon_rate as _cr
+
+    _cr._canon_ts.clear()
+    mem, graph = _FakeMem(), _FakeGraph()
+    text = "Госпожа закрепила в SOUL: я — Стальная Мать, Лили — моя девочка, форма обращения закреплена"
+    res = await auto_save_text(mem, graph, "p1", text, role="assistant", persona_owner=True, kind="preference")
+    assert res["saved_l4"] is True
+    assert res["canon"] == "persona_owner"
+    _cr._canon_ts.clear()
+
+
+@pytest.mark.asyncio
+async def test_auto_save_persona_owner_undeclared_stays_heuristic() -> None:
+    mem, graph = _FakeMem(), _FakeGraph()
+    text = "какое решение по кэшу? " + "x" * 80
+    res = await auto_save_text(mem, graph, "p2", text, role="assistant", persona_owner=True, kind="")
+    assert res["saved_l4"] is False
+    assert res["saved_l3"] is True
+    assert "canon" not in res
+
+
+@pytest.mark.asyncio
+async def test_new_message_forwards_speaker_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    """S10: dispatch payload fields reach auto_save_text via the hook."""
+    import hooks.external as ext
+
+    seen: dict[str, Any] = {}
+
+    async def fake_auto_save(mem: Any, graph: Any, user_id: str, text: str, **kw: Any) -> dict[str, Any]:
+        seen.update(kw)
+        seen["text"] = text
+        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}
+
+    monkeypatch.setattr(ext, "auto_save_text", fake_auto_save)
+    from hooks.user_hooks import UserHooks
+
+    res = await UserHooks("u9")._new_message(
+        {"text": "длинный канонический текст про протокол обращения", "role": "assistant", "persona_owner": True, "kind": "preference"},
+        mem=object(),
+        graph=object(),
+    )
+    assert res["auto_save"]["score"] == 0.0
+    assert seen["role"] == "assistant" and seen["persona_owner"] is True and seen["kind"] == "preference"
+
+
+def test_persona_assistant_dispatch_layer_is_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """S10: __main__ routes assistant-role persona dispatches to the agent layer."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    yaml_body = """data_dir: ~/.d
+user_id: u
+layer: user
+persona_owner: true
+source:
+  driver: sqlite
+  path: ~/.s.db
+  table: m
+  cursor_column: id
+  order_by: id
+  role: {column: r}
+  text: {column: t}
+"""
+    cfg = _write_yaml(tmp_path, yaml_body)
+    from autohooks.__main__ import _dispatch_layer
+    from autohooks.config import load_config as lc
+
+    c = lc(cfg)
+    assert _dispatch_layer(c, {"role": "assistant"}) == "agent"
+    assert _dispatch_layer(c, {"role": "user"}) == "user"
+    c2 = lc(_write_yaml(tmp_path, yaml_body.replace("persona_owner: true", "persona_owner: false"), name="b.yaml"))
+    assert _dispatch_layer(c2, {"role": "assistant"}) == "user"
+
+
+def _write_yaml(tmp_path: Path, body: str, name: str = "a.yaml") -> Path:
+    p = tmp_path / name
+    p.write_text(body, encoding="utf-8")
+    return p
 
 
 @pytest.mark.asyncio

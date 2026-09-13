@@ -123,3 +123,49 @@ def test_cursor_roundtrip(tmp_path: Path) -> None:
     assert load_cursor(tmp_path / "absent.json") is None
     save_cursor(tmp_path / "state" / "cursor.json", 15)
     assert load_cursor(tmp_path / "state" / "cursor.json") == 15
+
+
+async def test_persona_owner_assistant_routes_agent_layer(tmp_path: Path) -> None:
+    """S10 speaker axis: persona_owner client + assistant sender → agent layer,
+    payload carries role + persona_owner for the declared-canon channel."""
+    from dataclasses import replace
+
+    dispatched: list[dict[str, Any]] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        dispatched.append({"event": event, "layer": layer, **payload})
+        return {"results": [], "handler_count": 0}
+
+    cfg = replace(_cfg(tmp_path), persona_owner=True)
+    src = _FakeSource(
+        batches=[
+            Batch(
+                messages=[
+                    Message(sender="assistant", text="Госпожа закрепила канон обращения к хозяйке", ts=2.5, source_id=9),
+                    Message(sender="user", text="да, госпожа", ts=2.6, source_id=10),
+                ],
+                cursor=10,
+            )
+        ]
+    )
+    await run_daemon(cfg, src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch, resolve=lambda layer: (None, None, None))
+    assert len(dispatched) == 2
+    assert dispatched[0]["layer"] == "agent"
+    assert dispatched[0]["role"] == "assistant" and dispatched[0]["persona_owner"] is True
+    assert dispatched[1]["layer"] == "user"
+    assert dispatched[1]["role"] == "user"
+
+
+async def test_no_persona_owner_keeps_single_layer(tmp_path: Path) -> None:
+    dispatched: list[dict[str, Any]] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        dispatched.append({"event": event, "layer": layer, **payload})
+        return {"results": [], "handler_count": 0}
+
+    src = _FakeSource(batches=[Batch(messages=[Message(sender="assistant", text="reply body here for harvest", ts=2.5, source_id=9)], cursor=9)])
+    await run_daemon(
+        _cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch, resolve=lambda layer: (None, None, None)
+    )
+    assert dispatched[0]["layer"] == "user"
+    assert dispatched[0]["persona_owner"] is False

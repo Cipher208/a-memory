@@ -124,6 +124,9 @@ async def auto_save_text(
     *,
     event: str = "new_message",
     source_msg_id: int | None = None,
+    role: str = "",
+    persona_owner: bool = False,
+    kind: str = "",
 ) -> dict[str, Any]:
     """evaluate_importance → threshold-gated saves + one memory_dispatch_log row.
 
@@ -167,6 +170,41 @@ async def auto_save_text(
 
     score = evaluate_importance(text)
     result: dict[str, Any] = {"score": score, "saved_l3": False, "saved_l4": False, "saved_graph": False}
+
+    # S10+S4: persona-owner declared canon — origin certifies content, so it
+    # skips the G1 EMA and the distiller gates straight to L4 at the 0.8
+    # floor. Rate-limited with the same shared window as think(kind).
+    if persona_owner and kind and role == "assistant":
+        from shared.canon_rate import canon_rate_ok
+        from shared.memory_types import L4_DECLARABLE_KINDS, validate_kind
+
+        if validate_kind(kind) and kind in L4_DECLARABLE_KINDS and canon_rate_ok(user_id):
+            import hashlib as _hl
+
+            key = f"canon:{kind}:{_hl.sha1(text.encode('utf-8')).hexdigest()[:12]}"
+            await mem.remember(key, text[:2000], max(score, 0.8))
+            result["saved_l4"] = True
+            result["canon"] = "persona_owner"
+            if l0_id is not None:
+                try:
+                    _conn_w = await connection_manager.get("memory.db")
+                    await _conn_w.execute("UPDATE l0_journal SET status=?, processed_at=? WHERE id=?", ("promoted_l4", _time.time(), l0_id))
+                    await _conn_w.commit()
+                except Exception as _e:
+                    logger.debug("l0 watermark failed (persona): %s", _e)
+            try:
+                db_path = connection_manager.base_dir / "memory.db"
+                _ensure_preview_column(db_path)
+                with _sqlite3.connect(str(db_path)) as _conn:
+                    _conn.execute(
+                        "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (event, source_msg_id, "agent", user_id, float(max(score, 0.8)), 0, 1, 0, text[:200], _time.time()),
+                    )
+                    _conn.commit()
+            except Exception as _e:
+                logger.debug("memory_dispatch_log insert failed (persona): %s", _e)
+            return result
 
     # C1.12: DREAM: markers are durable signals — route through staging at 0.95.
     # Toggle: staging.dream_markers (default true) — disabled → plain heuristic path.

@@ -96,7 +96,7 @@ async def test_new_message_below_threshold(monkeypatch: pytest.MonkeyPatch) -> N
     import hooks.external as ext
 
     async def fake_auto_save(
-        mem: Any, graph: Any, user_id: str, text: str, *, event: str = "new_message", source_msg_id: int | None = None
+        mem: Any, graph: Any, user_id: str, text: str, *, event: str = "new_message", source_msg_id: int | None = None, **kw: Any
     ) -> dict[str, Any]:
         return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}
 

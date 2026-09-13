@@ -43,6 +43,14 @@ def test_minimal_config_loads_with_defaults(tmp_path: Path, monkeypatch: pytest.
     assert cfg.source.table == "messages"
     assert cfg.state_file == Path(tmp_path / ".mcp-ariel-memory-hermes" / "autohooks-cursor.json")
     assert cfg.data_dir == Path(tmp_path / ".mcp-ariel-memory-hermes")
+    assert cfg.persona_owner is False
+
+
+def test_persona_owner_key_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """S10: persona_owner declares "this client's assistant-role text is the persona's own voice"."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = _write(tmp_path, MINIMAL + "\npersona_owner: true\n")
+    assert load_config(p).persona_owner is True
 
 
 def test_unknown_top_key_hard_error(tmp_path: Path) -> None:

@@ -52,11 +52,18 @@ async def run_daemon(
     max_iterations: int | None = None,
     poll: Callable[[float], Awaitable[None]] | None = None,
     dispatch: Dispatch | None = None,
+    resolve: Callable[[str], tuple[Any, Any, Any]] | None = None,
 ) -> None:
-    """Run the poll loop until SIGTERM/SIGINT (or max_iterations for tests)."""
+    """Run the poll loop until SIGTERM/SIGINT (or max_iterations for tests).
+
+    resolve: layer -> (mem, graph, rag) for cross-layer dispatch (S10 speaker
+    axis); None disables the switch (unit tests / single-layer clients).
+    """
+    from autohooks.config import dispatch_layer
     from hooks.external import dispatch_event
 
     dispatch = dispatch or dispatch_event
+    layer_mems: dict[str, tuple[Any, Any, Any]] = {}
     try:
         cursor = load_cursor(cfg.state_file)
         if cursor is None:
@@ -75,16 +82,35 @@ async def run_daemon(
         while not stop.is_set():
             batch = source.fetch_after(cursor, cfg.batch_limit)
             for msg in batch.messages:
+                # S10: role from the source row; persona_owner assistant
+                # messages switch to the agent layer (cached per layer).
+                role = msg.sender or ""
+                d_layer = dispatch_layer(cfg, {"role": role})
+                mem_d, graph_d, rag_d = mem, graph, rag
+                if d_layer != cfg.layer:
+                    if resolve is None:
+                        d_layer = cfg.layer
+                    else:
+                        if d_layer not in layer_mems:
+                            layer_mems[d_layer] = resolve(d_layer)
+                        mem_d, graph_d, rag_d = layer_mems[d_layer]
                 result = await dispatch(
                     "new_message",
-                    cfg.layer,
+                    d_layer,
                     cfg.user_id,
-                    {"text": msg.text, "sender": msg.sender, "ts": msg.ts, "source_msg_id": msg.source_id},
-                    mem,
-                    graph,
-                    rag,
+                    {
+                        "text": msg.text,
+                        "sender": msg.sender,
+                        "role": role,
+                        "persona_owner": cfg.persona_owner,
+                        "ts": msg.ts,
+                        "source_msg_id": msg.source_id,
+                    },
+                    mem_d,
+                    graph_d,
+                    rag_d,
                 )
-                logger.debug("dispatched msg %s: %s", msg.source_id, result)
+                logger.debug("dispatched msg %s (layer=%s): %s", msg.source_id, d_layer, result)
             if batch.messages:
                 cursor = batch.cursor
                 save_cursor(cfg.state_file, cursor)

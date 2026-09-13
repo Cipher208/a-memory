@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-_TOP_KEYS = {"data_dir", "user_id", "layer", "source", "poll_seconds", "batch_limit", "state_file", "master_key"}
+_TOP_KEYS = {"data_dir", "user_id", "layer", "source", "poll_seconds", "batch_limit", "state_file", "master_key", "persona_owner"}
 _SOURCE_KEYS = {"driver", "path", "table", "cursor_column", "order_by", "role", "text", "ts", "filter"}
 _MAP_KEYS = {"column", "json_path"}
 
@@ -45,6 +45,10 @@ class AgentConfig:
     batch_limit: int = 100
     state_file: Path = Path()  # always set by load_config (data_dir / "autohooks-cursor.json")
     master_key: str | None = None
+    # S10 speaker axis: true = assistant-role dispatch texts are the persona's
+    # own declarations (agent layer, declarable kinds bypass gates). Default
+    # false keeps every existing client on the harvest path unchanged.
+    persona_owner: bool = False
 
 
 def sql_expr(fm: FieldMap) -> str:
@@ -114,4 +118,18 @@ def load_config(path: str | Path) -> AgentConfig:
         batch_limit=int(raw.get("batch_limit", 100)),
         state_file=Path(raw["state_file"]).expanduser() if "state_file" in raw else default_state,
         master_key=str(raw["master_key"]) if "master_key" in raw else None,
+        persona_owner=bool(raw.get("persona_owner", False)),
     )
+
+
+def dispatch_layer(cfg: AgentConfig, extra: dict[str, object]) -> str:
+    """S10 speaker axis: route the dispatch layer by message role.
+
+    Assistant-role messages from a persona_owner client are the persona's own
+    declarations — route them to the agent layer so they stop piling into the
+    user's fact heap. Everything else: cfg.layer.
+    Shared by the CLI dispatch command and the daemon poll loop.
+    """
+    if cfg.persona_owner and (extra or {}).get("role") == "assistant":
+        return "agent"
+    return cfg.layer
