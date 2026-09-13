@@ -25,6 +25,9 @@ _TRIGGERS: dict[str, tuple[str, ...]] = {
     "lesson": ("больше не делать", "не повторять", "запомни ошибка", "провалилось"),
 }
 _IMPORTANCE: dict[str, float] = {"preference": 0.6, "experience": 0.5, "lesson": 0.7}
+# K2 (spec S3): the pattern maps to a real kind so the kind-aware gate can
+# judge it honestly — preference is durable fact-class, a lesson is a rule.
+_KIND: dict[str, str] = {"preference": "preference", "experience": "observation", "lesson": "rule"}
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?;])\s+|\n+")
 
@@ -68,6 +71,7 @@ async def extract_and_stage(mem: Any, user_id: str, session_texts: list[str]) ->
                 "key": _slug(sentence, ptype),
                 "value": sentence[:500],
                 "importance": _IMPORTANCE[ptype],
+                "memory_kind": _KIND[ptype],
                 "tags": tags,
             }
             try:

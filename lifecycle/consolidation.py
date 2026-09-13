@@ -78,11 +78,14 @@ def passes_promotion_gate(item: dict[str, Any], min_importance: float = 0.7) -> 
 
     if is_dialogic(content) or is_status_broadcast(content):
         return False
-    effective_threshold = (
-        min_importance
-        if not (pol.never_archive or kind in (MemoryKind.INSTRUCTION, MemoryKind.RULE, MemoryKind.COMMITMENT))
-        else min(min_importance, 0.3)
-    )
+    effective_threshold = min_importance
+    if pol.never_archive or kind in (MemoryKind.INSTRUCTION, MemoryKind.RULE, MemoryKind.COMMITMENT):
+        effective_threshold = min(min_importance, 0.3)
+    elif kind is MemoryKind.PREFERENCE:
+        # K2 (spec S3): a session preference is a durable fact about the user;
+        # session_close scores them 0.6 — the 0.7 fact gate made them
+        # permanent queue noise (225 expired in the hermes base).
+        effective_threshold = min(min_importance, 0.5)
     return importance >= effective_threshold
 
 
