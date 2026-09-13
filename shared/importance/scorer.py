@@ -17,14 +17,20 @@ from .signals import (
     NoiseSignal,
 )
 
+# Package-relative assets (S2, 2026-09-13): the two loaders used to resolve
+# relative paths against a hardcoded absolute dead clone of this repo in the
+# user's Projects tree — stale configs silently diverged from intent. Missing
+# assets must fail loudly, never fall back.
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+
 
 class ImportanceScorer:
     def __init__(
         self,
         config: ImportanceConfig | None = None,
         signals: list[IImportanceSignal] | None = None,
-        config_path: str = "shared/assets/importance_config.json",
-        data_path: str = "shared/assets/importance.json",
+        config_path: str = "importance_config.json",
+        data_path: str = "importance.json",
     ):
         self._config = config
         self._signals = signals or [
@@ -42,16 +48,17 @@ class ImportanceScorer:
         self._tech_re: re.Pattern[str] | None = None
         self._noise_re: re.Pattern[str] | None = None
 
+    def _resolve_asset(self, p: Path) -> Path:
+        return p if p.is_absolute() else _ASSETS_DIR / p.name
+
     def _load_config(self) -> ImportanceConfig:
         if self._config:
             return self._config
-        path = self._config_path if self._config_path.is_absolute() else Path("/home/murat/Projects/repos/mcp-ariel-memory") / self._config_path
-        with open(path, encoding="utf-8") as f:
+        with open(self._resolve_asset(self._config_path), encoding="utf-8") as f:
             return ImportanceConfig(**json.load(f))
 
     def _load_data(self) -> tuple[re.Pattern[str], re.Pattern[str]]:
-        path = self._data_path if self._data_path.is_absolute() else Path("/home/murat/Projects/repos/mcp-ariel-memory") / self._data_path
-        with open(path, encoding="utf-8") as f:
+        with open(self._resolve_asset(self._data_path), encoding="utf-8") as f:
             data = json.load(f)
             tech = data.get("tech_keywords_ru", []) + data.get("tech_keywords_en", [])
             tech_re = re.compile("|".join(re.escape(k) for k in tech), re.IGNORECASE)

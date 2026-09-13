@@ -169,7 +169,9 @@ def score_text(text: str, event: str = "new_message") -> float:
         result = ImportanceScorer().score(text=text, event=event)
         return max(0.0, min(1.0, float(result.total())))
     except Exception as exc:
-        logger.debug("importance scorer degraded to 0.6: %s", exc)
+        # WARNING, not debug: assets are committed now (S2) — a scorer failure
+        # here means a real config problem, not a missing stale-clone file.
+        logger.warning("importance scorer degraded to 0.6: %s", exc)
         return 0.6
 
 

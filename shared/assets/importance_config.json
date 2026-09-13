@@ -1,0 +1,17 @@
+{
+  "weights": {
+    "base": 1.0,
+    "length": 0.6,
+    "question": 0.5,
+    "tech_keyword": 1.0,
+    "emotional": 0.8,
+    "novelty": 0.7,
+    "retrieval_signal": 0.9,
+    "noise_penalty": 1.0
+  },
+  "thresholds": {
+    "high": 0.8,
+    "medium": 0.5,
+    "low": 0.2
+  }
+}
