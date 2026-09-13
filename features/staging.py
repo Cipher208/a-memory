@@ -51,7 +51,7 @@ async def propose(source: str, kind: str, user_id: str, layer: str, payload: dic
         tomb = await conn.execute(
             "SELECT id, payload FROM mutation_proposals"
             " WHERE status IN ('rejected', 'expired') AND source = ? AND kind = ? AND user_id = ? AND layer = ?"
-            " AND COALESCE(decided_at, expires_at) > ?",
+            " AND COALESCE(decided_at, expires_at, proposed_at) > ?",
             (source, kind, user_id, layer, now - _expire_days() * 86400),
         )
         for row in await tomb.fetchall():
