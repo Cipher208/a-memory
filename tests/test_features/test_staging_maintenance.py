@@ -67,6 +67,46 @@ def _insert_decided(base: Path, status: str, decided_age_days: float) -> int:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_purge_legacy_null_timestamps(fresh_dir: Path) -> None:
+    """Legacy decided rows (NULL decided_at AND expires_at, the 225 hermes case)
+    must age out by proposed_at — the original COALESCE missed them forever."""
+    conn = sqlite3.connect(fresh_dir / "memory.db")
+    # LEGACY table shape (pre-migration prod bases): decided_at/expires_at nullable.
+    conn.executescript(
+        """CREATE TABLE mutation_proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL, kind TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT 'default', layer TEXT NOT NULL DEFAULT 'user',
+            payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            proposed_at REAL NOT NULL, expires_at REAL, decided_at REAL, decided_by TEXT, result_ref TEXT
+        );"""
+    )
+    cur = conn.execute(
+        "INSERT INTO mutation_proposals (source, kind, user_id, layer, payload, status, proposed_at, expires_at, decided_at)"
+        " VALUES ('auto_save', 'core_write', 'legacy_u', 'user', ?, 'expired', ?, NULL, NULL)",
+        (json.dumps({"key": "legacy", "value": "v", "importance": 0.9}), time.time() - 40 * 86400),
+    )
+    recent_id = conn.execute(
+        "INSERT INTO mutation_proposals (source, kind, user_id, layer, payload, status, proposed_at, expires_at, decided_at)"
+        " VALUES ('auto_save', 'core_write', 'legacy_u', 'user', ?, 'rejected', ?, NULL, NULL)",
+        (json.dumps({"key": "recent", "value": "v", "importance": 0.9}), time.time() - 3 * 86400),
+    ).lastrowid
+    conn.commit()
+    legacy_id = int(cur.lastrowid or 0)
+    conn.close()
+    # also create the audit_log table decide()/expire_stale() may touch
+
+    n = await staging.purge_decided_past_window()
+    assert n == 1
+
+    conn = sqlite3.connect(fresh_dir / "memory.db")
+    ids = {r[0] for r in conn.execute("SELECT id FROM mutation_proposals")}
+    conn.close()
+    assert legacy_id not in ids
+    assert int(recent_id) in ids
+
+
 async def test_purge_removes_only_old_decided(ensure_schema: Path) -> None:
     old_rej = _insert_decided(ensure_schema, "rejected", 30)
     fresh_exp = _insert_decided(ensure_schema, "expired", 3)

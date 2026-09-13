@@ -136,7 +136,8 @@ async def purge_decided_past_window() -> int:
     cutoff = time.time() - days * 86400
     conn = await connection_manager.get(DB_NAME)
     cur = await conn.execute(
-        "DELETE FROM mutation_proposals WHERE status IN ('rejected', 'expired') AND COALESCE(decided_at, expires_at) < ?",
+        """DELETE FROM mutation_proposals WHERE status IN ('rejected', 'expired') AND
+               COALESCE(decided_at, expires_at, proposed_at) < ?""",
         (cutoff,),
     )
     await conn.commit()
