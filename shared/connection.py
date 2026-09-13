@@ -241,6 +241,9 @@ class AsyncConnectionManager:
             await conn.execute("PRAGMA journal_mode=WAL")
         await conn.execute("PRAGMA busy_timeout=5000")
         await conn.execute("PRAGMA synchronous=NORMAL")
+        # Cap WAL size: a starved auto-checkpoint must not grow a multi-GB WAL
+        # (2026-09-13: 3.9 GB mimocode WAL held open by two hung CLI orphans).
+        await conn.execute("PRAGMA journal_size_limit=67108864")  # 64 MiB
         await conn.execute("PRAGMA foreign_keys=ON")
         await conn.execute("PRAGMA cache_size=-64000")  # 64MB page cache
         await conn.execute("PRAGMA temp_store=MEMORY")

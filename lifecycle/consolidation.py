@@ -58,6 +58,59 @@ def _parent_refs(*refs: str | None) -> dict[str, Any] | None:
     return {"parents": parents} if parents else None
 
 
+def passes_promotion_gate(item: dict[str, Any], min_importance: float = 0.7) -> bool:
+    """Would consolidate_staging promote this item — same predicate, no drift.
+
+    Used as a PRE-gate at proposal time (2026-09-13): proposing an item that
+    can never pass the apply gate creates a zombie proposal the operator must
+    reject by hand (#85/#86: imp 0.5 against a 0.7 gate).
+    """
+    content = item.get("content", "")
+    importance = float(item.get("importance", 0.7))
+    kind_str = item.get("memory_kind", "fact")
+    kind = MemoryKind(kind_str) if validate_kind(kind_str) else MemoryKind.FACT
+    pol = get_policy(kind)
+
+    if _looks_like_transcript(content):
+        return False
+    from shared.broadcast import is_status_broadcast
+    from shared.dialogue import is_dialogic
+
+    if is_dialogic(content) or is_status_broadcast(content):
+        return False
+    effective_threshold = (
+        min_importance
+        if not (pol.never_archive or kind in (MemoryKind.INSTRUCTION, MemoryKind.RULE, MemoryKind.COMMITMENT))
+        else min(min_importance, 0.3)
+    )
+    return importance >= effective_threshold
+
+
+async def stage_consolidation(
+    user_id: str,
+    layer: str,
+    items: list[dict[str, Any]],
+    min_importance: float = 0.7,
+) -> int | None:
+    """Propose a consolidation of the PROMOTABLE subset; None if nothing passes.
+
+    Returns the proposal id, or (via the staging tombstone guard) an existing
+    decided id when the same identity is already off the table.
+    """
+    promotable = [i for i in items if passes_promotion_gate(i, min_importance)]
+    if not promotable:
+        return None
+    from features.staging import propose
+
+    return await propose(
+        "consolidation",
+        "consolidate_staging",
+        user_id,
+        layer,
+        {"items": promotable, "min_importance": min_importance},
+    )
+
+
 class ConsolidationEngine:
     def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
@@ -81,34 +134,10 @@ class ConsolidationEngine:
             importance = float(item.get("importance", 0.7))
             kind_str = item.get("memory_kind", "fact")
 
-            kind = MemoryKind(kind_str) if validate_kind(kind_str) else MemoryKind.FACT
-            pol = get_policy(kind)
-
-            # Audit 05.09 (P1): transcript filter as in consolidate_episodes —
-            # raw conversation dumps must not become L4 facts.
-            if _looks_like_transcript(content):
-                logger.warning("skipping transcript-shaped staging item from L4 promotion")
-                skipped += 1
-                continue
-
-            # F1 2026-09-12: conversational register is not a durable fact
-            # (the review queue must not fill with greeting proposals either).
-            # Status-broadcast follow-up: agent close-out reports are echoes.
-            from shared.broadcast import is_status_broadcast
-            from shared.dialogue import is_dialogic
-
-            if is_dialogic(content) or is_status_broadcast(content):
-                logger.debug("skipping dialogic/broadcast staging item from L4 promotion")
-                skipped += 1
-                continue
-
-            # Type-aware threshold: instruction/rule/commitment pass at 0.3+
-            effective_threshold = (
-                min_importance
-                if not (pol.never_archive or kind in (MemoryKind.INSTRUCTION, MemoryKind.RULE, MemoryKind.COMMITMENT))
-                else min(min_importance, 0.3)
-            )
-            if importance < effective_threshold:
+            # Single source of truth for skip-vs-promote (2026-09-13 refactor):
+            # the pre-gate at proposal time uses the same predicate.
+            if not passes_promotion_gate(item, min_importance):
+                logger.debug("skipping gated-out staging item from L4 promotion")
                 skipped += 1
                 continue
 
@@ -116,6 +145,7 @@ class ConsolidationEngine:
             # kind prefix) instead of the truncated staging_{content[:30]} keys.
             from lifecycle.distiller import _canonical_key
 
+            kind = MemoryKind(kind_str) if validate_kind(kind_str) else MemoryKind.FACT
             key = _canonical_key(content, kind)
             entry_id = await cm.save(
                 user_id,

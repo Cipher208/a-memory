@@ -105,13 +105,13 @@ async def consolidation(
 
     if staging_items and config.get("staging", "enabled", default=True):
         # Empty items → old engine behavior was a harmless no-op; do NOT stage junk proposals.
-        from features.staging import propose
+        # Pre-gate (2026-09-13): items that can never pass the apply gate are dropped
+        # here, so the review queue no longer receives guaranteed no-ops.
+        from lifecycle.consolidation import stage_consolidation
 
-        payload: dict[str, Any] = {"items": staging_items}
-        if min_importance is not None:
-            payload["min_importance"] = min_importance
-        pid = await propose("consolidation", "consolidate_staging", user_id, "user", payload)
-        return {"action": final_key, "staged": True, "proposal_id": pid, "promoted": 0, "skipped": 0}
+        gate = min_importance if min_importance is not None else 0.7
+        pid = await stage_consolidation(user_id, "user", staging_items, min_importance=gate)
+        return {"action": final_key, "staged": pid is not None, "proposal_id": pid, "promoted": 0, "skipped": 0}
     engine = ConsolidationEngine()
     if min_importance is not None:
         result = await engine.consolidate_staging(user_id, staging_items, min_importance=min_importance)

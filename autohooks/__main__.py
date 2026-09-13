@@ -58,6 +58,36 @@ def apply_env(cfg: AgentConfig) -> None:
 logger = logging.getLogger("autohooks.cli")
 
 
+def _arm_cli_guard(seconds: float = 120.0) -> None:
+    """Last-line exit guarantee for one-shot CLI commands.
+
+    2026-09-12: two `autohooks dispatch/recall` processes finished printing
+    but hung on interpreter teardown (futex, ppid=1) and kept mimocode
+    memory.db WAL open for a day → 3.9 GB starvation. _close_ariel only
+    covers clean shutdown; when the shutdown itself wedges, faulthandler
+    dumps the stuck stack and exits. Set ARIEL_CLI_GUARD=0 to disable.
+    """
+    import contextlib
+    import faulthandler
+
+    if seconds <= 0:
+        return
+    # Best-effort: under captured/no-fileno stderr (pytest) these raise;
+    # in real CLI runs both succeed and the guard is live.
+    with contextlib.suppress(OSError, ValueError, RuntimeError):
+        faulthandler.enable()
+    with contextlib.suppress(OSError, ValueError, RuntimeError):
+        faulthandler.dump_traceback_later(seconds, exit=True)
+
+
+def _cancel_cli_guard() -> None:
+    import contextlib
+    import faulthandler
+
+    with contextlib.suppress(OSError, ValueError, RuntimeError):
+        faulthandler.cancel_dump_traceback_later()
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     ns = _parse_args(argv)
@@ -75,6 +105,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     apply_env(cfg)
+
+    # Arm the exit watchdog for one-shot commands only: dispatch/recall/
+    # inject/context finished printing but wedged on teardown (2026-09-12
+    # orphans). The daemon is a long-lived process and must not self-kill.
+    if ns.command != "daemon":
+        guard = float(os.environ.get("ARIEL_CLI_GUARD", "120"))
+        if guard > 0:
+            _arm_cli_guard(guard)
 
     # ariel imports happen ONLY after apply_env.
     from autohooks.appctx import build_app_context, resolve_layer

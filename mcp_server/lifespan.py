@@ -71,16 +71,10 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                             from config import config as _cfg
 
                             if _cfg.get("staging", "enabled", default=True):
-                                from features.staging import propose
+                                from lifecycle.consolidation import stage_consolidation
 
-                                await propose(
-                                    "consolidation",
-                                    "consolidate_staging",
-                                    uid,
-                                    layer,
-                                    {"items": items, "min_importance": min_weight},
-                                )
-                                res: dict[str, Any] = {"staged": True}
+                                pid = await stage_consolidation(uid, layer, items, min_importance=min_weight)
+                                res: dict[str, Any] = {"staged": pid is not None}
                             else:
                                 res = dict(await engine.consolidate_staging(uid, items, min_importance=min_weight))
                             await buf.clear_staging(uid)

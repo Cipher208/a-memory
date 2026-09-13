@@ -38,11 +38,29 @@ async def propose(source: str, kind: str, user_id: str, layer: str, payload: dic
     (2026-09-11: 52 same-key auto_save proposals drowned the review queue).
     Distinct identities (different key/user/kind) always create new rows,
     so dream markers and consolidation stay granular.
+
+    Tombstone guard (2026-09-13): a key already decided (rejected/expired)
+    within the expiry window is absorbed too — the decided id is returned
+    and no new row is created. Without this, every session_close re-staged
+    the same rejected keys (#80-84 after #75-79) and drowned the queue again.
     """
     now = time.time()
     conn = await connection_manager.get(DB_NAME)
     dedup_key = payload.get("key") or payload.get("title")
     if dedup_key is not None:
+        tomb = await conn.execute(
+            "SELECT id, payload FROM mutation_proposals"
+            " WHERE status IN ('rejected', 'expired') AND source = ? AND kind = ? AND user_id = ? AND layer = ?"
+            " AND COALESCE(decided_at, expires_at) > ?",
+            (source, kind, user_id, layer, now - _expire_days() * 86400),
+        )
+        for row in await tomb.fetchall():
+            try:
+                decided = json.loads(row["payload"])
+            except Exception:
+                decided = {}
+            if (decided.get("key") or decided.get("title")) == dedup_key:
+                return int(row["id"])
         cur = await conn.execute(
             "SELECT id, payload FROM mutation_proposals WHERE status = 'pending' AND source = ? AND kind = ? AND user_id = ? AND layer = ?",
             (source, kind, user_id, layer),
