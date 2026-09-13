@@ -71,7 +71,12 @@ def evaluate_importance(text: str) -> float:
     score = structure_score(text)
     from shared.dialogue import is_dialogic
 
-    if is_dialogic(text) and len(text) < 120:
+    if is_dialogic(text, max_words=10) and len(text) < 120:
+        # Message-level check: an entire chat message can hold 3-4 short
+        # vocative sentences (>8 distinct words) and still be pure phatics —
+        # the clause default (8) would misjudge it as canon. 10 words keeps
+        # the cap on "Спасибо, мамочка! Важно! Нужно решить."-class chats
+        # while long declarative instructions survive (K1 granularity split).
         # Short dialogic messages are pure chat (greetings, thanks, vocative
         # ping-pong) — cap below the default gate. LONG vocative-wrapped
         # messages stay eligible: the scorer's unit is the whole message and

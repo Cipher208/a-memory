@@ -49,15 +49,22 @@ DIALOGIC_PHRASES = (
 )
 
 
-def is_dialogic(clause: str) -> bool:
+def is_dialogic(clause: str, max_words: int = 8) -> bool:
     """Return True for conversational-register clauses — chat, never a durable fact.
 
-    Trailing interrogative only (punctuation tails tolerated); a leading "?!"
-    is a scoring artifact in synthetic texts, not a question.
+    Trailing interrogative is length-independent. Word/phrase register matches
+    only condemn SHORT clauses (< max_words distinct words): the owners embed
+    durable instructions and persona canon inside address terms ("Госпожа
+    закрепила в SOUL: ..."), and the 2026-09-13 gate audit showed the
+    length-blind word kill made every such clause unpromotable (spec S3).
+    Distinct-word counting keeps vocative ping-pong ("мам" x12) phatic.
     """
     low = clause.lower()
     if low.rstrip().rstrip("!.…;:»\"'").endswith("?"):
         return True
-    if set(re.findall(r"[а-яёa-z]+", low)) & DIALOGIC_WORDS:
+    words = set(re.findall(r"[а-яёa-z]+", low))
+    if len(words) > max_words:
+        return False
+    if words & DIALOGIC_WORDS:
         return True
     return any(p in low for p in DIALOGIC_PHRASES)
