@@ -61,6 +61,7 @@ class MemoryLayer:
         source: str = "user_explicit",
         ttl_minutes: int = 0,
         visibility: str | None = None,
+        memory_kind: str | None = None,
     ) -> int:
         """Write an L4 fact.
 
@@ -72,7 +73,9 @@ class MemoryLayer:
         key quarantine: future writes update the row but never un-hide it.
         """
         expires_at = time.time() + ttl_minutes * 60 if ttl_minutes > 0 else None
-        return await self.l4.save(self.user_id, key, value, importance, expires_at=expires_at, source=source, visibility=visibility)
+        return await self.l4.save(
+            self.user_id, key, value, importance, expires_at=expires_at, source=source, visibility=visibility, memory_kind=memory_kind
+        )
 
     async def recall(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         cache_key = f"recall:{self.user_id}:{query}:{limit}"

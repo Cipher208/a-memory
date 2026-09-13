@@ -65,7 +65,7 @@ class _FakeUserMem:
     def __init__(self, store: dict) -> None:
         self._store = store
 
-    async def remember(self, key: str, value: str, importance: float) -> int:
+    async def remember(self, key: str, value: str, importance: float, **kw: object) -> int:
         self._store[key] = value
         return 900
 

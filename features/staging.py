@@ -266,12 +266,15 @@ async def decide(proposal_id: int, approve: bool, mem: Any) -> dict[str, Any]:
 async def _apply(kind: str, user_id: str, layer: str, payload: dict[str, Any], mem: Any) -> str:
     """Execute the write the direct path would have done. Same code path, pinned inputs."""
     if kind == "core_write":
+        # S10 K2: the declared/pattern memory_kind must reach the row — the
+        # gate judges by kind, the write must not silently downgrade to fact.
+        mk = str(payload.get("memory_kind") or "") or None
         mem_obj = getattr(mem, "mm", None)
         if mem_obj is not None:
             mem_u = mem_obj.user_memory(user_id) if layer == "user" else mem_obj.agent_memory(user_id)
-            entry_id = await mem_u.remember(payload["key"], payload["value"], float(payload["importance"]))
+            entry_id = await mem_u.remember(payload["key"], payload["value"], float(payload["importance"]), memory_kind=mk)
         elif mem is not None:
-            entry_id = await mem.remember(payload["key"], payload["value"], float(payload["importance"]))
+            entry_id = await mem.remember(payload["key"], payload["value"], float(payload["importance"]), memory_kind=mk)
         else:
             raise ValueError("core_write apply requires mem (AppContext or a memory facade)")
         return str(entry_id)

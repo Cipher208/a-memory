@@ -103,7 +103,7 @@ async def think(
         if canon_rate_ok(user_id):
             imp = max(importance, 0.8)
             key = f"canon:{kind}:{hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]}"
-            entry_id = await mem.remember(key, text, imp)
+            entry_id = await mem.remember(key, text, imp, memory_kind=kind)
             actions.append({"type": "L4_declared_canon", "kind": kind, "importance": str(imp)})
             routing["declared_canon"] = True
             declared_canon = True

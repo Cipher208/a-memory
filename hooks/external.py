@@ -182,7 +182,7 @@ async def auto_save_text(
             import hashlib as _hl
 
             key = f"canon:{kind}:{_hl.sha1(text.encode('utf-8')).hexdigest()[:12]}"
-            await mem.remember(key, text[:2000], max(score, 0.8))
+            await mem.remember(key, text[:2000], max(score, 0.8), memory_kind=kind)
             result["saved_l4"] = True
             result["canon"] = "persona_owner"
             if l0_id is not None:

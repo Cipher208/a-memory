@@ -51,7 +51,7 @@ class _FakeMem:
     def __init__(self) -> None:
         self.remembered: list[tuple[str, str, float]] = []
 
-    async def remember(self, key: str, value: str, importance: float) -> int:
+    async def remember(self, key: str, value: str, importance: float, **kw: object) -> int:
         self.remembered.append((key, value, importance))
         return 100 + len(self.remembered)
 
@@ -68,7 +68,7 @@ class _FakeUserMem:
     def __init__(self, calls: list) -> None:
         self._calls = calls
 
-    async def remember(self, key: str, value: str, importance: float) -> int:
+    async def remember(self, key: str, value: str, importance: float, **kw: object) -> int:
         self._calls.append((key, value, importance))
         return 555
 

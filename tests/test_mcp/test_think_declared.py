@@ -53,6 +53,7 @@ async def test_declared_kind_lands_l4_despite_length():
     key = mem.remember.call_args[0][0]
     assert key.startswith("canon:preference:")
     assert mem.remember.call_args[0][2] == pytest.approx(0.8)  # floor applied over 0.4
+    assert mem.remember.call_args.kwargs.get("memory_kind") == "preference"  # kind persists to the store
 
 
 @pytest.mark.asyncio

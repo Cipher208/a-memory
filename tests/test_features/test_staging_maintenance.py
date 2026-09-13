@@ -93,10 +93,10 @@ async def test_purge_removes_only_old_decided(ensure_schema: Path) -> None:
 
 class _FakeRemember:
     def __init__(self) -> None:
-        self.saved: list[tuple[str, str, float]] = []
+        self.saved: list[tuple[str, str, float, dict]] = []
 
-    async def remember(self, key: str, value: str, importance: float) -> int:
-        self.saved.append((key, value, importance))
+    async def remember(self, key: str, value: str, importance: float, **kw: object) -> int:
+        self.saved.append((key, value, importance, kw))
         return 1
 
 
@@ -149,3 +149,4 @@ async def test_auto_apply_applies_gated_in_ignores_rest(ensure_schema: Path) -> 
     assert st[pid_fail] == "pending"
     assert wiki_status == "pending"
     assert app.mm.mem.saved and app.mm.mem.saved[0][0] == "preference:люблю"
+    assert app.mm.mem.saved[0][3].get("memory_kind") == "preference"  # kind reaches the row

@@ -77,11 +77,13 @@ class _FakeL3:
 class _FakeMem:
     def __init__(self) -> None:
         self.l1 = _FakeL1()
-        self.saved: list[tuple[str, str, float, list[str]]] = []
+        self.saved: list[Any] = []
         self.l3 = _FakeL3(self.saved)
         self.l4 = None
+        self.canon_calls: list[dict[str, Any]] = []
 
-    async def remember(self, key: str, value: str, importance: float) -> int:
+    async def remember(self, key: str, value: str, importance: float, **kw: Any) -> int:
+        self.canon_calls.append({"key": key, "kw": kw})
         return 2
 
 
@@ -138,6 +140,7 @@ async def test_auto_save_persona_owner_declared_lands_l4() -> None:
     res = await auto_save_text(mem, graph, "p1", text, role="assistant", persona_owner=True, kind="preference")
     assert res["saved_l4"] is True
     assert res["canon"] == "persona_owner"
+    assert mem.canon_calls and mem.canon_calls[0]["kw"].get("memory_kind") == "preference"  # kind persists
     _cr._canon_ts.clear()
 
 
