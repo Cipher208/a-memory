@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,22 @@ def _norm(content: str) -> str:
 
 def _hit_text(hit: dict[str, Any]) -> str:
     return str(hit.get("content") or hit.get("value") or hit.get("summary") or hit.get("title") or "")
+
+
+def _date_prefix(hit: dict[str, Any]) -> str:
+    """UTC source date for dated hits (episodes/wiki pages).
+
+    Recalled past text must announce when it happened — undated recall gets
+    laundered by first-turn reasoning into a "current user message"
+    (live confabulation incident, 2026-09-13). Returns "" for undated hits.
+    """
+    raw = hit.get("created_at") or hit.get("updated_at")
+    if raw:
+        try:
+            return datetime.fromtimestamp(float(raw), timezone.utc).strftime("%Y-%m-%d ")
+        except (TypeError, ValueError, OSError):
+            pass
+    return ""
 
 
 async def _collect_markers(mem: Any, user_id: str, cutoff: float) -> tuple[str, tuple[str, ...]] | None:
@@ -167,11 +184,11 @@ async def _collect_semantic(rag: Any, user_id: str, query: str) -> list[_Candida
         except Exception as exc:
             logger.debug("verify log skipped: %s", exc)
         for h in verified:
-            content = _hit_text(h)
+            content = _date_prefix(h) + _hit_text(h)
             if content:
                 out.append(("semantic", float(h.get("score", 0.0)), content, ()))
         for h in expand_hits:
-            content = _hit_text(h)
+            content = _date_prefix(h) + _hit_text(h)
             if content:
                 out.append(("expand", float(h.get("score", 0.0)), content, ()))
     except Exception as exc:

@@ -231,7 +231,10 @@ def _render_recall_md(blocks: list[dict[str, Any]]) -> str:
     if not blocks:
         return "—"
     lines = [f"- [{b['axis']}] {b['content']}" for b in blocks if str(b.get("content", "")).strip()]
-    return "\n".join(lines) if lines else "—"
+    if not lines:
+        return "—"
+    header = "# RECALLED MEMORY — ariel recollections of past messages, not a current user turn"
+    return "\n".join([header, *lines])
 
 
 if __name__ == "__main__":

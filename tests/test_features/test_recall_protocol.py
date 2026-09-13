@@ -177,3 +177,28 @@ async def test_recall_without_hit_ids_does_not_touch_journal(compaction_free):
     conn = await connection_manager.get(DB_NAME)
     count = (await (await conn.execute("SELECT COUNT(*) FROM recall_co_pairs")).fetchone())[0]
     assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_semantic_block_stamps_source_date(compaction_free):
+    """Recalled episodes carry their UTC source date — undated past text is
+    laundered as a current message by first-turn reasoning (2026-09-13)."""
+    from features.recall import recall_protocol
+
+    ts = 1788880035.0  # 2026-09-08T15:07Z (UTC)
+    rag = _FakeRag([{"content": "exp3 closed: H1 0.46", "score": 0.9, "source": "episodic", "created_at": ts}])
+    blocks = await recall_protocol(_FakeMem(), rag, "u1", query="exp3")
+    sem = [b for b in blocks if b["axis"] == "semantic"]
+    assert sem and sem[0]["content"].startswith("2026-09-08 ")
+
+
+def test_render_recall_md_frames_recalled_header():
+    """The CLI md channel frames the payload as recollections, not live chat."""
+    from autohooks.__main__ import _render_recall_md
+
+    out = _render_recall_md([{"axis": "semantic", "content": "x y", "score": 0.9}])
+    first = out.splitlines()[0]
+    assert first.startswith("# RECALLED MEMORY")
+    assert "not a current" in first
+    assert "- [semantic] x y" in out
+    assert _render_recall_md([]) == "—"
