@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import re
 import time
@@ -35,12 +36,28 @@ async def think(
     user_id: str = "default",
     wiki_type: str | None = None,
     wiki_title: str | None = None,
+    kind: str | None = None,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Universal Primitive: routing thoughts to correct memory layers based on importance and content."""
+    """Universal Primitive: routing thoughts to correct memory layers based on importance and content.
+
+    kind: optional declaration hint (one of L4_DECLARABLE_KINDS). A declared
+    thought is authored canon — it bypasses the length/pattern gates straight
+    to L4 (spec S4), rate-limited per user. Without it, behavior is unchanged.
+    """
     app: AppContext = _get_ctx(ctx)
     metrics.inc("tool_calls")
     metrics.inc("tool_think")
+
+    # S4: validate the declaration hint BEFORE any side effect (L0 capture,
+    # rate slots) — an invalid call must not write anything.
+    if kind is not None:
+        from shared.memory_types import L4_DECLARABLE_KINDS, validate_kind
+
+        if not validate_kind(kind):
+            return {"status": "error", "message": f"invalid kind: {kind!r}"}
+        if kind not in L4_DECLARABLE_KINDS:
+            return {"status": "error", "message": f"kind {kind!r} is not declarable; use one of {sorted(L4_DECLARABLE_KINDS)}"}
 
     # 1. Rate limiting
     rate_limit = await _check_rate_limit(app, user_id)
@@ -75,6 +92,34 @@ async def think(
     tasks.append(_l0_capture(event="think", layer=resolved_layer, user_id=user_id, text=text, decisions=[{"gate": "think", "skip_distill": True}]))
     actions.append({"type": "L0_captured", "event": "think"})
 
+    # S4: declared-canon channel — an explicit kind hint is authored truth,
+    # so it lands in L4 at the 0.8 floor regardless of length gates (<=2000;
+    # longer declarations still ride the wiki branch below). Rate-limited per
+    # user by the shared window in shared/canon_rate.py.
+    declared_canon = False
+    if kind is not None and len(text) <= 2000:
+        from shared.canon_rate import CANON_MAX_PER_HOUR, canon_rate_ok
+
+        if canon_rate_ok(user_id):
+            imp = max(importance, 0.8)
+            key = f"canon:{kind}:{hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]}"
+            entry_id = await mem.remember(key, text, imp)
+            actions.append({"type": "L4_declared_canon", "kind": kind, "importance": str(imp)})
+            routing["declared_canon"] = True
+            declared_canon = True
+            with contextlib.suppress(Exception):
+                from shared.connection import connection_manager
+
+                conn = await connection_manager.get("memory.db")
+                await conn.execute(
+                    "INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)"
+                    " VALUES (?,?,?,?,?,?,?,?)",
+                    (user_id, int(entry_id), "declared_canon", float(importance), float(imp), "{}", f"think kind={kind}", time.time()),
+                )
+                await conn.commit()
+        else:
+            actions.append({"type": "L4_declared_canon_capped", "note": f">{CANON_MAX_PER_HOUR}/h for {user_id}"})
+
     forced_wiki = bool(wiki_type or wiki_title)
     large_text = len(text) > 2000
 
@@ -98,7 +143,8 @@ async def think(
     else:
         # Standard routing
         # If len(text) < 60 and importance is high -> Save to CoreMemory (L4)
-        if len(text) < 60 and importance > 0.7:
+        # (skip when the declared channel already wrote the canon entry)
+        if len(text) < 60 and importance > 0.7 and not declared_canon:
             tasks.append(mem.remember("thought", text, importance))
             actions.append({"type": "L4_remember", "importance": str(importance)})
 

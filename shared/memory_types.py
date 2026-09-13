@@ -37,6 +37,13 @@ class MemoryKind(str, enum.Enum):
     PROCEDURAL = "procedural"
 
 
+# S4 (spec 2026-09-13): kinds a client may DECLARE — authored, not harvested.
+# Declaration (not a regex) certifies the content, so these bypass the
+# pattern-guessing gates; anything else ("fact", "observation", ...) stays
+# heuristic all the way down.
+L4_DECLARABLE_KINDS = frozenset({"preference", "commitment", "rule", "instruction", "relationship", "decision"})
+
+
 @dataclass(frozen=True)
 class TypePolicy:
     kind: MemoryKind
