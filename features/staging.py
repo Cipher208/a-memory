@@ -124,6 +124,72 @@ async def expire_stale() -> int:
     return len(rows)
 
 
+async def purge_decided_past_window() -> int:
+    """Delete decided proposals outside the tombstone window (spec S6).
+
+    Dedup reads only decisions newer than expire_days — older rows are an
+    inert graveyard (hermes base: 225 expired + 62 rejected after d0934e4).
+    """
+    from config import config
+
+    days = max(_expire_days(), int(config.get("staging", "purge_after_days", default=14)))
+    cutoff = time.time() - days * 86400
+    conn = await connection_manager.get(DB_NAME)
+    cur = await conn.execute(
+        "DELETE FROM mutation_proposals WHERE status IN ('rejected', 'expired') AND COALESCE(decided_at, expires_at) < ?",
+        (cutoff,),
+    )
+    await conn.commit()
+    return int(cur.rowcount or 0)
+
+
+# Pattern-extraction sources with honest kind tagging: their proposals either
+# pass the same gate an apply would enforce or never enter the queue at all.
+# Human-review lanes (wiki_write, consolidation, conflicts) stay manual.
+_AUTO_APPLY_SOURCES = ("session_close", "dream")
+
+
+async def auto_apply_pending(mem: Any) -> int:
+    """Apply low-risk, gate-passing core_write proposals (spec S6).
+
+    The hermes base proved the manual queue rots unread (225 expired); an
+    auto lane gated by the very predicate apply would enforce keeps L4 honest
+    while decide() audit rows keep provenance.
+    """
+    import logging
+
+    import logging
+
+    logger = logging.getLogger(__name__)
+    from lifecycle.consolidation import passes_promotion_gate
+
+    conn = await connection_manager.get(DB_NAME)
+    cur = await conn.execute(
+        "SELECT id, payload FROM mutation_proposals WHERE status = 'pending' AND kind = 'core_write' AND source IN ('session_close', 'dream') ORDER BY id",
+    )
+    rows = await cur.fetchall()
+    applied = 0
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except Exception:
+            logger.debug("auto_apply skipped corrupt payload id=%s", row["id"], exc_info=True)
+            continue
+        item = {
+            "content": str(payload.get("value") or ""),
+            "importance": float(payload.get("importance", 0.5)),
+            "memory_kind": str(payload.get("memory_kind") or "fact"),
+        }
+        if not passes_promotion_gate(item, 0.7):
+            continue
+        try:
+            await decide(int(row["id"]), True, mem)
+            applied += 1
+        except Exception:
+            logging.getLogger(__name__).debug("auto_apply failed id=%s", row["id"], exc_info=True)
+    return applied
+
+
 async def list_pending(user_id: str = "default", limit: int = 20) -> list[dict[str, Any]]:
     await expire_stale()
     conn = await connection_manager.get(DB_NAME)

@@ -97,6 +97,17 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                             )
                     last_consolidation = now
 
+                    # S6: staging housekeeping — auto-review lane for pattern
+                    # sources (the manual queue rots unread: 225 expired on
+                    # hermes) + graveyard purge of decided rows past the window.
+                    from features.staging import auto_apply_pending, expire_stale, purge_decided_past_window
+
+                    await expire_stale()
+                    n_auto = await auto_apply_pending(ctx)
+                    n_purged = await purge_decided_past_window()
+                    if n_auto or n_purged:
+                        logging.getLogger(__name__).info("Staging housekeeping: auto_applied=%d purged=%d", n_auto, n_purged)
+
                 # DB size monitoring + auto-VACUUM (same hourly cadence)
                 try:
                     from features.db_maintenance import run_db_maintenance
