@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -44,13 +43,9 @@ def _date_prefix(hit: dict[str, Any]) -> str:
     laundered by first-turn reasoning into a "current user message"
     (live confabulation incident, 2026-09-13). Returns "" for undated hits.
     """
-    raw = hit.get("created_at") or hit.get("updated_at")
-    if raw:
-        try:
-            return datetime.fromtimestamp(float(raw), timezone.utc).strftime("%Y-%m-%d ")
-        except (TypeError, ValueError, OSError):
-            pass
-    return ""
+    from shared.dates import utc_date_prefix
+
+    return utc_date_prefix(hit.get("created_at") or hit.get("updated_at"))
 
 
 async def _collect_markers(mem: Any, user_id: str, cutoff: float) -> tuple[str, tuple[str, ...]] | None:
