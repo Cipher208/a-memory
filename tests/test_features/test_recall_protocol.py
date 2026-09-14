@@ -202,3 +202,15 @@ def test_render_recall_md_frames_recalled_header():
     assert "not a current" in first
     assert "- [semantic] x y" in out
     assert _render_recall_md([]) == "—"
+
+
+@pytest.mark.asyncio
+async def test_markers_axis_stamps_dates(compaction_free):
+    """S4 (2026-09-14): conscious-marker renders carry the row's UTC date."""
+    from features.recall import recall_protocol
+
+    ts = 1788880035.0  # 2026-09-08T15:07Z
+    mem = _FakeMem(l4=[SimpleNamespace(key="dream_x", value="intim detail", importance=0.95, created_at=ts, updated_at=ts)])
+    blocks = await recall_protocol(mem, _FakeRag([]), "u1", query="")
+    mk = [b for b in blocks if b["axis"] == "markers"]
+    assert mk and mk[0]["content"].startswith("2026-09-08 dream_x=")

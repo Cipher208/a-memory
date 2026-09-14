@@ -19,6 +19,8 @@ import logging
 import time
 from typing import Any
 
+from shared.dates import row_stamp
+
 logger = logging.getLogger(__name__)
 
 _DAY_CUTOFF_S = 24 * 3600
@@ -59,7 +61,7 @@ async def _collect_markers(mem: Any, user_id: str, cutoff: float) -> tuple[str, 
         parts: list[str] = []
         facts = await mem.l4.get_all(user_id, 50)
         marker_facts = [f for f in facts if str(f.key).startswith("dream_") or f.importance >= 0.95]
-        parts.extend(f"{f.key}={f.value[:80]}" for f in marker_facts)
+        parts.extend(f"{row_stamp(f)}{f.key}={f.value[:80]}" for f in marker_facts)
         try:
             skill_eps = await mem.l3.search_by_tag(user_id, "dream_skill", 5)
             parts.extend(

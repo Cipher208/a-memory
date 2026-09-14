@@ -15,6 +15,8 @@ import math
 import time
 from typing import Any
 
+from shared.dates import row_stamp
+
 logger = logging.getLogger(__name__)
 
 
@@ -165,7 +167,7 @@ async def build_inject_blocks(
         except Exception:
             top = []
         if top:
-            content = "; ".join(f"{f.key}={f.value[:80]}" for f in top)
+            content = "; ".join(f"{row_stamp(f)}{f.key}={f.value[:80]}" for f in top)
             content = _cap(content)
             cost = estimate_tokens(content)
             if cost <= remaining:
@@ -219,7 +221,7 @@ async def build_inject_blocks(
     facts = await mem.l4.get_all(user_id, 50)
     important = [f for f in facts if f.importance >= important_min and getattr(f, "visibility", "visible") == "visible"]
     if important:
-        content = "; ".join(f"{f.key}={f.value[:80]}" for f in important)
+        content = "; ".join(f"{row_stamp(f)}{f.key}={f.value[:80]}" for f in important)
         content = _cap(content)
         cost = estimate_tokens(content)
         if cost <= remaining:
