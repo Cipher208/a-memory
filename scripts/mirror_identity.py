@@ -124,13 +124,14 @@ async def mirror(
 _LEGACY_SHA_KEY_RE = re.compile(r"^canon:[a-z_]+:[0-9a-f]{12}$")
 
 
-async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str) -> tuple[int, list[str]]:
+async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str, dry: bool = False) -> tuple[int, list[str]]:
     """One-time: retire pre-2026-09-14 sha-keyed mirror rows.
 
     A legacy row is deleted only when importance_audit maps it to a mirrored
     file (reason='mirror <name> kind=<k>'); unmapped rows are reported and
-    left for operator judgment — no silent guesses. Re-run mirror afterwards
-    to re-write the same files under stable keys.
+    left for operator judgment — no silent guesses. dry=True previews the
+    same report without deleting anything (guard for live bases). Re-run
+    mirror afterwards to re-write the same files under stable keys.
     """
     conn = await cm.get(DB_NAME)
     cur = await conn.execute(
@@ -150,7 +151,10 @@ async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str) -> tuple
             )
         ).fetchone()
         if audit:
-            if await mem.l4.delete(user_id, key, triggered_by="identity_mirror_migration"):
+            if dry:
+                removed += 1
+                print(f"[dry-migrate] would retire {key} ({audit[0]})")
+            elif await mem.l4.delete(user_id, key, triggered_by="identity_mirror_migration"):
                 removed += 1
                 print(f"migrated out legacy {key} ({audit[0]})")
         else:
@@ -178,8 +182,8 @@ def main() -> int:
         app = AppContext()
         mem = app.mm.agent_memory(ns.user) if ns.layer == "agent" else app.mm.user_memory(ns.user)
         if ns.migrate_sha_keys:
-            removed, unmapped = await migrate_sha_keys(mem, connection_manager, ns.user, ns.layer)
-            print(f"migrated {removed} legacy row(s), {len(unmapped)} unmapped kept")
+            removed, unmapped = await migrate_sha_keys(mem, connection_manager, ns.user, ns.layer, ns.dry_run)
+            print(f"migrate{' (dry)' if ns.dry_run else ''}: {removed} legacy row(s), {len(unmapped)} unmapped kept")
         total = await mirror(files, ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run, mem, connection_manager)
         await connection_manager.close_all()
         return total

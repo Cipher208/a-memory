@@ -128,3 +128,32 @@ async def test_migrate_sha_keys_deletes_mapped_keeps_unmapped(db, capsys):
     assert hist >= 1  # deletion is audited, not silent
     out = capsys.readouterr().out
     assert "unmapped" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_migrate_sha_keys_dry_run_touches_nothing(db, capsys):
+    """--dry-run must preview, never delete — the flag guards live bases."""
+    import time as _t
+
+    from core import MemoryManager
+    from scripts.mirror_identity import migrate_sha_keys
+
+    mem = MemoryManager(cm=db).agent_memory("u1")
+    conn = await db.get("memory.db")
+    id1 = await mem.l4.save(
+        "u1", "canon:rule:cccccccccccc", "legacy mapped chunk body for the audit trail", 0.85, memory_kind="rule", source="identity_mirror"
+    )
+    await conn.execute(
+        "INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        ("u1", int(id1), "identity_mirror", 0.0, 0.85, "{}", "mirror AGENT.md kind=rule", _t.time()),
+    )
+    await conn.commit()
+
+    would, kept = await migrate_sha_keys(mem, db, "u1", "agent", dry=True)
+    assert would == 1
+    assert kept == []
+    keys = {r.key for r in await _rows(mem)}
+    assert "canon:rule:cccccccccccc" in keys  # nothing deleted in dry mode
+    out = capsys.readouterr().out
+    assert "dry" in out.lower()
