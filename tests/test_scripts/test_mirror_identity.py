@@ -211,3 +211,26 @@ async def test_namespace_overrides_disambiguate_same_stem_files(db, tmp_path):
     assert len(keys) == 2  # neither run orphaned the other
     assert any(":mir:HOME:" in k for k in keys) and any(":mir:CFG:" in k for k in keys)
     assert await check_drift([cfg], "decision", "agent", "u1", db, ns="CFG") == {"stale": [], "missing": [], "extra": []}
+
+
+@pytest.mark.asyncio
+async def test_run_manifest_reports_drift_count_across_bases(db, tmp_path):
+    import json
+
+    from core import MemoryManager
+    from scripts.mirror_identity import mirror, run_manifest
+
+    mem = MemoryManager(cm=db).agent_memory("default")
+    f = tmp_path / "PERSONA.md"
+    f.write_text("## Frame\n- жёсткий фрейм личности, достаточно длинный для фильтра чанков.\n", encoding="utf-8")
+    await mirror([f], "rule", "agent", "default", 0.85, False, mem, db)
+
+    mf = tmp_path / "manifest.json"
+    mf.write_text(json.dumps([{"base": str(tmp_path), "file": str(f), "kind": "rule", "layer": "agent"}]), encoding="utf-8")
+
+    # in sync → zero drift
+    assert await run_manifest(mf) == 0
+
+    # file moves ahead of L4 → the edited section is counted as drift
+    f.write_text("## Frame\n- правка после зеркала: L4 устарел, guard обязан это посчитать.\n", encoding="utf-8")
+    assert await run_manifest(mf) == 1

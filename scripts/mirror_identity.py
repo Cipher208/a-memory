@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import json
 import re
 import sys
 import time
@@ -159,6 +160,60 @@ async def check_drift(paths: list[Path], kind: str, layer: str, user_id: str, cm
     return {"stale": stale, "missing": missing, "extra": extra}
 
 
+def _resolve_manifest(manifest_path: Path) -> list[tuple[Path, Path | None, str, str, str, str | None]]:
+    """Sync manifest IO: expand paths once, so the async loop only touches sqlite."""
+    out: list[tuple[Path, Path | None, str, str, str, str | None]] = []
+    entries: list[dict[str, Any]] = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for entry in entries:
+        file = Path(entry["file"]).expanduser()
+        out.append(
+            (
+                Path(entry["base"]).expanduser(),
+                file if file.is_file() else None,
+                entry["kind"],
+                entry["layer"],
+                str(entry.get("user", "default")),
+                entry.get("ns"),
+            )
+        )
+    return out
+
+
+async def run_manifest(manifest_path: Path) -> int:
+    """--check across every base named in an operator manifest — one process, read-only.
+
+    Manifest: JSON list of {base, file, kind, layer, user?, ns?}. Connections are
+    reopened per base (close_all clears the cache); total drift count is the
+    return value, 0 = every mirror in sync. Never writes — re-mirroring stays
+    an explicit operator act (auto-apply lane never produces canon).
+    """
+    from shared.connection import connection_manager as cm
+
+    resolved = _resolve_manifest(manifest_path)
+    original_base = cm.base_dir
+    current_base: Path | None = None
+    total = 0
+    for base, file, kind, layer, user, ns in resolved:
+        if base != current_base:
+            await cm.close_all()
+            cm.base_dir = base
+            current_base = base
+        if file is None:
+            print(f"drift: {base.name} {kind} missing file")
+            total += 1
+            continue
+        drift = await check_drift([file], kind, layer, user, cm, ns)
+        count = sum(len(keys) for keys in drift.values())
+        for cls, keys in drift.items():
+            for key in keys:
+                print(f"drift: {base.name} {file.name} {cls} {key}")
+        total += count
+    await cm.close_all()
+    cm.base_dir = original_base
+    print(f"manifest: {'clean' if not total else f'{total} drift item(s)'} across {len(resolved)} entries")
+    return total
+
+
 async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str, dry: bool = False) -> tuple[int, list[str]]:
     """One-time: retire pre-2026-09-14 sha-keyed mirror rows.
 
@@ -200,17 +255,30 @@ async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str, dry: boo
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--file", action="append", required=True, type=Path, help="markdown file (repeatable)")
+    ap.add_argument("--file", action="append", type=Path, help="markdown file (repeatable)")
     ap.add_argument("--kind", default="rule", help="declarable MemoryKind (default: rule)")
     ap.add_argument("--layer", default="agent", choices=["agent", "user"])
     ap.add_argument("--user", default="default")
     ap.add_argument("--importance", type=float, default=0.85)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--check", action="store_true", help="report drift vs the last mirror (read-only); exit 1 on drift")
+    ap.add_argument(
+        "--check-manifest",
+        default=None,
+        type=Path,
+        metavar="JSON",
+        help="read-only drift check over a JSON manifest of {base,file,kind,layer[,user,ns]} entries; exit 1 on drift",
+    )
     ap.add_argument("--ns", default=None, help="key namespace (default: file stem); required to disambiguate different files sharing a stem")
     ap.add_argument("--migrate-sha-keys", action="store_true", help="retire audited sha-keyed legacy mirror rows first")
     ns = ap.parse_args()
-    files = [f for f in ns.file if f.exists()]
+    if not ns.file and not ns.check_manifest:
+        ap.error("either --file or --check-manifest is required")
+    files = [f for f in (ns.file or []) if f.exists()]
+
+    if ns.check_manifest:
+        n = asyncio.run(run_manifest(ns.check_manifest))
+        return 1 if n else 0
 
     from mcp_server.context import AppContext
     from shared.connection import connection_manager
