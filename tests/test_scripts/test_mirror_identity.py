@@ -95,3 +95,36 @@ async def test_mirror_dry_run_writes_nothing(db, tmp_path):
     f.write_text(_V1, encoding="utf-8")
     assert await mirror([f], "rule", "agent", "u1", 0.85, True, mem, db) == 1
     assert await _rows(mem) == []
+
+
+@pytest.mark.asyncio
+async def test_migrate_sha_keys_deletes_mapped_keeps_unmapped(db, capsys):
+    import time as _t
+
+    from core import MemoryManager
+    from scripts.mirror_identity import migrate_sha_keys
+
+    mem = MemoryManager(cm=db).agent_memory("u1")
+    conn = await db.get("memory.db")
+    id1 = await mem.l4.save(
+        "u1", "canon:rule:aaaaaaaaaaaa", "legacy mapped chunk body for the audit trail", 0.85, memory_kind="rule", source="identity_mirror"
+    )
+    await mem.l4.save(
+        "u1", "canon:rule:bbbbbbbbbbbb", "legacy unmapped chunk body with no audit row", 0.85, memory_kind="rule", source="identity_mirror"
+    )
+    await conn.execute(
+        "INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        ("u1", int(id1), "identity_mirror", 0.0, 0.85, "{}", "mirror AGENT.md kind=rule", _t.time()),
+    )
+    await conn.commit()
+
+    removed, kept = await migrate_sha_keys(mem, db, "u1", "agent")
+    assert removed == 1
+    assert kept == ["canon:rule:bbbbbbbbbbbb"]
+    keys = {r.key for r in await _rows(mem)}
+    assert "canon:rule:aaaaaaaaaaaa" not in keys and "canon:rule:bbbbbbbbbbbb" in keys
+    hist = (await (await conn.execute("SELECT count(*) FROM core_memory_history WHERE key='canon:rule:aaaaaaaaaaaa'")).fetchone())[0]
+    assert hist >= 1  # deletion is audited, not silent
+    out = capsys.readouterr().out
+    assert "unmapped" in out.lower()

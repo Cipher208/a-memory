@@ -121,6 +121,44 @@ async def mirror(
     return written
 
 
+_LEGACY_SHA_KEY_RE = re.compile(r"^canon:[a-z_]+:[0-9a-f]{12}$")
+
+
+async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str) -> tuple[int, list[str]]:
+    """One-time: retire pre-2026-09-14 sha-keyed mirror rows.
+
+    A legacy row is deleted only when importance_audit maps it to a mirrored
+    file (reason='mirror <name> kind=<k>'); unmapped rows are reported and
+    left for operator judgment — no silent guesses. Re-run mirror afterwards
+    to re-write the same files under stable keys.
+    """
+    conn = await cm.get(DB_NAME)
+    cur = await conn.execute(
+        "SELECT entry_id, key FROM core_memory WHERE layer=? AND user_id=? AND source='identity_mirror'",
+        (layer, user_id),
+    )
+    rows = [dict(r) for r in await cur.fetchall()]
+    removed, kept = 0, []
+    for row in rows:
+        key = str(row["key"])
+        if not _LEGACY_SHA_KEY_RE.match(key):
+            continue
+        audit = await (
+            await conn.execute(
+                "SELECT reason FROM importance_audit WHERE chunk_id=? AND source='identity_mirror' LIMIT 1",
+                (int(row["entry_id"]),),
+            )
+        ).fetchone()
+        if audit:
+            if await mem.l4.delete(user_id, key, triggered_by="identity_mirror_migration"):
+                removed += 1
+                print(f"migrated out legacy {key} ({audit[0]})")
+        else:
+            kept.append(key)
+            print(f"unmapped legacy {key}: kept (no audit row — operator decision)")
+    return removed, kept
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--file", action="append", required=True, type=Path, help="markdown file (repeatable)")
@@ -129,6 +167,7 @@ def main() -> int:
     ap.add_argument("--user", default="default")
     ap.add_argument("--importance", type=float, default=0.85)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--migrate-sha-keys", action="store_true", help="retire audited sha-keyed legacy mirror rows first")
     ns = ap.parse_args()
     files = [f for f in ns.file if f.exists()]
 
@@ -138,6 +177,9 @@ def main() -> int:
     async def _run() -> int:
         app = AppContext()
         mem = app.mm.agent_memory(ns.user) if ns.layer == "agent" else app.mm.user_memory(ns.user)
+        if ns.migrate_sha_keys:
+            removed, unmapped = await migrate_sha_keys(mem, connection_manager, ns.user, ns.layer)
+            print(f"migrated {removed} legacy row(s), {len(unmapped)} unmapped kept")
         total = await mirror(files, ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run, mem, connection_manager)
         await connection_manager.close_all()
         return total
