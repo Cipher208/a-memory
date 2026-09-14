@@ -2,9 +2,12 @@
 """Mirror a markdown identity file into L4 as declared canon (operator tool).
 
 Splits on "## " headings, wraps oversized sections at paragraph boundaries
-(2000-char cap = the declared-canon ceiling), writes with the SAME key scheme
-as think(kind=...): canon:<kind>:<sha1[:12]>. Idempotent re-runs upsert.
-Each write lands an importance_audit row with source "identity_mirror".
+(2000-char cap = the declared-canon ceiling), writes with a STABLE section
+key: canon:<kind>:mir:<file>:<slug>#<h6>:p<part>. Body edits supersede
+through the A2.1 bi-temporal chain; sections removed between runs are deleted
+by the orphan pass — the mirror REPLACES per file, it never accumulates past
+versions of a persona. Each write lands an importance_audit row with source
+"identity_mirror".
 
 Usage (env selects the ariel base):
     MCP_MEMORY_DATA_DIR=~/.mcp-ariel-memory-cowagent \
@@ -20,50 +23,78 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Any
+
+from shared.constants import DB_NAME
 
 LIMIT = 2000
 
 
-def split_chunks(md: str) -> list[str]:
-    parts = re.split(r"(?m)^(?=## )", md)
-    out: list[str] = []
-    for p in parts:
+def split_chunks(md: str) -> list[tuple[str, int, str]]:
+    """Split into (heading, part_index, text); parts respect the LIMIT cap.
+
+    Heading (not content) defines identity: body edits supersede the same
+    temporal row instead of minting a new immortal one (spec S3.1).
+    """
+    out: list[tuple[str, int, str]] = []
+    for p in re.split(r"(?m)^(?=## )", md):
         p = p.strip()
         # bare headings carry no content; mirrors of "# Title" are noise rows
         if not p or len(p) < 30:
             continue
+        heading = p.split("\n", 1)[0].strip("#").strip() or "_top"
         if len(p) <= LIMIT:
-            out.append(p)
+            out.append((heading, 0, p))
             continue
-        buf = ""
+        buf, idx = "", 0
         for para in p.split("\n\n"):
             if buf and len(buf) + len(para) + 2 > LIMIT:
-                out.append(buf)
+                out.append((heading, idx, buf))
+                idx += 1
                 buf = para
             else:
                 buf = f"{buf}\n\n{para}".strip()
         if buf:
-            out.append(buf)
+            out.append((heading, idx, buf))
     return out
 
 
-async def mirror(paths: list[Path], kind: str, layer: str, user_id: str, importance: float, dry: bool) -> int:
-    from mcp_server.context import AppContext
-    from shared.connection import connection_manager
+def section_key(kind: str, file_stem: str, heading: str, part: int) -> str:
+    """canon:<kind>:mir:<file>:<slug>#<h6>:p<part> — content-independent key.
 
-    app = AppContext()
-    mem = app.mm.agent_memory(user_id) if layer == "agent" else app.mm.user_memory(user_id)
+    slug keeps unicode word chars (Cyrillic = data, policy-legal); h6 of the
+    full heading guards against 40-char truncation collisions.
+    """
+    slug = re.sub(r"\W+", "_", heading, flags=re.UNICODE).strip("_")[:40] or "_sec"
+    h6 = hashlib.sha1(heading.encode("utf-8")).hexdigest()[:6]
+    return f"canon:{kind}:mir:{file_stem}:{slug}#{h6}:p{part}"
+
+
+async def mirror(
+    paths: list[Path],
+    kind: str,
+    layer: str,
+    user_id: str,
+    importance: float,
+    dry: bool,
+    mem: Any,
+    cm: Any,
+) -> int:
+    """Per-file REPLACE: upsert all chunks, then delete keys this run did not write."""
+    conn = await cm.get(DB_NAME)
     written = 0
     for path in paths:
+        stem = path.stem
         text = path.read_text(encoding="utf-8")
-        for chunk in split_chunks(text):
-            key = f"canon:{kind}:{hashlib.sha1(chunk.encode('utf-8')).hexdigest()[:12]}"
+        written_keys: set[str] = set()
+        for heading, part, chunk in split_chunks(text):
+            key = section_key(kind, stem, heading, part)
+            written_keys.add(key)
             if dry:
                 print(f"[dry] {path.name} {key} {len(chunk)}B")
                 written += 1
                 continue
             entry_id = await mem.remember(key, chunk, importance, source="identity_mirror", memory_kind=kind)
-            conn = await connection_manager.get("memory.db")
             await conn.execute(
                 "INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)"
                 " VALUES (?,?,?,?,?,?,?,?)",
@@ -72,7 +103,21 @@ async def mirror(paths: list[Path], kind: str, layer: str, user_id: str, importa
             await conn.commit()
             written += 1
             print(f"mirrored {path.name} {key} {len(chunk)}B")
-    await connection_manager.close_all()
+        # orphan pass: same file+kind, keys absent from this run (section
+        # deleted / repartitioned / renamed heading)
+        cur = await conn.execute(
+            "SELECT key FROM core_memory WHERE layer=? AND user_id=? AND source='identity_mirror' AND key LIKE ?",
+            (layer, user_id, f"canon:{kind}:mir:{stem}:%"),
+        )
+        for row in await cur.fetchall():
+            old_key = str(row["key"])  # sqlite3.Row via connection_manager row_factory
+            if old_key in written_keys:
+                continue
+            if dry:
+                print(f"[dry-orphan] {old_key}")
+                continue
+            if await mem.l4.delete(user_id, old_key, triggered_by="identity_mirror"):
+                print(f"orphaned {old_key}")
     return written
 
 
@@ -85,7 +130,19 @@ def main() -> int:
     ap.add_argument("--importance", type=float, default=0.85)
     ap.add_argument("--dry-run", action="store_true")
     ns = ap.parse_args()
-    n = asyncio.run(mirror([f for f in ns.file if f.exists()], ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run))
+    files = [f for f in ns.file if f.exists()]
+
+    from mcp_server.context import AppContext
+    from shared.connection import connection_manager
+
+    async def _run() -> int:
+        app = AppContext()
+        mem = app.mm.agent_memory(ns.user) if ns.layer == "agent" else app.mm.user_memory(ns.user)
+        total = await mirror(files, ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run, mem, connection_manager)
+        await connection_manager.close_all()
+        return total
+
+    n = asyncio.run(_run())
     print(f"total: {n} chunk(s), dry_run={ns.dry_run}")
     return 0
 
