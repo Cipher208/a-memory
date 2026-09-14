@@ -157,3 +157,57 @@ async def test_migrate_sha_keys_dry_run_touches_nothing(db, capsys):
     assert "canon:rule:cccccccccccc" in keys  # nothing deleted in dry mode
     out = capsys.readouterr().out
     assert "dry" in out.lower()
+
+
+_NEW = "## Третья\n- добавленный после зеркала раздел, которого в L4 ещё нет вовсе.\n"
+
+
+@pytest.mark.asyncio
+async def test_check_drift_reports_three_classes_without_writing(db, tmp_path):
+    from core import MemoryManager
+    from scripts.mirror_identity import check_drift, mirror
+
+    mem = MemoryManager(cm=db).agent_memory("u1")
+    f = tmp_path / "AGENT.md"
+
+    f.write_text(_V1 + _DROP, encoding="utf-8")
+    await mirror([f], "rule", "agent", "u1", 0.85, False, mem, db)
+    assert len(await _rows(mem)) == 2
+
+    # edit body (stale), delete a section (extra), add a section (missing) — all at once.
+    f.write_text(_V2 + _NEW, encoding="utf-8")
+    drift = await check_drift([f], "rule", "agent", "u1", db)
+    assert len(drift["stale"]) == 1 and drift["stale"][0].startswith("canon:rule:mir:AGENT:Личность#")
+    assert len(drift["missing"]) == 1 and drift["missing"][0].startswith("canon:rule:mir:AGENT:Третья#")
+    assert len(drift["extra"]) == 1 and drift["extra"][0].startswith("canon:rule:mir:AGENT:Другая#")
+
+    # check is read-only: L4 still holds the pre-edit rows
+    rows = {r.key: r.value for r in await _rows(mem)}
+    assert len(rows) == 2 and any("v1 body" in v for v in rows.values())
+
+    # after re-mirror, the same check reports clean
+    await mirror([f], "rule", "agent", "u1", 0.85, False, mem, db)
+    assert await check_drift([f], "rule", "agent", "u1", db) == {"stale": [], "missing": [], "extra": []}
+
+
+@pytest.mark.asyncio
+async def test_namespace_overrides_disambiguate_same_stem_files(db, tmp_path):
+    """Two different files sharing a stem must not orphan each other's rows."""
+
+    from core import MemoryManager
+    from scripts.mirror_identity import check_drift, mirror
+
+    mem = MemoryManager(cm=db).agent_memory("u1")
+    home = tmp_path / "AGENTS.md"
+    cfg = tmp_path / "opencode" / "AGENTS.md"
+    cfg.parent.mkdir()
+    home.write_text("## Home only\n- раздел первого файла с тем же stem, никогда не见于 втором.\n", encoding="utf-8")
+    cfg.write_text("## Cfg only\n- раздел второго файла с тем же stem, никогда не见于 первом.\n", encoding="utf-8")
+
+    assert await mirror([home], "decision", "agent", "u1", 0.85, False, mem, db, ns="HOME") == 1
+    assert await mirror([cfg], "decision", "agent", "u1", 0.85, False, mem, db, ns="CFG") == 1
+
+    keys = {r.key for r in await _rows(mem)}
+    assert len(keys) == 2  # neither run orphaned the other
+    assert any(":mir:HOME:" in k for k in keys) and any(":mir:CFG:" in k for k in keys)
+    assert await check_drift([cfg], "decision", "agent", "u1", db, ns="CFG") == {"stale": [], "missing": [], "extra": []}

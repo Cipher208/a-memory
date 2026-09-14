@@ -79,12 +79,18 @@ async def mirror(
     dry: bool,
     mem: Any,
     cm: Any,
+    ns: str | None = None,
 ) -> int:
-    """Per-file REPLACE: upsert all chunks, then delete keys this run did not write."""
+    """Per-file REPLACE: upsert all chunks, then delete keys this run did not write.
+
+    ``ns`` overrides the key namespace (default: the file stem). Two different
+    files sharing a stem (e.g. ~/AGENTS.md and .config/opencode/AGENTS.md) MUST
+    mirror with distinct ``ns`` or each run orphans the other's rows.
+    """
     conn = await cm.get(DB_NAME)
     written = 0
     for path in paths:
-        stem = path.stem
+        stem = ns or path.stem
         text = path.read_text(encoding="utf-8")
         written_keys: set[str] = set()
         for heading, part, chunk in split_chunks(text):
@@ -122,6 +128,35 @@ async def mirror(
 
 
 _LEGACY_SHA_KEY_RE = re.compile(r"^canon:[a-z_]+:[0-9a-f]{12}$")
+
+
+async def check_drift(paths: list[Path], kind: str, layer: str, user_id: str, cm: Any, ns: str | None = None) -> dict[str, list[str]]:
+    """Staleness guard: identity files vs their L4 mirror rows — read-only.
+
+    stale   — key is planned and the stored body differs (edited after last mirror)
+    missing — key is planned but no row exists (section never mirrored)
+    extra   — stored row for this file+kind is not in the plan (deleted/renamed section)
+    Re-mirroring the file resolves all three; this writes nothing.
+    ``ns`` must match the namespace the file was mirrored under (see mirror()).
+    """
+    conn = await cm.get(DB_NAME)
+    planned: dict[str, str] = {}
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for heading, part, chunk in split_chunks(text):
+            planned[section_key(kind, ns or path.stem, heading, part)] = chunk
+    stored: dict[str, str] = {}
+    for path in paths:
+        cur = await conn.execute(
+            "SELECT key, value FROM core_memory WHERE layer=? AND user_id=? AND source='identity_mirror' AND key LIKE ?",
+            (layer, user_id, f"canon:{kind}:mir:{ns or path.stem}:%"),
+        )
+        for row in await cur.fetchall():
+            stored[str(row["key"])] = str(row["value"])
+    stale = sorted(k for k, chunk in planned.items() if k in stored and stored[k] != chunk)
+    missing = sorted(k for k in planned if k not in stored)
+    extra = sorted(k for k in stored if k not in planned)
+    return {"stale": stale, "missing": missing, "extra": extra}
 
 
 async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str, dry: bool = False) -> tuple[int, list[str]]:
@@ -171,6 +206,8 @@ def main() -> int:
     ap.add_argument("--user", default="default")
     ap.add_argument("--importance", type=float, default=0.85)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--check", action="store_true", help="report drift vs the last mirror (read-only); exit 1 on drift")
+    ap.add_argument("--ns", default=None, help="key namespace (default: file stem); required to disambiguate different files sharing a stem")
     ap.add_argument("--migrate-sha-keys", action="store_true", help="retire audited sha-keyed legacy mirror rows first")
     ns = ap.parse_args()
     files = [f for f in ns.file if f.exists()]
@@ -181,14 +218,25 @@ def main() -> int:
     async def _run() -> int:
         app = AppContext()
         mem = app.mm.agent_memory(ns.user) if ns.layer == "agent" else app.mm.user_memory(ns.user)
+        if ns.check:
+            drift = await check_drift(files, ns.kind, ns.layer, ns.user, connection_manager, ns=ns.ns)
+            for class_, keys in drift.items():
+                for key in keys:
+                    print(f"{class_}: {key}")
+            total = sum(len(v) for v in drift.values())
+            print(f"check: {'clean' if not total else f'{total} drift item(s)'}")
+            await connection_manager.close_all()
+            return total
         if ns.migrate_sha_keys:
             removed, unmapped = await migrate_sha_keys(mem, connection_manager, ns.user, ns.layer, ns.dry_run)
             print(f"migrate{' (dry)' if ns.dry_run else ''}: {removed} legacy row(s), {len(unmapped)} unmapped kept")
-        total = await mirror(files, ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run, mem, connection_manager)
+        total = await mirror(files, ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run, mem, connection_manager, ns=ns.ns)
         await connection_manager.close_all()
         return total
 
     n = asyncio.run(_run())
+    if ns.check:
+        return 1 if n else 0
     print(f"total: {n} chunk(s), dry_run={ns.dry_run}")
     return 0
 
