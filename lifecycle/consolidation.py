@@ -47,6 +47,21 @@ def _looks_like_dump(text: str) -> bool:
     return bool(_TRANSCRIPT_HEAD.match(text))
 
 
+# System-injected boilerplate that is not user memory: SKILL.md bodies (a `---`
+# frontmatter opening on a `name:` key) and cron delivery preambles. `[IMPORTANT:`
+# reminders are already cut by _TRANSCRIPT_HEAD (leading `[`). Matched at the head
+# so a genuine memory that merely mentions a cron job is never dropped.
+_SKILL_BODY_HEAD = re.compile(r"\s*---\s*\r?\n\s*name\s*:")
+_CRON_PREAMBLE = re.compile(r"scheduled\s+cron\s+job", re.IGNORECASE)
+
+
+def _looks_like_system_injection(text: str) -> bool:
+    """Detect skill-body frontmatter or a cron-delivery preamble (not user memory)."""
+    if _SKILL_BODY_HEAD.match(text):
+        return True
+    return bool(_CRON_PREAMBLE.search(text[:400]))
+
+
 def _slug(text: str) -> str:
     """Filename-safe key suffix: alnum/_/-/CJK survive, punctuation collapses."""
     cleaned = re.sub(r"[^\w-]+", "_", text, flags=re.UNICODE).strip("_")

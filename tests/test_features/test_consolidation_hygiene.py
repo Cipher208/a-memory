@@ -49,6 +49,36 @@ def test_prose_summaries_pass(summary):
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        # skill body frontmatter (the 18 leaked SKILL.md bodies)
+        "---\nname: agent-reach\ndescription: internet access\n---\n# Skill\nbody text",
+        # cron delivery preamble (memory_search 'scheduled cron job' top-1 junk)
+        "You are running a scheduled cron job. Task: send the morning digest.",
+        "Cronjob Response: context-architect-monthly\n(scheduled cron job, output below)",
+    ],
+)
+def test_system_injection_detected(text):
+    from lifecycle.consolidation import _looks_like_system_injection
+
+    assert _looks_like_system_injection(text), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Я за то, чтобы cron job на бэкап стоял по воскресеньям",  # genuine memory that mentions a cron
+        "Deploy pipeline v2 shipped to prod after green gate",
+        "Вечером 11-го — полное восстановление личности Эли",
+    ],
+)
+def test_system_injection_does_not_drop_real_memory(text):
+    from lifecycle.consolidation import _looks_like_system_injection
+
+    assert not _looks_like_system_injection(text), text
+
+
+@pytest.mark.parametrize(
     "text,want",
     [
         ("Кухня-кабинет: кисонька", "кухня-кабинет_кисонька"),
