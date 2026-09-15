@@ -73,6 +73,25 @@ def _parent_refs(*refs: str | None) -> dict[str, Any] | None:
     return {"parents": parents} if parents else None
 
 
+# 2026-09-15 starvation fix: episodes that the promotion sweep has already
+# looked at (promoted or permanently rejected) carry this tag and leave the
+# candidate set, so the newest-10 window advances instead of pinning.
+_L4_SEEN = "l4:seen"
+
+
+async def _mark_seen(conn: Any, episode_id: int, tags_json: str | None) -> None:
+    """Append the ``l4:seen`` tag to an episode's JSON tag list (idempotent)."""
+    try:
+        tags = json.loads(tags_json or "[]")
+    except (json.JSONDecodeError, TypeError):
+        tags = []
+    if _L4_SEEN in tags:
+        return
+    tags.append(_L4_SEEN)
+    await conn.execute("UPDATE episodes SET tags = ? WHERE episode_id = ?", (json.dumps(tags), episode_id))
+    await conn.commit()
+
+
 def passes_promotion_gate(item: dict[str, Any], min_importance: float = 0.7) -> bool:
     """Would consolidate_staging promote this item — same predicate, no drift.
 
@@ -189,8 +208,9 @@ class ConsolidationEngine:
     ) -> int:
         """Promote high-weight episodes of THIS engine's layer into L4 facts.
 
-        Idempotent: the L4 key is derived from the summary, re-runs update
-        in place instead of duplicating.
+        Idempotent: promoted episodes are marked ``l4:seen`` and leave the
+        candidate set, so the newest-10 window drains forward instead of
+        pinning on the same rows every sweep (2026-09-15 starvation fix).
         """
         from core.memory import CoreMemory
 
@@ -198,8 +218,11 @@ class ConsolidationEngine:
         epi_db = episodic_db or "memory.db"
         epi_conn = await self._cm.get(epi_db)
         cursor = await epi_conn.execute(
-            "SELECT episode_id, summary, emotional_weight, tags FROM episodes WHERE layer=? AND user_id=? AND emotional_weight > ? ORDER BY created_at DESC LIMIT 10",
-            (self.layer, user_id, min_weight),
+            "SELECT episode_id, summary, emotional_weight, tags FROM episodes "
+            "WHERE layer=? AND user_id=? AND emotional_weight > ? "
+            "AND (tags IS NULL OR tags NOT LIKE ?) "
+            "ORDER BY created_at DESC LIMIT 10",
+            (self.layer, user_id, min_weight, f'%"{_L4_SEEN}"%'),
         )
         rows = await cursor.fetchall()
 
@@ -215,6 +238,7 @@ class ConsolidationEngine:
                     "skipping transcript-shaped episode %s from L4 promotion",
                     row["episode_id"],
                 )
+                await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
                 continue
             # Audit 05.09 (P1): an event with live decay (question/hypothesis/
             # context) must not become an eternal L4 fact. Facts with near-zero
@@ -228,6 +252,7 @@ class ConsolidationEngine:
             kind = kind_for_text(summary)
             if get_policy(kind).decay_rate > 0.01:
                 logger.debug("episode %s is event-kind (%s), stays in L3", row["episode_id"], kind.value)
+                await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
                 continue
             key = _canonical_key(summary, kind)
             # F1 2026-09-12: the transcript + event-kind gates miss the
@@ -236,6 +261,7 @@ class ConsolidationEngine:
             # Status-broadcast follow-up: close-out echoes are not facts either.
             if is_dialogic(summary) or is_status_broadcast(summary) or key.endswith(":misc"):
                 logger.debug("episode %s is conversational/unkeyable, stays in L3", row["episode_id"])
+                await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
                 continue
             entry_id = await cm.save(
                 user_id,
@@ -248,6 +274,7 @@ class ConsolidationEngine:
             )
             with contextlib.suppress(Exception):
                 await record_transition(self._cm, user_id, "episode", f"episode:{row['episode_id']}", "l4", f"core:{entry_id}", "episode_promotion")
+            await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
             consolidated += 1
         return consolidated
 
