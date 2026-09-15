@@ -123,3 +123,16 @@ def test_processed_episodes_never_rescanned(tmp_path):
     # transcripts were scanned and marked, not promoted
     first_transcript_tags = _tags_for(cm, 4)
     assert "l4:seen" in first_transcript_tags
+
+
+def test_first_sweep_promotes_older_gold_behind_newer_junk(tmp_path):
+    """Drain order must be FIFO: the stranded old promotable backlog is the
+    point of the fix — a single sweep must reach the OLDEST unseen episodes,
+    not re-scan the newest window that just filled with today's phatic junk."""
+    cm = _seed(tmp_path, n_promotable=5, n_transcripts=12)
+
+    async def run():
+        engine = ConsolidationEngine(cm=cm, layer="user")
+        return await engine.consolidate_episodes("u1")
+
+    assert asyncio.run(run()) == 5

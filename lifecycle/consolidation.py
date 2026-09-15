@@ -62,6 +62,20 @@ def _looks_like_system_injection(text: str) -> bool:
     return bool(_CRON_PREAMBLE.search(text[:400]))
 
 
+# Arc-snapshot echo: the hermes LCM hands back a structural POINTER to its own
+# compression node as the session summary — "61 msgs; started with: [Session
+# Arc Summary (d1, node 12)] # Arc Snapshot …". The digit head passes
+# _looks_like_dump/_TRANSCRIPT_HEAD, so be46696 missed this producer; 99 L3 rows
+# and counting (last one 2026-09-15 23:31, after the guard deploy). Anchored
+# forms only — prose that discusses the format stays saveable.
+_ARC_ECHO = re.compile(r"^\s*\d+\s+msgs;\s*started with:|Session Arc Summary \(")
+
+
+def _looks_like_arc_echo(text: str) -> bool:
+    """Detect the LCM arc-snapshot pointer echo (not a real summary)."""
+    return bool(_ARC_ECHO.search(text[:200]))
+
+
 def _slug(text: str) -> str:
     """Filename-safe key suffix: alnum/_/-/CJK survive, punctuation collapses."""
     cleaned = re.sub(r"[^\w-]+", "_", text, flags=re.UNICODE).strip("_")
@@ -221,7 +235,7 @@ class ConsolidationEngine:
             "SELECT episode_id, summary, emotional_weight, tags FROM episodes "
             "WHERE layer=? AND user_id=? AND emotional_weight > ? "
             "AND (tags IS NULL OR tags NOT LIKE ?) "
-            "ORDER BY created_at DESC LIMIT 10",
+            "ORDER BY created_at ASC LIMIT 10",
             (self.layer, user_id, min_weight, f'%"{_L4_SEEN}"%'),
         )
         rows = await cursor.fetchall()

@@ -160,3 +160,27 @@ async def test_thin_advice_events() -> None:
     r1 = await hooks._context_threshold({"user_id": "u1"})
     r2 = await hooks._memory_pressure({"user_id": "u1"})
     assert "advice" in r1 and "advice" in r2
+
+
+@pytest.mark.asyncio
+async def test_session_ended_skips_arc_echo_summary() -> None:
+    """A 'summary' that is the LCM arc-snapshot pointer echo (`61 msgs; started
+    with: [Session Arc Summary (d1, node 12)] # Arc Snapshot …`) is not memory —
+    second live producer found 2026-09-15; be46696 missed it because the head is
+    prose-safe digits."""
+    hooks = uh.UserHooks()
+    mem = _Mem()
+    junk = "61 msgs; started with: [Session Arc Summary (d1, node 12)] # Arc Snapshot — Lucy & Lily (2026-09-15) …"
+    result = await hooks._session_ended({"user_id": "u1", "summary": junk}, mem=mem)
+    assert result["saved"] is False
+    assert mem.saved == []
+
+
+def test_arc_echo_predicate_shape() -> None:
+    from lifecycle.consolidation import _looks_like_arc_echo
+
+    assert _looks_like_arc_echo("61 msgs; started with: [anything]")
+    assert _looks_like_arc_echo("Session Arc Summary (d1, node 12) # Arc Snapshot body")
+    # real memory that merely discusses the format must survive
+    assert not _looks_like_arc_echo("Итог: 61 msgs обработано без потерь")
+    assert not _looks_like_arc_echo("Обсудили, что формат Arc Snapshot надо чинить гейдом")
