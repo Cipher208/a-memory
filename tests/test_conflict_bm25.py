@@ -49,6 +49,38 @@ def test_smart_similarity_empty_inputs():
 
 
 @pytest.mark.asyncio
+async def test_benign_conversational_content_not_stored_as_conflict(tmp_path):
+    """Greetings/thanks are phatic, never durable facts -> must not enter the
+    conflict store at all (they were 138/138 of the false 'contradictions')."""
+    from shared.connection import AsyncConnectionManager
+
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    cr = ConflictResolver(cm=cm)
+    await cr._init_db()
+
+    assert (await cr.check("u", "Доброе утро, зайка моя"))["is_conflict"] is False
+    assert (await cr.check("u", "Спасибо, мамочка, ты умница"))["is_conflict"] is False
+
+    conn = await cm.get("memory.db")
+    cur = await conn.execute("SELECT COUNT(*) FROM memory_conflicts WHERE user_id='u'")
+    assert (await cur.fetchone())[0] == 0  # benign skipped, conflict table stays clean
+
+
+@pytest.mark.asyncio
+async def test_real_near_duplicate_facts_still_conflict(tmp_path):
+    """Regression guard: the benign gate must not break detection on fact-like text."""
+    from shared.connection import AsyncConnectionManager
+
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    cr = ConflictResolver(cm=cm)
+    await cr._init_db()
+
+    await cr.check("u", "The deployment pipeline uses PostgreSQL for durable state in production")
+    res = await cr.check("u", "The deployment pipeline uses Postgres for durable state in production systems")
+    assert res["is_conflict"] is True
+
+
+@pytest.mark.asyncio
 async def test_resolve_archives_and_audits(tmp_path):
     from shared.connection import AsyncConnectionManager
 

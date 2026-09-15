@@ -87,8 +87,30 @@ class ConflictResolver:
         """,
         )
 
+    def _is_benign(self, text: str) -> bool:
+        """Phatic/status/system input that can never be a durable contradictory fact.
+
+        check() used to INSERT every non-conflicting message into memory_conflicts
+        and pair on a loose 0.3 similarity, so ordinary greetings/thanks became
+        'contradictions' (138/138 of the audit's conflict FAIL). Reuse the same
+        content-shape predicates the L4 promotion gate trusts.
+        """
+        from lifecycle.consolidation import _looks_like_dump, _looks_like_system_injection, _looks_like_transcript
+        from shared.broadcast import is_status_broadcast
+        from shared.dialogue import is_dialogic
+
+        return (
+            is_dialogic(text)
+            or is_status_broadcast(text)
+            or _looks_like_dump(text)
+            or _looks_like_transcript(text)
+            or _looks_like_system_injection(text)
+        )
+
     async def check(self, user_id: str, new_content: str, min_similarity: float = 0.3) -> dict[str, Any]:
         await self._init_db()
+        if self._is_benign(new_content):
+            return {"content": new_content, "is_conflict": False}
         conn = await self._cm.get(DB_NAME)
         keywords = [w for w in new_content.split() if len(w) > 3][:5]
         if not keywords:
