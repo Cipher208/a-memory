@@ -35,6 +35,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# SQLite busy wait (ms), single source for the async + sync connect paths.
+# 5000 was too tight on this VPS: swap thrash stretches other writers'
+# lock-hold time, so decay/consolidation raced "database is locked" and the
+# WAL starved of checkpoints (hermes base hit 56 MB WAL / 69 MB db, 2026-09-15).
+BUSY_TIMEOUT_MS = 15000
+
 # Registry of every aiosqlite connection handed out by any manager.
 # aiosqlite worker threads are non-daemon and block in queue.get() forever,
 # so a connection dropped without close() (test fixtures do _conns.clear())
@@ -239,7 +245,7 @@ class AsyncConnectionManager:
         await conn.execute("PRAGMA auto_vacuum=INCREMENTAL")  # new DBs only
         if _wal_enabled():
             await conn.execute("PRAGMA journal_mode=WAL")
-        await conn.execute("PRAGMA busy_timeout=5000")
+        await conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         await conn.execute("PRAGMA synchronous=NORMAL")
         # Cap WAL size: a starved auto-checkpoint must not grow a multi-GB WAL
         # (2026-09-13: 3.9 GB mimocode WAL held open by two hung CLI orphans).
@@ -261,7 +267,7 @@ class AsyncConnectionManager:
             conn.execute("PRAGMA auto_vacuum=INCREMENTAL")  # new DBs only
             if _wal_enabled():
                 conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA cache_size=-64000")  # 64MB page cache

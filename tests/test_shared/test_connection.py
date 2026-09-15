@@ -46,8 +46,29 @@ def test_new_db_pragmas(tmp_path):
     asyncio.run(t())
 
 
+def test_busy_timeout_raised_for_vps(tmp_path):
+    """busy_timeout must be 15000 ms, not the old 5000.
+
+    On a memory-pressured VPS, swap thrash stretches other writers' lock-hold
+    time; 5000 made decay/consolidation race 'database is locked' and starve
+    the WAL of checkpoints. Guards the value against silent revert.
+    """
+    import asyncio
+
+    from shared.connection import AsyncConnectionManager
+
+    async def t():
+        cm = AsyncConnectionManager(base_dir=str(tmp_path))
+        conn = await cm.get(f"busy_{_uid()}.db")
+        cur = await conn.execute("PRAGMA busy_timeout")
+        assert (await cur.fetchone())[0] == 15000
+
+    asyncio.run(t())
+
+
 def test_composite_indexes_exist(tmp_path):
     """A2.9: hot-query composite indexes are created on init."""
+
     import asyncio
 
     from core.episodic import EpisodicMemory
