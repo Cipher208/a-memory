@@ -232,6 +232,14 @@ class UserHooks:
         summary = (ctx.get("summary") or "").strip()
         if not summary or mem is None:
             return {"saved": False, **result}
+        # A1-consistent guard at this producer: when the harness hands back a raw
+        # system/cron preamble (or a dump) as the "summary" instead of a real
+        # recap, it is not memory — storing it re-pollutes L3 recall (the
+        # `[IMPORTANT: … scheduled cron job …]` episodes). Reuse the same predicates.
+        from lifecycle.consolidation import _looks_like_dump, _looks_like_system_injection
+
+        if _looks_like_dump(summary) or _looks_like_system_injection(summary):
+            return {"saved": False, "skipped": "system_injection", **result}
         await mem.l3.save(user_id, summary[:500], 0.6, ["session_summary"])
         return {"saved": True, **result}
 

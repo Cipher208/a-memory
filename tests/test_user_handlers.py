@@ -92,6 +92,19 @@ async def test_session_ended_without_summary_skips() -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_ended_skips_system_injection_summary() -> None:
+    """A 'summary' that is actually a raw system/cron preamble must NOT become a
+    session_summary L3 episode — the pollution class fixed at its last live
+    producer (consistent with A1's auto_save_text guard)."""
+    hooks = uh.UserHooks()
+    mem = _Mem()
+    junk = "[IMPORTANT: You are running as a scheduled cron job. DELIVER this report now please."
+    result = await hooks._session_ended({"user_id": "u1", "summary": junk}, mem=mem)
+    assert result["saved"] is False
+    assert mem.saved == []
+
+
+@pytest.mark.asyncio
 async def test_new_message_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     import hooks.external as ext
 
