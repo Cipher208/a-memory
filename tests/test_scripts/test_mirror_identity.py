@@ -41,6 +41,24 @@ def test_split_chunks_returns_headed_parts() -> None:
     assert all(len(c[2]) >= 30 for c in chunks)
 
 
+def test_split_chunks_cuts_at_auto_drain_marker() -> None:
+    """The hourly memory-drain cron writes transient facts below the
+    `# === AUTO-DRAIN BELOW ===` marker and truncates them. That region must
+    never reach the L4 mirror (canon) or move the drift-check hash (which would
+    re-fire the session-start mirror-drift guard every hour)."""
+    from scripts.mirror_identity import split_chunks
+
+    md = (
+        "## Stable\n- durable profile line, comfortably above the 30-char floor here.\n\n"
+        "# === AUTO-DRAIN BELOW ===\n"
+        "## Drained\n- transient drained fact that must not be mirrored, plenty long.\n"
+    )
+    text = "\n".join(c[2] for c in split_chunks(md))
+    assert "durable profile line" in text
+    assert "transient drained fact" not in text
+    assert "AUTO-DRAIN" not in text
+
+
 _V1 = "## Личность\n- v1 body text that is clearly long enough for the chunk filter here.\n"
 _V2 = "## Личность\n- v2 body text changed, but the section identity must stay the same.\n"
 _DROP = "## Другая\n- a replacement section that no longer mentions the old one whatsoever.\n"

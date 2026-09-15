@@ -30,13 +30,29 @@ from shared.constants import DB_NAME
 
 LIMIT = 2000
 
+# The hourly memory-drain cron writes transient facts into identity files below
+# this marker and then truncates them (see ~/.hermes/AGENTS.md). Content below
+# the marker must never be mirrored into L4 canon nor move the drift-check hash.
+_DRAIN_MARKER_RE = re.compile(r"(?mi)^#\s*=+\s*AUTO-DRAIN\b.*$")
+
+
+def _stable_prefix(md: str) -> str:
+    """Return md up to (not including) the first AUTO-DRAIN marker line."""
+    m = _DRAIN_MARKER_RE.search(md)
+    return md[: m.start()] if m else md
+
 
 def split_chunks(md: str) -> list[tuple[str, int, str]]:
     """Split into (heading, part_index, text); parts respect the LIMIT cap.
 
     Heading (not content) defines identity: body edits supersede the same
     temporal row instead of minting a new immortal one (spec S3.1).
+
+    The transient region below the AUTO-DRAIN marker is dropped first, so both
+    the mirror and the drift-check see only the durable prefix (drain churn can
+    then neither pollute canon nor re-fire the session-start mirror-drift guard).
     """
+    md = _stable_prefix(md)
     out: list[tuple[str, int, str]] = []
     for p in re.split(r"(?m)^(?=## )", md):
         p = p.strip()
