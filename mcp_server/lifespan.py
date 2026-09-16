@@ -42,6 +42,15 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                 await asyncio.sleep(900)  # 15 minutes
                 await forgetting_system.cleanup()
 
+                # 2026-09-16: central liveness sweep (see autohooks/daemon.py) —
+                # dangling edges from stale-snapshot writers are dust, not debt.
+                from lifecycle.graph_sanitation import prune_dangling_edges
+                from shared.connection import connection_manager
+
+                pruned = await prune_dangling_edges(connection_manager)
+                if pruned:
+                    logging.getLogger(__name__).info("dangling-edge sweep: pruned %d", pruned)
+
                 # Run compaction every 1 hour
                 now = asyncio.get_event_loop().time()
                 if now - last_compaction >= 3600:

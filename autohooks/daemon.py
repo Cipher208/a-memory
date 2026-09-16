@@ -14,7 +14,12 @@ import contextlib
 import json
 import logging
 import signal
+import time
 from typing import TYPE_CHECKING, Any
+
+# Liveness-sweep gate: run the central dangling-edge prune at most this often
+# (seconds) from the daemon loop. See lifecycle.graph_sanitation.prune_dangling_edges.
+_EDGE_PRUNE_SECONDS = 600.0
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -79,6 +84,7 @@ async def run_daemon(
 
         iterations = 0
         last_pressure = 0
+        last_prune = 0.0
         while not stop.is_set():
             batch = source.fetch_after(cursor, cfg.batch_limit)
             for msg in batch.messages:
@@ -119,6 +125,19 @@ async def run_daemon(
             if size > 40 and size - last_pressure >= 10:
                 await dispatch("memory_pressure", cfg.layer, cfg.user_id, {"l1_size": size}, mem, graph, rag)
                 last_pressure = size
+            # 2026-09-16: central liveness sweep — a frozen read-snapshot writer
+            # (this daemon included) can recreate edges toward purged nodes;
+            # housekeeping keeps dangling rows at dust scale. Failures must not
+            # break the poll loop.
+            now_mono = time.monotonic()
+            if graph is not None and now_mono - last_prune >= _EDGE_PRUNE_SECONDS:
+                last_prune = now_mono
+                with contextlib.suppress(Exception):
+                    from lifecycle.graph_sanitation import prune_dangling_edges
+
+                    pruned = await prune_dangling_edges(graph._cm)
+                    if pruned:
+                        logger.info("dangling-edge sweep: pruned %d", pruned)
             iterations += 1
             if max_iterations is not None and iterations >= max_iterations:
                 return

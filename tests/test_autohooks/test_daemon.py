@@ -67,6 +67,28 @@ async def test_first_run_baseline_no_replay(tmp_path: Path) -> None:
     assert load_cursor(tmp_path / "cursor.json") == 42
 
 
+async def test_daemon_sweeps_dangling_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The daemon loop runs the central liveness sweep (stale-WAL-snapshot guard,
+    2026-09-16): first iteration prunes via the graph's connection manager."""
+    calls: list[Any] = []
+
+    async def fake_prune(cm: Any) -> int:
+        calls.append(cm)
+        return 7
+
+    monkeypatch.setattr("lifecycle.graph_sanitation.prune_dangling_edges", fake_prune)
+
+    class _Graph:
+        _cm = "stub-cm"
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        return {"results": [], "handler_count": 0}
+
+    src = _FakeSource(batches=[], max_id=1)
+    await run_daemon(_cfg(tmp_path), src, mem=None, graph=_Graph(), rag=None, max_iterations=1, dispatch=_dispatch)
+    assert calls == ["stub-cm"]
+
+
 async def test_dispatch_payload_and_cursor_advance(tmp_path: Path) -> None:
     dispatched: list[dict[str, Any]] = []
 

@@ -17,6 +17,27 @@ from __future__ import annotations
 import statistics
 from typing import Any
 
+from shared.constants import DB_NAME
+
+
+async def prune_dangling_edges(cm: Any) -> int:
+    """Delete edges whose endpoint no longer exists in epi_nodes; returns deleted count.
+
+    Central liveness guard (2026-09-16): a writer process holding a frozen WAL
+    read-snapshot (the pinned autohooks daemon case) can re-insert edges toward
+    purged nodes even though every writer reads a "live" node list at its own
+    cycle start. Rather than gating each writer, housekeeping loops (mcp lifespan
+    + autohooks daemon) sweep here: while the sweep ticks, dangling rows are
+    dust, not debt. Single statement; O(|E|) without a join per row.
+    """
+    conn = await cm.get(DB_NAME)
+    cur = await conn.execute(
+        "DELETE FROM epi_edges WHERE source_id NOT IN (SELECT node_id FROM epi_nodes) OR target_id NOT IN (SELECT node_id FROM epi_nodes)"
+    )
+    await conn.commit()
+    return int(cur.rowcount or 0)
+
+
 # --- (a) lateral inhibition (SYNAPSE) ---
 
 INHIBITION_BETA = 0.15

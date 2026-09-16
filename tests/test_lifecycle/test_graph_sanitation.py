@@ -61,6 +61,31 @@ async def _edge_weight(a: int, b: int, relation: str) -> float | None:
 
 
 @pytest.mark.asyncio
+async def test_prune_dangling_edges(db):
+    """Central liveness sweep (2026-09-16): edges whose endpoints no longer exist
+    are deleted in one pass; valid edges untouched; idempotent."""
+    from lifecycle.graph_sanitation import prune_dangling_edges
+
+    a, b = await _node("dangling prune один"), await _node("dangling prune два")
+    conn = await connection_manager.get(DB_NAME)
+    await _heuristic_edge(a, b, "same_session", 0.3)
+    # dangling rows referencing never-existing node ids (stale-writer artifact)
+    await conn.execute(
+        "INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, 'same_session', 0.3, ?, '[]')",
+        (a, 999_999, T),
+    )
+    await conn.execute(
+        "INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, 'tagged', 0.4, ?, '[]')", (999_998, b, T)
+    )
+    await conn.commit()
+
+    assert await prune_dangling_edges(connection_manager) == 2
+    row = await (await conn.execute("SELECT COUNT(*) c FROM epi_edges WHERE source_id=? AND target_id=?", (min(a, b), max(a, b)))).fetchone()
+    assert row["c"] == 1  # the valid edge survived
+    assert await prune_dangling_edges(connection_manager) == 0  # idempotent
+
+
+@pytest.mark.asyncio
 async def test_lateral_inhibition_weak_edge_suppressed_by_strong_cluster(db):
     hub = await _node("хаб-узел кластера")
     strong = [await _node(f"сильный сосед {i}") for i in range(7)]
