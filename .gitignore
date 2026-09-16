@@ -28,3 +28,4 @@ site/
 .venv_test/
 .pytest_cache/
 reports/
+scripts/purge-archive/
