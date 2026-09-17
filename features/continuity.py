@@ -136,12 +136,13 @@ async def session_recap(
 
     # Axis 1: last substantive closed session — summary, topics, state changes.
     try:
-        from core.session import SessionStore
+        from core.session import SessionStore, is_service_session
 
         sessions = await SessionStore().get_recent_sessions(user_id, 3)
         closed = _pick_substantive(sessions)
         if closed is not None:
-            parts = [f"last session: {closed.summary[:160]}"]
+            head = "last session" if not is_service_session(closed) else "last session (service, 0 messages)"
+            parts = [f"{head}: {closed.summary[:160]}"]
             if closed.topics:
                 parts.append(f"topics: {', '.join(str(t) for t in closed.topics[:5])}")
             if closed.state_deltas:

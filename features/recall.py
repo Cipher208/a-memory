@@ -121,6 +121,30 @@ async def _collect_session(mem: Any, user_id: str, cutoff: float) -> list[tuple[
     return out
 
 
+async def _collect_episodes(mem: Any, user_id: str, query: str, limit: int = 5) -> list[_Candidate]:
+    """Axis episodes: query-relevant L3 episodes, newest first (Elli 16.09 D3).
+
+    Semantic recall searches wiki-only rag_pages; recent session work lives
+    in episodes and was invisible to it. EpisodicMemory.search is tokenized
+    LIKE over summaries, newest-first — keyword-relevant plus recency-ordered.
+    Mem fakes without .search degrade to [] (old tests stay green).
+    """
+    out: list[_Candidate] = []
+    try:
+        search = getattr(mem.l3, "search", None)
+        if search is None:
+            return out
+        for e in await search(user_id, query, limit) or []:
+            summary = str(getattr(e, "summary", "") or "").strip()
+            if not summary:
+                continue
+            content = _date_prefix({"created_at": getattr(e, "created_at", 0)}) + summary[:300]
+            out.append(("episodes", 0.65, content, (_norm(summary),)))
+    except Exception as exc:
+        logger.warning("recall axis failed: %s", exc)
+    return out
+
+
 async def _collect_triggered(user_id: str, query: str) -> list[str]:
     """E11: disclosure triggers — operator rules surface matching content (score 0.95)."""
     out: list[str] = []
@@ -244,6 +268,8 @@ async def recall_protocol(
 
     for score, content in await _collect_session(mem, user_id, cutoff):
         await _add("session", score, content)
+    for axis, score, content, extra in await _collect_episodes(mem, user_id, query):
+        await _add(axis, score, content, extra)
     for content in await _collect_triggered(user_id, query):
         await _add("triggered", 0.95, content)
     if rag is not None:

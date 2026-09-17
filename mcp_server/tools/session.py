@@ -40,6 +40,7 @@ async def memory_session_end(
     summary: str = "",
     topics: list[str] | None = None,
     state_deltas: dict[str, Any] | None = None,
+    message_count: int = 0,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """End a session and save summary + optional engagement metadata for quality scoring."""
@@ -52,7 +53,9 @@ async def memory_session_end(
     if rate_limit:
         return rate_limit
 
-    await _get_memory(app, layer, user_id).l2.close_session(session_id, summary, state_deltas=state_deltas, topics=topics)
+    await _get_memory(app, layer, user_id).l2.close_session(
+        session_id, summary, state_deltas=state_deltas, topics=topics, message_count=message_count
+    )
 
     await _fire_hook("consolidation", layer, {"trigger": "session_end", "session_id": session_id, "user_id": user_id})
     await _fire_hook("state_delta", layer, {"trigger": "session_end", "session_id": session_id, "summary": summary, "user_id": user_id})

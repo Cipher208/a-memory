@@ -39,6 +39,16 @@ class SessionRecord:
     quality_parts: dict[str, float] | None = None
 
 
+def is_service_session(session: Any) -> bool:
+    """Zero-message runs (cron probes, CLI audits) are service, not work.
+
+    Single source for the rule: service rows may surface (silence is worse),
+    but must always be labeled so they never pose as "what I was doing"
+    (Elli 16.09 D2/D5).
+    """
+    return int(getattr(session, "message_count", 0) or 0) <= 0
+
+
 class SessionStore:
     def __init__(self, cm: AsyncConnectionManager | None = None) -> None:
         self._cm = cm or connection_manager
@@ -131,11 +141,12 @@ class SessionStore:
             logger.warning("SessionStore.close_session: scoring failed for %s: %s", session_id, exc)
 
         await conn.execute(
-            "UPDATE sessions SET summary=?, state_deltas=?, topics=?, ended_at=?, quality_score=?, quality_parts=? WHERE session_id=?",
+            "UPDATE sessions SET summary=?, state_deltas=?, topics=?, message_count=?, ended_at=?, quality_score=?, quality_parts=? WHERE session_id=?",
             (
                 summary,
                 json.dumps(state_deltas),
                 json.dumps(topics),
+                message_count or row["message_count"] or 0,
                 time.time(),
                 score,
                 parts_json,
@@ -156,9 +167,15 @@ class SessionStore:
 
     async def get_session_summary(self, user_id: str) -> str:
         sessions = await self.get_recent_sessions(user_id, 3)
-        if not sessions:
+        lines = []
+        for s in sessions:
+            if not s.summary:
+                continue
+            tag = "" if not is_service_session(s) else " [service]"
+            lines.append(f"-{tag} {s.summary[:80]}")
+        if not lines:
             return "No sessions yet."
-        return "\n".join([f"- {s.summary[:80]}" for s in sessions if s.summary])
+        return "\n".join(lines)
 
     async def count_sessions(self, user_id: str | None = None) -> int:
         conn = await self._cm.get(DB_NAME)

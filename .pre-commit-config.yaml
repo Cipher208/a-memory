@@ -21,7 +21,9 @@ repos:
     hooks:
       - id: skylos
         name: skylos
-        entry: skylos .
+        # .venv-embeddings is vendored third-party code (.venv precedent);
+        # without the exclude skylos scans ~12k vendored files and hangs.
+        entry: skylos . --exclude-folder .venv-embeddings
         language: system
         types: [python]
         pass_filenames: false
