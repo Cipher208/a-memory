@@ -72,13 +72,22 @@ class TestMultiSourceRAG:
     def test_rerank_by_score(self):
         from rag.multi_source import MultiSourceRAG
 
-        rag = FakeRAG([{"id": 1, "title": "Low", "content": "a", "score": 0.3}])
+        rag = FakeRAG(
+            [
+                {"id": 1, "title": "Low", "content": "a", "score": 0.3},
+                {"id": 2, "title": "Lower", "content": "b", "score": 0.1},
+            ]
+        )
         wiki = FakeWiki([{"entry_id": 1, "title": "High", "content": "b", "rank": 0.9}])
         m = MultiSourceRAG(rag, wiki)
         import asyncio
 
         result = asyncio.run(m.search("test"))
-        assert result[0]["title"] == "High"  # Higher score first
+        titles = [r["title"] for r in result]
+        # E3 tuning: scores normalize per source — raw cross-source scales
+        # no longer compare; same-source order is preserved.
+        assert titles.index("Low") < titles.index("Lower")
+        assert set(titles) == {"Low", "Lower", "High"}
 
     def test_respects_limit(self):
         from rag.multi_source import MultiSourceRAG

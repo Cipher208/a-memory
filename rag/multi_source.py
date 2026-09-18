@@ -67,6 +67,49 @@ def _minmax_actr(activations: list[float]) -> list[float]:
     return [_ACTR_FLOOR + span * (a - lo) / (hi - lo) for a in activations]
 
 
+# E3 tuning (18.09): final merge normalized per source + recency.
+# Raw per-source scores live on incomparable scales (RRF ~0.03, FTS rank,
+# ACT-R products) — sorting them raw buries fresh short hits under old essays.
+_RECENCY_HALF_LIFE_DAYS = 30.0
+_RECENCY_BONUS = 0.5
+
+
+def _recency_mult(created_at: float | None, now: float) -> float:
+    """1.0 without timestamp; up to 1.5 for brand-new hits (half-life 30d)."""
+    if not created_at:
+        return 1.0
+    age_days = max(0.0, (now - float(created_at)) / 86400.0)
+    return 1.0 + _RECENCY_BONUS * (0.5 ** (age_days / _RECENCY_HALF_LIFE_DAYS))
+
+
+def merge_ranked(results: list[dict[str, Any]], now: float | None = None) -> list[dict[str, Any]]:
+    """Merge per-source hits.
+
+    Min-max normalize within each source group, apply recency multiplier
+    where created_at exists, sort descending.
+    """
+    now = now if now is not None else time.time()
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in results:
+        groups.setdefault(str(r.get("source", "")), []).append(r)
+    scored = []
+    for group in groups.values():
+        raw = [float(r.get("score") or 0.0) for r in group]
+        lo, hi = min(raw), max(raw)
+        span = hi - lo
+        for r, s in zip(group, raw, strict=True):
+            norm = (s - lo) / span if span > 1e-12 else 1.0
+            final = max(0.0, norm) * _recency_mult(r.get("created_at"), now)
+            scored.append((final, r))
+    scored.sort(key=lambda t: -t[0])
+    ranked = []
+    for final, r in scored:
+        r = dict(r)
+        r["merged_score"] = final
+        ranked.append(r)
+    return ranked
+
+
 class MultiSourceRAG:
     def __init__(self, rag: Any, wiki: Any, cm: Any | None = None):
         self.rag = rag
@@ -153,9 +196,8 @@ class MultiSourceRAG:
             seen.add(key)
             dedup.append(r)
 
-        # Rerank: priority — explicit score; degraded (None) → 0
-        dedup.sort(key=lambda r: -(r.get("score") or 0.0))
-        return dedup[:limit]
+        # Rerank: per-source normalized + recency (E3); degraded (None) → 0
+        return merge_ranked(dedup)[:limit]
 
     async def _from_rag(self, query: str, user_id: str, limit: int, strategy: str, weight: float) -> list[dict[str, Any]]:
         rag_results: list[dict[str, Any]] = await self.rag.search(query, user_id=user_id, strategy=strategy, limit=limit)
