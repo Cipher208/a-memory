@@ -120,3 +120,30 @@ async def test_scheduler_ignores_old(cm, monkeypatch):
     s = ImportanceScheduler(scheduler_config=SchedulerConfig(only_recent_days=30))
     stats = await s.run_once()
     assert stats["rescored"] == 0
+
+
+@pytest.mark.asyncio
+async def test_scheduler_spares_curated_sources(cm, monkeypatch):
+    """Authored entries must not be steamrolled by content heuristics (E1 18.09)."""
+    monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
+    conn = await cm.get("memory.db")
+    await conn.execute("ALTER TABLE core_memory ADD COLUMN source TEXT DEFAULT ''")
+    await conn.execute(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, memory_kind, source, updated_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("alice", "rule:speak-first", "speak first on noise", 0.95, "rule", "calibration", time.time(), time.time()),
+    )
+    await conn.execute(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, memory_kind, source, updated_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        ("alice", "fact:auto", "redis cluster pipelining", 0.4, "fact", "episode_promotion", time.time(), time.time()),
+    )
+    await conn.commit()
+
+    s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.0))
+    await s.run_once()
+
+    kept = await (await conn.execute("SELECT importance FROM core_memory WHERE \"key\"='rule:speak-first'")).fetchone()
+    assert kept["importance"] == 0.95

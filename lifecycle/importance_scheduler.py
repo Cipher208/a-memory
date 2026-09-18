@@ -36,6 +36,23 @@ class SchedulerConfig:
 
 
 class ImportanceScheduler:
+    """Authored entries keep their authored weight.
+
+    Sources a human (or calibration) wrote by hand are never steamrolled by
+    content heuristics — the scheduler only rescores organic rows (E1 18.09).
+    """
+
+    CURATED_SOURCES = frozenset(
+        {
+            "calibration",
+            "manual",
+            "user_explicit",
+            "declared_canon",
+            "identity_mirror",
+            "staging_promotion",
+        }
+    )
+
     def __init__(
         self,
         scorer: ImportanceScorer | None = None,
@@ -119,8 +136,21 @@ class ImportanceScheduler:
                 (user_id, time.time() - self.cfg.only_recent_days * 86400),
             )
         ).fetchall()
+        sources: dict[int, str] = {}
+        cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(core_memory)")).fetchall()]
+        if "source" in cols:
+            for srow in await (
+                await conn.execute(
+                    "SELECT entry_id, source FROM core_memory WHERE user_id=?",
+                    (user_id,),
+                )
+            ).fetchall():
+                sources[int(srow["entry_id"])] = str(srow["source"] or "")
 
         for r in rows:
+            if sources.get(int(r["entry_id"]), "") in self.CURATED_SOURCES:
+                stats["skipped"] += 1
+                continue
             rc = rc_map.get(int(r["entry_id"]), 0)
             signals = self.scorer.score(
                 text=r["value"] or "",
