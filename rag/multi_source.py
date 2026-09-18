@@ -79,7 +79,7 @@ def _recency_mult(created_at: float | None, now: float) -> float:
     if not created_at:
         return 1.0
     age_days = max(0.0, (now - float(created_at)) / 86400.0)
-    return 1.0 + _RECENCY_BONUS * (0.5 ** (age_days / _RECENCY_HALF_LIFE_DAYS))
+    return float(1.0 + _RECENCY_BONUS * (0.5 ** (age_days / _RECENCY_HALF_LIFE_DAYS)))
 
 
 def merge_ranked(results: list[dict[str, Any]], now: float | None = None) -> list[dict[str, Any]]:
