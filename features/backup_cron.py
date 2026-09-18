@@ -6,6 +6,7 @@ Backup Cron — automatic scheduled backups with jitter + wiki sync.
 
 import asyncio
 import contextlib
+import fcntl  # Unix-only by design: single-writer backup lock (Linux hosts)
 import json
 import logging
 import os
@@ -38,6 +39,7 @@ class BackupCron:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self.interval_hours = config.get("backup", "backup_interval_hours") or 24
         self.retention_days = config.get("backup", "backup_retention_days") or 30
+        self.keep_count = config.get("backup", "backup_keep_count") or 10
         self.jitter_seconds = config.get("backup", "jitter_seconds") or 3600
         self.wiki_sync_interval = config.get("backup", "wiki_sync_interval_minutes") or 30
         self._running = False
@@ -47,7 +49,27 @@ class BackupCron:
         self._last_backup = 0.0
         self._last_wiki_sync = 0.0
         self._state_file = self.base_dir / ".backup_cron_state.json"
+        self._lock_path = self.base_dir / ".backup_cron.lock"
         self._load_state()
+
+    def _acquire_backup_lock(self) -> int | None:
+        """Non-blocking leader lock for this base dir. fd or None.
+
+        fcntl locks die with the process — no stale-lock class by design.
+        """
+        fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return None
+        return fd
+
+    def _release_backup_lock(self, fd: int) -> None:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        with contextlib.suppress(OSError):
+            os.close(fd)
 
     def _load_state(self) -> None:
         if self._state_file.exists():
@@ -125,9 +147,18 @@ class BackupCron:
             if not self._running:  # stopped inside the jitter window
                 return
 
-        self._do_backup()
-        self._cleanup_old()
-        self._fire_nightly_hooks()
+        # Single writer per base dir: gateway/dashboard MCP twins must not
+        # each write a full backup. Lock AFTER jitter so we never squat it.
+        fd = self._acquire_backup_lock()
+        if fd is None:
+            logger.info("Backup skipped: another writer holds the lock")
+            return
+        try:
+            self._do_backup()
+            self._cleanup_old()
+            self._fire_nightly_hooks()
+        finally:
+            self._release_backup_lock(fd)
 
     def _check_wiki_sync(self, now: float) -> None:
         if now - self._last_wiki_sync >= self.wiki_sync_interval * 60:
@@ -233,6 +264,16 @@ class BackupCron:
             if d.is_dir() and d.stat().st_mtime < cutoff:
                 shutil.rmtree(d)
                 removed += 1
+        # Count cap regardless of age: N writers × interval overflowed age-only
+        # retention (2.4 backups/day × 30d ≈ 5G per base, incident 18.09).
+        kept = sorted(
+            (d for d in self.backup_dir.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for d in kept[self.keep_count :]:
+            shutil.rmtree(d)
+            removed += 1
         if removed:
             logger.info("Cleaned up %d old backups", removed)
         self._cleanup_tmp()
@@ -345,6 +386,7 @@ class BackupCron:
             "interval_hours": self.interval_hours,
             "jitter_seconds": self.jitter_seconds,
             "retention_days": self.retention_days,
+            "keep_count": self.keep_count,
             "wiki_sync_interval_minutes": self.wiki_sync_interval,
             "last_backup": self._last_backup,
             "next_backup": self._last_backup + self.interval_hours * 3600,
