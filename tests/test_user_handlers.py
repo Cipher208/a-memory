@@ -184,3 +184,12 @@ def test_arc_echo_predicate_shape() -> None:
     # real memory that merely discusses the format must survive
     assert not _looks_like_arc_echo("Итог: 61 msgs обработано без потерь")
     assert not _looks_like_arc_echo("Обсудили, что формат Arc Snapshot надо чинить гейдом")
+
+
+def test_harness_limit_predicate():
+    from lifecycle.consolidation import _looks_like_harness_limit
+
+    assert _looks_like_harness_limit("You've reached the maximum number of tool-calling iterations allowed.")
+    assert _looks_like_harness_limit("Please provide a final response summarizing what you've found and accomplished so far.")
+    assert not _looks_like_harness_limit("Мы обсуждали лимит итераций и решили поднять его")
+    assert not _looks_like_harness_limit("Итог: 46 строк мусора вычищено, гейт поставлен")

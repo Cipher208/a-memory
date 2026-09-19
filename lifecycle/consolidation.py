@@ -76,6 +76,25 @@ def _looks_like_arc_echo(text: str) -> bool:
     return bool(_ARC_ECHO.search(text[:200]))
 
 
+# Harness budget chatter: the agent runtime injects its own control messages as
+# user-role turns when an iteration/token budget runs out ("You've reached the
+# maximum number of tool-calling iterations…", "Please provide a final response
+# summarizing…"). They pass every other predicate — plain prose, no newline, no
+# structural head — and landed as `fact` episodes carrying the `raw:` provenance
+# tag: 46 rows by 2026-09-19. Anchored at the head, so prose that merely quotes
+# the message stays saveable.
+_HARNESS_LIMIT = re.compile(
+    r"^\s*(?:You'?ve reached the maximum number of tool-calling iterations"
+    r"|Please provide a final response summarizing)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_harness_limit(text: str) -> bool:
+    """Detect the runtime's own budget-exhausted control message (not memory)."""
+    return bool(_HARNESS_LIMIT.match(text[:200]))
+
+
 def _slug(text: str) -> str:
     """Filename-safe key suffix: alnum/_/-/CJK survive, punctuation collapses."""
     cleaned = re.sub(r"[^\w-]+", "_", text, flags=re.UNICODE).strip("_")

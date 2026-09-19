@@ -33,6 +33,7 @@ sys.path.insert(0, "/home/murat/mcp-ariel-memory")
 from lifecycle.consolidation import (
     _looks_like_arc_echo,
     _looks_like_dump,
+    _looks_like_harness_limit,
     _looks_like_system_injection,
 )
 
@@ -47,6 +48,8 @@ def junk_class(text: str) -> str | None:
         return "arc_echo"
     if _looks_like_system_injection(text):
         return "system_injection"
+    if _looks_like_harness_limit(text):
+        return "harness_limit"
     return None
 
 

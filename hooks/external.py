@@ -150,10 +150,18 @@ async def auto_save_text(
     # blobs, hook echoes) are not memories — prod once filled 52% of the
     # episodes table with them. Narrow variant: no newline rule (legit saved
     # messages wrap freely); only structural heads and tool markers.
-    from lifecycle.consolidation import _looks_like_dump, _looks_like_system_injection
+    from lifecycle.consolidation import (
+        _looks_like_dump,
+        _looks_like_harness_limit,
+        _looks_like_system_injection,
+    )
 
     if _looks_like_dump(text):
         return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "transcript"}
+
+    # Harness budget chatter is the runtime talking to itself, not memory.
+    if _looks_like_harness_limit(text):
+        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "harness_limit"}
 
     # A1: system-injected boilerplate (skill bodies, cron preambles) is not user
     # memory — cut it at the input so it never poisons L3 recall.
