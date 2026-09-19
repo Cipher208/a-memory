@@ -34,3 +34,45 @@ async def test_capture_never_raises(cm):
 
     rid = await capture("new_message", "user", "u1", "x", raw_type=None)
     assert rid is not None  # даже с None raw_type — классифицирует сам
+
+
+@pytest.mark.asyncio
+async def test_find_block_keys_on_layer_user_text(cm):
+    from shared.l0 import capture, find_block
+
+    assert await find_block("user", "u1", "нет такого блока") is None
+
+    rid = await capture("new_message", "user", "u1", "помни: wal включён")
+    assert await find_block("user", "u1", "помни: wal включён") == rid
+    # layer and user_id are part of the key — the same text elsewhere is a different block
+    assert await find_block("agent", "u1", "помни: wal включён") is None
+    assert await find_block("user", "u2", "помни: wal включён") is None
+
+
+@pytest.mark.asyncio
+async def test_capture_replay_returns_original_rid_without_second_row(cm):
+    from shared.l0 import capture
+
+    first = await capture("new_message", "user", "u1", "дубль сообщения")
+    again = await capture("new_message", "user", "u1", "дубль сообщения")
+    assert again == first
+
+    row = await (await (await cm.get("memory.db")).execute("SELECT count(*) FROM l0_journal")).fetchone()
+    assert row[0] == 1  # the replay added no row
+
+
+@pytest.mark.asyncio
+async def test_auto_save_skips_replay_of_captured_block(cm):
+    """capture() dedups the journal, but the caller ran the distiller anyway —
+    every replay re-emitted the full clause set under the same `raw:<rid>` tag
+    (raw:164 → 120 rows across three days, decaying 60/40/20). The guard sits
+    before capture(), so a replay costs nothing downstream."""
+    from hooks.external import auto_save_text
+    from shared.l0 import capture
+
+    text = "помни: wal включён, автовакуум выключен"
+    assert await capture("new_message", "user", "u1", text) is not None
+
+    out = await auto_save_text(None, None, "u1", text)
+    assert out["skipped"] == "duplicate_l0_block"
+    assert out["saved_l3"] is False and out["saved_l4"] is False

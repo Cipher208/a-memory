@@ -171,7 +171,15 @@ async def auto_save_text(
     # L0 intake (F): append-only raw journal BEFORE sanitize — the journal is
     # the raw door of the pipeline. Best-effort (capture never raises); the id
     # drives the status watermark after distillation.
-    from shared.l0 import capture
+    from shared.l0 import capture, find_block
+
+    # A replay of an already-captured block. capture() would return the original
+    # rid and stop there — but the distiller ran unconditionally after it, so
+    # every replay re-emitted the full clause set under the same `raw:<rid>` tag.
+    # capture() guards the journal, not the pipeline; the pipeline guard belongs
+    # here, before it.
+    if await find_block("user", user_id, text) is not None:
+        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "duplicate_l0_block"}
 
     l0_id: int | None = await capture(event, "user", user_id, text, source_msg_id=source_msg_id)
 

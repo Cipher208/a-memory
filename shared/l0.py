@@ -20,6 +20,35 @@ from shared.fractional_index import midpoint
 _capture_lock = asyncio.Lock()
 
 
+def _content_hash(layer: str, user_id: str, text: str) -> str:
+    """S17 #5 dedup key: identical (layer, user_id, text) is the same block."""
+    return hashlib.sha256(f"{layer}|{user_id}|{text}".encode()).hexdigest()
+
+
+async def find_block(layer: str, user_id: str, text: str) -> int | None:
+    """Return the rid of an already-captured identical block, or None. Never raises.
+
+    capture() uses this to return the prior rid instead of inserting a second
+    row. Callers that run a pipeline after capture use it to skip a replay
+    outright: capture() guards the journal, not the pipeline — a replayed
+    message returned the same rid while the distiller re-emitted every clause
+    under that one `raw:<rid>` tag (raw:164 → 120 rows across three days,
+    decaying 60/40/20). Pre-migration DB without the content_hash column →
+    None (dedup inactive, write as is).
+    """
+    try:
+        conn = await connection_manager.get(DB_NAME)
+        prior = await (
+            await conn.execute(
+                "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
+                (_content_hash(layer, user_id, text),),
+            )
+        ).fetchone()
+    except Exception:
+        return None
+    return int(prior["id"]) if prior is not None else None
+
+
 async def capture(
     event: str,
     layer: str,
@@ -62,21 +91,13 @@ async def _capture_inner(
         conn = await connection_manager.get(DB_NAME)
         ts = ts_override or time.time()
         rt = raw_type or classify_raw(text)
-        content_hash = hashlib.sha256(f"{layer}|{user_id}|{text}".encode()).hexdigest()
+        content_hash = _content_hash(layer, user_id, text)
         # S17 #5: dedup of an already-stored block — a repeat does not create a row;
         # the rid of the original record is returned (link to the first entry). No
         # content_hash column (pre-g23-migration DB) → dedup inactive, we write as is.
-        try:
-            prior = await (
-                await conn.execute(
-                    "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
-                    (content_hash,),
-                )
-            ).fetchone()
-        except Exception:
-            prior = None
-        if prior is not None:
-            return int(prior["id"])
+        prior_id = await find_block(layer, user_id, text)
+        if prior_id is not None:
+            return prior_id
         # S1 order_key: fractional index after the last row. The column may be absent
         # in live pre-migration DBs — then we write without order_key.
         # BEGIN IMMEDIATE: take the write lock BEFORE reading the chain head so
