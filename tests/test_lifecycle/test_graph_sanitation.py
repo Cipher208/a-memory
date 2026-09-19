@@ -163,11 +163,11 @@ async def test_insert_edge_repeat_skips_inhibition(db, monkeypatch):
     assert calls == 2, "создание ребра ингибирует оба конца"
 
     w2 = await _insert_edge(conn, a, b, "topic_overlap", 0.5, "tokens")
-    assert w2 == 1, "контракт возврата не меняется"
+    assert w2 == 0, "19.09 ч.3: повтор того же веса — no-op"
     assert calls == 2, "повтор не должен трогать ингибицию"
 
     w3 = await _insert_edge(conn, a, b, "topic_overlap", 0.2, "tokens")
-    assert w3 == 1
+    assert w3 == 0
     assert calls == 2, "слабый повтор не должен трогать ингибицию"
 
 
@@ -228,6 +228,59 @@ async def test_miner_tags_inhibits_once_per_node(db, monkeypatch):
     res = await miner_tags(connection_manager, "user")
     assert res["edges"] == 15, "C(6,2) пар на общем теге"
     assert calls == 6, f"батч: 6 узлов — 6 проходов, получено {calls}"
+
+
+@pytest.mark.asyncio
+async def test_insert_edge_weaker_repeat_is_noop(db):
+    """19.09, issue G (часть 3): слабый повтор не пишет строку (created_at
+    стабилен) и возвращает 0 — иначе каждый nightly churn'ит WAL миллионами
+    пустых апдейтов."""
+    from lifecycle.graph_miners import _insert_edge
+
+    a = await _node("noop один")
+    b = await _node("noop два")
+    conn = await connection_manager.get(DB_NAME)
+
+    assert await _insert_edge(conn, a, b, "topic_overlap", 0.6, "tokens") == 1
+    before = await (await conn.execute("SELECT created_at FROM epi_edges WHERE source_id=? AND target_id=?", (a, b))).fetchone()
+    assert await _insert_edge(conn, a, b, "topic_overlap", 0.2, "tokens") == 0
+    after = await (await conn.execute("SELECT weight, created_at FROM epi_edges WHERE source_id=? AND target_id=?", (a, b))).fetchone()
+    assert float(after["weight"]) == pytest.approx(0.6)
+    assert float(after["created_at"]) == float(before["created_at"])
+
+
+@pytest.mark.asyncio
+async def test_miner_sessions_caps_mega_cluster(db, monkeypatch):
+    """19.09, issue G (часть 3): один кластер на 40 узлов не материализует
+    полный граф — степень same_session на узел <= _SESSION_TOPK."""
+    import lifecycle.graph_sanitation as san
+    from lifecycle.graph_miners import _SESSION_TOPK, miner_sessions
+
+    monkeypatch.setattr(san, "lateral_inhibition", lambda *a, **k: _fake_inhibition())
+    conn = await connection_manager.get(DB_NAME)
+    await conn.execute(
+        "INSERT INTO l0_journal (ts, event, layer, user_id, text, raw_type) VALUES (?, 'msg', 'user', 'u', 'мега сессия', 'user-message')",
+        (T,),
+    )
+    for i in range(40):
+        await conn.execute(
+            "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES ('user', 'gu', ?, 'fact', '[]', 0.5, ?)",
+            (f"мега узел {i}", T),
+        )
+    await conn.commit()
+
+    res = await miner_sessions(connection_manager, "user")
+    assert res["edges"] < 40 * 39 // 2, "полный граф запрещён капом"
+    rows = await (await conn.execute("SELECT source_id, target_id FROM epi_edges WHERE relation='same_session'")).fetchall()
+    deg: dict[int, int] = {}
+    for r in rows:
+        deg[int(r["source_id"])] = deg.get(int(r["source_id"]), 0) + 1
+        deg[int(r["target_id"])] = deg.get(int(r["target_id"]), 0) + 1
+    assert max(deg.values()) <= _SESSION_TOPK
+
+
+async def _fake_inhibition(*args, **kwargs) -> int:
+    return 0
 
 
 # --- (b) validity windows: valid_from/valid_to/status на epi_edges ---

@@ -44,7 +44,7 @@ async def test_insert_edge_max_weight_upsert(cm):
     row = await (await conn.execute("SELECT weight FROM epi_edges WHERE source_id=? AND target_id=?", (n1, n2))).fetchone()
     assert row[0] == pytest.approx(0.6)
     w3 = await _insert_edge(conn, n1, n2, "tagged", 0.2, "tags")
-    assert w3 == 1
+    assert w3 == 0, "19.09 (issue G): слабый повтор — чистый no-op, строка не трогается"
     row = await (await conn.execute("SELECT weight FROM epi_edges WHERE source_id=? AND target_id=?", (n1, n2))).fetchone()
     assert row[0] == pytest.approx(0.6), "слабый повторный скор не понижает вес"
 

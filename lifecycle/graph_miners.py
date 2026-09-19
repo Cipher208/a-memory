@@ -31,6 +31,7 @@ _STOP_TOKENS = {"и", "но", "в", "на", "с", "для", "это", "что", 
 _SESSION_GAP = 1800.0  # L0 rows within 30 min belong to one session
 _NODE_WINDOW = 300.0  # node is in-session if created_at is within ±5 min of an L0 row
 _BIND_SHARED = 2  # or >=2 shared canon-tokens with session texts
+_SESSION_TOPK = 12  # at most 12 same_session edges per node from this miner (anti-hub, like entities)
 
 
 async def _inhibit_dirty(conn: Any, dirty: set[int]) -> int:
@@ -63,6 +64,11 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
     hub on every nightly (640k edges → 9h of 100% main-thread CPU that
     never converges: upsert re-raises what inhibition lowered). Return
     contract is unchanged (rows written, 0/1).
+
+    19.09 (issue G, part 3): the upsert is gated — a weaker-or-equal repeat
+    is a true no-op (no row touched, created_at stable, returns 0). Without
+    the gate every repeat rewrote created_at, so no nightly ever converged
+    and the DB churned WAL on millions of no-change writes.
     """
     prev = await (
         await conn.execute(
@@ -73,7 +79,8 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
     cur = await conn.execute(
         """INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (source_id, target_id, relation)
-           DO UPDATE SET weight = MAX(weight, excluded.weight), created_at = excluded.created_at""",
+           DO UPDATE SET weight = excluded.weight, created_at = excluded.created_at
+           WHERE excluded.weight > weight""",
         (a, b, relation, weight, time.time(), json.dumps([f"heuristic:{heuristic}"])),
     )
     written = int(cur.rowcount or 0)
@@ -254,11 +261,17 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
 
     edges = 0
     dirty: set[int] = set()
+    degree: dict[int, int] = {}
     for idx in range(len(merged)):
         members = sorted(nid for nid, cs in assigned.items() if idx in cs)
         for i, a in enumerate(members):
             for b in members[i + 1 :]:
+                if degree.get(a, 0) >= _SESSION_TOPK or degree.get(b, 0) >= _SESSION_TOPK:
+                    continue  # 19.09 (issue G, part 3): anti-hub cap — a mega-cluster
+                # must not materialize the complete graph (1.1M edges in 10 min)
                 edges += await _insert_edge(conn, a, b, "same_session", 0.3, "sessions", dirty)
+                degree[a] = degree.get(a, 0) + 1
+                degree[b] = degree.get(b, 0) + 1
     await _inhibit_dirty(conn, dirty)
     await conn.commit()
     return {"edges": edges}

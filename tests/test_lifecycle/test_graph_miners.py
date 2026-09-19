@@ -761,9 +761,9 @@ async def test_miner_structural_co_citation_creates_edge(db):
     assert result["boosted"] == 0  # у всех источников дефолтный confidence 0.5
 
     again = await miner_structural(db, "user")
-    # T16: контракт изменён (аудит 05.09) — upsert max-weight возвращает 1 на
-    # пересчёт веса, но дубль-ребро не создаётся.
-    assert again["edges"] == 1
+    # 19.09 (issue G, ч.3): повтор без роста веса — чистый no-op (0),
+    # дубль-ребро не создаётся, вес стабилен.
+    assert again["edges"] == 0
     rows2 = await _edges("co_cited")
     assert len(rows2) == 1 and rows2[0]["weight"] == pytest.approx(0.3)
 
