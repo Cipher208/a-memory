@@ -33,7 +33,23 @@ _NODE_WINDOW = 300.0  # node is in-session if created_at is within ±5 min of an
 _BIND_SHARED = 2  # or >=2 shared canon-tokens with session texts
 
 
-async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, heuristic: str) -> int:
+async def _inhibit_dirty(conn: Any, dirty: set[int]) -> int:
+    """Batched end-of-run inhibition: one lateral_inhibition per touched node.
+
+    19.09 (issue G, part 2): miners insert thousands of edges per nightly;
+    inhibiting per edge is O(E²) per call. Collect dirty nodes during the
+    run and sweep once at the end — same end state, linear passes.
+    """
+    from lifecycle.graph_sanitation import lateral_inhibition
+
+    changed = 0
+    for nid in dirty:
+        with contextlib.suppress(Exception):  # inhibition must never crash the miner
+            changed += await lateral_inhibition(conn, nid)
+    return changed
+
+
+async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, heuristic: str, dirty: set[int] | None = None) -> int:
     """UPSERT into epi_edges; returns rows actually written (re-run → 0).
 
     Audit 05.09 (P1): INSERT OR IGNORE froze the weight — a miner re-run
@@ -62,6 +78,9 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
     )
     written = int(cur.rowcount or 0)
     if prev is None and written:
+        if dirty is not None:
+            dirty.update((a, b))
+            return written
         from lifecycle.graph_sanitation import lateral_inhibition
 
         with contextlib.suppress(Exception):  # inhibition must never crash the miner
@@ -138,8 +157,10 @@ async def miner_tags(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
         )
     ).fetchall()
     edges = 0
+    dirty: set[int] = set()
     for a, b, shared in rows:
-        edges += await _insert_edge(conn, int(a), int(b), "tagged", min(0.3 + 0.1 * int(shared), 0.6), "tags")
+        edges += await _insert_edge(conn, int(a), int(b), "tagged", min(0.3 + 0.1 * int(shared), 0.6), "tags", dirty)
+    await _inhibit_dirty(conn, dirty)
     await conn.commit()
     return {"edges": edges}
 
@@ -176,9 +197,11 @@ async def miner_tokens(cm: AsyncConnectionManager, layer: str) -> dict[str, int]
                 cands.append((a, b, jaccard))
     tau = max(0.3, mad_threshold([c[2] for c in cands])) if cands else 0.3
     edges = 0
+    dirty: set[int] = set()
     for a, b, jaccard in cands:
         if jaccard >= tau:
-            edges += await _insert_edge(conn, a, b, "topic_overlap", jaccard, "tokens")
+            edges += await _insert_edge(conn, a, b, "topic_overlap", jaccard, "tokens", dirty)
+    await _inhibit_dirty(conn, dirty)
     await conn.commit()
     return {"edges": edges}
 
@@ -230,11 +253,13 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
                 assigned.setdefault(nid, set()).add(idx)
 
     edges = 0
+    dirty: set[int] = set()
     for idx in range(len(merged)):
         members = sorted(nid for nid, cs in assigned.items() if idx in cs)
         for i, a in enumerate(members):
             for b in members[i + 1 :]:
-                edges += await _insert_edge(conn, a, b, "same_session", 0.3, "sessions")
+                edges += await _insert_edge(conn, a, b, "same_session", 0.3, "sessions", dirty)
+    await _inhibit_dirty(conn, dirty)
     await conn.commit()
     return {"edges": edges}
 
@@ -258,6 +283,7 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
     nlp = _get_ner()
     ents = [_entities(str(c), syn, nlp) for _, c in nodes]
     edges = 0
+    dirty: set[int] = set()
     degree: dict[int, int] = {}
     for i in range(len(nodes)):
         if not ents[i]:
@@ -267,9 +293,10 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
                 a, b = nodes[i][0], nodes[j][0]
                 if degree.get(a, 0) >= _CO_MENTIONS_TOPK or degree.get(b, 0) >= _CO_MENTIONS_TOPK:
                     continue  # B6: active-entity cap — anti-hub
-                edges += await _insert_edge(conn, a, b, "co_mentions", 0.4, "entities")
+                edges += await _insert_edge(conn, a, b, "co_mentions", 0.4, "entities", dirty)
                 degree[a] = degree.get(a, 0) + 1
                 degree[b] = degree.get(b, 0) + 1
+    await _inhibit_dirty(conn, dirty)
     await conn.commit()
     return {"edges": edges}
 

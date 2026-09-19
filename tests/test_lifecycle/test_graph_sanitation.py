@@ -171,6 +171,65 @@ async def test_insert_edge_repeat_skips_inhibition(db, monkeypatch):
     assert calls == 2, "слабый повтор не должен трогать ингибицию"
 
 
+@pytest.mark.asyncio
+async def test_insert_edge_dirty_set_defers_inhibition(db, monkeypatch):
+    """19.09, issue G (часть 2): с dirty-набором ингибиция не бежит сразу,
+    а копит узлы; _inhibit_dirty — один проход по каждому узлу."""
+    import lifecycle.graph_sanitation as san
+    from lifecycle.graph_miners import _inhibit_dirty, _insert_edge
+
+    calls: list[int] = []
+    real = san.lateral_inhibition
+
+    async def spy(conn, node_id, *args, **kwargs):
+        calls.append(int(node_id))
+        return await real(conn, node_id, *args, **kwargs)
+
+    monkeypatch.setattr(san, "lateral_inhibition", spy)
+    hub = await _node("хаб батча")
+    spokes = [await _node(f"спица батча {i}") for i in range(5)]
+    conn = await connection_manager.get(DB_NAME)
+
+    dirty: set[int] = set()
+    for s in spokes:
+        w = await _insert_edge(conn, hub, s, "topic_overlap", 0.5, "tokens", dirty)
+        assert w == 1
+    assert calls == [], "вставки с dirty не ингибируют сразу"
+    assert dirty == {hub, *spokes}
+
+    changed = await _inhibit_dirty(conn, dirty)
+    assert isinstance(changed, int)
+    assert sorted(calls) == sorted({hub, *spokes}), "ровно один проход по узлу"
+
+
+@pytest.mark.asyncio
+async def test_miner_tags_inhibits_once_per_node(db, monkeypatch):
+    """Wiring: miner_tags с хабом из 5 рёбер — 6 вызовов ингибиции, а не 10."""
+    import lifecycle.graph_sanitation as san
+    from lifecycle.graph_miners import miner_tags
+
+    calls = 0
+    real = san.lateral_inhibition
+
+    async def spy(conn, node_id, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await real(conn, node_id, *args, **kwargs)
+
+    monkeypatch.setattr(san, "lateral_inhibition", spy)
+    conn = await connection_manager.get(DB_NAME)
+    hub = await _node("хаб тегов")
+    await conn.execute("INSERT INTO epi_tags (node_id, tag) VALUES (?, ?)", (hub, "общий"))
+    for i in range(5):
+        s = await _node(f"тег-спица {i}")
+        await conn.execute("INSERT INTO epi_tags (node_id, tag) VALUES (?, ?)", (s, "общий"))
+    await conn.commit()
+
+    res = await miner_tags(connection_manager, "user")
+    assert res["edges"] == 15, "C(6,2) пар на общем теге"
+    assert calls == 6, f"батч: 6 узлов — 6 проходов, получено {calls}"
+
+
 # --- (b) validity windows: valid_from/valid_to/status на epi_edges ---
 
 
