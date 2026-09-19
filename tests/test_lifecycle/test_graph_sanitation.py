@@ -137,6 +137,40 @@ async def test_insert_edge_applies_inhibition_on_creation(db):
     assert await _edge_weight(hub, weak, "tagged") == pytest.approx(0.0)
 
 
+@pytest.mark.asyncio
+async def test_insert_edge_repeat_skips_inhibition(db, monkeypatch):
+    """Регрессия 19.09, issue G (петля nightly): повторный upsert существующего
+    ребра НЕ запускает lateral_inhibition. Иначе каждый nightly заново гонит
+    квадратичную ингибицию по всем рёбрам хаба (640k рёбер, 9ч 100% CPU)."""
+    import lifecycle.graph_sanitation as san
+    from lifecycle.graph_miners import _insert_edge
+
+    calls = 0
+    real = san.lateral_inhibition
+
+    async def spy(conn, node_id, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return await real(conn, node_id, *args, **kwargs)
+
+    monkeypatch.setattr(san, "lateral_inhibition", spy)
+    a = await _node("повтор один")
+    b = await _node("повтор два")
+    conn = await connection_manager.get(DB_NAME)
+
+    w1 = await _insert_edge(conn, a, b, "topic_overlap", 0.5, "tokens")
+    assert w1 == 1
+    assert calls == 2, "создание ребра ингибирует оба конца"
+
+    w2 = await _insert_edge(conn, a, b, "topic_overlap", 0.5, "tokens")
+    assert w2 == 1, "контракт возврата не меняется"
+    assert calls == 2, "повтор не должен трогать ингибицию"
+
+    w3 = await _insert_edge(conn, a, b, "topic_overlap", 0.2, "tokens")
+    assert w3 == 1
+    assert calls == 2, "слабый повтор не должен трогать ингибицию"
+
+
 # --- (b) validity windows: valid_from/valid_to/status на epi_edges ---
 
 

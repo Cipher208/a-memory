@@ -41,7 +41,19 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
     evidence wins) and refreshes created_at. After a heuristic edge is
     inserted, lateral inhibition applies (G5, SYNAPSE): a weak edge is
     suppressed by the cluster of stronger neighbors around the node.
+
+    19.09 (issue G): inhibition runs ONLY for newly created rows. A repeat
+    upsert used to re-run the quadratic lateral_inhibition over the whole
+    hub on every nightly (640k edges → 9h of 100% main-thread CPU that
+    never converges: upsert re-raises what inhibition lowered). Return
+    contract is unchanged (rows written, 0/1).
     """
+    prev = await (
+        await conn.execute(
+            "SELECT weight FROM epi_edges WHERE source_id=? AND target_id=? AND relation=?",
+            (a, b, relation),
+        )
+    ).fetchone()
     cur = await conn.execute(
         """INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT (source_id, target_id, relation)
@@ -49,7 +61,7 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
         (a, b, relation, weight, time.time(), json.dumps([f"heuristic:{heuristic}"])),
     )
     written = int(cur.rowcount or 0)
-    if written:
+    if prev is None and written:
         from lifecycle.graph_sanitation import lateral_inhibition
 
         with contextlib.suppress(Exception):  # inhibition must never crash the miner
