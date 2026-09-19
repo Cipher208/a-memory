@@ -94,6 +94,11 @@ async def test_breaker_trip_diagnose_heal_pipeline(e2e, monkeypatch):
 
     monkeypatch.delenv("ARIEL_HASH_EMBEDDINGS", raising=False)
     monkeypatch.setattr(emb, "_get_model", lambda: _Boom())
+    # 19.09: the test trips the breaker through the LOCAL encoder branch.
+    # With a live config declaring a remote embedder, embed() takes the
+    # remote path and _Boom.encode is never called (DID NOT RAISE). Pin the
+    # local branch so the test does not depend on ambient config.
+    monkeypatch.setattr(emb, "_remote_active", lambda: False)
     emb._embedding_breaker.reset()
 
     cache = emb.EmbeddingCache(cm=connection_manager)
