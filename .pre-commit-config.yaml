@@ -38,9 +38,11 @@ repos:
         always_run: true
 
       # F-gate: full push gate (ruff --isolated + mypy 10 dirs + pytest)
+      # 19.09: ruff scopes to TRACKED files only — untracked scratch drafts
+      # (scripts/_*.py) broke pushes without being part of them.
       - id: prepush-gate
         name: pre-push gate (ruff isolated + mypy 10 dirs)
-        entry: bash -c 'uv run --isolated --with ruff python -m ruff check . && uv run --isolated --with ruff python -m ruff format --check . && uv run --with-editable . --extra dev --extra embeddings mypy features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/ autohooks/ eval/'
+        entry: bash -c 'uv run --isolated --with ruff python -m ruff check $(git ls-files "*.py") && uv run --isolated --with ruff python -m ruff format --check $(git ls-files "*.py") && uv run --with-editable . --extra dev --extra embeddings mypy features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/ autohooks/ eval/'
         language: system
         pass_filenames: false
         stages: [pre-push]
