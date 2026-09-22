@@ -82,7 +82,7 @@ ann = [
     "hnswlib>=0.7",
 ]
 embeddings = [
-    "sentence-transformers>=3.0",
+    "sentence-transformers>=6.0.1",
 ]
 all = [
     "a-memory[dev,win,binary,vec,ann,embeddings]",
