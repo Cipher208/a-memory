@@ -27,8 +27,10 @@ import sys
 from pathlib import Path
 
 SSOT_DIR = Path.home() / "skills-ssot"
-ARIEL_REPO = "/home/murat/mcp-ariel-memory"
-ARIEL_PY = "/home/murat/mcp-ariel-memory/.venv/bin/python3"
+ARIEL_REPO = str(Path(__file__).resolve().parents[1])
+# The interpreter running this script is the one whose environment has the
+# package importable, so re-invoking it needs no path into any particular venv.
+ARIEL_PY = sys.executable
 AGENTS = {
     "hermes": Path.home() / ".mcp-ariel-memory-hermes",
     "mimocode": Path.home() / ".mcp-ariel-memory-mimocode",

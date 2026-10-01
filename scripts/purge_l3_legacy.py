@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, "/home/murat/mcp-ariel-memory")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lifecycle.consolidation import (
     _looks_like_arc_echo,
     _looks_like_dump,
@@ -37,9 +37,9 @@ from lifecycle.consolidation import (
     _looks_like_system_injection,
 )
 
-DB = "/home/murat/.mcp-ariel-memory-hermes/memory.db"
+DB = str(Path.home() / ".mcp-ariel-memory-hermes" / "memory.db")
 USER = "default"
-ARCHIVE_DIR = Path("/home/murat/mcp-ariel-memory/scripts/purge-archive")
+ARCHIVE_DIR = Path(__file__).resolve().parent / "purge-archive"
 
 
 def junk_class(text: str) -> str | None:
