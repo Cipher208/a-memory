@@ -10,7 +10,7 @@ GitHub Actions runs on every push/PR:
 | **typecheck** | mypy (63 source files, 0 errors) |
 | **quality** | skylos (dead code, security, grade) |
 | **security** | gitleaks (secret scanning) |
-| **test** | pytest on Python 3.10, 3.11, 3.12, 3.13 |
+| **test** | pytest on Python 3.11, 3.12, 3.13 |
 | **build** | python -m build |
 | **auto-label** | File-based PR labeling |
 | **auto-merge** | Dependabot minor/patch auto-merge |

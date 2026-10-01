@@ -25,7 +25,7 @@ docker run -p 8000:8000 a-memory
 
 ## Dependencies
 
-Requires Python 3.10+. Core dependencies install automatically:
+Requires Python 3.11+. Core dependencies install automatically:
 `mcp[cli]>=2,<3`, `pydantic>=2.0`, `pyyaml>=6.0`, `pynacl>=1.5.0`,
 `aiosqlite>=0.22.1`, `numpy>=2.2.6`, `prometheus-client`, `alembic`,
 `starlette`, `uvicorn`, `python-frontmatter`.
