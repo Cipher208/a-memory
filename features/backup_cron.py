@@ -285,11 +285,14 @@ class BackupCron:
     _TMP_CLEANUP_DAYS = 2
 
     def _cleanup_tmp(self, tmp_root: Path | None = None) -> int:
-        """Tear down stale test artifacts in /tmp. Strict prefixes, best-effort."""
+        """Tear down stale test artifacts in the temp dir. Strict prefixes, best-effort."""
         import getpass
         import shutil as _shutil
+        import tempfile
 
-        root = tmp_root or Path("/tmp")
+        # Resolve the real temp dir: TMPDIR can point elsewhere (/var/tmp on 2026-10-01),
+        # and a hardcoded /tmp left 4.4G of pytest/eval artifacts uncleaned (2026-10-01).
+        root = tmp_root or Path(tempfile.gettempdir())
         cutoff = time.time() - self._TMP_CLEANUP_DAYS * 86400
         candidates: list[Path] = []
         pytest_base = root / f"pytest-of-{getpass.getuser()}"

@@ -46,6 +46,29 @@ def test_cleanup_tmp_removes_only_stale_known_prefixes(tmp_path: Path) -> None:
     assert outsider.exists() and keeper.exists()
 
 
+def test_cleanup_tmp_defaults_to_real_tempdir(tmp_path: Path, monkeypatch) -> None:
+    """Боевой вызов не передаёт tmp_root — умолчание обязано быть настоящим temp-каталогом.
+
+    Инцидент 2026-10-01: TMPDIR указывал на /var/tmp, а чистка смотрела в /tmp —
+    4.4G (pytest-of-murat 3.4G + 74 ariel-eval-*) копились две недели незамеченными.
+    Прежние тесты всегда передавали tmp_root=tmp_path, поэтому хардкод не исполнялся.
+    rmtree заглушен: до исправления тест не должен трогать настоящий /tmp.
+    """
+    import shutil
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    _mk(tmp_path, "ariel-eval-ccc", 3)
+
+    seen: list[str] = []
+    monkeypatch.setattr(shutil, "rmtree", lambda p, **kw: seen.append(str(p)))
+
+    removed = BackupCron(base_dir=str(tmp_path))._cleanup_tmp()
+
+    assert seen == [str(tmp_path / "ariel-eval-ccc")], f"умолчание не равно tempfile.gettempdir(); чистили бы: {seen}"
+    assert removed == 1
+
+
 def test_cleanup_tmp_missing_roots_noop(tmp_path: Path) -> None:
     cron = BackupCron(base_dir=str(tmp_path))
     assert cron._cleanup_tmp(tmp_root=tmp_path) == 0
