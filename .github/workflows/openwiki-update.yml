@@ -1,23 +1,17 @@
 name: OpenWiki Update
 
 on:
+  # Automatic triggers are disabled by decision (2026-10-01).
+  #
+  # Every automated run failed without writing a single page: the OpenAI-compatible
+  # gateway (plusvibeapi.ru) answered the generation request with an nginx
+  # "504 Gateway Time-out" after ~50 minutes of hanging, so the run produced zero
+  # pages, zero pull requests, and burned ~1 runner-hour plus gateway tokens per
+  # push to master. See the failure runs 36913331737, 36901545549, 36451310820.
+  #
+  # Manual dispatch stays available. Regenerate the wiki deliberately from a local
+  # checkout instead of paying a CI runner to fail on every commit.
   workflow_dispatch:
-  push:
-    branches: [master]
-    paths:
-      - "features/**"
-      - "shared/**"
-      - "mcp_server/**"
-      - "rag/**"
-      - "hooks/**"
-      - "wiki/**"
-      - "lifecycle/**"
-      - "graph/**"
-      - "core/**"
-      - "autohooks/**"
-  schedule:
-    # Weekly Monday 08:00 UTC (11:00 MSK). Daily on a paid model is waste.
-    - cron: "0 8 * * 1"
 
 permissions:
   contents: write
