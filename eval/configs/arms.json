@@ -1,0 +1,9 @@
+{
+  "arms": {
+    "rrf": {"description": "статус-кво: один 5-source RRF без EDM/ITS и роутинга", "edm": false, "inhibition": false, "graph_expand": true, "routing": false},
+    "dense_per_kind": {"description": "ENGRAM-упрощение: поиск per memory-kind, set-merge без RRF", "edm": false, "inhibition": false, "graph_expand": false, "routing": false},
+    "gated": {"description": "Adaptive RAG: query-features решают, какие источники фаерить", "edm": false, "inhibition": false, "graph_expand": false, "routing": true},
+    "full": {"description": "dual-route: classify_query → S2/EDM/ITS/D-Mem escalation", "edm": true, "inhibition": true, "graph_expand": true, "routing": true}
+  },
+  "default": "full"
+}

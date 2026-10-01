@@ -84,7 +84,10 @@ async def run_daemon(
 
         iterations = 0
         last_pressure = 0
-        last_prune = 0.0
+        # None sentinel, not 0.0: time.monotonic() is CLOCK_MONOTONIC (time since
+        # boot), so a 0.0 baseline made the first sweep fire only when the host
+        # had been up ≥10 min — it passed on long-lived VPS, failed on fresh CI.
+        last_prune: float | None = None
         while not stop.is_set():
             batch = source.fetch_after(cursor, cfg.batch_limit)
             for msg in batch.messages:
@@ -130,7 +133,7 @@ async def run_daemon(
             # housekeeping keeps dangling rows at dust scale. Failures must not
             # break the poll loop.
             now_mono = time.monotonic()
-            if graph is not None and now_mono - last_prune >= _EDGE_PRUNE_SECONDS:
+            if graph is not None and (last_prune is None or now_mono - last_prune >= _EDGE_PRUNE_SECONDS):
                 last_prune = now_mono
                 with contextlib.suppress(Exception):
                     from lifecycle.graph_sanitation import prune_dangling_edges

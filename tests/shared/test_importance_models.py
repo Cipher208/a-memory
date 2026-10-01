@@ -1,10 +1,15 @@
 import json
+from pathlib import Path
+
 from shared.importance.models import ImportanceConfig, ImportanceSignals, ScorerResult
+
+# Repo-relative, not an absolute host path: CI checkouts live elsewhere
+# (was /home/murat/Projects/repos/... → FileNotFoundError on GitHub Actions).
+ASSET_PATH = Path(__file__).resolve().parents[2] / "shared" / "assets" / "importance_config.json"
 
 
 def test_importance_config_loading():
-    asset_path = "/home/murat/Projects/repos/mcp-ariel-memory/shared/assets/importance_config.json"
-    with open(asset_path, encoding="utf-8") as f:
+    with open(ASSET_PATH, encoding="utf-8") as f:
         data = json.load(f)
 
     config = ImportanceConfig(**data)

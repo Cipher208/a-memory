@@ -11,6 +11,7 @@ build/
 !pyproject.toml
 !shared/assets/*.json
 !tests/fixtures/locomo_mini.json
+!eval/configs/*.json
 .mcp-ariel-memory/
 backups/
 exports/
