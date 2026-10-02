@@ -50,7 +50,7 @@ Two CLI subcommands and one event dispatcher:
 data_dir: ~/.mcp-ariel-memory-<agent>   # → MCP_MEMORY_DATA_DIR (must exist)
 user_id: default                        # ariel user inside the agent's instance
 layer: user                             # "user" | "agent"
-source:
+source:                                 # optional — only `daemon` reads it; see below
   driver: sqlite                        # v1: the only driver
   path: ~/.hermes/state.db              # conversation DB (read-only URI)
   table: messages
@@ -69,6 +69,17 @@ master_key: <hex>                       # optional; else MCP_MASTER_KEY env
 Rules: unknown keys are hard errors; exactly one of `column` / `json_path`
 per field; `~` expands. Examples for real platforms live in
 `autohooks/examples/` — **copy the closest one and change paths**.
+
+**When `source:` may be omitted.** The block describes a chat database the daemon
+*polls*: it reads new rows and turns them into events. Some platforms have nothing
+to poll — a harness that fires its own lifecycle events and calls `inject` /
+`recall` / `dispatch` directly (DSH, Hermes), or an agent whose transcript lives
+only in the harness's own store. Omit the block and every command except `daemon`
+works unchanged. `daemon` then refuses immediately and says so, which is the
+honest outcome: with nothing to poll it would idle forever looking healthy.
+Omission is a choice; a malformed `source:` is still a mistake — a present block
+is validated exactly as strictly as before (unknown keys, missing keys and
+non-sqlite drivers all fail hard), because only the first case should be silent.
 
 First-run behavior: cursor = `max(cursor_column)` — **no history replay**;
 only messages arriving after daemon start are evaluated. At-least-once

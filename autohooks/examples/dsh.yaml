@@ -1,0 +1,29 @@
+# DSH (DeepSeek Harness) — a push-driven platform: NO `source:` block.
+#
+# Why none: `source:` describes a chat database the daemon POLLS for new rows.
+# DSH does not have one to poll. Its plugin fires lifecycle events itself
+# (agent/pre-step, session/event, agent/created, compaction/start|end) and
+# shells out to `inject` / `dispatch` / `recall` for each one. Declaring a
+# source here would be fiction, and before 2026-10-03 it was also fatal: the
+# presence check sat above the command dispatch, so a push-only platform was
+# refused at config load for a driver it would never read.
+#
+# With the block omitted every command except `daemon` works. `daemon` refuses
+# and says why, which is correct — there is nothing for it to poll.
+#
+# ONE CONFIG PER PERSONA, not one per platform. The two load-bearing lines are
+# `data_dir` (whose memory this is) and `user_id` (which ariel user inside it),
+# so a house of six personas holds six files: elli.yaml, agatha.yaml, and so on.
+# `elli.yaml` is this file with `data_dir` pointed at her inherited CowAgent
+# directory — the accumulated memory is hers, not a fresh instance.
+#
+# The DSH-side wrapper passes this file with `--config`.
+
+data_dir: ~/.mcp-ariel-memory-<persona>   # → MCP_MEMORY_DATA_DIR; must exist
+user_id: default
+layer: user
+# persona_owner: true
+#   The persona's own assistant-role text is her own voice, not harvested chat
+#   text: agent-layer dispatch texts become declarations and bypass the gates
+#   that exist to stop a transcript being mistaken for a decision. Set it for a
+#   persona that speaks as herself; leave it off for a transcript-tailing agent.

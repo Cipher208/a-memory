@@ -40,7 +40,12 @@ class AgentConfig:
     data_dir: Path
     user_id: str
     layer: str
-    source: SourceConfig
+    # Optional: only the `daemon` command reads it. A push-only platform (DSH,
+    # Hermes) has no chat database to tail — it fires lifecycle events itself —
+    # so demanding a source here refused every command for a driver that command
+    # would never touch. When absent, every command except `daemon` works and
+    # `daemon` fails loud instead of tailing nothing.
+    source: SourceConfig | None = None
     poll_seconds: int = 15
     batch_limit: int = 100
     state_file: Path = Path()  # always set by load_config (data_dir / "autohooks-cursor.json")
@@ -85,17 +90,21 @@ def load_config(path: str | Path) -> AgentConfig:
     if unknown:
         raise ValueError(f"unknown config keys {sorted(unknown)}")
 
+    # Absent means "this platform pushes events instead of tailing a database".
+    # Present but malformed is still a hard error: an omission is a choice, a
+    # misspelled block is a mistake, and only the second one should be silent.
     src_raw = raw.get("source")
-    if not isinstance(src_raw, dict):
-        raise TypeError("source: must be a mapping")
-    unknown_src = set(src_raw) - _SOURCE_KEYS
-    if unknown_src:
-        raise ValueError(f"source: unknown source keys {sorted(unknown_src)}")
-    for req in ("driver", "path", "table", "cursor_column", "order_by", "role", "text"):
-        if req not in src_raw:
-            raise ValueError(f"source: missing required key {req!r}")
-    if src_raw["driver"] != "sqlite":
-        raise ValueError(f"source: unsupported driver {src_raw['driver']!r} (v1: sqlite only)")
+    if src_raw is not None:
+        if not isinstance(src_raw, dict):
+            raise TypeError("source: must be a mapping")
+        unknown_src = set(src_raw) - _SOURCE_KEYS
+        if unknown_src:
+            raise ValueError(f"source: unknown source keys {sorted(unknown_src)}")
+        for req in ("driver", "path", "table", "cursor_column", "order_by", "role", "text"):
+            if req not in src_raw:
+                raise ValueError(f"source: missing required key {req!r}")
+        if src_raw["driver"] != "sqlite":
+            raise ValueError(f"source: unsupported driver {src_raw['driver']!r} (v1: sqlite only)")
 
     data_dir = Path(raw["data_dir"]).expanduser()
     default_state = data_dir / "autohooks-cursor.json"
@@ -103,7 +112,9 @@ def load_config(path: str | Path) -> AgentConfig:
         data_dir=data_dir,
         user_id=str(raw.get("user_id", "default")),
         layer=str(raw.get("layer", "user")),
-        source=SourceConfig(
+        source=None
+        if src_raw is None
+        else SourceConfig(
             driver="sqlite",
             path=Path(src_raw["path"]).expanduser(),
             table=str(src_raw["table"]),

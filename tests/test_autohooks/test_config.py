@@ -96,3 +96,38 @@ def test_master_key_optional(tmp_path: Path) -> None:
     assert load_config(p).master_key == "abc123"
     p2 = _write(tmp_path, MINIMAL)
     assert load_config(p2).master_key is None
+
+
+# --- `source:` is optional; only the daemon reads it. ---------------------
+#
+# A push-driven platform (DSH, Hermes) has no chat database to tail: it calls
+# inject/dispatch/recall and fires its own lifecycle events. Demanding a source
+# block from it refused every command for a driver it would never touch.
+
+NO_SOURCE = """
+data_dir: ~/.mcp-ariel-memory-house
+user_id: default
+layer: user
+"""
+
+
+def test_config_without_source_loads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg = load_config(_write(tmp_path, NO_SOURCE))
+    assert cfg.source is None
+    # Everything else keeps its defaults, so a push-only agent is a normal agent.
+    assert cfg.user_id == "default"
+    assert cfg.layer == "user"
+    assert cfg.poll_seconds == 15
+    assert cfg.state_file == Path(tmp_path / ".mcp-ariel-memory-house" / "autohooks-cursor.json")
+
+
+def test_malformed_source_is_still_a_hard_error(tmp_path: Path) -> None:
+    """An absent block is a choice; a misspelled one is a mistake. Only the first is silent."""
+    p = _write(tmp_path, NO_SOURCE + "\nsource: {driver: sqlite}\n")
+    with pytest.raises(ValueError, match="missing required key"):
+        load_config(p)
+
+    p2 = _write(tmp_path, NO_SOURCE + "\nsource: not-a-mapping\n")
+    with pytest.raises(TypeError, match="must be a mapping"):
+        load_config(p2)

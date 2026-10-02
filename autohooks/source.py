@@ -51,6 +51,11 @@ class SqliteSource:
 
     @classmethod
     def from_config(cls, cfg: AgentConfig) -> SqliteSource:
+        # `source:` is optional in the config because only the daemon reads it.
+        # The daemon checks first and reports properly; this is the guard for any
+        # caller that reaches here directly, and it narrows the type.
+        if cfg.source is None:
+            raise ValueError("this config declares no `source:` block; a source is required to tail a chat database")
         if cfg.source.driver != "sqlite":
             raise ValueError(f"unsupported driver: {cfg.source.driver!r} (v1: sqlite only)")
         return cls(cfg.source.path, cfg.source)

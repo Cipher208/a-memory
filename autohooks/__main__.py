@@ -100,9 +100,25 @@ def main(argv: list[str] | None = None) -> int:
     if not cfg.data_dir.exists():
         logger.error("data_dir does not exist: %s (is the agent's ariel instance provisioned?)", cfg.data_dir)
         return 2
-    if not cfg.source.path.exists():
-        logger.error("source DB does not exist: %s", cfg.source.path)
-        return 2
+
+    # The source is the daemon's whole reason to exist: it tails a chat database
+    # and turns new rows into events. Every other command is push-driven and
+    # never reads it, so this check sits under the one command that needs it —
+    # it used to sit above the dispatch and refused `inject`, `recall` and
+    # `dispatch` on platforms that legitimately have no database to tail (DSH,
+    # Hermes). Kept before build_app_context() so a missing source fails in
+    # milliseconds instead of after loading ariel.
+    if ns.command == "daemon":
+        if cfg.source is None:
+            logger.error(
+                "daemon needs a `source:` block in %s: it tails a chat database for events. "
+                "A platform that fires its own events uses inject/dispatch/recall instead.",
+                cfg_path,
+            )
+            return 2
+        if not cfg.source.path.exists():
+            logger.error("source DB does not exist: %s", cfg.source.path)
+            return 2
 
     apply_env(cfg)
 
@@ -135,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         from autohooks.daemon import run_daemon
         from autohooks.source import SqliteSource
 
+        assert cfg.source is not None  # checked above, before ariel was loaded
         source = SqliteSource.from_config(cfg)
         asyncio.run(
             run_daemon(
