@@ -50,6 +50,16 @@ class EpisodicMemory:
 
     async def save(self, user_id: str, summary: str, emotional_weight: float = 0.5, tags: list[str] | None = None) -> int:
         conn = await self._cm.get(DB_NAME)
+        # Dedup guard: an identical (layer, user_id, summary) must not land as a
+        # second row. The live base accumulated 468 such duplicates (17.5% of the
+        # table), every pair written seconds apart. Return the existing id.
+        cursor = await conn.execute(
+            "SELECT episode_id FROM episodes WHERE layer=? AND user_id=? AND summary=? ORDER BY episode_id ASC LIMIT 1",
+            (self.layer, user_id, summary),
+        )
+        row = await cursor.fetchone()
+        if row is not None:
+            return int(row[0])
         cursor = await conn.execute(
             "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (self.layer, user_id, summary, emotional_weight, json.dumps(tags or []), time.time()),
