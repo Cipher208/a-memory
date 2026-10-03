@@ -16,6 +16,19 @@ from pathlib import Path
 # before any other project import.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Pin our own site-packages ahead of any interloper site dir (same bug class
+# for third-party packages: our `mcp` must never lose to a same-named module
+# from another env on sys.path). No-op when nothing foreign precedes us.
+import site as _site
+
+_site_dirs = _site.getsitepackages()
+for _sp in _site_dirs:
+    if _sp in sys.path:
+        sys.path.remove(_sp)
+for _sp in reversed(_site_dirs):
+    sys.path.insert(1, _sp)
+del _sp, _site_dirs, _site
+
 import argparse
 import asyncio
 import json

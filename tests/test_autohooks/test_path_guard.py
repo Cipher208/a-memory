@@ -29,3 +29,21 @@ def test_repo_root_first_despite_pretender(monkeypatch, tmp_path):
     spec = importlib.util.find_spec("mcp_server")
     assert spec is not None and spec.origin is not None
     assert spec.origin.startswith(REPO_ROOT), spec.origin
+
+
+def test_venv_site_packages_precede_interlopers(monkeypatch, tmp_path):
+    """Our third-party deps (e.g. `mcp`) must resolve from our own venv, never
+    from a same-named module in another env that leaked onto sys.path."""
+    evil = tmp_path / "evil-site"
+    evil.mkdir()
+    (evil / "mcp.py").write_text('raise ImportError("poisoned mcp")\n')
+    monkeypatch.syspath_prepend(str(evil))
+    for mod in ("mcp", "autohooks.__main__"):
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+    importlib.invalidate_caches()
+
+    import autohooks.__main__  # noqa: F401  -- runs both pins at top
+
+    spec = importlib.util.find_spec("mcp")
+    assert spec is not None and spec.origin is not None
+    assert "evil-site" not in spec.origin, spec.origin
