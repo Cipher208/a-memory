@@ -7,13 +7,20 @@ Import order is the contract: parse args → load config (ariel-free) → set en
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Pin our own tree first: the gateway spawns this CLI with its own cwd, so our
+# `mcp_server/` package otherwise resolves through whatever precedes it on
+# sys.path — including a same-named module from an unrelated package. Must run
+# before any other project import.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import argparse
 import asyncio
 import json
 import logging
 import os
-import sys
-from pathlib import Path
 from typing import Any
 
 from autohooks.config import AgentConfig, dispatch_layer as _dispatch_layer, load_config
