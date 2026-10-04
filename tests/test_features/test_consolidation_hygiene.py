@@ -200,3 +200,53 @@ async def test_broadcast_episode_skipped_at_promotion(cm):
     values = " | ".join(str(getattr(r, "value", r)) for r in rows)
     assert "f9eaeb6" not in values and "Phase 1" not in values, f"broadcast leaked to L4: {values}"
     assert "e5 сервис" in values
+
+
+# ── markdown prose is not a dump (2026-10-04) ──
+#
+# The head class used to carry the whole markdown set (`* # | ~ = !`), and the
+# personas write IN markdown, so the L0 intake door silently discarded their own
+# words. Measured on the live bases before the fix: of Lucy's 734 substantive
+# assistant messages in one replay window the guard dropped 591 (80%), 584 of
+# them opening with her italics — `*Поворачиваю тебя лицом к себе…*`. Not one
+# carried a structural marker. Ksаль lost 273 more to the same class.
+#
+# `_looks_like_dump` is the case that matters: it runs at the input door, before
+# L0, so a discard leaves no row anywhere to be found later.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "*Поворачиваю тебя лицом к себе. Локоть под голову — смотрю в глаза.*",  # roleplay italics
+        "**Готово, госпожа.** Все три пункта закрыты с живыми доказательствами.",  # bold opener
+        "## Ночь закрыта, Лили. Итог последнего часа:",  # markdown heading
+        "| Репо | Состояние |\n|---|---|\n| ariel | чисто |",  # markdown table
+        "~черновик~ — не канон",  # strikethrough
+        "=== раздел ===",  # separator
+    ],
+)
+def test_markdown_prose_is_not_a_dump(text):
+    from lifecycle.consolidation import _looks_like_dump
+
+    assert not _looks_like_dump(text), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[{"type": "text", "text": "*я дочитываю план"}',  # JSON message array
+        '{"status": "success", "output": "944\\nconnection.md"}',  # raw tool JSON
+        "[IMPORTANT: You are running as a subagent]",  # runtime reminder
+        "[Recent Summary (d0, node 41)]\n#",  # LCM echo
+        '"Without using any tools: reply with the exact first heading line',  # quoted dump
+        "```python\nprint(1)",  # code fence
+        "<system-reminder>\nA skill is reusable",  # injected tag
+        'prefix tool_use_id: "call_00_ET"',  # tool marker (not at the head)
+    ],
+)
+def test_structural_dumps_are_still_caught(text):
+    """Narrowing the class must not open the door it was built to close."""
+    from lifecycle.consolidation import _looks_like_dump
+
+    assert _looks_like_dump(text), text

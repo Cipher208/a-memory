@@ -84,19 +84,40 @@ async def main() -> int:
     from mcp_server.server import PRIMITIVE_TOOLS, resolve_exposure
     from mcp_server.tools_layer import _register_tools
 
-    check("41 tools registered", len(_register_tools) == 41, f"got {len(_register_tools)}")
-    check("6 primitives", len(PRIMITIVE_TOOLS) == 6)
+    # These two used to assert a frozen inventory ("41 tools", "6 primitives")
+    # and spent their time reporting their own age — 66 and 7 now, so the script
+    # cried wolf on every run and a real failure would have read as more of the
+    # same noise. A count is not a contract. What must hold is that the names the
+    # exposure tiers route actually exist, and that a primitive is a real tool.
     all_names = set(_register_tools)
+    ops_tools = {"memory_proposals", "memory_watch", "memory_report_card"}
+    check(
+        "registry carries the tools the tiers route",
+        (all_names & ops_tools) == ops_tools,
+        f"missing {sorted(ops_tools - all_names)}",
+    )
+    check("primitives are registered tools", set(PRIMITIVE_TOOLS) <= all_names, f"unregistered {sorted(set(PRIMITIVE_TOOLS) - all_names)}")
+    print(f"    inventory: {len(all_names)} tools, {len(PRIMITIVE_TOOLS)} primitives")
     prim = resolve_exposure("primitives", all_names)
-    check("primitives-only hides ops tools", "memory_proposals" not in prim and "memory_watch" not in prim and "memory_report_card" not in prim)
+    check("primitives-only hides ops tools", not (prim & ops_tools))
     review = resolve_exposure("primitives,review", all_names)
     check("review tier exposes proposals+report card", {"memory_proposals", "memory_report_card"} <= review)
 
-    # ── 2. dispatcher: 8 known events ─────────────────────────────────────
+    # ── 2. dispatcher: every KNOWN_EVENT has a handler ────────────────────
     section("2. dispatch_event — KNOWN_EVENTS")
     from hooks.external import KNOWN_EVENTS, dispatch_event
+    from hooks.registry import hook_registry
 
-    check("8 known events", len(KNOWN_EVENTS) == 8, f"got {len(KNOWN_EVENTS)}")
+    # The old check asserted the count was 8 (11 now). The count was never the
+    # contract. What breaks a platform is an event declared dispatchable with NO
+    # handler behind it: `fire` answers {"skipped": True, "reason":
+    # "no_handlers"} and the event dies silently. That is not hypothetical — it
+    # is precisely how the house's own plugin spent days reading
+    # `handler_count: 0` for a whole persona while every call returned cleanly.
+    registered = hook_registry.list_hooks()
+    handlerless = sorted(e for e in KNOWN_EVENTS if not registered.get(e))
+    print(f"    inventory: {len(registered)} hook names, {sum(registered.values())} handlers")
+    check(f"all {len(KNOWN_EVENTS)} known events have a handler", not handlerless, f"no handler: {handlerless}")
     try:
         await dispatch_event("nope", "user", "verify", {}, mem, graph, rag)
         check("unknown event raises", False)
@@ -150,7 +171,13 @@ async def main() -> int:
     check("cursor at max id (6)", cursor == 6, f"got {cursor}")
     conn = sqlite3.connect(SCRATCH / "memory.db")
     staged = conn.execute("SELECT count(*) FROM mutation_proposals WHERE source IN ('auto_save', 'dream') AND status='pending'").fetchone()[0]
-    check("high-score + 2 markers staged (3 proposals)", staged == 3, f"got {staged}")
+    # Two dream markers, and NOT the row-4 high-score message. That message used
+    # to be staged under the literal key "auto_save"; the branch was removed on
+    # 2026-09-11 (52 same-key proposals in a week, none a distinct decision) and
+    # high-score text now routes to L4 through the distiller. Kept as an exact
+    # number on purpose: it is the assertion that the removed branch has not
+    # crept back, and 3 here would mean raw chat text is queueing for review again.
+    check("2 dream markers staged, high-score routed to L4 instead", staged == 2, f"got {staged}")
     dispatch_rows = conn.execute("SELECT count(*) FROM memory_dispatch_log").fetchone()[0]
     check("dispatch log rows written", dispatch_rows >= 3, f"got {dispatch_rows}")
     conn.close()

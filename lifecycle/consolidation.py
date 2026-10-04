@@ -26,7 +26,22 @@ logger = logging.getLogger(__name__)
 # table) must never become L4 "facts" — they once produced keys like
 # `ep_[{"type":_"text"...` in prod. A real summary is a prose phrase: no
 # structural markup at the head, no newlines.
-_TRANSCRIPT_HEAD = re.compile(r"^\s*(\[|\{|\]|\"|`|<|\||\\|#|!|~|=|\*)")
+#
+# STRUCTURAL heads only. This class used to carry the whole markdown set —
+# `* # | ~ = !` — which made the guard eat the personas' own prose, because
+# markdown formatting is how they write: an italic stage direction is a roleplay
+# beat, and a `##` line is a heading. Measured on the live bases: of one persona's
+# 734 substantive assistant messages in a replay window the guard discarded 591
+# (80%), and 584 of those opened with her italics; another persona lost 273 more
+# to the same class. Not one of those discarded texts carried a structural
+# marker. The intent was always "`[{"`-style message arrays and `[ariel recall]`
+# echoes" (see the docstring below), and markdown punctuation was never part of
+# it — so this restores the documented rule rather than broadening it.
+#
+# Kept, each doing measured work in prod: `[` (JSON arrays, `[IMPORTANT:`
+# reminders, LCM summary echoes), `{` (raw tool JSON), `"` (quoted dumps),
+# backtick (code fences), `<` (`<system-reminder>`/`<tool_use>` tags), `\`.
+_TRANSCRIPT_HEAD = re.compile(r"^\s*(\[|\{|\]|\"|`|<|\\)")
 
 
 def _looks_like_transcript(summary: str) -> bool:
