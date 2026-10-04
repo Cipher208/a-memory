@@ -75,8 +75,21 @@ def classify(row: dict[str, Any]) -> tuple[str, str | None, str]:
 
 
 def _rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    conn.row_factory = sqlite3.Row
-    cur = conn.execute("SELECT id, ts, event, layer, raw_type, user_id, text, status, decisions FROM l0_journal WHERE status='received' ORDER BY id")
+    """Every stranded row, or an empty list when this base has no L0 journal.
+
+    Not every `memory.db` under the profile is an a-memory database: some are
+    alternative layouts with no `l0_journal` at all. A missing table means "nothing
+    to clean", not "crash" — the first version raised an `OperationalError`
+    traceback on such a base, which reads as a failure of the cleanup rather than a
+    property of the base.
+    """
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(
+            "SELECT id, ts, event, layer, raw_type, user_id, text, status, decisions FROM l0_journal WHERE status='received' ORDER BY id"
+        )
+    except sqlite3.OperationalError:
+        return []
     return [dict(r) for r in cur.fetchall()]
 
 

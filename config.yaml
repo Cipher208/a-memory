@@ -31,6 +31,23 @@ limits:
   l3_episodic_limit: 1000
   l4_core_limit: 5000
 
+# === L0 journal ===
+# Both keys are read by the nightly pass (lifecycle/l0_tiers). A missing key takes
+# the code default written here, so an agent config that predates them keeps working.
+l0:
+  # `received` means "arrived, awaiting processing" — and until this existed that
+  # wait had no end, so every early return in the capture path accumulated rows
+  # forever (353 on one base, the oldest from 26.07). Rows still `received` after
+  # this many days are closed as `gated_out` / `never_processed`. Deliberate
+  # "wake later" imports are `parked` and are exempt.
+  received_ttl_days: 7
+  # Upper bound on rows per replay run. A config change re-opens every row whose
+  # decisions carry the old config_hash — 564 refused rows on one live base — and
+  # without a bound the whole backlog would be distilled in one burst.
+  replay_max_rows: 200
+  # Nightly tiering (warm 30-180d: preview + zlib; cold >180d: archive + delete).
+  tiers_enabled: true
+
 # === Hooks ===
 # Single source of truth — no code-side duplicate list.
 # Missing key = hook enabled; disable explicitly with `false`.

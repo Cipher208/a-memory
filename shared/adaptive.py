@@ -83,6 +83,22 @@ class AdaptiveThresholdManager:
         await self.update(score)
         return {"importance": score, "threshold": threshold, "bypass": score < threshold}
 
+    async def peek(self, score: float) -> dict[str, Any]:
+        """Gate a score WITHOUT feeding the EMA — for processing a backlog.
+
+        `gate` trains the threshold on every score it sees, which is right for the
+        live path (one message, at the moment it arrives) and wrong for a replay:
+        a replay walks a backlog whose scores are near zero, and
+        `T = ALPHA*score + (1-ALPHA)*T` pulls the threshold down with every row.
+        Measured: 365 refused rows would take a live threshold from 0.240 to the
+        0.1 floor, after which everything passes and the gate stops existing. An
+        old row is evidence about the past, not a signal about what to accept now.
+
+        Same verdict shape as `gate`, so callers can be swapped deliberately.
+        """
+        threshold = await self.get_threshold()
+        return {"importance": score, "threshold": threshold, "bypass": score < threshold}
+
     async def _save(self, value: float) -> None:
         """Persist threshold to DB."""
         try:

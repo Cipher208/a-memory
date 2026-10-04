@@ -192,6 +192,41 @@ def _ensure_preview_column(db_path: Any) -> None:
         logger.debug("text_preview column migration failed: %s", _e)
 
 
+async def _close_unaccounted(tracker: dict[str, Any]) -> None:
+    """Close a row the capture path captured but never stamped. Never raises.
+
+    `_auto_save_text_body` names the row it wrote into `tracker`; this checks
+    afterwards that the row reached a terminal status. Reaching this function with
+    the row still `received` means the body returned — or raised — without giving it
+    one, which is the exact defect that stranded 353 rows on a live base, the oldest
+    from 26.07, with no reader and no expiry.
+
+    Three early returns were found and fixed by hand (gate bypass, empty route,
+    DREAM marker). Listing exits does not scale: it repairs the branches someone
+    already wrote, not the one added next month. This is the part that survives the
+    next branch.
+
+    `gated_out` is the honest status — nothing was saved — and `unaccounted_exit`
+    names the bug instead of dressing it as a plausible verdict. WARNING, not debug:
+    this should never fire, and a silent one is how the original went unnoticed for
+    months.
+    """
+    l0_id = tracker.get("l0_id")
+    if not l0_id:
+        return
+    try:
+        from shared.connection import connection_manager
+
+        conn = await connection_manager.get("memory.db")
+        row = await (await conn.execute("SELECT status FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
+        if row is None or row[0] != "received":
+            return
+        logger.warning("auto_save_text left l0 row %s unaccounted for — closing it", l0_id)
+        await _close_l0_row(int(l0_id), "gated_out", reason="unaccounted_exit")
+    except Exception as _e:
+        logger.debug("unaccounted-exit close failed: %s", _e)
+
+
 async def auto_save_text(
     mem: Any,
     graph: Any,
@@ -204,6 +239,48 @@ async def auto_save_text(
     persona_owner: bool = False,
     kind: str = "",
     ts: float | None = None,
+) -> dict[str, Any]:
+    """Public entry point — runs the body, then proves the L0 row was not left behind.
+
+    The contract lives in `_auto_save_text_body` below. This wrapper exists only
+    because that contract was broken three separate times by three separate early
+    returns, each one stranding its journal row. The exits are listed and fixed, but
+    the wrapper is what makes the guarantee independent of that list.
+    """
+    tracker: dict[str, Any] = {}
+    try:
+        return await _auto_save_text_body(
+            mem,
+            graph,
+            user_id,
+            text,
+            event=event,
+            source_msg_id=source_msg_id,
+            role=role,
+            persona_owner=persona_owner,
+            kind=kind,
+            ts=ts,
+            tracker=tracker,
+        )
+    finally:
+        # `finally`, not the normal path: an exception mid-pipeline strands the row
+        # exactly as an early return does.
+        await _close_unaccounted(tracker)
+
+
+async def _auto_save_text_body(
+    mem: Any,
+    graph: Any,
+    user_id: str,
+    text: str,
+    *,
+    event: str = "new_message",
+    source_msg_id: int | None = None,
+    role: str = "",
+    persona_owner: bool = False,
+    kind: str = "",
+    ts: float | None = None,
+    tracker: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """evaluate_importance → threshold-gated saves + one memory_dispatch_log row.
 
@@ -311,6 +388,12 @@ async def auto_save_text(
         return await _refuse("duplicate_l0_block")
 
     l0_id: int | None = await capture(event, l0_layer, user_id, text, source_msg_id=source_msg_id, ts_override=ts)
+    # Report the captured row to the public wrapper, which checks after this body
+    # returns (or raises) that the row reached a terminal status. Only the wrapper
+    # needs this: it is the one place that can see an exit nobody remembered to
+    # handle. See `_close_unaccounted`.
+    if tracker is not None and l0_id is not None:
+        tracker["l0_id"] = l0_id
 
     # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
     # NER unavailable/crashed → the regex tier inside sanitize still ran.

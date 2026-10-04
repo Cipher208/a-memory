@@ -195,7 +195,8 @@ async def test_a_replay_dates_history_by_its_source_and_not_by_the_run(cm: Any) 
     )
     assert rid is not None
 
-    result = await replay(since_days=60)
+    # respect_gate=False: тест про ДАТУ повтора, а не про отбор текста гейтом.
+    result = await replay(since_days=60, respect_gate=False)
     assert result["processed"] >= 1, result
 
     assert abs(await _journal_ts(cm, rid) - source_ts) < 2.0
@@ -222,9 +223,9 @@ async def test_the_replay_window_reaches_rows_older_than_a_week(cm: Any) -> None
     assert rid is not None
 
     # The default window cannot see it — this is the documented reason those days were empty.
-    assert (await replay(since_days=7))["processed"] == 0
+    assert (await replay(since_days=7, respect_gate=False))["processed"] == 0
     # A wide enough window can, which is what the backfill will use.
-    assert (await replay(since_days=60))["processed"] == 1
+    assert (await replay(since_days=60, respect_gate=False))["processed"] == 1
 
 
 class _NullMem:

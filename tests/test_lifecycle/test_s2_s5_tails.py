@@ -214,7 +214,8 @@ async def test_all_distill_call_sites_pass_source_rid(cm, tmp_path, monkeypatch)
     # 1) replay: строка L0 → дистилляция с source_rid
     rid = await capture("new_message", "user", "rp", "решила кэш чистить по расписанию еженощно")
     assert rid is not None
-    res = await replay(since_days=1)
+    # respect_gate=False: тест про source_rid на месте вызова, а не про отбор.
+    res = await replay(since_days=1, respect_gate=False)
     assert res["processed"] >= 1
     conn = await cm.get("memory.db")
     rows = await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='rp'")).fetchall()

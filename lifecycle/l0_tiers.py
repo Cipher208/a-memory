@@ -9,7 +9,11 @@
   <data_dir>/l0_cold/<month>.clack.jsonl
   (CLACK: one line = one JSON block = decision-vector meta + plaintext).
 
-The received status is NEVER archived or truncated. Gate: l0.tiers_enabled.
+The received status is NEVER archived or truncated; it is closed by the nightly
+expiry instead (`close_overdue_received`), which is what stops a stranded row from
+accumulating forever. `parked` rows — deliberate "keep the raw text, decide later"
+imports — are exempt from that expiry and from tiering; `replay --ids` wakes them.
+Gate: l0.tiers_enabled.
 """
 
 from __future__ import annotations
@@ -37,6 +41,69 @@ _PREVIEW_CAP = 400
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…。])\s+")
 
 
+async def close_overdue_received(
+    *,
+    ttl_days: float | None = None,
+    now: float | None = None,
+    cm: Any | None = None,
+) -> dict[str, Any]:
+    """Close `received` rows older than the TTL as `gated_out` / `never_processed`.
+
+    `received` means "arrived, awaiting processing", and until this existed nothing
+    ever gave that wait an end: the status is explicitly never tiered or archived,
+    and the only reader (`replay`) ran only when a human typed the command. Every
+    early return in the capture path therefore accumulated forever — 353 rows on
+    one live base, the oldest from 26.07, with no reader and no expiry.
+
+    The reason is recorded as a decision, not just a status, so the close is
+    reproducible and the config_hash window stays meaningful: an unchanged config
+    leaves the row closed, a changed one re-opens it for replay.
+
+    Parked rows are deliberately NOT touched — they are the owner's "wake later",
+    not a stranded wait. `raw_type='import'` rows predating the `parked` status are
+    migrated to `parked` (migration g27) for the same reason.
+    """
+    from config import config
+
+    if ttl_days is None:
+        ttl_days = float(config.get("l0", "received_ttl_days", default=7))
+    cm = cm or connection_manager
+    conn = await cm.get(DB_NAME)
+    ts_now = now if now is not None else time.time()
+    cutoff = ts_now - ttl_days * 86400
+    rows = list(
+        await (
+            await conn.execute(
+                # `raw_type != 'import'` is the second line of defence, not the
+                # mechanism: migration g27 renames those rows to `parked`, and this
+                # clause keeps them safe if that migration has not run or failed
+                # halfway. The cost of being wrong here is one owner-requested
+                # history silently closed, so the redundant guard is worth it.
+                "SELECT id, decisions FROM l0_journal WHERE status='received' AND raw_type != 'import' AND ts <= ? ORDER BY id",
+                (cutoff,),
+            )
+        ).fetchall()
+    )
+    if not rows:
+        return {"closed": 0, "ttl_days": ttl_days}
+
+    from features.replay import config_hash
+
+    chash = config_hash()
+    for row in rows:
+        try:
+            decisions: list[dict[str, Any]] = json.loads(row["decisions"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            decisions = []
+        decisions.append({"gate": "g1", "config_hash": chash, "ts": ts_now, "reason": "never_processed"})
+        await conn.execute(
+            "UPDATE l0_journal SET status='gated_out', processed_at=?, decisions=? WHERE id=?",
+            (ts_now, json.dumps(decisions, ensure_ascii=False), row["id"]),
+        )
+    await conn.commit()
+    return {"closed": len(rows), "ttl_days": ttl_days}
+
+
 def _preview(text: str) -> str:
     """Build an extractive preview: first ~2 sentences (hard cap on characters)."""
     parts = _SENTENCE_SPLIT.split(text.strip(), maxsplit=_PREVIEW_SENTENCES)
@@ -56,16 +123,24 @@ async def _ensure_schema(cm: Any) -> None:
             user_id TEXT NOT NULL DEFAULT 'default',
             decisions TEXT NOT NULL DEFAULT '[]',
             archived_at REAL NOT NULL,
-            text TEXT NOT NULL
+            text TEXT NOT NULL,
+            hash_prev TEXT,
+            hash_self TEXT
         )"""
     )
     for ddl in (
         "ALTER TABLE l0_journal ADD COLUMN tier TEXT",
         "ALTER TABLE l0_journal ADD COLUMN text_z BLOB",
+        # The archive keeps the row's chain links: tiering deletes the journal row,
+        # and without these columns the link dies with it and `verify_chain` reads
+        # the next surviving row as tampered with.
+        "ALTER TABLE l0_cold_archive ADD COLUMN hash_prev TEXT",
+        "ALTER TABLE l0_cold_archive ADD COLUMN hash_self TEXT",
     ):
         with contextlib.suppress(Exception):  # column already exists
             await conn.execute(ddl)
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_cold_ts ON l0_cold_archive(ts)")
+    await conn.commit()
 
 
 def _parse_decisions(raw: Any) -> list[dict[str, Any]]:
@@ -99,7 +174,7 @@ async def tier_l0(
     cold_rows = list(
         await (
             await conn.execute(
-                f"""SELECT id, ts, event, raw_type, layer, user_id, decisions, text, text_z
+                f"""SELECT id, ts, event, raw_type, layer, user_id, decisions, text, text_z, hash_prev, hash_self
                     FROM l0_journal
                     WHERE status IN ({_PLACEHOLDERS}) AND ts <= ?
                     ORDER BY id""",
@@ -108,17 +183,32 @@ async def tier_l0(
         ).fetchall()
     )
     months: set[str] = set()
-    for rid, ts, event, raw_type, layer, user_id, decisions, text, text_z in cold_rows:
+    for rid, ts, event, raw_type, layer, user_id, decisions, text, text_z, hash_prev, hash_self in cold_rows:
         full = text
         if text_z:
             with contextlib.suppress(Exception):
                 full = zlib.decompress(bytes(text_z)).decode("utf-8")
-        # id is explicitly the archive PK: re-runs are idempotent (OR IGNORE), no duplicates
+        # id is explicitly the archive PK: re-runs are idempotent (OR IGNORE), no duplicates.
+        # hash_prev/hash_self travel with the row: deleting it from the journal would
+        # otherwise take its chain link with it and break verification for every row
+        # that follows.
         await conn.execute(
             """INSERT OR IGNORE INTO l0_cold_archive
-               (id, ts, event, raw_type, layer, user_id, decisions, archived_at, text)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (rid, ts, event, raw_type, layer, user_id, decisions if decisions is not None else "[]", archived_at, full),
+               (id, ts, event, raw_type, layer, user_id, decisions, archived_at, text, hash_prev, hash_self)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                rid,
+                ts,
+                event,
+                raw_type,
+                layer,
+                user_id,
+                decisions if decisions is not None else "[]",
+                archived_at,
+                full,
+                hash_prev,
+                hash_self,
+            ),
         )
         await conn.execute("DELETE FROM l0_journal WHERE id = ?", (rid,))
         months.add(time.strftime("%Y-%m", time.gmtime(ts)))

@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import json
 import time
+import zlib
 from typing import Any
 
 from shared.connection import connection_manager
@@ -18,6 +19,16 @@ from shared.fractional_index import midpoint
 # fork the chain (chaos-probe finding: two writers chained from the same
 # head → verify_chain reported a broken link).
 _capture_lock = asyncio.Lock()
+
+# `received` means "arrived, awaiting processing" and is given an expiry by the
+# nightly pass. `parked` means "deliberately sleeping, wake on request" — an
+# import that restores a history without distilling it. One status cannot carry
+# both meanings: an expiry on `received` would destroy the import's whole point,
+# and no expiry leaves every early return accumulating forever. `parked` rows are
+# exempt from the expiry, from tiering and from window replay; `replay --ids`
+# wakes them by name.
+STATUS_RECEIVED = "received"
+STATUS_PARKED = "parked"
 
 
 def _content_hash(layer: str, user_id: str, text: str) -> str:
@@ -59,20 +70,26 @@ async def capture(
     raw_type: str | None = None,
     decisions: list[dict[str, Any]] | None = None,
     ts_override: float | None = None,
+    park: bool = False,
 ) -> int | None:
     """Append-only intake. Never raises — an L0 failure must not block the flow.
 
     S17 #5: SHA-256 block dedup — re-emitting the same output (same text and
     layer/user, content_hash column) does not create a row; the rid of the
-    first record is returned. Hash-chain v2 is maintained for EVERY capture
-    attempt (including dedup hits), so tamper-evidence does not depend on dedup.
+    first record is returned. A dedup hit writes no row of its own and therefore
+    no chain link either; the chain stays whole because it covers the rows that
+    exist, not the attempts that were folded into them.
+
+    `park=True` writes STATUS_PARKED instead of STATUS_RECEIVED: the row is a
+    deliberate "keep the raw text, decide later" import, exempt from the nightly
+    expiry. See the comment on the two statuses above.
     """
     try:
         # In-process serialization; cross-process safety comes from
         # BEGIN IMMEDIATE below (SQLite single-writer) plus the CAS-style
         # chain write (UPDATE only applies if the chain head is unchanged).
         async with _capture_lock:
-            return await _capture_inner(event, layer, user_id, text, source_msg_id, raw_type, decisions, ts_override)
+            return await _capture_inner(event, layer, user_id, text, source_msg_id, raw_type, decisions, ts_override, park)
     except Exception:
         return None
 
@@ -86,6 +103,7 @@ async def _capture_inner(
     raw_type: str | None,
     decisions: list[dict[str, Any]] | None,
     ts_override: float | None,
+    park: bool = False,
 ) -> int | None:
     try:
         conn = await connection_manager.get(DB_NAME)
@@ -118,17 +136,18 @@ async def _capture_inner(
         order_key: str | None = None
         with contextlib.suppress(Exception):
             order_key = midpoint(prev_key) if prev_key else midpoint(None)
-        params = (ts, event, source_msg_id, layer, user_id, text, rt, json.dumps(decisions or [], ensure_ascii=False))
+        status = STATUS_PARKED if park else STATUS_RECEIVED
+        params = (ts, event, source_msg_id, layer, user_id, text, rt, status, json.dumps(decisions or [], ensure_ascii=False))
         try:
             cur = await conn.execute(
                 "INSERT INTO l0_journal (ts, event, source_msg_id, layer, user_id, text, raw_type, status, decisions, order_key, content_hash)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?)",
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (*params, order_key, content_hash),
             )
         except Exception:  # content_hash/order_key columns not present yet (pre-migration DB) — write without them
             cur = await conn.execute(
                 "INSERT INTO l0_journal (ts, event, source_msg_id, layer, user_id, text, raw_type, status, decisions)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?)",
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 params,
             )
         rid = int(cur.lastrowid or 0)
@@ -157,8 +176,55 @@ def _chain_digest_v1(hash_prev: str, rt: str, ts: float, text: str) -> str:
     return hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}"[:200].encode()).hexdigest()[:16]
 
 
+def _captured_text(text: Any, text_z: Any) -> str:
+    """Return the text the chain was computed over, undoing the warm tier.
+
+    The digest covers the text as it was CAPTURED, but the warm tier replaces
+    `text` with an extractive preview and leaves the full value only
+    zlib-compressed in `text_z`. Recomputing over the preview made a correctly
+    tiered row read as tampered with — the first row to cross 30 days would have
+    broken the chain by being processed exactly as designed.
+    """
+    if not text_z:
+        return text or ""
+    try:
+        return zlib.decompress(bytes(text_z)).decode("utf-8")
+    except Exception:
+        return text or ""
+
+
+async def _archived_chain_rows(conn: Any) -> list[tuple[Any, ...]]:
+    """Chain rows from l0_cold_archive in id order, or [] when they cannot be trusted.
+
+    Tiering DELETES a row from the journal once it is archived, and the chain was
+    recomputed over the journal alone — so the next surviving row carried a
+    `hash_prev` naming a row that no longer existed and the chain read as broken
+    at the very moment tiering did its job. The archive carries its own
+    hash_prev/hash_self, which is what lets the union be walked in capture order.
+    Bases whose archive predates those columns contribute no rows: their chain
+    starts at the oldest surviving journal row, and that gap is visible as such
+    rather than reported as tampering.
+    """
+    try:
+        cols = {r[1] for r in await (await conn.execute("PRAGMA table_info(l0_cold_archive)")).fetchall()}
+        if not {"hash_prev", "hash_self"} <= cols:
+            return []
+        rows = await (await conn.execute("SELECT id, hash_prev, hash_self, raw_type, ts, text FROM l0_cold_archive ORDER BY id")).fetchall()
+    except Exception:
+        return []
+    return [(int(r[0]), r[1] or "", r[2] or "", r[3], r[4], r[5] or "") for r in rows]
+
+
 async def verify_chain() -> list[dict[str, Any]]:
-    """Recompute the hash-chain over all l0_journal rows → broken records.
+    """Recompute the hash-chain over every captured row → broken records.
+
+    The chain spans the journal AND the cold archive, because tiering moves rows
+    between them: a link that did not survive the move would fail its own
+    tiering. Text is read as captured, so a warm row is verified against the
+    full text decompressed from `text_z` rather than against its preview.
+
+    Rows are ordered by id, which is capture order — not by ts, because imported
+    messages carry original timestamps and would otherwise interleave wrongly.
 
     Tampering with one record breaks the recomputation for it and for every
     subsequent record (chain nature), so the scan stops at the first broken
@@ -167,12 +233,22 @@ async def verify_chain() -> list[dict[str, Any]]:
     """
     try:
         conn = await connection_manager.get(DB_NAME)
-        rows = list(await (await conn.execute("SELECT id, hash_prev, hash_self, raw_type, ts, text FROM l0_journal ORDER BY id")).fetchall())
+        jcols = {r[1] for r in await (await conn.execute("PRAGMA table_info(l0_journal)")).fetchall()}
+        if not jcols:
+            return [{"id": -1, "error": "verify failed"}]
+        has_z = "text_z" in jcols
+        cols = "id, hash_prev, hash_self, raw_type, ts, text" + (", text_z" if has_z else "")
+        jrows = list(await (await conn.execute(f"SELECT {cols} FROM l0_journal ORDER BY id")).fetchall())
+        combined: list[tuple[Any, ...]] = [
+            (int(r[0]), r[1] or "", r[2] or "", r[3], r[4], _captured_text(r[5], r[6] if has_z else None)) for r in jrows
+        ]
+        combined.extend(await _archived_chain_rows(conn))
+        combined.sort(key=lambda r: r[0])
     except Exception:
         return [{"id": -1, "error": "verify failed"}]
     broken: list[dict[str, Any]] = []
     expected_prev = ""
-    for rid, hash_prev, hash_self, rt, ts, text in rows:
+    for rid, hash_prev, hash_self, rt, ts, text in combined:
         digest = _chain_digest(expected_prev, rt, ts, text)
         digest_v1 = _chain_digest_v1(expected_prev, rt, ts, text)
         if hash_prev != expected_prev or (hash_self != digest and hash_self != digest_v1):

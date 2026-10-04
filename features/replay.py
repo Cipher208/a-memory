@@ -21,6 +21,7 @@ import json
 import time
 from typing import Any
 
+from config import config
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
@@ -98,7 +99,14 @@ def config_hash() -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-async def replay(*, since_days: int = 7, gate: str = "g1", ids: list[int] | None = None) -> dict[str, int]:
+async def replay(
+    *,
+    since_days: int = 7,
+    gate: str = "g1",
+    ids: list[int] | None = None,
+    respect_gate: bool | None = None,
+    max_rows: int | None = None,
+) -> dict[str, int]:
     """Re-run the G1 distiller over the l0_journal window [now-since_days, now].
 
     Selects rows with status in ('received', 'gated_out'); skips rows whose
@@ -108,13 +116,34 @@ async def replay(*, since_days: int = 7, gate: str = "g1", ids: list[int] | None
     extra_tags omitted — rules were applied at first pass) and its status set
     to 'promoted_l4' / 'saved_l3' / 'gated_out' with processed_at=now.
 
+    THE GATE, AND WHY IT IS APPLIED HERE NOW
+
+    This used to distil every selected row without consulting the importance gate
+    at all, so the two paths disagreed about the same text: a message the live
+    hook refused would be written to memory by a replay. That was tolerable while
+    a human typed every replay, and not tolerable once the nightly pass calls it
+    automatically — it would have re-admitted the refused backlog, which is the
+    exact work the gate exists to do.
+
+    The gate's own scorer is used (`features.importance.evaluate_importance` plus
+    the rules boost), NOT `score_text`, so a replayed row is judged by the same
+    measure the live path used. The two scorers are not interchangeable:
+    measured on live rows, they disagreed on 99 of 365 refused rows.
+
+    The threshold is read through `adaptive_threshold.peek`, not `gate`: `gate`
+    trains the EMA, and a backlog of near-zero scores would drag a live threshold
+    down to the 0.1 floor until everything passed. See `peek`.
+
     `ids` narrows the run to exactly those journal rows, ignoring both the window
-    and the status filter. Why this exists: when an early return strands rows, the
-    backlog is a MIXTURE of chatter the importance gate refused and a handful of
-    long messages carrying real decisions. Replaying the window would distil all of
-    it, and replay bypasses the gate by design — so it would put the refused chatter
-    straight back into memory. Naming the ids is the only way to wake what deserves
-    waking and leave the rest closed.
+    and the status filter, AND is treated as a human override of the gate — the
+    whole point of naming a row is "this one, despite the gate". The override is
+    written into the decision as `gate_override`, so the record shows a person
+    chose it rather than implying the gate admitted it.
+
+    `max_rows` bounds a single run. A config change re-opens every row whose
+    decisions carry the old config_hash — 564 refused rows on one live base — and
+    without a bound the whole backlog would be distilled in one burst. Bounding it
+    lets the backlog drain over successive nights.
     """
     from core import MemoryManager
     from graph.epistemic import EpistemicGraph
@@ -140,7 +169,17 @@ async def replay(*, since_days: int = 7, gate: str = "g1", ids: list[int] | None
             )
         ).fetchall()
 
+    # An explicit id list is a human decision to wake that row; a window run is
+    # automation and obeys the gate. Callers may override either way.
+    if respect_gate is None:
+        respect_gate = not ids
+    if max_rows is None:
+        max_rows = int(config.get("l0", "replay_max_rows", default=200))
+    if max_rows > 0:
+        rows = rows[:max_rows]
+
     processed = skipped = conflicts = 0
+    gated = 0
     for row in rows:
         decisions: list[dict[str, Any]] = json.loads(row["decisions"] or "[]")
         if any(d.get("gate") == gate and d.get("config_hash") == chash for d in decisions):
@@ -165,6 +204,37 @@ async def replay(*, since_days: int = 7, gate: str = "g1", ids: list[int] | None
             continue
         await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time(), row["id"]))
         await conn.commit()  # the claim is fixed before distillation
+
+        if respect_gate:
+            # Judged by the gate's own measure, not by what the distiller is fed.
+            # `peek` reads the threshold without training the EMA (see docstring).
+            from features.importance import evaluate_importance
+            from features.rules import apply_rules
+            from shared.adaptive import adaptive_threshold
+
+            gate_score = evaluate_importance(row["text"])
+            rules_out = apply_rules(row["text"])
+            if rules_out["importance_boost"]:
+                gate_score = min(1.0, gate_score + rules_out["importance_boost"])
+            verdict = await adaptive_threshold.peek(gate_score)
+            if verdict["bypass"]:
+                decisions.append(
+                    {
+                        "gate": gate,
+                        "config_hash": chash,
+                        "ts": time.time(),
+                        "reason": "importance_gate_bypass",
+                        "importance": verdict["importance"],
+                        "threshold": verdict["threshold"],
+                    }
+                )
+                await conn.execute(
+                    "UPDATE l0_journal SET status='gated_out', processed_at=?, decisions=? WHERE id=?",
+                    (time.time(), json.dumps(decisions, ensure_ascii=False), row["id"]),
+                )
+                gated += 1
+                continue
+
         mem = MemoryManager(cm=connection_manager).get_layer(row["layer"] or "user", row["user_id"])
         graph = EpistemicGraph(cm=connection_manager, layer=row["layer"] or "user")
         # ts from the journal, not now: a replay is BY DEFINITION distilling text
@@ -187,11 +257,16 @@ async def replay(*, since_days: int = 7, gate: str = "g1", ids: list[int] | None
         # C8: novelty_skipped = the fact is already in L4 (a re-run of the same row) —
         # that is an idempotent success, not gated_out.
         new_status = "promoted_l4" if (route["l4_saved"] or route.get("novelty_skipped")) else ("saved_l3" if route["l3_saved"] else "gated_out")
-        decisions.append({"gate": gate, "config_hash": chash, "ts": time.time()})
+        decision: dict[str, Any] = {"gate": gate, "config_hash": chash, "ts": time.time()}
+        if not respect_gate:
+            # Record the human override rather than letting the log imply the gate
+            # admitted this row.
+            decision["gate_override"] = True
+        decisions.append(decision)
         await conn.execute(
             "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
             (new_status, time.time(), json.dumps(decisions, ensure_ascii=False), row["id"]),
         )
         processed += 1
     await conn.commit()
-    return {"processed": processed, "skipped": skipped, "conflicts": conflicts}
+    return {"processed": processed, "skipped": skipped, "conflicts": conflicts, "gated": gated, "limit": max_rows}

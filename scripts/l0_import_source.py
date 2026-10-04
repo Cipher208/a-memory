@@ -5,13 +5,22 @@ WHY THIS IS SEPARATE FROM scripts/import_chat.py
 
 `import_chat.py` distills every record it imports (its docstring says so), because
 its purpose is to turn an export into memories. This script does the opposite: it
-puts a history back into the raw journal and stops. `shared.l0.capture` writes
-status='received' and nothing else consumes that status except
-`features.replay.replay()`, which is reachable only from `scripts/l0_cli.py
-replay` — no daemon, hook or cron calls it. `lifecycle.l0_tiers` states outright
-that "the received status is NEVER archived or truncated", and `segment_l0` is
-report-only. So rows written here are stable, permanent, and invisible to recall
-until someone deliberately runs the replay.
+puts a history back into the raw journal and stops. Rows written here carry
+status='parked' — a deliberate "keep the raw text, decide later" import.
+
+WHY A SEPARATE STATUS, AND NOT 'received'
+
+`capture` writes 'received' by default, and the nightly pass now expires overdue
+'received' rows: a row that arrived and was never processed is a stranded row, so
+it is closed as `gated_out` after `l0.received_ttl_days`. That expiry is right for
+a live message and fatal for this script's purpose — it would quietly close an
+import the owner asked to keep. So the two meanings got two names: 'received' =
+arrived, awaiting processing, and 'parked' = deliberately sleeping, wake on
+request. `parked` is exempt from the expiry, from tiering and from window replay;
+`l0_cli.py replay --ids` wakes parked rows by name.
+
+Rows written here are therefore stable, permanent, and invisible to recall until
+someone deliberately runs the replay.
 
 That property is the whole point. A persona whose history was eaten by an intake
 bug can have it back without flooding L3/L4 — their canon stays exactly as it was,
@@ -155,6 +164,7 @@ async def _run(args: argparse.Namespace) -> int:
                 source_msg_id=msg.source_id,
                 raw_type="import",
                 ts_override=msg.ts,
+                park=True,
             )
             if rid is None:
                 failures += 1

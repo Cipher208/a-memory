@@ -127,3 +127,132 @@ async def test_import_preserves_orig_ts(import_db, tmp_path) -> None:
     expected1 = datetime.fromisoformat("2024-01-15T10:31:00+00:00").timestamp()
     assert rows[0][0] == pytest.approx(expected0)
     assert rows[1][0] == pytest.approx(expected1)
+
+
+async def _processed(rid: int) -> None:
+    """Mark a captured row as processed, which is the precondition for tiering."""
+    conn = await connection_manager.get("memory.db")
+    await conn.execute("UPDATE l0_journal SET status='saved_l3' WHERE id=?", (rid,))
+    await conn.commit()
+
+
+async def test_warm_tiering_keeps_the_chain_verifiable(cm) -> None:
+    """The warm tier replaces `text` with a preview; the chain covers the original.
+
+    Before this, the digest was recomputed over the preview, so the first row to
+    cross 30 days would have broken the chain by being tiered exactly as designed
+    — and `verify_chain` is the only tamper detector L0 has. A long text is used
+    because a short one's preview equals its text, which hides the defect.
+    """
+    from shared.l0 import capture, verify_chain
+    from lifecycle.l0_tiers import tier_l0
+
+    now = 1_800_000_000.0
+    long_text = "Первое предложение про решение. " + "Наполнение. " * 80
+    rid = await capture("new_message", "user", "u1", long_text, ts_override=now - 40 * 86400)
+    await _processed(rid)
+
+    assert await verify_chain() == []
+    result = await tier_l0(now=now)
+    assert result["warm"] == 1
+
+    conn = await cm.get("memory.db")
+    row = await (await conn.execute("SELECT LENGTH(text), text_z IS NOT NULL FROM l0_journal WHERE id=?", (rid,))).fetchone()
+    assert row[0] < len(long_text), "строка обязана была стать превью, иначе тест ничего не проверяет"
+    assert row[1], "полный текст обязан лежать в text_z"
+
+    assert await verify_chain() == []
+
+
+async def test_a_tampered_warm_row_is_still_detected(cm) -> None:
+    """Undoing the warm tier must not blind the detector."""
+    from shared.l0 import capture, verify_chain
+    from lifecycle.l0_tiers import tier_l0
+
+    now = 1_800_000_000.0
+    rid = await capture("new_message", "user", "u1", "Решение. " + "хвост. " * 90, ts_override=now - 40 * 86400)
+    await _processed(rid)
+    await tier_l0(now=now)
+    assert await verify_chain() == []
+
+    conn = await cm.get("memory.db")
+    await conn.execute("UPDATE l0_journal SET text_z=? WHERE id=?", (b"not the original text", rid))
+    await conn.commit()
+    broken = await verify_chain()
+    assert [b["id"] for b in broken] == [rid], "подмена сжатого текста обязана быть видна"
+
+
+async def test_cold_tiering_keeps_the_chain_verifiable(cm) -> None:
+    """Archiving DELETES the journal row; the link has to travel with it.
+
+    The deleted row is the oldest, so before this the very first surviving row
+    failed: its `hash_prev` named an id that no longer existed. Verified on a
+    three-row chain so a surviving middle link is exercised too.
+    """
+    from shared.l0 import capture, verify_chain
+    from lifecycle.l0_tiers import tier_l0
+
+    now = 1_800_000_000.0
+    old = await capture("new_message", "user", "u1", "очень старая строка", ts_override=now - 200 * 86400)
+    mid = await capture("new_message", "user", "u1", "средняя строка", ts_override=now - 40 * 86400)
+    hot = await capture("new_message", "user", "u1", "свежая строка", ts_override=now - 1 * 86400)
+    for rid in (old, mid, hot):
+        await _processed(rid)
+
+    assert await verify_chain() == []
+    result = await tier_l0(now=now)
+    assert result["cold"] == 1, "старая строка обязана уйти в архив"
+    assert result["warm"] == 1
+
+    conn = await cm.get("memory.db")
+    gone = await (await conn.execute("SELECT COUNT(*) FROM l0_journal WHERE id=?", (old,))).fetchone()
+    assert gone[0] == 0, "строка обязана быть удалена из журнала — иначе тест не про архив"
+    archived = await (await conn.execute("SELECT hash_prev, hash_self, text FROM l0_cold_archive WHERE id=?", (old,))).fetchone()
+    assert archived[0] == "" and archived[1], "архив обязан хранить звено цепочки"
+    assert archived[2] == "очень старая строка"
+
+    assert await verify_chain() == []
+
+
+async def test_a_tampered_archived_row_is_still_detected(cm) -> None:
+    """The archive is the only copy of that text — tampering there must be visible."""
+    from shared.l0 import capture, verify_chain
+    from lifecycle.l0_tiers import tier_l0
+
+    now = 1_800_000_000.0
+    old = await capture("new_message", "user", "u1", "очень старая строка", ts_override=now - 200 * 86400)
+    hot = await capture("new_message", "user", "u1", "свежая строка", ts_override=now - 1 * 86400)
+    for rid in (old, hot):
+        await _processed(rid)
+    await tier_l0(now=now)
+    assert await verify_chain() == []
+
+    conn = await cm.get("memory.db")
+    await conn.execute("UPDATE l0_cold_archive SET text='подменённый архив' WHERE id=?", (old,))
+    await conn.commit()
+    broken = await verify_chain()
+    assert [b["id"] for b in broken] == [old]
+
+
+async def test_a_removed_archived_row_breaks_the_chain(cm) -> None:
+    """Deleting an archived row must not read as a clean chain.
+
+    The gap is only detectable because the following row still names it, which is
+    the whole reason the links are stored rather than the archive being treated as
+    outside the chain.
+    """
+    from shared.l0 import capture, verify_chain
+    from lifecycle.l0_tiers import tier_l0
+
+    now = 1_800_000_000.0
+    old = await capture("new_message", "user", "u1", "старая первая", ts_override=now - 200 * 86400)
+    keep = await capture("new_message", "user", "u1", "свежая вторая", ts_override=now - 1 * 86400)
+    for rid in (old, keep):
+        await _processed(rid)
+    await tier_l0(now=now)
+
+    conn = await cm.get("memory.db")
+    await conn.execute("DELETE FROM l0_cold_archive WHERE id=?", (old,))
+    await conn.commit()
+    broken = await verify_chain()
+    assert [b["id"] for b in broken] == [keep], "разрыв обязан всплыть на следующей строке"

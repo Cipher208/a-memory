@@ -130,8 +130,11 @@ async def test_import_all_four_formats_end_to_end(import_db, tmp_path) -> None:
     l4 = await (await conn.execute("SELECT COUNT(*) FROM core_memory WHERE user_id='u1'")).fetchone()
     assert int(l4[0]) >= 1
 
-    # watermark-совместимость: replay не переобрабатывает import-строки
-    assert await replay(since_days=1) == {"processed": 0, "skipped": 0, "conflicts": 0}
+    # watermark-совместимость: replay не переобрабатывает import-строки.
+    # Сверяются значимые счётчики: `gated` и `limit` описывают прогон, а не окно.
+    res = await replay(since_days=1)
+    assert (res["processed"], res["skipped"], res["conflicts"]) == (0, 0, 0), res
+    assert res["gated"] == 0, res
 
 
 async def test_chatgpt_memory_json_normalization(import_db, tmp_path) -> None:

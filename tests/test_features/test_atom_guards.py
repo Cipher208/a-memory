@@ -536,3 +536,72 @@ async def test_a_dream_marker_row_is_closed_too(live_base) -> None:
     )
 
     assert await _status_of(live_base, 9201) == "routed_direct"
+
+
+# --- the net: a branch nobody has written yet -----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_future_early_return_cannot_strand_a_row(live_base, monkeypatch) -> None:
+    """The point of the wrapper: it catches exits that were never enumerated.
+
+    Three early returns stranded rows and each was found by hand. A fourth would be
+    found the same way — by a stranded row some weeks later. This simulates that
+    fourth branch by making the body return right after capture, which is exactly
+    the shape of the original defect, and asserts the row still reaches a terminal
+    status.
+
+    Reverting the wrapper (making `auto_save_text` the body itself) leaves the row
+    `received` and fails here.
+    """
+    import hooks.external as ext
+
+    async def _forgetful_body(*_a, **_kw):
+        # Capture, then return — the shape of the gate bypass before it was fixed.
+        from shared.l0 import capture
+
+        rid = await capture("new_message", "user", "u1", "строка, о которой ветка забыла", source_msg_id=9301)
+        assert rid is not None
+        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}
+
+    async def _forgetful(mem, graph, user_id, text, **kwargs):
+        tracker = kwargs.pop("tracker", None)
+        result = await _forgetful_body()
+        if tracker is not None:
+            tracker["l0_id"] = await _row_id(live_base, 9301)
+        return result
+
+    monkeypatch.setattr(ext, "_auto_save_text_body", _forgetful)
+    await ext.auto_save_text(FakeMem(), MagicMock(), user_id="u1", text="строка, о которой ветка забыла", event="new_message", source_msg_id=9301)
+
+    assert await _status_of(live_base, 9301) == "gated_out", "обёртка обязана закрыть забытую строку"
+
+
+@pytest.mark.asyncio
+async def test_the_net_does_not_touch_a_row_that_was_closed(live_base, monkeypatch) -> None:
+    """The net must be invisible when the body behaves — no second write, no rewrite.
+
+    A wrapper that closed every row would be worse than the defect: it would
+    overwrite the honest status (`saved_l3`) with `gated_out` and make every saved
+    message look refused.
+    """
+    import hooks.external as ext
+
+    # Текст подобран так, чтобы гейт его ПРОПУСКАЛ (score 0.400 при пороге 0.3):
+    # иначе тест проверял бы отказ гейта, а не молчание обёртки.
+    await ext.auto_save_text(
+        FakeMem(),
+        MagicMock(),
+        user_id="u1",
+        text="Важно: я решила перейти на PostgreSQL для проекта X, потому что MySQL не держит нагрузку и падает на 500 rps.",
+        event="new_message",
+        source_msg_id=9302,
+    )
+    status = await _status_of(live_base, 9302)
+    assert status in {"saved_l3", "promoted_l4"}, status
+
+
+async def _row_id(cm, source_msg_id: int) -> int:
+    conn = await cm.get("memory.db")
+    row = await (await conn.execute("SELECT id FROM l0_journal WHERE source_msg_id=?", (source_msg_id,))).fetchone()
+    return int(row[0])

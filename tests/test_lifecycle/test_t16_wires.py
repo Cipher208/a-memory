@@ -113,7 +113,8 @@ async def test_replay_stale_processing_reprocessed(cm):
     await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time() - 900.0, rid))
     await conn.commit()
 
-    res = await replay(since_days=1)
+    # respect_gate=False: тест про клейм зависшей строки, а не про отбор текста.
+    res = await replay(since_days=1, respect_gate=False)
     assert res["processed"] == 1, f"зависшая строка добирается: {res}"
 
 

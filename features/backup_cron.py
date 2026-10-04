@@ -205,6 +205,29 @@ class BackupCron:
             from lifecycle.l0_sweep import sweep_expired
 
             self._await_on_main_loop(sweep_expired())
+        # L0 replay: wake rows that were never processed. This is the reader that
+        # `received` never had — the status was written by every message and read by
+        # nothing automatic, so a row could sit unprocessed indefinitely. Bounded by
+        # `l0.replay_max_rows` and gated by the importance gate (see features/replay),
+        # so a backlog drains over successive nights instead of landing in one burst.
+        # Ordered BEFORE the expiry and the tiering: a row that qualifies for replay
+        # should get its chance to be distilled before anything closes or compresses it.
+        with contextlib.suppress(Exception):
+            from features.replay import replay
+
+            replayed = self._await_on_main_loop(replay())
+            if any(replayed.get(k) for k in ("processed", "gated", "conflicts")):
+                logger.info("L0 replay: %s", replayed)
+        # L0 expiry: `received` older than `l0.received_ttl_days` is a strand, not a
+        # wait forever. Closed as `gated_out` / `never_processed` — which is also the
+        # status that makes it eligible for the tiers below, where the text is kept.
+        # Parked rows (deliberate "wake later" imports) are untouched.
+        with contextlib.suppress(Exception):
+            from lifecycle.l0_tiers import close_overdue_received
+
+            expired = self._await_on_main_loop(close_overdue_received())
+            if expired.get("closed"):
+                logger.info("L0 received expiry: %s", expired)
         # S6: L0 tiering — warm (preview+zlib) / cold (CLACK archive). After the
         # sweep so freshly processed rows age through tiers in a stable order.
         with contextlib.suppress(Exception):
