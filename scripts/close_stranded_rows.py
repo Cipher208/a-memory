@@ -71,6 +71,16 @@ def classify(row: dict[str, Any]) -> tuple[str, str | None, str]:
         return "close", "gated_out", "empty_text"
     if row["event"] not in MESSAGE_EVENTS:
         return "close", "gated_out", "internal_event"
+    if row.get("layer") == "agent" and not decisions:
+        # An agent-layer message with no decisions came from a writer that captured
+        # and then never recorded the outcome — `agent_hooks._capture_route` ran the
+        # whole distiller and stamped nothing. So `importance_gate_bypass` would be
+        # a guess dressed as a fact: the gate was never consulted on this path, and
+        # the row may well have produced memory. The reason says what is actually
+        # known (a writer failed to record its verdict) rather than inventing one,
+        # and `gated_out` is the conservative status: it asserts no save we cannot
+        # prove, and touches nothing that may already be in L3/L4.
+        return "close", "gated_out", "unstamped_writer"
     return "close", "gated_out", "importance_gate_bypass"
 
 

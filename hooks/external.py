@@ -11,7 +11,6 @@ chokes on). The HTTP endpoint and the memory_hook tool do the resolution.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -29,50 +28,22 @@ async def _close_l0_row(l0_id: int, status: str, *, reason: str | None = None) -
     were not queued for anything: 'received' is the status `l0_tiers` promises it
     will NEVER tier or archive, so they accumulated forever with no reader.
 
-    WHY `reason` MATTERS AS MUCH AS THE STATUS. A closed row is only honest if a
-    later `replay` can tell "deliberately closed" from "never processed". Replay
-    skips rows whose `decisions` already record the current (gate, config_hash)
-    pair, so the same pair is written here. The effect is exactly right: replay
-    under an unchanged config leaves the row alone, and replay after the config
-    changed re-opens it — which is the whole point of `config_hash`, and the
-    reason a fixed distiller can reconsider rows a broken one refused.
+    The implementation moved to `shared.l0.close_row`, next to `capture`, because
+    three OTHER capture sites had the same hole and could not reach a helper that
+    lived here — the agent hook, `think` and `remember` each wrote `received` and
+    never closed it. This wrapper stays for the reason recorded below.
 
-    `gate` is recorded as "g1" to match every `gated_out` row already in the live
-    bases and the default of `l0_cli.py replay --gate`. The true cause is kept in
-    `reason`, because the importance gate is what refused these, not the distiller.
-
-    WHY THE IMPORTS ARE INSIDE. `connection_manager` and `_time` are imported
-    inside `auto_save_text` (lines 217/221), not at module level, so a module-level
-    helper cannot see them. The first version of this function referenced them
-    anyway; the resulting `NameError` was swallowed by the `except` below and the
-    watermark silently did nothing at all — which is precisely the failure mode
-    this function exists to remove. The tests caught it; keep the imports here.
+    WHY THE IMPORTS WERE ONCE INSIDE, WHICH IS THE WHOLE LESSON. This function
+    first referenced `connection_manager` and `_time` as module-level names, but
+    they are imported INSIDE `auto_save_text`, not at module scope. The resulting
+    `NameError` was swallowed by the `except` and the watermark silently did
+    nothing at all — precisely the failure mode the function exists to remove. The
+    tests caught it. `close_row` imports what it needs where it needs it, so the
+    same trap cannot repeat.
     """
-    import time as _time
+    from shared.l0 import close_row
 
-    from shared.connection import connection_manager
-
-    try:
-        conn = await connection_manager.get("memory.db")
-        now = _time.time()
-        if reason is None:
-            await conn.execute("UPDATE l0_journal SET status=?, processed_at=? WHERE id=?", (status, now, l0_id))
-        else:
-            from features.replay import config_hash
-
-            row = await (await conn.execute("SELECT decisions FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
-            try:
-                decisions = json.loads((row["decisions"] if row else None) or "[]")
-            except (json.JSONDecodeError, TypeError):
-                decisions = []
-            decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
-            await conn.execute(
-                "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
-                (status, now, json.dumps(decisions, ensure_ascii=False), l0_id),
-            )
-        await conn.commit()
-    except Exception as _e:
-        logger.debug("l0_journal watermark update failed: %s", _e)
+    await close_row(l0_id, status, reason=reason)
 
 
 def _staging_enabled() -> bool:

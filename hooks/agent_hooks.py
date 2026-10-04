@@ -83,21 +83,42 @@ class AgentHooks:
         return await adaptive_threshold.gate(min(1.0, score))
 
     async def _capture_route(self, mem: Any, event: str, text: str, score: float) -> dict[str, Any]:
-        """F-T9 single-entry: L0 capture (journal) → distill route.
+        """F-T9 single-entry: L0 capture (journal) → distill route → status.
 
         Direct add_node from hooks is removed: the distiller (_wire_atoms) and
         miners populate the graph — the same path as user-layer auto_save_text.
         mem is unavailable (registry did not pass it) → only capture remains,
         the nightly/distiller will complete the write.
-        """
-        from shared.l0 import capture
 
-        await capture(event=event, layer=AGENT_LAYER, user_id=self.user_id, text=text)
+        THE STATUS WAS MISSING, and that is why three rows on a live base sat
+        `received` with empty `decisions` hours after the rest of the pipeline had
+        been taught to close its rows: this path captured and then distilled
+        without ever stamping the journal. `received` is the one status `l0_tiers`
+        promises never to tier or archive and nothing else reads it, so each row
+        this hook touched was stranded by construction.
+        """
+        from shared.l0 import capture, close_row
+
+        l0_id = await capture(event=event, layer=AGENT_LAYER, user_id=self.user_id, text=text)
         if mem is None:
+            # No manager means no distillation happened here. `routed_direct` says
+            # the row was handled by its own entry rather than left waiting, which
+            # is what keeps it out of the replay window and out of the expiry.
+            if l0_id is not None:
+                await close_row(int(l0_id), "routed_direct")
             return {"captured": True}
         from lifecycle.distiller import distill_and_route
 
         route_stats = await distill_and_route(mem, self.graph, self.user_id, text, score, event=event)
+        if l0_id is not None:
+            # Same three-way verdict as `auto_save_text`, so both paths describe a
+            # save the same way and neither is more optimistic than the other.
+            new_status = (
+                "promoted_l4"
+                if (route_stats.get("l4_saved") or route_stats.get("novelty_skipped"))
+                else ("saved_l3" if route_stats.get("l3_saved") else "gated_out")
+            )
+            await close_row(int(l0_id), new_status, reason=None if new_status != "gated_out" else "empty_route")
         return {"captured": True, **route_stats}
 
     @hook_registry.mark("error_occurred", layer=AGENT_LAYER)

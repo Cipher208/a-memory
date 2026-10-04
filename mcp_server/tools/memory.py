@@ -67,10 +67,18 @@ async def memory_remember(
     # provenance; skip_distill because the value already landed in L4 by key —
     # replay must not push it through the distiller again.
     from shared.l0 import capture as _l0_capture
+    from shared.l0 import close_row as _l0_close
 
-    await _l0_capture(
+    _l0_rid = await _l0_capture(
         event="remember", layer=layer, user_id=user_id, text=value, decisions=[{"gate": "mcp_remember", "skip_distill": True, "key": key}]
     )
+    # Closed immediately: `remember` writes by key before this point, so nothing is
+    # waiting. Without it the row stayed `received` — the status `l0_tiers` never
+    # tiers or archives and nothing else reads — filling the journal with rows that
+    # could never be finished. `routed_direct` matches what `replay` assigns a
+    # skip_distill row, so both paths tell the same story.
+    if _l0_rid is not None:
+        await _l0_close(int(_l0_rid), "routed_direct")
 
     if layer == "agent":
         # F-T9 single-entry: L4 only — the distiller/miners populate the graph

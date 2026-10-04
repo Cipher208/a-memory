@@ -147,3 +147,30 @@ def test_dry_run_reports_the_import_as_kept(base: Path, capsys) -> None:
     out = capsys.readouterr().out
     assert "would close 1, keep 1" in out, out
     assert "import" in out.split("KEEP:")[1], out
+
+
+def test_an_agent_row_with_no_decisions_says_the_writer_was_silent() -> None:
+    """The reason must state what is known, not guess a verdict.
+
+    An agent-layer message with empty `decisions` came from a writer that captured
+    and never recorded the outcome (`agent_hooks._capture_route` ran the whole
+    distiller and stamped nothing). Calling that `importance_gate_bypass` would
+    invent a fact: the gate is never consulted on that path, and the row may have
+    produced memory.
+    """
+    action, status, reason = csr.classify(
+        {"raw_type": "user-message", "decisions": "[]", "text": "агентское сообщение", "event": "new_message", "layer": "agent"}
+    )
+    assert action == "close"
+    assert status == "gated_out"
+    assert reason == "unstamped_writer"
+
+
+def test_a_user_layer_row_still_reports_the_gate() -> None:
+    """The new branch must not swallow the ordinary case it sits next to."""
+    action, status, reason = csr.classify(
+        {"raw_type": "user-message", "decisions": "[]", "text": "обычное сообщение", "event": "new_message", "layer": "user"}
+    )
+    assert action == "close"
+    assert status == "gated_out"
+    assert reason == "importance_gate_bypass"

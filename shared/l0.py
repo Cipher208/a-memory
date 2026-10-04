@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import time
 import zlib
 from typing import Any
@@ -256,6 +257,68 @@ async def verify_chain() -> list[dict[str, Any]]:
             break
         expected_prev = hash_self
     return broken
+
+
+async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> None:
+    """Give one captured row a terminal status. Never raises.
+
+    WHY THIS IS HERE AND NOT IN THE HOOK. `capture` writes `received` and six
+    different call sites are responsible for stamping it afterwards — the external
+    hook, the agent hook, `think`, `remember`, the bridge and the importers. Three
+    of them simply never did, so the rows they captured sat `received` forever:
+    `received` is the status `l0_tiers` promises never to tier or archive, and
+    nothing else reads it, so those rows accumulated with no reader and no expiry
+    (353 on one live base, the oldest from 26.07). A watermark helper that only the
+    first call site can reach is how the other two were missed; this lives next to
+    `capture` so every writer can close what it wrote.
+
+    WHY `reason` MATTERS AS MUCH AS THE STATUS. A closed row is only honest if a
+    later `replay` can tell "deliberately closed" from "never processed". Replay
+    skips rows whose `decisions` already record the current (gate, config_hash)
+    pair, so the same pair is written here. The effect is exactly right: replay
+    under an unchanged config leaves the row alone, and replay after the config
+    changed re-opens it — which is the point of `config_hash`, and the reason a
+    fixed distiller can reconsider rows a broken one refused.
+
+    `gate` is recorded as "g1" to match every `gated_out` row already in the live
+    bases and the default of `l0_cli.py replay --gate`. The true cause lives in
+    `reason`, because the importance gate is usually what refused these, not the
+    distiller.
+
+    Callers pass `reason=None` when their own entry already wrote the content
+    addressably (a save, a `routed_direct`) — there is then no refusal to explain,
+    and adding a decision entry would make an unchanged config treat a legitimate
+    save as skippable.
+    """
+    from shared.connection import connection_manager
+
+    try:
+        conn = await connection_manager.get(DB_NAME)
+        now = time.time()
+        if reason is None:
+            await conn.execute(
+                "UPDATE l0_journal SET status=?, processed_at=? WHERE id=?",
+                (status, now, l0_id),
+            )
+        else:
+            from features.replay import config_hash
+
+            row = await (await conn.execute("SELECT decisions FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
+            try:
+                decisions = json.loads((row["decisions"] if row else None) or "[]")
+            except (json.JSONDecodeError, TypeError):
+                decisions = []
+            decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
+            await conn.execute(
+                "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
+                (status, now, json.dumps(decisions, ensure_ascii=False), l0_id),
+            )
+        await conn.commit()
+    except Exception as exc:
+        # Best-effort, like `capture`: a watermark failure must not break the write
+        # path that already succeeded. Logged at debug because the caller's flow is
+        # what matters; the nightly expiry is the backstop that closes the row.
+        logging.getLogger(__name__).debug("l0_journal status update failed: %s", exc)
 
 
 def classify_raw(text: str) -> str:

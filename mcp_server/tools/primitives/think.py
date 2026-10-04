@@ -88,8 +88,22 @@ async def think(
     # provenance, but with skip_distill: think routes itself (L4/L3/wiki),
     # replay must not distill it a second time.
     from shared.l0 import capture as _l0_capture
+    from shared.l0 import close_row as _l0_close
 
-    tasks.append(_l0_capture(event="think", layer=resolved_layer, user_id=user_id, text=text, decisions=[{"gate": "think", "skip_distill": True}]))
+    async def _capture_think() -> None:
+        """Capture, then close: `think` writes its own memory, so it is not waiting.
+
+        The row used to stay `received` forever — the status `l0_tiers` promises
+        never to tier or archive and the one nothing else reads — because this path
+        captured without stamping. `routed_direct` is the honest terminal status and
+        is the same word `replay` uses for skip_distill rows, so the two agree about
+        what happened instead of the replay window finding it later.
+        """
+        rid = await _l0_capture(event="think", layer=resolved_layer, user_id=user_id, text=text, decisions=[{"gate": "think", "skip_distill": True}])
+        if rid is not None:
+            await _l0_close(int(rid), "routed_direct")
+
+    tasks.append(_capture_think())
     actions.append({"type": "L0_captured", "event": "think"})
 
     # S4: declared-canon channel — an explicit kind hint is authored truth,
