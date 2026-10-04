@@ -84,6 +84,24 @@ async def dispatch_event(
 
     result = await default_pipeline.execute(mw_ctx, _fire)
     if mw_ctx.blocked:
+        # The pipeline runs AHEAD of the handler, so a block here means nothing
+        # downstream ever saw the event: no L0 row (the door is inside the
+        # handler), no dispatch-log row, no operator-visible warning. That is
+        # where the fifth bug lived — 2608 rate-limit blocks, 2590 in one replay,
+        # each one a message deleted from a source that cannot be re-read from
+        # the middle. The daemon now reads the verdict by value and holds the
+        # cursor; this writes it down so an operator can see the rate instead of
+        # reconstructing it after the fact.
+        from shared.door_log import record_rejection
+
+        await record_rejection(
+            mw_ctx.block_reason,
+            layer=layer,
+            user_id=user_id or "default",
+            event=event,
+            source_msg_id=payload.get("source_msg_id"),
+            text=str(payload.get("text") or ""),
+        )
         return {"skipped": True, "reason": mw_ctx.block_reason}
     return dict(result) if isinstance(result, dict) else {"results": result}
 
@@ -156,23 +174,6 @@ async def auto_save_text(
         _looks_like_system_injection,
     )
 
-    if _looks_like_dump(text):
-        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "transcript"}
-
-    # Harness budget chatter is the runtime talking to itself, not memory.
-    if _looks_like_harness_limit(text):
-        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "harness_limit"}
-
-    # A1: system-injected boilerplate (skill bodies, cron preambles) is not user
-    # memory — cut it at the input so it never poisons L3 recall.
-    if _looks_like_system_injection(text):
-        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "system_injection"}
-
-    # L0 intake (F): append-only raw journal BEFORE sanitize — the journal is
-    # the raw door of the pipeline. Best-effort (capture never raises); the id
-    # drives the status watermark after distillation.
-    from shared.l0 import capture, find_block
-
     # S10 speaker axis has to reach the journal as well, and this is not
     # bookkeeping. `layer` is an INPUT TO THE L0 CONTENT HASH
     # (`shared/l0.py:_content_hash`), and the replay guard below asks
@@ -183,7 +184,56 @@ async def auto_save_text(
     # dropped as `duplicate_l0_block` — BEFORE the persona-canon branch below
     # could promote it to L4. Her canon was silently thrown away for agreeing
     # with the woman she was agreeing with.
+    #
+    # It is computed HERE, above the guards, because the layer belongs to the
+    # message and not to the capture step: a refusal has to be recorded against
+    # the same layer the save would have used, or the log splits one message's
+    # history across two names.
     l0_layer = "agent" if persona_owner and role == "assistant" else "user"
+
+    async def _refuse(reason: str) -> dict[str, Any]:
+        """Return the refusal AND write it down.
+
+        Every guard below used to return without a trace. The door runs before
+        L0 capture and before the dispatch-log insert, so a refused message
+        existed nowhere at all — not in `l0_journal`, not in
+        `memory_dispatch_log`, not in a warning. The sixth bug hid in exactly
+        that silence: the markdown class in `_TRANSCRIPT_HEAD` discarded 591 of
+        one persona's 734 substantive messages and the loss was findable only by
+        re-deriving the number from the source database by hand.
+
+        Returning and recording are one function on purpose. Six bugs in this
+        repository came from one value being written in two places and diverging;
+        the refusal verdict and its record must not be the seventh.
+        """
+        from shared.door_log import record_rejection
+
+        await record_rejection(
+            reason,
+            layer=l0_layer,
+            user_id=user_id,
+            event=event,
+            source_msg_id=source_msg_id,
+            text=text,
+        )
+        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": reason}
+
+    if _looks_like_dump(text):
+        return await _refuse("transcript")
+
+    # Harness budget chatter is the runtime talking to itself, not memory.
+    if _looks_like_harness_limit(text):
+        return await _refuse("harness_limit")
+
+    # A1: system-injected boilerplate (skill bodies, cron preambles) is not user
+    # memory — cut it at the input so it never poisons L3 recall.
+    if _looks_like_system_injection(text):
+        return await _refuse("system_injection")
+
+    # L0 intake (F): append-only raw journal BEFORE sanitize — the journal is
+    # the raw door of the pipeline. Best-effort (capture never raises); the id
+    # drives the status watermark after distillation.
+    from shared.l0 import capture, find_block
 
     # A replay of an already-captured block. capture() would return the original
     # rid and stop there — but the distiller ran unconditionally after it, so
@@ -191,7 +241,7 @@ async def auto_save_text(
     # capture() guards the journal, not the pipeline; the pipeline guard belongs
     # here, before it.
     if await find_block(l0_layer, user_id, text) is not None:
-        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "duplicate_l0_block"}
+        return await _refuse("duplicate_l0_block")
 
     l0_id: int | None = await capture(event, l0_layer, user_id, text, source_msg_id=source_msg_id)
 

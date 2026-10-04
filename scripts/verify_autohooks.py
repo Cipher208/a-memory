@@ -59,6 +59,11 @@ def make_schemas() -> None:
         (4, "user", "?! важно решил " + "x" * 120 + "\n\n\n", 103.0),  # 0.9 band → staged L4
         (5, "user", "DREAM: memory: зафиксируй выбор SQLite", 104.0),  # marker
         (6, "user", "DREAM: skill: деплой через restic", 105.0),  # marker + skill episode
+        # 7 exists to exercise the refusal counter: the intake door must reject
+        # this one, and the rejection must be visible afterwards. Without a row
+        # that IS refused the counter assertion below passes on an empty table —
+        # which is the exact shape of silence the counter was built to end.
+        (7, "user", '[{"type": "text", "text": "junk"}]', 106.0),  # door refuses: transcript
     ]
     conv.executemany("INSERT INTO messages VALUES (?, ?, ?, ?)", rows)
     conv.commit()
@@ -168,7 +173,7 @@ async def main() -> int:
     for dr in dispatch_results:
         print(f"    dispatch {dr['event']}: {str(dr['out'])[:140]}")
     cursor = load_cursor(cfg.state_file)
-    check("cursor at max id (6)", cursor == 6, f"got {cursor}")
+    check("cursor at max id (7)", cursor == 7, f"got {cursor}")
     conn = sqlite3.connect(SCRATCH / "memory.db")
     staged = conn.execute("SELECT count(*) FROM mutation_proposals WHERE source IN ('auto_save', 'dream') AND status='pending'").fetchone()[0]
     # Two dream markers, and NOT the row-4 high-score message. That message used
@@ -180,6 +185,18 @@ async def main() -> int:
     check("2 dream markers staged, high-score routed to L4 instead", staged == 2, f"got {staged}")
     dispatch_rows = conn.execute("SELECT count(*) FROM memory_dispatch_log").fetchone()[0]
     check("dispatch log rows written", dispatch_rows >= 3, f"got {dispatch_rows}")
+    # The counter's own contract (2026-10-04): a refusal by the intake door must
+    # leave a row. Row 7 is a transcript-shaped dump, so exactly one refusal is
+    # expected, tagged and attributed — and row 7 must NOT appear among the
+    # saves, because a refusal that still saved would be the worst of both.
+    refusals = conn.execute("SELECT reason, layer, source_msg_id FROM memory_dispatch_rejections ORDER BY id").fetchall()
+    check(
+        "door refusal is recorded with reason and layer",
+        refusals == [("transcript", "user", 7)],
+        f"got {refusals}",
+    )
+    saved_row_7 = conn.execute("SELECT count(*) FROM memory_dispatch_log WHERE source_msg_id = 7").fetchone()[0]
+    check("a refused message is not also logged as a save", saved_row_7 == 0, f"got {saved_row_7}")
     conn.close()
 
     # ── 4. staging lifecycle: apply / revert / reject / expire ────────────
