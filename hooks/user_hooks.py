@@ -320,6 +320,38 @@ class UserHooks:
         """Explicit candidate pushed by a daemon — same pipeline as new_message."""
         return await self._new_message(ctx, mem=mem, graph=graph)
 
+    @hook_registry.mark("new_message", layer="agent")
+    async def _new_message_agent(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
+        """S10 speaker axis, agent side: a persona_owner's own declarations.
+
+        Why this method exists at all, and it is a bug fix rather than a feature.
+
+        `dispatch_layer` routes assistant-role text from a `persona_owner` client
+        to the AGENT layer, with the stated reason that the persona's own words
+        must "stop piling into the user's fact heap". That routing worked. The
+        destination did not: `new_message` was marked `layer="user"` only, and
+        `HookRegistry.fire` filters handlers by layer with **no fallback**, so the
+        event arrived at a layer with zero handlers and was dropped.
+
+        Measured on the real CLI before this fix, same payload, only `role`
+        differing:
+
+            role=user       {"results": [{"auto_save": {...}}], "handler_count": 1}
+            role=assistant  {"results": [], "handler_count": 0}
+
+        The consequence was worse than a missing write. `auto_save_text`'s
+        persona-canon branch — `if persona_owner and kind and role == "assistant"`
+        — was **unreachable from the CLI and daemon paths**: the handler that
+        would have called it never fired for the layer it was routed to. A
+        documented, tested capability was dead in production and looked alive.
+
+        Delegation, not a second implementation: the transcript guard, the L0
+        intake, the importance gate and the L3/L4 writes are what make an
+        utterance land somewhere useful, and a parallel copy would drift from
+        them. The layer is what differs; the pipeline is the same.
+        """
+        return await self._new_message(ctx, mem=mem, graph=graph)
+
     @hook_registry.mark("on_turn_end", layer="user")
     async def _on_turn_end(self, ctx: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
         """E14: turn-level capture — same pipeline as new_message, sync result to the caller."""

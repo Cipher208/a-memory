@@ -34,9 +34,36 @@ import asyncio
 import json
 import logging
 import os
+import time as _time
 from typing import Any
 
 from autohooks.config import AgentConfig, dispatch_layer as _dispatch_layer, load_config
+
+
+def _dispatch_window(ns: argparse.Namespace) -> tuple[float, float]:
+    """Resolve `--since`/`--until` into the half-open window a diff event reads.
+
+    Two CLI defaults, deliberately different from each other.
+
+    `--since` absent means 0.0 — "from the beginning". `compute_session_gaps`
+    turns it into `created_at >= since`, so the epoch legitimately includes
+    everything.
+
+    `--until` absent must mean "up to now", and it used to be passed as an
+    explicit 0.0. That reads as the epoch rather than as "unset", and the
+    handler's own `ctx.get("until", time.time())` default can never apply once
+    the key is present — so the gap window became
+    `created_at >= since AND created_at < 0`, an impossible condition.
+    `post_session_diff` therefore reported `gaps: 0` for EVERY caller no matter
+    what had actually happened, and no `diff_gap` episode was ever materialized.
+
+    Invisible to the suite because every existing test called the handler
+    directly with an explicit `until=time.time() + 1`: the tests always supplied
+    a usable window, so only a real CLI invocation could expose the boundary.
+    """
+    since = float(ns.since) if ns.since else 0.0
+    until = float(ns.until) if ns.until and float(ns.until) > 0 else _time.time()
+    return since, until
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -200,8 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(extra, dict):
             logger.error("--payload must be a JSON object")
             return 2
-        since = float(ns.since) if ns.since else 0.0
-        until = float(ns.until) if ns.until else 0.0
+        since, until = _dispatch_window(ns)
         d_layer = _dispatch_layer(cfg, extra)
         if d_layer != cfg.layer:
             mem, graph, rag = resolve_layer(app, d_layer, cfg.user_id)

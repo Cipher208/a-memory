@@ -173,15 +173,27 @@ async def auto_save_text(
     # drives the status watermark after distillation.
     from shared.l0 import capture, find_block
 
+    # S10 speaker axis has to reach the journal as well, and this is not
+    # bookkeeping. `layer` is an INPUT TO THE L0 CONTENT HASH
+    # (`shared/l0.py:_content_hash`), and the replay guard below asks
+    # `find_block` the same question. Hard-coding "user" here therefore cost
+    # more than a mislabelled row: a persona's declaration that repeated
+    # anything the owner had already said hashed identically to the owner's
+    # block, `find_block` answered "already captured", and the declaration was
+    # dropped as `duplicate_l0_block` — BEFORE the persona-canon branch below
+    # could promote it to L4. Her canon was silently thrown away for agreeing
+    # with the woman she was agreeing with.
+    l0_layer = "agent" if persona_owner and role == "assistant" else "user"
+
     # A replay of an already-captured block. capture() would return the original
     # rid and stop there — but the distiller ran unconditionally after it, so
     # every replay re-emitted the full clause set under the same `raw:<rid>` tag.
     # capture() guards the journal, not the pipeline; the pipeline guard belongs
     # here, before it.
-    if await find_block("user", user_id, text) is not None:
+    if await find_block(l0_layer, user_id, text) is not None:
         return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "duplicate_l0_block"}
 
-    l0_id: int | None = await capture(event, "user", user_id, text, source_msg_id=source_msg_id)
+    l0_id: int | None = await capture(event, l0_layer, user_id, text, source_msg_id=source_msg_id)
 
     # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
     # NER unavailable/crashed → the regex tier inside sanitize still ran.

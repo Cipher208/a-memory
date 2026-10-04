@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -82,6 +83,47 @@ def test_parse_dispatch_args(tmp_path: Path) -> None:
     assert ns.event == "post_session_diff"
     assert ns.since == "0"
     assert ns.until == "100"
+
+
+# --- The diff window: `--since` and `--until` do NOT share a default. -------
+#
+# `compute_session_gaps` reads `created_at >= since AND created_at < until`.
+# A missing `--until` used to be forwarded as an explicit 0.0, which is the
+# epoch rather than "unset" — so the window became `< 0` and matched nothing.
+# `post_session_diff` answered `gaps: 0` for every caller regardless of what had
+# happened, and no `diff_gap` episode was ever written.
+#
+# The whole existing suite missed it because every test called the handler with
+# an explicit `until=time.time() + 1`. The window was only ever exercised from
+# the one place that could not supply it: a real CLI invocation.
+
+
+def test_dispatch_window_until_defaults_to_now(tmp_path: Path) -> None:
+    """No `--until` means "up to now", never the epoch."""
+    from autohooks.__main__ import _dispatch_window
+
+    ns = _parse_args(["dispatch", "--config", str(_cfg_file(tmp_path)), "--event", "post_session_diff"])
+    before = time.time()
+    since, until = _dispatch_window(ns)
+    assert since == 0.0, "an absent --since still means 'from the beginning'"
+    assert before <= until <= time.time() + 1, "an absent --until must open the window, not close it"
+    assert until > since, "a window that cannot match any row is the bug being pinned"
+
+
+def test_dispatch_window_respects_an_explicit_until(tmp_path: Path) -> None:
+    from autohooks.__main__ import _dispatch_window
+
+    ns = _parse_args(["dispatch", "--config", str(_cfg_file(tmp_path)), "--event", "post_session_diff", "--since", "10", "--until", "100"])
+    assert _dispatch_window(ns) == (10.0, 100.0)
+
+
+def test_dispatch_window_treats_zero_until_as_unset(tmp_path: Path) -> None:
+    """An explicit `--until 0` is the same mistake by hand, and gets the same answer."""
+    from autohooks.__main__ import _dispatch_window
+
+    ns = _parse_args(["dispatch", "--config", str(_cfg_file(tmp_path)), "--event", "post_session_diff", "--until", "0"])
+    _since, until = _dispatch_window(ns)
+    assert until > 0, "zero is the epoch, and the epoch is always an empty window"
 
 
 # --- The `source:` gate, and which side of it each command sits on. -------

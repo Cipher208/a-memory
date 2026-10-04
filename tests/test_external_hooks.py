@@ -205,6 +205,97 @@ source:
     assert _dispatch_layer(c2, {"role": "assistant"}) == "user"
 
 
+@pytest.mark.asyncio
+async def test_persona_declaration_reaches_a_handler_on_the_agent_layer() -> None:
+    """S10 regression: the dispatch routed to the agent layer had NO handler there.
+
+    `dispatch_layer` sends an assistant-role persona_owner message to the `agent`
+    layer so the persona's own words stop piling into the user's fact heap. That
+    routing was tested (`test_persona_assistant_dispatch_layer_is_agent`) and it
+    worked — but the destination was empty: `new_message` was marked
+    `layer="user"` only, and `HookRegistry.fire` filters by layer with no
+    fallback, so the event arrived, matched nothing, and returned
+    `handler_count: 0`.
+
+    Every existing test called `auto_save_text` directly, which is why nothing
+    caught it: the pipeline was verified while the door into it was shut. The
+    persona-canon branch (`persona_owner and kind and role == "assistant"`) was
+    unreachable from the CLI and daemon paths and looked alive.
+
+    So this test fires through the REGISTRY, at the layer the dispatcher chooses,
+    which is the only place the bug was visible.
+    """
+    from hooks.registry import HookRegistry
+    from hooks.user_hooks import UserHooks
+
+    reg = HookRegistry()
+    reg.register_instance(UserHooks("u1"))
+
+    fired: dict[str, Any] = {}
+
+    async def _fake_auto_save(mem: Any, graph: Any, user_id: str, text: str, **kw: Any) -> dict[str, Any]:
+        fired.update(kw)
+        fired["text"] = text
+        return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}
+
+    import hooks.external as ext
+
+    original = ext.auto_save_text
+    ext.auto_save_text = _fake_auto_save
+    try:
+        result = await reg.fire(
+            "new_message",
+            "agent",
+            {"text": "каноническое решение персоны", "role": "assistant", "persona_owner": True, "kind": "preference"},
+            mem=object(),
+            graph=object(),
+        )
+    finally:
+        ext.auto_save_text = original
+
+    assert result["handler_count"] == 1, "the agent layer must have a new_message handler"
+    assert fired["role"] == "assistant" and fired["persona_owner"] is True
+
+
+@pytest.mark.asyncio
+async def test_persona_declaration_uses_the_agent_l0_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The speaker axis has to reach the journal, because `layer` is in its hash.
+
+    `shared/l0.py:_content_hash` hashes `layer|user_id|text`, and the replay
+    guard asks the same question through `find_block`. With the layer hard-coded
+    to "user", a persona's declaration that repeated anything the owner had
+    already said hashed identically to the owner's block — so `find_block`
+    answered "already captured" and the declaration was dropped as
+    `duplicate_l0_block` BEFORE the canon branch could promote it. Her canon was
+    thrown away for agreeing with the woman she was agreeing with.
+    """
+    import hooks.external as ext
+    import shared.l0 as l0
+
+    captured: list[tuple[str, str]] = []
+    looked_up: list[str] = []
+
+    async def _fake_find_block(layer: str, user_id: str, text: str) -> int | None:
+        looked_up.append(layer)
+        return None
+
+    async def _fake_capture(event: str, layer: str, user_id: str, text: str, **kw: Any) -> int:
+        captured.append((layer, text))
+        return 42
+
+    monkeypatch.setattr(l0, "find_block", _fake_find_block)
+    monkeypatch.setattr(l0, "capture", _fake_capture)
+
+    text = "дом держит двенадцать инструментов"
+    await ext.auto_save_text(_FakeMem(), _FakeGraph(), "u1", text, role="assistant", persona_owner=True, kind="preference")
+    await ext.auto_save_text(_FakeMem(), _FakeGraph(), "u1", text, role="user")
+
+    assert captured[0][0] == "agent", "her own declaration is journalled on the agent layer"
+    assert captured[1][0] == "user", "the owner's words stay on the user layer"
+    assert captured[0][1] == captured[1][1], "same text, and the layers are what tell them apart"
+    assert looked_up[0] == "agent", "the replay guard asks the same question the hash does"
+
+
 def _write_yaml(tmp_path: Path, body: str, name: str = "a.yaml") -> Path:
     p = tmp_path / name
     p.write_text(body, encoding="utf-8")
