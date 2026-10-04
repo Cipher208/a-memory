@@ -375,9 +375,24 @@ async def auto_save_text(
     if similar_to:
         result["similar_to"] = similar_to
     # L0 watermark (F): close the captured row — replay skips 'saved_l3'/
-    # 'promoted_l4'. Neither of the two write paths fires → stays 'received'.
+    # 'promoted_l4'. The status must be what the route ACTUALLY did: this used to
+    # be `"promoted_l4" if route_stats["l4_saved"] else "saved_l3"`, so a message
+    # that wrote nothing at all — a refused machine report, or one whose every
+    # atom was below the length floor — was stamped `saved_l3` regardless, and
+    # the journal then claimed a save that never happened. Same vocabulary as
+    # `features/replay.py`, which already says `gated_out` for "nothing written".
+    #
+    # `gated_out` rather than leaving it `received`: the causes here are
+    # deterministic (the same text produces the same empty route), so 'received'
+    # would only invite replay to re-refuse the same row forever and multiply the
+    # rejection count.
     if l0_id is not None:
-        new_status = "promoted_l4" if route_stats["l4_saved"] else "saved_l3"
+        if route_stats["l4_saved"]:
+            new_status = "promoted_l4"
+        elif route_stats["l3_saved"]:
+            new_status = "saved_l3"
+        else:
+            new_status = "gated_out"
         try:
             conn = await connection_manager.get("memory.db")
             await conn.execute("UPDATE l0_journal SET status=?, processed_at=? WHERE id=?", (new_status, _time.time(), l0_id))

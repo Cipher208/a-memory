@@ -1,8 +1,9 @@
 # === Two-Layer Unified Memory MCP ===
 # Layer 1: User facts | Layer 2: Agent identity
 #
-# EVERY key here is read by code (see docs/CONTROL_MAP.md).
-# Per-agent override: copy this file and point the agent's MCP env at it:
+# EVERY key here is read by code (see docs/CONTROL_MAP.md) — EXCEPT the three
+# dead `limits` keys marked in that block. Per-agent override: copy this file and
+# point the agent's MCP env at it:
 #   MCP_CONFIG_PATH=/home/<user>/.mcp-ariel-memory-<agent>/config.yaml
 
 # === Layers ===
@@ -14,8 +15,18 @@ layers:
     enabled: true
 
 # === L1-L4 Limits ===
+# READ BY CODE, checked 2026-10-04: only `l1_buffer_size` and `l3_atom_limit` are.
+# `l2_session_limit`, `l3_episodic_limit` and `l4_core_limit` are read by nothing —
+# the comment above this block used to claim every key here was wired, and it was
+# not. Kept as documentation of intent; if you change them, expect no effect.
 limits:
   l1_buffer_size: 50
+  # Atoms kept per message (lifecycle/distiller.atom_limit). A value of 0 or less
+  # means "not configured" and falls back to the code default of 10 — NOT "keep
+  # nothing". Every live agent mounts its own copy of this file through
+  # MCP_CONFIG_PATH, so a key missing from those copies must not stop memory.
+  # Raising it is NOT the first fix for fragment loss: the splitter produced them.
+  l3_atom_limit: 10
   l2_session_limit: 100
   l3_episodic_limit: 1000
   l4_core_limit: 5000

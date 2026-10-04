@@ -72,6 +72,12 @@ REASON_DUPLICATE = "duplicate_l0_block"
 REASON_RATE_LIMIT = "rate_limit"
 REASON_IMPORTANCE = "below_importance_threshold"
 REASON_INVALID = "invalid_input"
+#: A tool's own status output (the self-monitoring digest, the cleaner's summary)
+#: refused by `lifecycle.distiller` before any atom is written. It belongs in this
+#: vocabulary, not in a counter of its own: the reader groups by reason, and a
+#: second place to count is how the counts split. Measured on one live base: 42
+#: rows, 216 episodes that were never memories.
+REASON_MACHINE_REPORT = "machine_report"
 REASON_UNKNOWN = "unknown"
 
 #: Middleware block reasons are free-form sentences built at the site that

@@ -15,10 +15,76 @@ import re
 from typing import Any
 
 from shared.dialogue import is_dialogic as _is_dialogic
+from shared.door_log import REASON_MACHINE_REPORT, record_rejection
+from shared.machine_report import is_machine_report
 from shared.memory_types import MemoryKind, get_policy, kind_for_text
 
 logger = logging.getLogger(__name__)
-_CLAUSE_SPLIT = re.compile(r"[,;]?\s+(?:и|но|причём|а|хотя)\s+|\.\s+")
+
+# Split on SENTENCE BOUNDARIES only. The previous pattern also cut on the
+# Russian conjunctions ("and", "but", "though", "while") by name, plus a period:
+#
+#     re.compile(r"[,;]?\s+(?:<the four conjunction words>)\s+|\.\s+")
+#
+# A conjunction is not a boundary. It cut one real message in half at its final
+# "and" and wrote the orphaned tail as its own episode. Measured on one live base
+# (782 journal rows, both splitters at the same 10-atom cap):
+#
+#     by conjunctions : 4120 atoms reach memory, 3706 of them (90%) fragments
+#     by sentences    : 4020 atoms reach memory, 1929 of them (48%) fragments
+#
+# The volume barely moves; the rubbish halves. This is the cheapest of the four
+# fixes because it needs no new line anywhere — it stops producing fragments
+# instead of filtering them afterwards.
+#
+# Newlines are boundaries too: these messages are markdown, and a heading or a
+# list item on its own line is a separate thought, not a continuation.
+_CLAUSE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+#: An atom shorter than this is not a thought that can stand alone.
+#:
+#: WHY 15 AND NOT 20. The first version used 20 and an existing test caught it:
+#: `test_conflict_not_silent_update` stores a 22-character declarative fact and
+#: then a 19-character one that contradicts it. A 20-char floor silently discarded
+#: the second, so it never reached the conflict resolver and a contradiction
+#: stopped being reported. The band 15..19 holds 409 episodes on one live base and
+#: they are mostly fragments, but "mostly" is not "all": a length floor is a
+#: proxy, and this is the value at which it stops eating facts. Every fragment
+#: cited in this file's history is shorter than 15 (the longest is 13), so the
+#: price of the lower floor is paid in agent chatter, not in the owner's facts.
+#:
+#: The threshold is about the ATOM, not the message — a message is still
+#: distilled in full.
+_MIN_ATOM_CHARS = 15
+
+#: The code-side default for the atom cap. Kept here so the cap has a value even
+#: when no config file mentions it — see `atom_limit()` for why that matters.
+_DEFAULT_ATOM_LIMIT = 10
+
+
+def atom_limit() -> int:
+    """Return the per-message atom cap, from `limits.l3_atom_limit`, with a safe floor.
+
+    WHY A FLOOR AND NOT A PLAIN `config.get_limit`. `Config.get_limit` is
+    `int(self.get("limits", key, default=0))`, so a key that no file mentions
+    reads as **0** — and `[:0]` keeps nothing at all. Every live agent mounts its
+    OWN config through `MCP_CONFIG_PATH` (`~/.mcp-ariel-memory-hermes`,
+    `-mimocode`, `-cowagent` each ship a `config.yaml`), so adding this key only
+    to the repo default would hand those three a cap of zero: memory would stop,
+    with no error and no refused row, which is the exact silent-loss shape this
+    repository keeps re-learning. A non-positive value therefore means "not
+    configured" and falls back to the default, never "keep nothing".
+
+    The dead `l2_session_limit` / `l3_episodic_limit` / `l4_core_limit` keys could
+    afford `default=0` because no code read them; this one is live.
+    """
+    try:
+        from config import config
+
+        value = int(config.get_limit("l3_atom_limit"))
+    except Exception:
+        return _DEFAULT_ATOM_LIMIT
+    return value if value > 0 else _DEFAULT_ATOM_LIMIT
 
 
 def _canonical_key(clause: str, kind: MemoryKind) -> str:
@@ -145,9 +211,35 @@ def _topic_of(clause: str) -> str:
     return "general"
 
 
-def atomize(text: str) -> list[str]:
-    parts = _CLAUSE_SPLIT.split(text.strip())
-    return [p.strip() for p in parts if len(p.strip()) >= 8][:10]
+def atomize_counted(text: str, *, limit: int | None = None) -> tuple[list[str], dict[str, int]]:
+    """Atomize AND report what was dropped. The counter the cap never had.
+
+    `atomize` returned a list and said nothing about the rest, so a 52% loss was
+    invisible for months: measured on one live base, 4491 of 8611 atoms never
+    reached memory and no number anywhere said so. A guard that runs BEFORE any
+    write has to carry a count of what it refused — the same rule
+    `shared/door_log.py` was written to encode, applied one level down at the
+    atom instead of the message.
+
+    Counts are returned per call, not written to the rejection table: a single
+    message can drop 80 atoms, and one row per atom would drown the table that
+    exists to make refusals legible.
+    """
+    cap = atom_limit() if limit is None else int(limit)
+    parts = [p.strip() for p in _CLAUSE_SPLIT.split(text.strip()) if p.strip()]
+    too_short = sum(1 for p in parts if len(p) < _MIN_ATOM_CHARS)
+    keepable = [p for p in parts if len(p) >= _MIN_ATOM_CHARS]
+    kept = keepable[:cap] if cap > 0 else []
+    return kept, {
+        "candidates": len(parts),
+        "too_short": too_short,
+        "over_cap": len(keepable) - len(kept),
+    }
+
+
+def atomize(text: str, *, limit: int | None = None) -> list[str]:
+    """Return the atoms of `text` — see `atomize_counted` for what this drops."""
+    return atomize_counted(text, limit=limit)[0]
 
 
 def route_kind(kind: MemoryKind) -> str:
@@ -208,9 +300,7 @@ async def distill_and_route(
     from core.memory import CoreMemory
     from rag.conflict import ConflictResolver
 
-    cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="user")
-    await cmem._init_db()  # self-healing schema, like ConflictResolver.check — the fixture may lack migrations
-    stats: dict[str, Any] = {
+    base_stats: dict[str, Any] = {
         "l4_saved": 0,
         "l3_saved": 0,
         "conflicts": 0,
@@ -218,12 +308,56 @@ async def distill_and_route(
         "semantic_skipped": 0,  # S18 item 5: cosine>0.92 dedup
         "guard_skipped": 0,  # F1 2026-09-12: dialogic/misc atoms never reach L4
         "similar_to": [],  # S17 A2-advisory: keys the clause intersected with (near-dup/conflict)
+        # WHAT THE ATOM GUARDS REFUSED (see atomize_counted). Without these the
+        # cap and the length floor drop text in silence, which is how a 52% loss
+        # stayed invisible for months.
+        "atoms_kept": 0,
+        "atoms_too_short": 0,
+        "atoms_over_cap": 0,
+        "machine_report": False,
+        "refused": "",
     }
+    # A tool's own status dump is not a memory: refuse the MESSAGE, not its atoms.
+    # Deliberately here rather than at the intake door, because intake already
+    # captured these rows and `replay` re-distils them — one guard covers the live
+    # path and the backlog, and two guards on two paths is how the fourth bug's
+    # two branches drifted apart.
+    if is_machine_report(text):
+        base_stats["machine_report"] = True
+        base_stats["refused"] = REASON_MACHINE_REPORT
+        await record_rejection(
+            REASON_MACHINE_REPORT,
+            layer=getattr(mem, "layer_type", "user"),
+            user_id=user_id,
+            event=event,
+            text=text,
+        )
+        return base_stats
+
+    cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="user")
+    await cmem._init_db()  # self-healing schema, like ConflictResolver.check — the fixture may lack migrations
+    stats = base_stats
+    atoms, atom_counts = atomize_counted(text)
+    stats["atoms_kept"] = len(atoms)
+    stats["atoms_too_short"] = atom_counts["too_short"]
+    stats["atoms_over_cap"] = atom_counts["over_cap"]
+    if atom_counts["over_cap"] or atom_counts["too_short"]:
+        # DEBUG, not WARNING: this is the designed filter doing its job, and it
+        # fires on most messages. The returned counters are the operator-facing
+        # record; the log line is for a live tail.
+        logger.debug(
+            "atom guard: kept %d of %d (short %d, over cap %d) for event=%s",
+            len(atoms),
+            atom_counts["candidates"],
+            atom_counts["too_short"],
+            atom_counts["over_cap"],
+            event,
+        )
     # S17 ENGRAM: procedural («how to do X»-style) — agent-self track, L4 of the agent layer.
     agent_cmem: CoreMemory | None = None
     resolver = ConflictResolver()
     saved: list[str] = []
-    for clause in atomize(text):
+    for clause in atoms:
         kind = kind_for_text(clause)
         key = _canonical_key(clause, kind)
         # ENGRAM procedural: how-to lives in the agent's L4-namespace, not the user's.
