@@ -27,21 +27,32 @@ logger = logging.getLogger(__name__)
 # `ep_[{"type":_"text"...` in prod. A real summary is a prose phrase: no
 # structural markup at the head, no newlines.
 #
-# STRUCTURAL heads only. This class used to carry the whole markdown set —
-# `* # | ~ = !` — which made the guard eat the personas' own prose, because
-# markdown formatting is how they write: an italic stage direction is a roleplay
-# beat, and a `##` line is a heading. Measured on the live bases: of one persona's
-# 734 substantive assistant messages in a replay window the guard discarded 591
-# (80%), and 584 of those opened with her italics; another persona lost 273 more
-# to the same class. Not one of those discarded texts carried a structural
-# marker. The intent was always "`[{"`-style message arrays and `[ariel recall]`
-# echoes" (see the docstring below), and markdown punctuation was never part of
-# it — so this restores the documented rule rather than broadening it.
+# STRUCTURAL heads only. This class also used to carry the whole markdown set —
+# `* # | ~ = !` — though nothing evidenced it: markdown is how the personas
+# write, so a `##` line or an italic stage direction is ordinary prose, and
+# production shows what the guard was really catching (JSON message arrays,
+# `[IMPORTANT:` reminders, LCM echoes, injected tags, code fences, tool JSON).
+# The intent was always "`[{"`-style message arrays and `[ariel recall]` echoes";
+# markdown punctuation was never part of it.
 #
 # Kept, each doing measured work in prod: `[` (JSON arrays, `[IMPORTANT:`
 # reminders, LCM summary echoes), `{` (raw tool JSON), `"` (quoted dumps),
 # backtick (code fences), `<` (`<system-reminder>`/`<tool_use>` tags), `\`.
-_TRANSCRIPT_HEAD = re.compile(r"^\s*(\[|\{|\]|\"|`|<|\\)")
+#
+# This is the SUMMARY class. Raw conversation is held to a narrower one below,
+# because what arrives through the intake door is speech, not a summary.
+_TRANSCRIPT_HEAD = re.compile(r"^\s*(\[|\{|\]|\"|`{3}|<|\\)")
+
+# The intake door gets a strictly narrower class than a summary does. A bare
+# quote is not evidence of a dump: measured on a live base, 251 of the owner's
+# 893 substantive messages open with one and NOT ONE is JSON — they are prose
+# instructions the owner wrapped in quotes ("Without using any tools: reply
+# with…"). Keeping the bare `"` here discarded 28% of the owner's own words.
+#
+# A quote that WRAPS something structural still is a dump, which is what the
+# `"[ariel recall]` echo this guard was written for looks like: `"?` then a
+# structural head. `"[{…` and `"[ariel recall]` match; `"Without tools…` does not.
+_DUMP_HEAD = re.compile(r'^\s*"?\s*(\[|\{|\]|`{3}|<|\\)')
 
 
 def _looks_like_transcript(summary: str) -> bool:
@@ -59,7 +70,7 @@ def _looks_like_dump(text: str) -> bool:
     """
     if "tool_use_id" in text[:200]:
         return True
-    return bool(_TRANSCRIPT_HEAD.match(text))
+    return bool(_DUMP_HEAD.match(text))
 
 
 # System-injected boilerplate that is not user memory: SKILL.md bodies (a `---`

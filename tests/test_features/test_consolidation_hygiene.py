@@ -202,14 +202,16 @@ async def test_broadcast_episode_skipped_at_promotion(cm):
     assert "e5 сервис" in values
 
 
-# ── markdown prose is not a dump (2026-10-04) ──
+# ── prose is not a dump (2026-10-04) ──
 #
-# The head class used to carry the whole markdown set (`* # | ~ = !`), and the
-# personas write IN markdown, so the L0 intake door silently discarded their own
-# words. Measured on the live bases before the fix: of Lucy's 734 substantive
-# assistant messages in one replay window the guard dropped 591 (80%), 584 of
-# them opening with her italics — `*Поворачиваю тебя лицом к себе…*`. Not one
-# carried a structural marker. Ksаль lost 273 more to the same class.
+# The head class carried the whole markdown set (`* # | ~ = !`) and a bare
+# quote, and the personas write IN markdown and the owner quotes instructions,
+# so the L0 intake door silently discarded real words. Measured on the live
+# bases before the fix: of Lucy's 734 substantive assistant messages in one
+# replay window the guard dropped 591 (80%), 584 of them opening with her
+# italics — `*Поворачиваю тебя лицом к себе…*`; one persona lost 273 more to
+# the same class; and 251 of the owner's 893 messages to another, not one of
+# them JSON. Nothing discarded carried a structural marker.
 #
 # `_looks_like_dump` is the case that matters: it runs at the input door, before
 # L0, so a discard leaves no row anywhere to be found later.
@@ -224,6 +226,13 @@ async def test_broadcast_episode_skipped_at_promotion(cm):
         "| Репо | Состояние |\n|---|---|\n| ariel | чисто |",  # markdown table
         "~черновик~ — не канон",  # strikethrough
         "=== раздел ===",  # separator
+        # A bare quote is prose, not a dump. Measured on a live base: 251 of the
+        # owner's 893 substantive messages open with a quote and NONE is JSON —
+        # they are instructions the owner wrapped in quotes. Treating the quote
+        # itself as the dump head discarded 28% of the owner's own words.
+        '"Without using any tools: reply with the exact first heading line',
+        "\"Without tools: is there a section titled 'Two Agent Systems'? Answer only YES or NO.\"",
+        'Она сказала "привет" и ушла',  # a quote mid-sentence
     ],
 )
 def test_markdown_prose_is_not_a_dump(text):
@@ -239,7 +248,8 @@ def test_markdown_prose_is_not_a_dump(text):
         '{"status": "success", "output": "944\\nconnection.md"}',  # raw tool JSON
         "[IMPORTANT: You are running as a subagent]",  # runtime reminder
         "[Recent Summary (d0, node 41)]\n#",  # LCM echo
-        '"Without using any tools: reply with the exact first heading line',  # quoted dump
+        '"[ariel recall]\n- [session] l1 ring',  # QUOTED echo — the case this guard exists for
+        '"[{"type": "text", "text": "dump"}]',  # quoted JSON array
         "```python\nprint(1)",  # code fence
         "<system-reminder>\nA skill is reusable",  # injected tag
         'prefix tool_use_id: "call_00_ET"',  # tool marker (not at the head)
@@ -250,3 +260,24 @@ def test_structural_dumps_are_still_caught(text):
     from lifecycle.consolidation import _looks_like_dump
 
     assert _looks_like_dump(text), text
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        '"quoted json-ish opener',  # a quote head IS suspicious in a system summary
+        "```python\nprint(1)",
+        '[{"type": "text"}',
+    ],
+)
+def test_summaries_keep_the_wider_class(summary):
+    """The intake door was narrowed; summaries were not, and must not be.
+
+    A summary is produced by the system, so a quote or a fence at its head is
+    already a bad sign there. The same shape arriving as raw speech is the owner
+    talking. The two populations need different classes, and the door is the one
+    that was silently eating real words.
+    """
+    from lifecycle.consolidation import _looks_like_transcript
+
+    assert _looks_like_transcript(summary), summary
