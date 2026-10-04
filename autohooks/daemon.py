@@ -70,25 +70,45 @@ def source_went_backwards(source_max_id: int, cursor: int) -> bool:
     """Report whether the source's newest row is now BEHIND the saved cursor.
 
     A source is a chat database, and a chat database can be renumbered under the
-    daemon: cowagent's `merge_conversations_to_global` folds each secondary
-    agent's `index.db` into the default agent's file and re-issues every message
-    id on the way in (`id -> NULL so the global file re-issues AUTOINCREMENT
-    ids`), and its multi-agent schema rebuild recreates the messages table
-    outright. After that, the ids a cursor was counting no longer describe the
-    rows it had consumed.
+    daemon: cowagent's `migrate_conversations_to_global` (via
+    `_merge_secondary_agents` -> `_merge_one_agent`) folds each secondary agent's
+    `index.db` into the default agent's file and re-issues every message id on the
+    way in (`id -> NULL so the global file re-issues AUTOINCREMENT ids`). After
+    that, the ids a cursor was counting no longer describe the rows it had
+    consumed.
+
+    THREE THINGS THIS IS AND IS NOT, because the first version of this docstring
+    overstated all three.
+
+    * It is PREVENTIVE. No live occurrence has been observed. The case that
+      prompted it — one base whose daemon looked healthy and dispatched nothing —
+      turned out to be a different phenomenon: that platform stopped writing rows
+      on 29.09, so the source simply stopped growing. Measured at the time,
+      `max(id)` was 8709 and the saved cursor was 8709: EQUAL, not behind. This
+      check would not have fired. A stalled source and a renumbered one look alike
+      from the cursor and are not the same thing.
+    * Only the MERGE re-issues ids. The multi-agent schema rebuild recreates
+      `sessions`/`messages` under composite `(agent_id, session_id)` keys, but it
+      copies the id explicitly (`INSERT INTO messages_new (id, agent_id, ...)
+      SELECT id, agent_id, ... FROM messages`) — it preserves them. An earlier
+      version of this note claimed the rebuild also renumbered, which is wrong and
+      would send a reader hunting the wrong mechanism.
+    * It is cheap and safe to keep anyway. Should a merge ever land on a base this
+      daemon tails, `WHERE id > cursor` would select nothing and stay silent
+      forever, which is unrecoverable without this; erroring the other way costs
+      one slow re-read.
 
     The cursor is only ever compared with `max_id()` on FIRST start, when no
     state file exists. Once a cursor is saved, nothing notices the source moving
-    underneath it, and `WHERE id > cursor` then selects nothing forever. This is
-    the check that notices.
+    underneath it. This is the check that notices.
 
     Answers False whenever the two are not both integers. `cursor_column` is
     whatever the config names, so a source may legitimately declare a TEXT key
-    (Ksal's `role`/`text` plumbing shows how loose the mapping is; here it is
-    `rowid`, but nothing enforces integer). `SqliteSource` orders such a key as
-    text, and `'msg_abc' < 64763` raises TypeError inside the poll loop — turning
-    a timing problem into a dead daemon. Declining to rewind when the ordering
-    cannot be established costs a missed reset; raising costs the daemon.
+    (here every live source uses an integer one, but nothing enforces that).
+    `SqliteSource` orders such a key as text, and `'msg_abc' < 64763` raises
+    TypeError inside the poll loop — turning a timing problem into a dead daemon.
+    Declining to rewind when the ordering cannot be established costs a missed
+    reset; raising costs the daemon.
     """
     if not isinstance(source_max_id, int) or not isinstance(cursor, int):
         return False
@@ -140,7 +160,11 @@ async def run_daemon(
             # A source can be replaced or renumbered under a running daemon (see
             # `source_went_backwards`). Left unnoticed, `WHERE id > cursor` then
             # selects nothing on every poll and the daemon looks healthy while
-            # dispatching nothing — the failure one live base sat in for a week.
+            # dispatching nothing. No live occurrence has been observed — this is
+            # a preventive check, kept because that failure is unrecoverable
+            # without it. The stalled base that first drew attention here stopped
+            # growing for its own reason, and its cursor equalled its max id, so
+            # this branch would not have fired.
             #
             # The rewind goes to ZERO, not to the new maximum. Resetting to the
             # maximum would be a no-op dressed as a repair: it would skip

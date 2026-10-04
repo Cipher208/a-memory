@@ -301,13 +301,22 @@ async def test_empty_text_is_skipped_before_it_costs_anything(tmp_path: Path) ->
 async def test_a_source_that_went_backwards_rewinds_the_cursor_and_says_so(tmp_path: Path) -> None:
     """A renumbered source must not leave the daemon polling into a void.
 
-    cowagent's `merge_conversations_to_global` folds each secondary agent's
-    database into the default one and re-issues message ids on the way in
-    (`id -> NULL so the global file re-issues AUTOINCREMENT ids`), and its
-    schema rebuild recreates the messages table outright. A saved cursor then
-    counts ids that no longer exist; `WHERE id > cursor` matches nothing and the
-    daemon looks perfectly healthy while dispatching nothing -- which is exactly
-    what one live base did for a week.
+    cowagent's `migrate_conversations_to_global` (via `_merge_secondary_agents` ->
+    `_merge_one_agent`) folds each secondary agent's database into the default one
+    and re-issues message ids on the way in (`id -> NULL so the global file
+    re-issues AUTOINCREMENT ids`). A saved cursor then counts ids that no longer
+    exist; `WHERE id > cursor` matches nothing and the daemon looks perfectly
+    healthy while dispatching nothing.
+
+    This is the PREVENTIVE case, not a reported one: no live occurrence has been
+    observed. The base that first drew attention here was stalled for another
+    reason -- its platform stopped writing rows -- and its cursor equalled its max
+    id, so this guard would not have fired on it.
+
+    Note also that only the MERGE re-issues ids. The multi-agent schema rebuild
+    recreates `sessions`/`messages` under composite keys but copies the id
+    explicitly, so it preserves them; an earlier version of this docstring
+    claimed otherwise.
 
     Rewinding is the safe response: L0 dedups by content hash, so re-reading is
     idempotent, whereas never reading again is permanent.
