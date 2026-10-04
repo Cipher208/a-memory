@@ -84,3 +84,51 @@ async def test_replay_reruns_only_reset_rows(cm: Any) -> None:
     assert res2["processed"] == 0 and res2["skipped"] == 1
     rows2 = {r["id"]: r for r in await _rows(cm)}
     assert rows2[rid1]["status"] == "gated_out"  # не переобработана
+
+
+@pytest.mark.asyncio
+async def test_replay_by_ids_touches_nothing_else(cm: Any) -> None:
+    """The named-row escape hatch: wake one row, leave every other row alone.
+
+    Why it is needed rather than a convenience: `replay` distils whatever it
+    selects and bypasses the importance gate, so replaying a stranded backlog by
+    window would put the chatter that gate refused straight back into memory.
+    """
+    from features.replay import replay
+    from shared.l0 import capture
+
+    wanted = await capture("new_message", "user", "u1", "я решила перейти на PostgreSQL для проекта")
+    untouched = await capture("new_message", "user", "u1", "наблюдение: трафик растёт по пятницам стабильно")
+    also_untouched = await capture("new_message", "user", "u1", "просто болтовня ни о чём особенном")
+    assert None not in (wanted, untouched, also_untouched)
+
+    res = await replay(since_days=1, ids=[wanted])
+    assert res["processed"] == 1, res
+
+    by_id = {r["id"]: r for r in await _rows(cm)}
+    assert by_id[wanted]["status"] in {"promoted_l4", "saved_l3"}, by_id[wanted]
+    assert by_id[untouched]["status"] == "received", "a row not named must not be distilled"
+    assert by_id[also_untouched]["status"] == "received", "a row not named must not be distilled"
+
+
+@pytest.mark.asyncio
+async def test_replay_by_ids_ignores_the_status_filter(cm: Any) -> None:
+    """A closed row can be re-opened by id — that is how a deliberate close is undone.
+
+    The window filter only accepts 'received'/'gated_out', so a row already closed
+    as `routed_direct` is invisible to it. Naming the id must reach it anyway;
+    otherwise a wrongly-closed row could never be reconsidered.
+    """
+    from features.replay import replay
+    from shared.connection import connection_manager
+    from shared.l0 import capture
+
+    rid = await capture("new_message", "user", "u1", "я решила перейти на PostgreSQL для проекта")
+    assert rid is not None
+    conn = await connection_manager.get("memory.db")
+    await conn.execute("UPDATE l0_journal SET status='routed_direct' WHERE id=?", (rid,))
+    await conn.commit()
+
+    res = await replay(since_days=1, ids=[rid])
+    assert res["processed"] == 1, res
+    assert (await _rows(cm))[0]["status"] in {"promoted_l4", "saved_l3"}

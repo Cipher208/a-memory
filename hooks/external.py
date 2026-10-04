@@ -11,10 +11,68 @@ chokes on). The HTTP endpoint and the memory_hook tool do the resolution.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+async def _close_l0_row(l0_id: int, status: str, *, reason: str | None = None) -> None:
+    """Stamp the L0 watermark for one captured row, recording WHY it closed.
+
+    THE DEFECT THIS FIXES. `auto_save_text` captured the row, then returned early
+    whenever the adaptive importance gate said `bypass` — before the watermark
+    block, which is further down. Nothing ever wrote a status, so the row stayed
+    `received` for good. Measured on one live base: 348 such rows, and 161 of them
+    had EMPTY `decisions`, i.e. the pipeline had never touched them at all. They
+    were not queued for anything: 'received' is the status `l0_tiers` promises it
+    will NEVER tier or archive, so they accumulated forever with no reader.
+
+    WHY `reason` MATTERS AS MUCH AS THE STATUS. A closed row is only honest if a
+    later `replay` can tell "deliberately closed" from "never processed". Replay
+    skips rows whose `decisions` already record the current (gate, config_hash)
+    pair, so the same pair is written here. The effect is exactly right: replay
+    under an unchanged config leaves the row alone, and replay after the config
+    changed re-opens it — which is the whole point of `config_hash`, and the
+    reason a fixed distiller can reconsider rows a broken one refused.
+
+    `gate` is recorded as "g1" to match every `gated_out` row already in the live
+    bases and the default of `l0_cli.py replay --gate`. The true cause is kept in
+    `reason`, because the importance gate is what refused these, not the distiller.
+
+    WHY THE IMPORTS ARE INSIDE. `connection_manager` and `_time` are imported
+    inside `auto_save_text` (lines 217/221), not at module level, so a module-level
+    helper cannot see them. The first version of this function referenced them
+    anyway; the resulting `NameError` was swallowed by the `except` below and the
+    watermark silently did nothing at all — which is precisely the failure mode
+    this function exists to remove. The tests caught it; keep the imports here.
+    """
+    import time as _time
+
+    from shared.connection import connection_manager
+
+    try:
+        conn = await connection_manager.get("memory.db")
+        now = _time.time()
+        if reason is None:
+            await conn.execute("UPDATE l0_journal SET status=?, processed_at=? WHERE id=?", (status, now, l0_id))
+        else:
+            from features.replay import config_hash
+
+            row = await (await conn.execute("SELECT decisions FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
+            try:
+                decisions = json.loads((row["decisions"] if row else None) or "[]")
+            except (json.JSONDecodeError, TypeError):
+                decisions = []
+            decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
+            await conn.execute(
+                "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
+                (status, now, json.dumps(decisions, ensure_ascii=False), l0_id),
+            )
+        await conn.commit()
+    except Exception as _e:
+        logger.debug("l0_journal watermark update failed: %s", _e)
 
 
 def _staging_enabled() -> bool:
@@ -342,6 +400,15 @@ async def auto_save_text(
                 _conn.commit()
         except Exception as _e:
             logger.debug("memory_dispatch_log insert failed: %s", _e)
+        # Second early return, same defect class as the gate above: the marker was
+        # routed by its own protocol, but the journal row was never stamped, so it
+        # stayed `received` forever. `routed_direct` is the right terminal status —
+        # it is exactly what `replay` uses for rows whose own entry already wrote
+        # them, and replay excludes it from its window, so the marker text will not
+        # be re-atomized into episodes. No live row has ever carried a DREAM marker
+        # (checked: 0 rows across three bases), so this is latent, not observed.
+        if l0_id is not None:
+            await _close_l0_row(l0_id, "routed_direct")
         return result
 
     # S17 (F2): the EMA gate is back in auto_save — adaptive_threshold.gate reads
@@ -358,6 +425,13 @@ async def auto_save_text(
         result["rules"] = rule_out["matched"]
     verdict = await adaptive_threshold.gate(score)
     if verdict["bypass"]:
+        # The gate refused the message, so nothing will be written — close the row
+        # as `gated_out` instead of leaving it `received` forever. See
+        # `_close_l0_row`: this early return was the whole reason 348 rows sat
+        # unprocessed on a live base, with no reader and no expiry.
+        result["gated"] = "importance_gate"
+        if l0_id is not None:
+            await _close_l0_row(l0_id, "gated_out", reason="importance_gate_bypass")
         return result
 
     # G1 distiller: atomize → canonical key → kind-routing (invariants → L4,
@@ -393,12 +467,10 @@ async def auto_save_text(
             new_status = "saved_l3"
         else:
             new_status = "gated_out"
-        try:
-            conn = await connection_manager.get("memory.db")
-            await conn.execute("UPDATE l0_journal SET status=?, processed_at=? WHERE id=?", (new_status, _time.time(), l0_id))
-            await conn.commit()
-        except Exception as _e:
-            logger.debug("l0_journal watermark update failed: %s", _e)
+        # `reason` only for the empty route: a save that DID happen needs no
+        # explanation, and recording one would make `decisions` noisy. The empty
+        # route is the case replay must be able to recognise as deliberate.
+        await _close_l0_row(l0_id, new_status, reason=None if new_status != "gated_out" else "empty_route")
     # 2026-09-11: the score>=0.8 auto_save staging branch is REMOVED.
     # It staged raw chat text under the literal core key "auto_save" for
     # manual review — 52 same-key proposals flooded the review queue in a

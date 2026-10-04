@@ -343,3 +343,196 @@ def test_a_short_declarative_fact_survives_the_floor() -> None:
 
     assert len("база проекта: MySQL") == 19
     assert atomize("база проекта: MySQL") == ["база проекта: MySQL"]
+
+
+# --- the gate early-return must close the row, and say why -----------------------
+
+
+def _force_gate_bypass(monkeypatch):
+    """Make the adaptive gate refuse, leaving the distiller untouched.
+
+    The gate is read as an attribute of the singleton that `auto_save_text`
+    imports inside its own body, so patching the singleton's method is what the
+    call actually sees. Patched rather than nudged through the EMA: the point
+    under test is the early-return branch, and a threshold-based setup would also
+    depend on the clamps in `update()`.
+    """
+    from shared.adaptive import adaptive_threshold
+
+    async def _bypass(score: float) -> dict:
+        return {"importance": score, "threshold": 1.0, "bypass": True}
+
+    monkeypatch.setattr(adaptive_threshold, "gate", _bypass)
+
+
+async def _decisions_of(cm, source_msg_id: int) -> list[dict]:
+    import json
+
+    conn = await cm.get("memory.db")
+    row = await (await conn.execute("SELECT decisions FROM l0_journal WHERE source_msg_id=?", (source_msg_id,))).fetchone()
+    assert row is not None, "the message must have been captured"
+    return json.loads(row[0] or "[]")
+
+
+@pytest.mark.asyncio
+async def test_gate_bypass_closes_the_row_instead_of_leaving_it_received(live_base, monkeypatch) -> None:
+    """The defect that stranded 348 rows on a live base.
+
+    `auto_save_text` captured the row and then returned on `verdict["bypass"]`
+    BEFORE the watermark block further down, so no status was ever written. The
+    row stayed `received`, which `l0_tiers` promises never to tier or archive —
+    it accumulated forever with nothing reading it. Reverting the early return to
+    a bare `return result` makes this assertion read `received` and fail.
+    """
+    import hooks.external as ext
+
+    _force_gate_bypass(monkeypatch)
+
+    result = await ext.auto_save_text(
+        FakeMem(),
+        MagicMock(),
+        user_id="u1",
+        text="МамЮ а то работаем-работаем, а обнимашки когда?",
+        event="new_message",
+        source_msg_id=9101,
+    )
+
+    assert result["gated"] == "importance_gate"
+    assert await _status_of(live_base, 9101) == "gated_out"
+
+
+@pytest.mark.asyncio
+async def test_gate_bypass_records_a_decision_that_replay_will_honour(live_base, monkeypatch) -> None:
+    """Closing the row is not enough: a later replay must be able to see WHY.
+
+    Replay skips a row whose `decisions` already carry the current (gate,
+    config_hash) pair, and it re-opens the row when the hash changes. Recording
+    the same pair therefore means an unchanged config leaves these refused rows
+    alone, while a changed threshold re-opens them — which is the documented
+    purpose of `config_hash`, and the only reason a fixed distiller can
+    reconsider what a broken one refused.
+    """
+    from features.replay import config_hash
+
+    import hooks.external as ext
+
+    _force_gate_bypass(monkeypatch)
+
+    await ext.auto_save_text(FakeMem(), MagicMock(), user_id="u1", text="просто болтовня ни о чём", event="new_message", source_msg_id=9102)
+
+    decisions = await _decisions_of(live_base, 9102)
+    assert len(decisions) == 1, decisions
+    entry = decisions[0]
+    assert entry["gate"] == "g1", entry
+    assert entry["config_hash"] == config_hash(), entry
+    assert entry["reason"] == "importance_gate_bypass", entry
+    # The exact predicate replay applies before it will skip the row.
+    assert any(d.get("gate") == "g1" and d.get("config_hash") == config_hash() for d in decisions)
+
+
+@pytest.mark.asyncio
+async def test_closing_a_row_appends_to_existing_decisions(live_base) -> None:
+    """`decisions` is a log, not a slot: a close must not erase earlier entries.
+
+    The row is built with `capture()` and closed by calling the helper directly,
+    rather than by running a second `auto_save_text` over the same text: that path
+    stops at the `duplicate_l0_block` guard before the watermark, which is its own
+    correct behaviour and would test nothing here.
+    """
+    import hooks.external as ext
+    from shared.l0 import capture
+
+    rid = await capture(
+        "new_message",
+        "user",
+        "u1",
+        "текст с готовым решением",
+        source_msg_id=9103,
+        decisions=[{"gate": "think", "skip_distill": True}],
+    )
+    assert rid is not None
+
+    await ext._close_l0_row(rid, "gated_out", reason="importance_gate_bypass")
+
+    decisions = await _decisions_of(live_base, 9103)
+    assert decisions[0] == {"gate": "think", "skip_distill": True}, decisions
+    assert decisions[1]["reason"] == "importance_gate_bypass", decisions
+
+
+@pytest.mark.asyncio
+async def test_a_corrupt_decisions_value_does_not_block_the_close(live_base) -> None:
+    """The column is text anyone can write; a bad value must not hide the status.
+
+    `decisions` has no constraint, so the helper parses it defensively. Without
+    that branch one malformed row would leave the status unwritten — the same
+    silent strand this whole change removes, one row at a time.
+    """
+    import time
+
+    import hooks.external as ext
+    from shared.connection import connection_manager
+
+    conn = await connection_manager.get("memory.db")
+    await conn.execute(
+        "INSERT INTO l0_journal (ts, event, source_msg_id, layer, user_id, text, raw_type, status, decisions, order_key, content_hash)"
+        " VALUES (?, 'new_message', 9106, 'user', 'u1', 'строка с битым decisions', 'user-message', 'received', 'not json at all', 'k', 'h')",
+        (time.time(),),
+    )
+    await conn.commit()
+    rid = (await (await conn.execute("SELECT id FROM l0_journal WHERE source_msg_id=9106")).fetchone())[0]
+
+    await ext._close_l0_row(rid, "gated_out", reason="importance_gate_bypass")
+
+    assert await _status_of(live_base, 9106) == "gated_out"
+    assert [d["reason"] for d in await _decisions_of(live_base, 9106)] == ["importance_gate_bypass"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_route_records_why_but_a_save_records_nothing(live_base, monkeypatch) -> None:
+    """Only the empty route needs an explanation; a real save needs none.
+
+    Recording a decision on every save would bury the interesting rows in noise,
+    so the helper takes `reason=None` there and writes the status alone.
+    """
+    import hooks.external as ext
+
+    _force_distill(monkeypatch)
+
+    await ext.auto_save_text(FakeMem(), MagicMock(), user_id="u1", text="Да. Нет. Прочитала. Разобралась.", event="new_message", source_msg_id=9104)
+    assert await _status_of(live_base, 9104) == "gated_out"
+    assert [d["reason"] for d in await _decisions_of(live_base, 9104)] == ["empty_route"]
+
+    await ext.auto_save_text(
+        FakeMem(),
+        MagicMock(),
+        user_id="u1",
+        text="наблюдение: трафик растёт по пятницам вечером после релиза",
+        event="new_message",
+        source_msg_id=9105,
+    )
+    assert await _status_of(live_base, 9105) in {"saved_l3", "promoted_l4"}
+    assert await _decisions_of(live_base, 9105) == []
+
+
+@pytest.mark.asyncio
+async def test_a_dream_marker_row_is_closed_too(live_base) -> None:
+    """The second early return of the same class, found while fixing the first.
+
+    The DREAM branch (`DREAM: memory: …`) routes the marker by its own protocol and
+    then returned without stamping the journal, so the row stayed `received` — the
+    same strand, in a different branch. No live row has ever carried a marker
+    (checked: 0 across three bases), so this pins a latent path rather than an
+    observed one. Reverting the close makes this assertion read `received`.
+    """
+    import hooks.external as ext
+
+    await ext.auto_save_text(
+        FakeMem(),
+        MagicMock(),
+        user_id="u1",
+        text="DREAM: memory: правило дома — не резать память по союзам",
+        event="new_message",
+        source_msg_id=9201,
+    )
+
+    assert await _status_of(live_base, 9201) == "routed_direct"

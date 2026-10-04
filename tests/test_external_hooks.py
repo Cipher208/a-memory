@@ -100,7 +100,16 @@ class _FakeGraph:
 async def test_auto_save_text_below_threshold_saves_nothing() -> None:
     mem, graph = _FakeMem(), _FakeGraph()
     result = await auto_save_text(mem, graph, "u1", "короткий")  # len<20 → 0.0
-    assert result == {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False}
+    # The whole dict is still pinned: nothing reached either layer. `gated` names
+    # WHICH guard refused, and exists because the refusal used to be visible only
+    # as an early return — the L0 row it left behind stayed `received` forever.
+    assert result == {
+        "score": 0.0,
+        "saved_l3": False,
+        "saved_l4": False,
+        "saved_graph": False,
+        "gated": "importance_gate",
+    }
 
 
 @pytest.mark.asyncio

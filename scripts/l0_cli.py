@@ -24,7 +24,8 @@ AGE_BUCKETS = (("<1h", 3600), ("1h-1d", 86400), ("1d-7d", 7 * 86400))
 def _cmd_replay(args: argparse.Namespace) -> int:
     from features.replay import replay
 
-    res = asyncio.run(_with_db(lambda: replay(since_days=args.since, gate=args.gate)))
+    ids = [int(x) for x in args.ids.split(",")] if args.ids else None
+    res = asyncio.run(_with_db(lambda: replay(since_days=args.since, gate=args.gate, ids=ids)))
     print(json.dumps(res, ensure_ascii=False))
     return 0
 
@@ -97,6 +98,12 @@ def main() -> int:
     p_replay = sub.add_parser("replay", help="re-run G1 distiller over the l0_journal window")
     p_replay.add_argument("--since", type=int, default=7, metavar="N", help="window in days (default 7)")
     p_replay.add_argument("--gate", default="g1", help="gate id recorded in decisions (default g1)")
+    p_replay.add_argument(
+        "--ids",
+        default=None,
+        metavar="N,N,...",
+        help="replay exactly these journal row ids, ignoring --since and the status filter. Use to wake named rows out of a stranded backlog without distilling the rest of it.",
+    )
     p_replay.set_defaults(fn=_cmd_replay)
 
     p_sweep = sub.add_parser("sweep", help="delete expired L4 rows (B5 protections)")

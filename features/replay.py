@@ -98,7 +98,7 @@ def config_hash() -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
-async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
+async def replay(*, since_days: int = 7, gate: str = "g1", ids: list[int] | None = None) -> dict[str, int]:
     """Re-run the G1 distiller over the l0_journal window [now-since_days, now].
 
     Selects rows with status in ('received', 'gated_out'); skips rows whose
@@ -107,6 +107,14 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
     (mem/graph built on connection_manager, user_id/layer from the row,
     extra_tags omitted — rules were applied at first pass) and its status set
     to 'promoted_l4' / 'saved_l3' / 'gated_out' with processed_at=now.
+
+    `ids` narrows the run to exactly those journal rows, ignoring both the window
+    and the status filter. Why this exists: when an early return strands rows, the
+    backlog is a MIXTURE of chatter the importance gate refused and a handful of
+    long messages carrying real decisions. Replaying the window would distil all of
+    it, and replay bypasses the gate by design — so it would put the refused chatter
+    straight back into memory. Naming the ids is the only way to wake what deserves
+    waking and leave the rest closed.
     """
     from core import MemoryManager
     from graph.epistemic import EpistemicGraph
@@ -115,13 +123,22 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
     conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - since_days * 86400
     chash = config_hash()
-    rows = await (
-        await conn.execute(
-            "SELECT id, ts, layer, user_id, text, decisions FROM l0_journal"
-            " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
-            (cutoff, time.time() - 600.0),
-        )
-    ).fetchall()
+    if ids:
+        placeholders = ",".join("?" for _ in ids)
+        rows = await (
+            await conn.execute(
+                f"SELECT id, ts, layer, user_id, text, decisions FROM l0_journal WHERE id IN ({placeholders}) ORDER BY id",
+                tuple(ids),
+            )
+        ).fetchall()
+    else:
+        rows = await (
+            await conn.execute(
+                "SELECT id, ts, layer, user_id, text, decisions FROM l0_journal"
+                " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
+                (cutoff, time.time() - 600.0),
+            )
+        ).fetchall()
 
     processed = skipped = conflicts = 0
     for row in rows:
