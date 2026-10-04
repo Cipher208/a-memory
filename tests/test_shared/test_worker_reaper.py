@@ -1,7 +1,6 @@
 """Tests for leaked aiosqlite worker-thread cleanup (os._exit removal)."""
 
 import asyncio
-import threading
 from pathlib import Path
 
 import pytest
@@ -22,11 +21,23 @@ async def _open_two_conns(base: Path) -> AsyncConnectionManager:
 
 @pytest.mark.asyncio
 async def test_clear_without_close_leaks_workers(tmp_path: Path) -> None:
-    """Reproduce the leak: clear-only teardown leaves aiosqlite workers running."""
-    before = threading.active_count()
+    """Reproduce the leak: clear-only teardown leaves aiosqlite workers running.
+
+    Asserts against the module's own leaked-connection registry, not against
+    threading.active_count(). The global count is shared state and this test read
+    it twice; the gate caught it as `assert 9 > 11` — two threads belonging to
+    earlier tests exited inside the window and swallowed the two leaked here, so
+    the check failed under the gate's load while passing in isolation. That is
+    the kind of flake that teaches people to bypass the gate.
+
+    The registry names exactly the connections under test, and each thread is
+    checked to be genuinely alive, which is this test's actual claim: the leak is
+    real threads, not bookkeeping.
+    """
     await _open_two_conns(tmp_path)
-    await asyncio.sleep(0.2)
-    assert threading.active_count() > before, "expected leaked workers after clear() without close"
+    leaked = leaked_connection_workers()
+    assert len(leaked) >= 2, "clear() without close() must leave the workers behind"
+    assert all(c._thread.is_alive() for c in leaked), "a leaked connection has no live worker thread"
 
 
 @pytest.mark.asyncio
