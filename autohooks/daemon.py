@@ -66,6 +66,35 @@ def save_cursor(state_file: Path, cursor: int) -> None:
     state_file.write_text(json.dumps({"cursor": cursor}), encoding="utf-8")
 
 
+def source_went_backwards(source_max_id: int, cursor: int) -> bool:
+    """Report whether the source's newest row is now BEHIND the saved cursor.
+
+    A source is a chat database, and a chat database can be renumbered under the
+    daemon: cowagent's `merge_conversations_to_global` folds each secondary
+    agent's `index.db` into the default agent's file and re-issues every message
+    id on the way in (`id -> NULL so the global file re-issues AUTOINCREMENT
+    ids`), and its multi-agent schema rebuild recreates the messages table
+    outright. After that, the ids a cursor was counting no longer describe the
+    rows it had consumed.
+
+    The cursor is only ever compared with `max_id()` on FIRST start, when no
+    state file exists. Once a cursor is saved, nothing notices the source moving
+    underneath it, and `WHERE id > cursor` then selects nothing forever. This is
+    the check that notices.
+
+    Answers False whenever the two are not both integers. `cursor_column` is
+    whatever the config names, so a source may legitimately declare a TEXT key
+    (Ksal's `role`/`text` plumbing shows how loose the mapping is; here it is
+    `rowid`, but nothing enforces integer). `SqliteSource` orders such a key as
+    text, and `'msg_abc' < 64763` raises TypeError inside the poll loop — turning
+    a timing problem into a dead daemon. Declining to rewind when the ordering
+    cannot be established costs a missed reset; raising costs the daemon.
+    """
+    if not isinstance(source_max_id, int) or not isinstance(cursor, int):
+        return False
+    return source_max_id < cursor
+
+
 async def run_daemon(
     cfg: AgentConfig,
     source: SqliteSource,
@@ -108,6 +137,36 @@ async def run_daemon(
         # had been up ≥10 min — it passed on long-lived VPS, failed on fresh CI.
         last_prune: float | None = None
         while not stop.is_set():
+            # A source can be replaced or renumbered under a running daemon (see
+            # `source_went_backwards`). Left unnoticed, `WHERE id > cursor` then
+            # selects nothing on every poll and the daemon looks healthy while
+            # dispatching nothing — the failure one live base sat in for a week.
+            #
+            # The rewind goes to ZERO, not to the new maximum. Resetting to the
+            # maximum would be a no-op dressed as a repair: it would skip
+            # everything the renumbered source now holds, which is precisely the
+            # history that has to be re-read. Once ids no longer map to what was
+            # consumed, no id is trustworthy, so the only safe target is the
+            # beginning.
+            #
+            # This is affordable because L0 dedups by content hash: messages
+            # already captured collapse to duplicates and nothing is stored
+            # twice. Re-reading a whole source is slow; never reading it again is
+            # permanent. The event is logged loudly, because a silent rewind would
+            # hide the merge that caused it.
+            source_max = source.max_id()
+            if source_went_backwards(source_max, cursor):
+                logger.warning(
+                    "source went backwards: max id %s < cursor %s — the source was "
+                    "replaced or renumbered (a multi-agent merge re-issues message ids). "
+                    "Resetting the cursor to 0 and re-reading the whole source; L0 dedups "
+                    "by content hash, so this is slow but lossless.",
+                    source_max,
+                    cursor,
+                )
+                cursor = 0
+                save_cursor(cfg.state_file, cursor)
+
             batch = source.fetch_after(cursor, cfg.batch_limit)
             # The cursor advances only past messages that were really handled.
             # `dispatch` can decline one, and the rate limit in particular means
