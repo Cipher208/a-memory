@@ -182,3 +182,51 @@ async def test_transcript_dumps_skipped_before_any_save(ensure_schema: Path) -> 
     graph = _FakeGraph()
     result = await auto_save_text(mem, graph, user_id="u1", text=LONG_TEXT, event="new_message")
     assert result["saved_l3"] is True
+
+
+async def test_log_row_carries_the_layer_the_routing_chose(ensure_schema: Path) -> None:
+    """The dispatch log records the routed layer, not a literal.
+
+    `layer` here is what `memory_watch` and operator introspection read, and it
+    was written as "user" on every path -- so an agent-layer save was logged
+    under the owner's layer, contradicting the persona branch that logs "agent"
+    for the very same message. No reader filters on this column today, which is
+    why it went unnoticed: the cost was a column that lies.
+
+    Measured on a live persona replay: 34 agent-layer saves in l0_journal with
+    zero agent rows in the log.
+    """
+    from hooks.external import auto_save_text
+
+    mem = _FakeMem()
+    graph = _FakeGraph()
+    result = await auto_save_text(
+        mem,
+        graph,
+        user_id="u1",
+        text=LONG_TEXT,
+        event="new_message",
+        source_msg_id=7,
+        role="assistant",
+        persona_owner=True,
+    )
+    assert result["score"] >= 0.5
+    conn = sqlite3.connect(connection_manager.base_dir / "memory.db")
+    row = conn.execute("SELECT layer, source_msg_id FROM memory_dispatch_log WHERE source_msg_id = 7").fetchone()
+    conn.close()
+    assert row is not None, "the save path must log a row"
+    assert row[0] == "agent", f"agent-layer save logged as {row[0]!r}"
+
+
+async def test_log_row_still_says_user_for_the_owner(ensure_schema: Path) -> None:
+    """The companion case: routing a plain owner message must not drift."""
+    from hooks.external import auto_save_text
+
+    mem = _FakeMem()
+    graph = _FakeGraph()
+    result = await auto_save_text(mem, graph, user_id="u1", text=LONG_TEXT, event="new_message", source_msg_id=8)
+    assert result["score"] >= 0.5
+    conn = sqlite3.connect(connection_manager.base_dir / "memory.db")
+    layer = conn.execute("SELECT layer FROM memory_dispatch_log WHERE source_msg_id = 8").fetchone()[0]
+    conn.close()
+    assert layer == "user"

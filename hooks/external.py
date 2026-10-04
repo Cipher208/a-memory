@@ -336,6 +336,13 @@ async def auto_save_text(
     # C1.10: one log row per save path. Best-effort — failure here never
     # blocks the save (the dispatcher catches), but a missing log row silently
     # disables memory_diff for this event.
+    #
+    # The layer is the one the routing chose, not a literal. This column exists
+    # to be read (`memory_watch`, operator introspection), and it was written as
+    # "user" on every path — so an agent-layer save was logged under the owner's
+    # layer, and the row contradicted the persona branch above, which logs
+    # "agent" for the very same message. No reader filters on this column today,
+    # which is why it went unnoticed; the cost was a column that lies.
     try:
         db_path = connection_manager.base_dir / "memory.db"
         _ensure_preview_column(db_path)
@@ -346,7 +353,7 @@ async def auto_save_text(
                 (
                     event,
                     source_msg_id,
-                    "user",
+                    l0_layer,
                     user_id,
                     score,
                     int(result["saved_l3"]),
