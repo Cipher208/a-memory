@@ -47,6 +47,19 @@ evidence of when the repair ran.
 READ-ONLY BY DEFAULT. `--apply` is required to write, and it takes a backup of
 the database first.
 
+RUN THIS AFTER A CATCH-UP, NOT ONLY ONCE. This script resolves the time from the
+SOURCE (`l0_journal.source_msg_id` -> the chat database), which is strictly better
+than the journal's own `ts`. For 539 legacy rows that `ts` is the IMPORT time, not
+the message time: they were captured by the old daemon, which sent the timestamp in
+its payload while the hook ignored it. A `replay` can therefore only date those rows
+from `l0.ts` (`features/replay.py` passes `row["ts"]`), so the episodes it creates
+land at import time. Re-running this script afterwards moves them to the true time,
+because provenance does not care how the row got there.
+
+The order is: retime the base -> catch up with a wide replay window -> retime again.
+The second dry run is also the proof that the first one worked: it says how many rows
+would still move.
+
 USAGE
 
     MCP_MEMORY_DATA_DIR=~/.mcp-ariel-memory-hermes \\
