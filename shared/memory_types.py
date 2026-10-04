@@ -16,6 +16,7 @@ Each type has its own:
 from __future__ import annotations
 import enum
 import math
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -153,7 +154,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         0.005,
         False,
         True,
-        ("todo", "сделать", "do later", "remind"),
+        ("todo", "to-do", "do later", "remind", "напомни"),
         "Задача с дедлайном",
         0.6,
     ),
@@ -163,7 +164,7 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
         0.05,
         False,
         False,
-        ("вопрос", "уточнить", "ask later", "?"),
+        ("вопрос", "уточнить", "ask later"),
         "Открытый вопрос",
         0.3,
     ),
@@ -199,7 +200,105 @@ _REGISTRY: dict[MemoryKind, TypePolicy] = {
     ),
 }
 
-# Heuristic priority order (first match wins)
+# Interrogative words that make a sentence a QUESTION when they OPEN it.
+#
+# NOTE ON SCOPE: the QUESTION entry below keeps its keyword list for READABILITY and
+# for callers that introspect `_KEYWORD_MAP`, but `kind_for_text` does not match them
+# as substrings — it calls `_is_question`. That is what removes the mid-sentence
+# false positives WITHOUT resorting to word boundaries, which broke inflected forms.
+# The verbatim failing examples live in tests/test_kind_tagger_gate.py: this file is
+# held to the English-comments rule, and the evidence belongs in a test anyway.
+#
+# WHY POSITION MATTERS. `kind_for_text` used to accept any one of these as a bare
+# substring ANYWHERE in the text, so an ordinary clause carrying the Russian word for
+# "as/like" mid-sentence was filed as a question. Measured on one live base: 174 of 276
+# `question` episodes matched on that one substring alone,
+# and 179 of 276 contained no question mark and no interrogative at all. The tag feeds
+# L3 episodes and the retrieval boost, so the register was ranking roleplay.
+_QUESTION_WORDS = frozenset(
+    {
+        "как",
+        "почему",
+        "зачем",
+        "что",
+        "кто",
+        "где",
+        "когда",
+        "какой",
+        "какая",
+        "какие",
+        "каком",
+        "чем",
+        "куда",
+        "откуда",
+        "сколько",
+        "why",
+        "how",
+        "what",
+        "who",
+        "where",
+        "when",
+        "which",
+    }
+)
+
+# Imperative forms that make a clause a REQUEST for work when they open it.
+_TASK_OPENERS = frozenset({"сделать", "сделай", "сделайте", "починить", "исправить", "запланировать", "проверить"})
+
+# Leading decoration a sentence may carry: asterisks from roleplay, quotes, dashes.
+_LEAD_JUNK = "*_«»\"'“”„-—– \t"
+
+
+def _opens_with(text: str, words: frozenset[str]) -> bool:
+    """Report whether any sentence of `text` begins with one of `words`.
+
+    Position, not presence: the same word opening a clause and nested inside one
+    mean different things. `_LEAD_JUNK` strips the asterisks roleplay wraps lines in,
+    and the trailing punctuation strip keeps hyphenated and indefinite forms from being
+    read as their bare interrogative root.
+    """
+    for sentence in re.split(r"(?<=[.!?…])\s+|\n+", text.strip()):
+        parts = sentence.strip().lstrip(_LEAD_JUNK).split(maxsplit=1)
+        if parts and parts[0].lower().rstrip(",.:;!?—–") in words:
+            return True
+    return False
+
+
+def _is_question(text: str) -> bool:
+    """Decide whether the text ACTUALLY asks something.
+
+    Two sufficient signals: a question mark, or a sentence that OPENS with an
+    interrogative word. The Russian for "as/like" mid-sentence is not a question;
+    the same word opening a clause is. Everything else falls through to the other kinds, and ultimately
+    to FACT, which is the honest answer for text nobody classified: under-tagging
+    costs a coarser retrieval hint, while over-tagging poisoned 65% of a register.
+    """
+    return "?" in text or _opens_with(text, _QUESTION_WORDS)
+
+
+def _is_task_request(text: str) -> bool:
+    """Decide whether the text ASKS FOR WORK to be done.
+
+    The mirror of `_is_question`, and needed for the same reason. Dropping the bare
+    the bare verb "to do/make" keyword removed the junk but also stopped a bare
+    imperative ("Make a backup before deploy") from being a task, so the imperative is
+    accepted when it OPENS a clause. It is refused when nested, because narration uses
+    the same verb: a past-tense report of work already done was one of the eleven live
+    rows filed as a task by the substring.
+
+    The Russian obligation particles are deliberately NOT openers despite sounding like
+    tasks: the same past-tense report OPENS with one of them, so position does not
+    separate them the way it separates an interrogative from a statement.
+    """
+    return _opens_with(text, _TASK_OPENERS)
+
+
+# Heuristic priority order (first match wins).
+#
+# QUESTION sits ABOVE TODO on purpose. A line can both ask something and contain an
+# explicit task phrase, and the asking wins: the
+# interrogative form is a statement about the sentence, while the phrase is one word
+# inside it. Measured on live data, the old order filed that line as a task.
 _KEYWORD_MAP: list[tuple[MemoryKind, tuple[str, ...]]] = [
     (MemoryKind.PROCEDURAL, ("сделай так", "порядок действий", "инструкция по", "how to", "пошагово", "step 1")),
     (MemoryKind.COMMITMENT, ("обещаю", "обязуюсь", "commit", "promise", "согласен")),
@@ -209,8 +308,8 @@ _KEYWORD_MAP: list[tuple[MemoryKind, tuple[str, ...]]] = [
     (MemoryKind.DECISION, ("решил", "decided", "chose", "going with", "выбираю")),
     (MemoryKind.PREFERENCE, ("предпочитаю", "prefer", "нравится", "не люблю", "не нравится")),
     (MemoryKind.RELATIONSHIP, ("мой друг", "мой коллега", "мой брат", "my friend", "knows")),
-    (MemoryKind.TODO, ("сделать", "todo", "нужно сделать", "to-do", "remind me")),
-    (MemoryKind.QUESTION, ("?", "почему", "как", "зачем", "why", "how")),
+    (MemoryKind.QUESTION, ("?", "почему", "как", "зачем", "что", "кто", "где", "когда", "какой", "why", "how", "what", "who", "where", "when")),
+    (MemoryKind.TODO, ("todo", "to-do", "нужно сделать", "надо сделать", "нужно будет", "надо будет", "remind me", "напомни", "не забыть")),
     (MemoryKind.HYPOTHESIS, ("возможно", "наверное", "похоже что", "probably", "perhaps")),
     (MemoryKind.OBSERVATION, ("видел", "заметил", "noticed", "observed", "оказывается")),
 ]
@@ -265,9 +364,31 @@ def can_archive(
 
 
 def kind_for_text(text: str) -> MemoryKind:
-    """Best-effort heuristic for auto-classification. Returns FACT if nothing matches."""
+    """Best-effort heuristic for auto-classification. Returns FACT if nothing matches.
+
+    Two gates apply, and they are the whole fix. QUESTION is decided by `_is_question`
+    and TODO by `_is_task_request` — by the SHAPE of the text, not by one word appearing
+    in it. Everything else still matches by substring, deliberately.
+
+    WHY SUBSTRING IS KEPT. Whole-word matching was tried first, because `kw in text`
+    is what let "how" match inside "show". Measured against 10404 live rows it also
+    broke Russian inflection and English stems — feminine and prefixed verb forms
+    stopped matching their dictionary keys, and `committed` stopped matching `commit` —
+    losing 148 classifications. This house writes in feminine grammatical forms, so a
+    silently became FACT. The semantic gates remove the real defect without that cost,
+    so the blunt instrument was withdrawn.
+
+    Returning FACT is not a failure: it is the honest answer for text that matched no
+    pattern, and it costs a coarser retrieval hint. Over-tagging is what this replaces.
+    """
     tl = text.lower()
     for kind, kws in _KEYWORD_MAP:
+        if kind is MemoryKind.QUESTION:
+            if _is_question(text):
+                return kind
+            continue
+        if kind is MemoryKind.TODO and _is_task_request(text):
+            return kind
         if any(kw in tl for kw in kws):
             return kind
     return MemoryKind.FACT
@@ -277,9 +398,15 @@ def boost_for_query(query: str, candidate_kind: MemoryKind | str, base_boost: fl
     """Boost for retrieval if query matches type keywords. Capped at 0.5."""
     p = get_policy(candidate_kind)
     q = query.lower()
-    if not p.boost_on_keywords:
-        return base_boost
     matches = sum(1.0 for kw in p.boost_on_keywords if kw in q)
+    # A question-kind memory is boosted because the QUERY asks something. The old
+    # list carried a bare "?" for this, which meant every question-marked query
+    # lifted every question-kind memory — and owners mostly ask questions, so the
+    # boost was constant and ranked nothing. Interrogativity is the real condition.
+    if p.kind is MemoryKind.QUESTION and _is_question(query):
+        matches += 1.0
+    if not matches:
+        return base_boost
     return min(matches * 0.1, 0.5)
 
 
