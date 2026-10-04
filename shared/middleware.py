@@ -30,6 +30,14 @@ class MiddlewareContext:
 
 MiddlewareNext = Callable[[MiddlewareContext], Any]
 
+# The rate limiter is the one block a caller must be able to RECOGNIZE, because
+# it is the only block that means "not now" rather than "no". Every other reason
+# is a verdict on the event itself (invalid, unimportant, duplicate) and dropping
+# the event is correct; a rate limit is a verdict on the moment, so a caller that
+# discards the event loses it permanently. The daemon holds its cursor on this
+# prefix instead of advancing past the message.
+RATE_LIMIT_BLOCK_PREFIX = "Rate limit exceeded"
+
 
 class Middleware:
     """Base middleware class."""
@@ -41,22 +49,54 @@ class Middleware:
 
 
 class RateLimitMiddleware(Middleware):
-    """Rate limiting for requests."""
+    """Rate limiting for requests.
+
+    The hard 100/min was a constant, and it silently discarded work: a poll loop
+    replaying a chat backlog hit the ceiling within seconds and every message
+    after it was dropped before any handler ran. Measured on a live persona
+    daemon: 2608 rate-limit blocks, 2590 of them inside one replay, which lost
+    63 of 142 substantive messages with no trace anywhere.
+
+    Two escapes now exist, both explicit:
+
+    * `middleware.rate_limit_per_minute` in config.yaml sets the ceiling.
+    * a ceiling of 0 or less disables the limiter entirely, for the deliberate
+      case of replaying history through a loop that is not an external client.
+
+    An unreadable or malformed config falls back to the original 100 rather than
+    failing open, because the limiter exists to protect the memory store from a
+    runaway caller and a broken config must not remove that.
+    """
 
     name = "rate_limit"
 
-    def __init__(self, max_per_minute: int = 100):
+    def __init__(self, max_per_minute: int | None = None):
         self._max = max_per_minute
         self._requests: dict[str, list[float]] = {}
 
+    def _limit(self) -> int:
+        """Resolve the ceiling once; `None` means "read the config"."""
+        if self._max is not None:
+            return self._max
+        try:
+            from config import config
+
+            self._max = int(config.get("middleware", "rate_limit_per_minute", default=100))
+        except Exception:
+            logger.warning("rate limit config unreadable; falling back to 100/min")
+            self._max = 100
+        return self._max
+
     async def process(self, ctx: MiddlewareContext, next: MiddlewareNext) -> Any:
+        limit = self._limit()
         now = time.time()
         user_requests = self._requests.setdefault(ctx.user_id, [])
         user_requests[:] = [t for t in user_requests if now - t < 60]
 
-        if len(user_requests) >= self._max:
+        # A ceiling of 0 or less is the documented way to switch the limiter off.
+        if limit > 0 and len(user_requests) >= limit:
             ctx.blocked = True
-            ctx.block_reason = f"Rate limit exceeded ({self._max}/min)"
+            ctx.block_reason = f"{RATE_LIMIT_BLOCK_PREFIX} ({limit}/min)"
             logger.warning(f"Rate limit hit for user {ctx.user_id}")
             return {"error": ctx.block_reason}
 

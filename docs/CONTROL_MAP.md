@@ -116,6 +116,7 @@ Observability surfaces: `memory_dispatch_log` + `mutation_proposals` tables
 | `features.*` rest (import_export, versioning, cross_user_learning, compression, webhooks, audit_trail, auth, embeddings) | ☠️ DEAD | is_feature_enabled has NO callers at all |
 | `performance.*` | ☠️ DEAD | WAL hardcoded ON in connection.py; pool/cache sizes unread |
 | `security.rate_limit_per_user / max_ws_per_user / max_ws_total` | ✅ LIVE | RateLimiter / middlewares (max_ws_* questionable: no WebSocket surface in stdio mode) |
+| `middleware.rate_limit_per_minute` | ✅ LIVE | `shared.middleware.RateLimitMiddleware` — a DIFFERENT limiter from `security.rate_limit_per_user`: this one counts every hook dispatch and tool call through the pipeline, and a block drops the event before any handler runs. 0 or less disables it |
 | `security.input_validation / sql_injection_prevention / per_user_isolation / audit_logging` | ☠️ DECORATIVE | zero readers |
 | `backup.interval/jitter/wiki_sync/retention` | ✅ LIVE | backup_cron |
 | `dashboard.port` | ☠️ DEAD | argparse --port default 8000 |

@@ -214,6 +214,20 @@ security:
   max_ws_per_user: 5         # connection caps used by RateLimiter
   max_ws_total: 100
 
+# === Middleware pipeline (shared/middleware.py) ===
+# NOT the same limiter as `security.rate_limit_per_user` above. That one guards
+# the HTTP/websocket surface; this one counts events as they pass through the
+# middleware pipeline, which every hook dispatch and tool call goes through.
+#
+# It matters because a rate-limited event is dropped BEFORE any handler runs, so
+# nothing is written anywhere. A poll loop replaying a chat backlog hits the
+# ceiling within seconds: measured on a live persona, 2590 blocks during one
+# replay, losing 63 of 142 substantive messages with no journal row and no
+# dispatch-log row. The daemon now holds its cursor instead of advancing past a
+# blocked message, so the loss is a delay rather than a deletion.
+middleware:
+  rate_limit_per_minute: 100   # 0 or less disables the limiter (deliberate replay only)
+
 # === CORS (HTTP transport / dashboard) ===
 cors:
   allowed_origins:

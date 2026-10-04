@@ -36,6 +36,25 @@ else:
     Dispatch = Any
 
 
+def rate_limited(result: Any) -> bool:
+    """Report whether the pipeline declined this event on the rate limit.
+
+    The distinction matters because this is the only decline that means "not now"
+    rather than "no". An unimportant or duplicate event should be dropped and the
+    cursor should move on; a rate-limited one must not be, because the source is a
+    chat log the daemon can never re-read from the middle — advancing past it
+    loses the message for good.
+
+    This was not hypothetical. A replay of a live persona's history hit the
+    limiter 2590 times and lost 63 of 142 substantive messages, each leaving no
+    row in the journal, no row in the dispatch log, and no warning the operator
+    would see.
+    """
+    from shared.middleware import RATE_LIMIT_BLOCK_PREFIX
+
+    return isinstance(result, dict) and result.get("skipped") is True and RATE_LIMIT_BLOCK_PREFIX in str(result.get("reason", ""))
+
+
 def load_cursor(state_file: Path) -> int | None:
     if not state_file.exists():
         return None
@@ -90,7 +109,26 @@ async def run_daemon(
         last_prune: float | None = None
         while not stop.is_set():
             batch = source.fetch_after(cursor, cfg.batch_limit)
+            # The cursor advances only past messages that were really handled.
+            # `dispatch` can decline one, and the rate limit in particular means
+            # "not now": the source is a chat log that cannot be re-read from the
+            # middle, so advancing past a declined message loses it permanently.
+            # Holding the cursor keeps the at-least-once promise this module
+            # documents in its docstring — which the old `cursor = batch.cursor`
+            # quietly broke for exactly the messages that most needed delivering.
+            handled_upto = cursor
             for msg in batch.messages:
+                # Empty text can never become a memory — `_new_message` already
+                # answers `no_text_or_mem` for it — but it consumed a rate-limit
+                # slot on the way there, because the middleware pipeline runs
+                # ahead of the handler. A chat database that stores one row per
+                # streamed chunk produces thousands of these (2034 empty
+                # assistant rows in one live log), and they crowded the real
+                # messages out of the budget. Skipping them here costs nothing
+                # and removes the flood at its source.
+                if not (msg.text or "").strip():
+                    handled_upto = msg.source_id
+                    continue
                 # S10: role from the source row; persona_owner assistant
                 # messages switch to the agent layer (cached per layer).
                 role = msg.sender or ""
@@ -119,9 +157,20 @@ async def run_daemon(
                     graph_d,
                     rag_d,
                 )
+                if rate_limited(result):
+                    # Retry after the poll interval; the limiter's window is a
+                    # minute, so the same message goes through on a later pass.
+                    logger.warning(
+                        "rate limited at source_msg_id=%s (layer=%s) — holding the cursor at %s and retrying",
+                        msg.source_id,
+                        d_layer,
+                        handled_upto,
+                    )
+                    break
+                handled_upto = msg.source_id
                 logger.debug("dispatched msg %s (layer=%s): %s", msg.source_id, d_layer, result)
-            if batch.messages:
-                cursor = batch.cursor
+            if handled_upto != cursor:
+                cursor = handled_upto
                 save_cursor(cfg.state_file, cursor)
             # E16: memory_pressure — ariel-side emitter (L1 ring growth with hysteresis).
             size = len(mem.l1.get_full()) if mem is not None and hasattr(mem, "l1") and hasattr(mem.l1, "get_full") else 0
