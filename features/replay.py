@@ -117,7 +117,7 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
     chash = config_hash()
     rows = await (
         await conn.execute(
-            "SELECT id, layer, user_id, text, decisions FROM l0_journal"
+            "SELECT id, ts, layer, user_id, text, decisions FROM l0_journal"
             " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
             (cutoff, time.time() - 600.0),
         )
@@ -150,8 +150,21 @@ async def replay(*, since_days: int = 7, gate: str = "g1") -> dict[str, int]:
         await conn.commit()  # the claim is fixed before distillation
         mem = MemoryManager(cm=connection_manager).get_layer(row["layer"] or "user", row["user_id"])
         graph = EpistemicGraph(cm=connection_manager, layer=row["layer"] or "user")
+        # ts from the journal, not now: a replay is BY DEFINITION distilling text
+        # that arrived earlier, and `created_at` defaults to insertion time. Without
+        # this, one replay re-dated three weeks of history to the hour it ran —
+        # measured: 1937 agent-layer episodes spanning 15.09..04.10, all reading
+        # 04.10 09:15..13:42. The journal's ts is the original capture time, which
+        # `l0_import_source.py` and `import_chat.py` carry through as `ts_override`.
         route = await distill_and_route(
-            mem, graph, row["user_id"], row["text"], score_text(row["text"], event=gate), event=gate, source_rid=int(row["id"])
+            mem,
+            graph,
+            row["user_id"],
+            row["text"],
+            score_text(row["text"], event=gate),
+            event=gate,
+            source_rid=int(row["id"]),
+            ts=row["ts"],
         )
         conflicts += route["conflicts"]
         # C8: novelty_skipped = the fact is already in L4 (a re-run of the same row) —

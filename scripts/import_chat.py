@@ -145,7 +145,11 @@ async def _capture_and_distill(user_id: str, text: str, ts: float | None = None)
     conn = await connection_manager.get(DB_NAME)
     mem = MemoryManager(cm=connection_manager).get_layer("user", user_id)
     graph = EpistemicGraph(cm=connection_manager, layer="user")
-    route = await distill_and_route(mem, graph, user_id, text, score_text(text, event="import"), event="import", source_rid=rid)
+    # ts travels to BOTH writers. It already reached the journal above; without
+    # it here the episode still got `time.time()`, so an import of June history
+    # produced June-dated L0 rows feeding October-dated episodes — the two halves
+    # of one imported message disagreed about when it happened.
+    route = await distill_and_route(mem, graph, user_id, text, score_text(text, event="import"), event="import", source_rid=rid, ts=ts)
     # condition-splitting (C4): ConflictResolver hit сохраняет ОБЕ записи
     # (scope=earlier/later) и учитывается в l4_saved — routed, не gated out.
     # C8: novelty_skipped = дубликат уже в L4 — идемпотентный успех.

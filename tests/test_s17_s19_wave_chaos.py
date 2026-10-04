@@ -33,7 +33,7 @@ class FakeL3:
     def __init__(self) -> None:
         self.saved: list[tuple[str, str, float, list[str]]] = []
 
-    async def save(self, user_id: str, summary: str, weight: float, tags: list[str]) -> int:
+    async def save(self, user_id: str, summary: str, weight: float, tags: list[str], created_at: float | None = None) -> int:
         self.saved.append((user_id, summary, weight, tags))
         return len(self.saved)
 

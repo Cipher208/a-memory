@@ -66,7 +66,7 @@ async def test_promote_to_l3_and_clear(scratch_db):
     class _FakeMem:
         class l3:  # noqa: N801
             @staticmethod
-            async def save(user_id, summary, weight, tags):
+            async def save(user_id, summary, weight, tags, created_at=None):
                 saved.append((user_id, summary, weight, tags))
                 return 1
 

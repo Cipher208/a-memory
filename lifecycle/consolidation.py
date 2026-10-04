@@ -277,7 +277,12 @@ class ConsolidationEngine:
         epi_db = episodic_db or "memory.db"
         epi_conn = await self._cm.get(epi_db)
         cursor = await epi_conn.execute(
-            "SELECT episode_id, summary, emotional_weight, tags FROM episodes "
+            # created_at is SELECTED, not only ordered by: the promotion below
+            # writes it into L4, and without it the fact was dated by the
+            # promotion run rather than by the episode it came from. Same defect
+            # shape as the three writers fixed alongside this — a placeholder
+            # clock standing in for a time the caller actually knows.
+            "SELECT episode_id, summary, emotional_weight, tags, created_at FROM episodes "
             "WHERE layer=? AND user_id=? AND emotional_weight > ? "
             "AND (tags IS NULL OR tags NOT LIKE ?) "
             "ORDER BY created_at ASC LIMIT 10",
@@ -330,6 +335,10 @@ class ConsolidationEngine:
                 memory_kind=kind.value,
                 source="episode_promotion",
                 metadata=_parent_refs(f"episode:{row['episode_id']}"),
+                # The episode's own time. Observed live without this: episodes
+                # re-dated to 29.09 promoted into L4 rows stamped 04.10 16:49 —
+                # the promotion ran now, the memory happened then.
+                created_at=row["created_at"],
             )
             with contextlib.suppress(Exception):
                 await record_transition(self._cm, user_id, "episode", f"episode:{row['episode_id']}", "l4", f"core:{entry_id}", "episode_promotion")

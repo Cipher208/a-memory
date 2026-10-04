@@ -48,7 +48,32 @@ class EpisodicMemory:
         """,
         )
 
-    async def save(self, user_id: str, summary: str, emotional_weight: float = 0.5, tags: list[str] | None = None) -> int:
+    async def save(
+        self,
+        user_id: str,
+        summary: str,
+        emotional_weight: float = 0.5,
+        tags: list[str] | None = None,
+        created_at: float | None = None,
+    ) -> int:
+        """Write one episode; `created_at` defaults to now.
+
+        WHY THE PARAMETER EXISTS. An episode's `created_at` answers "when did
+        this happen", and recall, decay and the 30-day sweeper all ask it. This
+        method used to hard-code `time.time()`, which is right ONLY for text
+        arriving now. Every path that distils OLD text — `import_chat.py`, the
+        autohooks replay, `l0_import_source.py` plus a later `replay` — therefore
+        stamped the hour it ran onto material from months earlier.
+
+        Measured on one live base before the fix: 1937 agent-layer episodes whose
+        source messages span 15.09..04.10 all read 04.10 09:15..13:42, the two
+        hours of the replay. The user layer kept its dates only because its
+        history came through `features/import_export.py`, which passes
+        `created_at` explicitly — the asymmetry is the bug, not a property of the
+        layers.
+
+        None keeps the old behaviour, so a live message is unchanged.
+        """
         conn = await self._cm.get(DB_NAME)
         # Dedup guard: an identical (layer, user_id, summary) must not land as a
         # second row. The live base accumulated 468 such duplicates (17.5% of the
@@ -62,7 +87,14 @@ class EpisodicMemory:
             return int(row[0])
         cursor = await conn.execute(
             "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (self.layer, user_id, summary, emotional_weight, json.dumps(tags or []), time.time()),
+            (
+                self.layer,
+                user_id,
+                summary,
+                emotional_weight,
+                json.dumps(tags or []),
+                created_at if created_at is not None else time.time(),
+            ),
         )
         await conn.commit()
         return int(cursor.lastrowid or 0)

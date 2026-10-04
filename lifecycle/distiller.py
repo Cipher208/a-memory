@@ -185,6 +185,7 @@ async def distill_and_route(
     event: str = "new_message",
     extra_tags: tuple[str, ...] | list[str] = (),
     source_rid: int | None = None,
+    ts: float | None = None,
 ) -> dict[str, Any]:
     """Atomize text and route the atoms across layers.
 
@@ -196,6 +197,13 @@ async def distill_and_route(
     source_rid (S6a-4): id of the l0_journal source row — written into the
     metadata of L4 records (source_raw_id) and as a raw:<rid> tag on L3
     episodes → drill-down to the original raw material.
+    ts: when the SOURCE message was written, for episodes that did not happen
+    now. A backfill or a re-read of history distils old text at the moment it
+    runs, so the default — episode time is insertion time — turns September
+    into today and destroys the ordering recall asks about. Measured on one live
+    base: 1937 agent-layer episodes spanning 15.09..04.10 were all dated
+    04.10 09:15..13:42, the hours of the replay. None by default, so nothing
+    changes for a caller that is genuinely writing now.
     """
     from core.memory import CoreMemory
     from rag.conflict import ConflictResolver
@@ -301,6 +309,7 @@ async def distill_and_route(
                     memory_kind=kind.value,
                     source=f"{event}:contradiction",
                     metadata=meta_new,
+                    created_at=ts,
                 )
                 stats["l4_saved"] += 2 if first_key else 1
                 saved.append(clause)
@@ -308,7 +317,7 @@ async def distill_and_route(
             l4_meta: dict[str, Any] | None = None
             if source_rid is not None:
                 l4_meta = _merged_meta(rows[0]["metadata"] if rows else None, source_rid)
-            await target.save(user_id, key, clause, importance=score, memory_kind=kind.value, source=event, metadata=l4_meta)
+            await target.save(user_id, key, clause, importance=score, memory_kind=kind.value, source=event, metadata=l4_meta, created_at=ts)
             stats["l4_saved"] += 1
             saved.append(clause)
         else:
@@ -317,7 +326,7 @@ async def distill_and_route(
             l3_tags = [*extra_tags, event, kind.value, f"topic:{_topic_of(clause)}"]
             if source_rid is not None:
                 l3_tags.append(f"raw:{source_rid}")
-            await mem.l3.save(user_id, clause[:500], score, l3_tags)
+            await mem.l3.save(user_id, clause[:500], score, l3_tags, created_at=ts)
             stats["l3_saved"] += 1
             saved.append(clause)
             if has_conflict:

@@ -19,7 +19,7 @@ def _mem(cm):
     class _L3:
         saved: list[str] = []
 
-        async def save(self, uid, text, score, tags):
+        async def save(self, uid, text, score, tags, created_at=None):
             self.saved.append(text)
 
     class _Mem:

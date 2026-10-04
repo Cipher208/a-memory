@@ -77,7 +77,7 @@ class _FakeL3:
     def __init__(self):
         self.saved = []
 
-    async def save(self, user_id, summary, weight, tags):
+    async def save(self, user_id, summary, weight, tags, created_at=None):
         self.saved.append((summary, weight, tags))
         return 1
 

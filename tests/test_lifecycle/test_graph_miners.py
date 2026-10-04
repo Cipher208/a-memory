@@ -626,7 +626,7 @@ async def test_miner_entities_degree_cap_anti_hub(db):
 
 
 class _FakeL3:
-    async def save(self, user_id: str, summary: str, weight: float, tags: list[str]) -> int:
+    async def save(self, user_id: str, summary: str, weight: float, tags: list[str], created_at: float | None = None) -> int:
         return 1
 
 

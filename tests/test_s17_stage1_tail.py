@@ -321,7 +321,7 @@ class _FakeL3:
     def __init__(self, store: list) -> None:
         self._store = store
 
-    async def save(self, user_id: str, summary: str, weight: float, tags: list) -> int:
+    async def save(self, user_id: str, summary: str, weight: float, tags: list, created_at: float | None = None) -> int:
         self._store.append((user_id, summary, weight, tags))
         return 1
 

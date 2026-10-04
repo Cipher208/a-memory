@@ -90,6 +90,7 @@ class CoreMemory:
         layer: str | None = None,
         triggered_by: str | None = None,
         visibility: str | None = None,
+        created_at: float | None = None,
     ) -> int:
         layer = layer or self.layer
         now = time.time()
@@ -122,7 +123,7 @@ class CoreMemory:
             await self._record_temporal(conn, layer, user_id, key, value, importance, memory_kind, now)
         else:
             entry_id = await self._insert_entry(
-                conn, layer, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now, vis
+                conn, layer, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now, vis, created_at
             )
             new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)
             await self._record_history(conn, layer, user_id, key, None, new_row, triggered_by or source, now)
@@ -183,13 +184,17 @@ class CoreMemory:
         meta: str,
         now: float,
         vis: str = "visible",
+        created_at: float | None = None,
     ) -> int:
+        # created_at defaults to `now`, but is separable: a backfill writes the
+        # hour it ran while the fact it stores may be months older. updated_at is
+        # always `now` — the row really was last touched now.
         cursor = await conn.execute(
             """INSERT INTO core_memory
                (layer, user_id, key, value, importance, memory_kind, expires_at,
                 source, metadata, visibility, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (layer, uid, key, val, imp, kind, exp, src, meta, vis, now, now),
+            (layer, uid, key, val, imp, kind, exp, src, meta, vis, created_at if created_at is not None else now, now),
         )
         return int(cursor.lastrowid or 0)
 

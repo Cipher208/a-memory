@@ -339,7 +339,7 @@ async def test_dream_marker_anchoring_e2e(e2e):
         def __init__(self):
             self.saved = []
 
-        async def save(self, user_id, summary, weight, tags):
+        async def save(self, user_id, summary, weight, tags, created_at=None):
             self.saved.append(summary)
             return 1
 

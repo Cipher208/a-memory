@@ -7,7 +7,9 @@ class _FakeL4:
     def __init__(self):
         self.saved = []
 
-    async def save(self, user_id, key, value, importance=None, memory_kind=None, expires_at=None, source="manual", metadata=None, layer=None):
+    async def save(
+        self, user_id, key, value, importance=None, memory_kind=None, expires_at=None, source="manual", metadata=None, layer=None, created_at=None
+    ):
         self.saved.append({"user_id": user_id, "key": key, "value": value, "metadata": metadata, "source": source})
         return len(self.saved)
 

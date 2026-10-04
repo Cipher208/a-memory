@@ -19,7 +19,7 @@ async def test_novelty_gate_skips_paraphrase(tmp_path):
     class _L3:
         saved = []
 
-        async def save(self, uid, text, score, tags):
+        async def save(self, uid, text, score, tags, created_at=None):
             self.saved.append(text)
 
     class _Mem:
@@ -49,7 +49,7 @@ async def test_topic_tag_on_l3_episode(tmp_path):
     class _L3:
         saved = []
 
-        async def save(self, uid, text, score, tags):
+        async def save(self, uid, text, score, tags, created_at=None):
             self.saved.append(tags)
 
     class _Mem:

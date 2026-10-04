@@ -145,6 +145,7 @@ async def auto_save_text(
     role: str = "",
     persona_owner: bool = False,
     kind: str = "",
+    ts: float | None = None,
 ) -> dict[str, Any]:
     """evaluate_importance → threshold-gated saves + one memory_dispatch_log row.
 
@@ -157,6 +158,14 @@ async def auto_save_text(
     event that triggered the save (always "new_message" or "auto_save_candidate"
     in v1; the dispatcher calls auto_save_text with that name so the log
     carries the same tag as metrics.inc("hook_event_<event>")).
+
+    ts: when the SOURCE message was written, when that is not now. The daemon
+    has always put it in the dispatch payload (`daemon.py`, `"ts": msg.ts`) —
+    and this function had no parameter to receive it, so `capture()` fell back
+    to `time.time()` (`shared/l0.py`) and the journal, and every episode built
+    from it, were dated by the backfill instead of by the message. Three
+    historical layers collapsed into one afternoon that way. None means "now",
+    so the live path is unchanged.
     """
     import time as _time
     import sqlite3 as _sqlite3
@@ -243,7 +252,7 @@ async def auto_save_text(
     if await find_block(l0_layer, user_id, text) is not None:
         return await _refuse("duplicate_l0_block")
 
-    l0_id: int | None = await capture(event, l0_layer, user_id, text, source_msg_id=source_msg_id)
+    l0_id: int | None = await capture(event, l0_layer, user_id, text, source_msg_id=source_msg_id, ts_override=ts)
 
     # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
     # NER unavailable/crashed → the regex tier inside sanitize still ran.
@@ -355,7 +364,7 @@ async def auto_save_text(
     # events → L3 via mem.l3.save). The graph is not written directly — the miners fill it.
     from lifecycle.distiller import distill_and_route
 
-    route_stats = await distill_and_route(mem, graph, user_id, text, score, event=event, extra_tags=rule_out["tags"], source_rid=l0_id)
+    route_stats = await distill_and_route(mem, graph, user_id, text, score, event=event, extra_tags=rule_out["tags"], source_rid=l0_id, ts=ts)
     result["saved_l3"] = route_stats["l3_saved"] > 0
     result["saved_graph"] = route_stats["l3_saved"] > 0
     result["routes"] = route_stats

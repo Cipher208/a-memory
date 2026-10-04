@@ -312,6 +312,15 @@ class UserHooks:
             role=str(ctx.get("role") or ""),
             persona_owner=bool(ctx.get("persona_owner")),
             kind=str(ctx.get("kind") or ""),
+            # When the SOURCE message was written. The daemon has always sent
+            # this ("ts": msg.ts) and nothing here read it, so `capture` fell
+            # back to time.time() and a backfill dated months of history to the
+            # afternoon it ran. Passed through only if it is a real number: the
+            # payload crosses a JSON boundary, and a string would land in a REAL
+            # column as text and corrupt every age comparison downstream —
+            # `ts_override or time.time()` in shared/l0.py accepts anything
+            # truthy, so the check has to happen here, on the way in.
+            ts=ctx.get("ts") if isinstance(ctx.get("ts"), (int, float)) else None,
         )
         return {"auto_save": result}
 
