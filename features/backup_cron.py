@@ -185,7 +185,18 @@ class BackupCron:
             from hooks.registry import hook_registry
 
             for layer in ["user", "agent"]:
-                self._await_on_main_loop(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
+                # Timing only. The `finally` re-raises, so a timeout still skips
+                # the remaining layers exactly as it did before: this logs which
+                # layer was in flight and what it really cost, without changing
+                # what runs. The bare "Nightly hook error" that used to be the
+                # only trace did not say which layer died or how close the other
+                # came to the 120 s budget.
+                started = time.monotonic()
+                logger.info("Nightly pass: layer=%s starting", layer)
+                try:
+                    self._await_on_main_loop(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
+                finally:
+                    logger.info("Nightly pass: layer=%s finished in %.1f s", layer, time.monotonic() - started)
             if state_path is not None:
                 with contextlib.suppress(Exception):
                     from features.cycles import record_nightly_done

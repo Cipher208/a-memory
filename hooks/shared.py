@@ -8,9 +8,10 @@ server's event loop and store APIs are async (sync bridges deadlocked
 aiosqlite and silently dropped saves).
 """
 
+import contextlib
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lifecycle.consolidation import ConsolidationEngine
 from lifecycle.forgetting import ForgettingSystem
@@ -19,7 +20,41 @@ from rag.router import RetrievalRouter
 
 from shared.constants import DB_NAME, DEFAULT_USER
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def timed_step(layer: str, step: str) -> Iterator[None]:
+    """Log how long one nightly step took, without touching its control flow.
+
+    Measurement only. The `finally` re-raises whatever the step raised, so the
+    surrounding `contextlib.suppress(Exception)` still decides the outcome
+    exactly as it did before, and the step's value is still assigned before any
+    exception from the logging itself. A logging failure cannot change a
+    result: it is suppressed here.
+
+    Why this exists: the nightly pass has a hard 120 s budget per layer
+    (`features/backup_cron._await_on_main_loop`) and nothing recorded which
+    step spent it. The failure mode was a bare `Nightly hook error` with no
+    indication of the culprit. `asyncio.run_coroutine_threadsafe(...).result(
+    timeout=...)` raises without cancelling the coroutine, so these lines still
+    arrive after a timeout -- that is what makes the slow step readable rather
+    than merely inferable.
+    """
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        with contextlib.suppress(Exception):
+            logger.info(
+                "nightly step: layer=%s step=%s %.0f ms",
+                layer,
+                step,
+                (time.monotonic() - started) * 1000,
+            )
 
 
 async def forgetting_ritual(ctx: dict[str, Any]) -> dict[str, Any]:

@@ -14,6 +14,7 @@ from .shared import (
     dream_buffer_staging,
     forgetting_ritual,
     retrieval_router,
+    timed_step,
 )
 
 from shared.constants import DEFAULT_USER, AGENT_LAYER
@@ -34,23 +35,23 @@ class AgentHooks:
         is done by backup_cron for both layers — here only agent specifics.
         """
         result: dict[str, Any] = {"action": "agent_nightly"}
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step(AGENT_LAYER, "graph_enrich"):
             from lifecycle.graph_enrich import graph_enrich
 
             result["graph_enrich"] = await graph_enrich(layer=AGENT_LAYER)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step(AGENT_LAYER, "wiki_graph_build"):
             from lifecycle.wiki_graph_builder import build_from_wiki
 
             result["wiki_graph_build"] = await build_from_wiki(layer=AGENT_LAYER)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step(AGENT_LAYER, "compact"):
             from lifecycle.compact import compact_under_budget
 
             result["compact"] = await compact_under_budget(self.user_id, AGENT_LAYER)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step(AGENT_LAYER, "sweep"):
             from lifecycle.l0_sweep import sweep_expired
 
             result["sweep"] = await sweep_expired()
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step(AGENT_LAYER, "bridge"):
             from features.bridge import ingest_drain, regenerate_bridge
 
             result["bridge"] = str(await regenerate_bridge(self.user_id, AGENT_LAYER))

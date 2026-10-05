@@ -18,6 +18,7 @@ from .shared import (
     dream_buffer_staging,
     forgetting_ritual,
     retrieval_router,
+    timed_step,
 )
 
 logger = logging.getLogger(__name__)
@@ -86,37 +87,37 @@ class UserHooks:
     @hook_registry.mark("nightly", layer="user")
     async def _nightly(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         result = {"action": "create_diary", "summary": ctx.get("daily_summary", "")}
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "cls_replay"):
             result["cls_replay"] = await cls_replay_hook(ctx, self.user_id)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "graph_build"):
             from lifecycle.graph_builder import build_from_episodes
 
             from shared.connection import connection_manager
 
             result["graph_build"] = await build_from_episodes(connection_manager, self.user_id, layer="user")
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "wiki_graph_build"):
             from lifecycle.wiki_graph_builder import build_from_wiki
 
             result["wiki_graph_build"] = await build_from_wiki(user_id=self.user_id, layer="user")
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "graph_enrich"):
             from lifecycle.graph_enrich import graph_enrich
 
             result["graph_enrich"] = await graph_enrich(layer="user")
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "qfields"):
             from lifecycle.qfields import qfield_enrich
 
             result["qfields"] = await qfield_enrich(layer="user")
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "skill_promotion"):
             from features.skill_pipeline import auto_promote_fresh
 
             from wiki.manager import WikiManager
 
             result["skill_promotion"] = await auto_promote_fresh(mem, WikiManager(layer="user"), self.user_id)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "reflection"):
             from features.reflection import nightly_reflection
 
             result["reflection"] = nightly_reflection(mem, self.user_id)
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), timed_step("user", "skill_reinforce"):
             from features.skill_pipeline import skill_reinforce
 
             result["skill_reinforce"] = await skill_reinforce(WikiManager(layer="user"))
