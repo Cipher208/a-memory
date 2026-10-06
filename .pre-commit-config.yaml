@@ -29,9 +29,15 @@ repos:
         pass_filenames: false
 
       # F-gate: full test suite on commit (code changed)
+      # --locked, not --frozen: a bare `uv run` re-resolves and REWRITES
+      # uv.lock whenever pyproject.toml has drifted, which stashes the commit
+      # in progress and rolls it back ("Stashed changes conflicted with hook
+      # auto-fixes") — the commit silently never happens. --frozen stops the
+      # rewrite but still exits 0 against a stale lock; --locked stops the
+      # rewrite AND fails (exit 2) so the drift is loud. Verified both ways.
       - id: pytest-gate
         name: pytest gate (full suite)
-        entry: uv run --with-editable . --extra dev pytest tests/ -q --junitxml=/tmp/precommit_gate.xml
+        entry: uv run --locked --with-editable . --extra dev pytest tests/ -q --junitxml=/tmp/precommit_gate.xml
         language: system
         pass_filenames: false
         stages: [pre-commit]
@@ -42,7 +48,7 @@ repos:
       # (scripts/_*.py) broke pushes without being part of them.
       - id: prepush-gate
         name: pre-push gate (ruff isolated + mypy 10 dirs)
-        entry: bash -c 'uv run --isolated --with ruff python -m ruff check $(git ls-files "*.py") && uv run --isolated --with ruff python -m ruff format --check $(git ls-files "*.py") && uv run --with-editable . --extra dev --extra embeddings mypy features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/ autohooks/ eval/'
+        entry: bash -c 'uv run --isolated --with ruff python -m ruff check $(git ls-files "*.py") && uv run --isolated --with ruff python -m ruff format --check $(git ls-files "*.py") && uv run --locked --with-editable . --extra dev --extra embeddings mypy features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/ autohooks/ eval/'
         language: system
         pass_filenames: false
         stages: [pre-push]
@@ -50,7 +56,7 @@ repos:
 
       - id: prepush-pytest
         name: pre-push pytest gate
-        entry: bash -c 'ARIEL_HASH_EMBEDDINGS=1 uv run --with-editable . --extra dev pytest tests/ -q --junitxml=/tmp/prepush_gate.xml'
+        entry: bash -c 'ARIEL_HASH_EMBEDDINGS=1 uv run --locked --with-editable . --extra dev pytest tests/ -q --junitxml=/tmp/prepush_gate.xml'
         language: system
         pass_filenames: false
         stages: [pre-push]
