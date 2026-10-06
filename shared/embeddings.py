@@ -238,30 +238,38 @@ class EmbeddingCache:
         return None
 
     async def _cache_many(self, items: list[tuple[str, list[float]]], cache_tag: str) -> None:
-        """Write cache rows in ONE transaction.
+        """Write cache rows in bounded batches rather than one row at a time.
 
         The previous path committed per embedding, which cost a commit round trip
         for every vector — 3786 of them on hermes in a single nightly pass, at the
         same time as the model call it was meant to save.
+
+        Batches are capped rather than written as one transaction on purpose: a
+        single commit for the whole batch would lose every vector if the process
+        is restarted mid-pass, whereas the old per-row path lost at most one. A
+        hermes-sized pass costs 8 commits this way instead of 3786, and at most
+        one batch is at risk.
         """
         if not items:
             return
         await self.ensure()
         int8 = _int8_enabled()
-        rows = [
-            (
-                self._hash_text(text),
-                _encode_int8(emb) if int8 else struct.pack(f"{len(emb)}f", *emb),
-                cache_tag,
-            )
-            for text, emb in items
-        ]
         conn = await self._cm.get(DB_NAME)
-        await conn.executemany(
-            "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",
-            rows,
-        )
-        await conn.commit()
+        for start in range(0, len(items), _CACHE_LOOKUP_CHUNK):
+            batch = items[start : start + _CACHE_LOOKUP_CHUNK]
+            rows = [
+                (
+                    self._hash_text(text),
+                    _encode_int8(emb) if int8 else struct.pack(f"{len(emb)}f", *emb),
+                    cache_tag,
+                )
+                for text, emb in batch
+            ]
+            await conn.executemany(
+                "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",
+                rows,
+            )
+            await conn.commit()
 
     async def _cache(self, text: str, embedding: list[float], cache_tag: str) -> None:
         await self._cache_many([(text, embedding)], cache_tag)

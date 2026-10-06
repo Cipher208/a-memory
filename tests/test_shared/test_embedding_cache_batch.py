@@ -93,6 +93,34 @@ async def test_batched_lookup_does_not_query_per_text(tmp_path, monkeypatch):
     assert len(selects) == 1, f"ожидался 1 запрос на пачку из {len(texts)}, а их {len(selects)}"
 
 
+async def test_cache_many_commits_in_batches_not_one_transaction(tmp_path, monkeypatch):
+    """Запись идёт порциями, а не одной транзакцией на всю пачку.
+
+    Иначе рестарт посреди ночного прогона теряет ВСЕ посчитанные векторы,
+    тогда как прежний поштучный путь терял максимум один. Проверяем, что при
+    пачке больше порции коммитов больше одного — то есть долговечность
+    частичная, как и была.
+    """
+    cache = await _cache(tmp_path, monkeypatch)
+    monkeypatch.setattr(emb, "_CACHE_LOOKUP_CHUNK", 4)
+    total = 10
+
+    conn = await connection_manager.get(emb.DB_NAME)
+    real_commit = conn.commit
+    commits = 0
+
+    async def counting_commit():
+        nonlocal commits
+        commits += 1
+        await real_commit()
+
+    monkeypatch.setattr(conn, "commit", counting_commit)
+    await cache._cache_many([(f"b{i}", [1.0]) for i in range(total)], "m")
+
+    assert await cache.count() == total
+    assert commits == 3, f"10 строк порциями по 4 — это 3 коммита, а не {commits}"
+
+
 async def test_cache_many_writes_every_row(tmp_path, monkeypatch):
     """Батч-запись сохраняет все строки — иначе кэш тихо теряет векторы."""
     cache = await _cache(tmp_path, monkeypatch)
