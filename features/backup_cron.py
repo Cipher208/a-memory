@@ -491,11 +491,21 @@ class BackupCron:
             logger.info("Cleaned up %d old backups", removed)
         self._cleanup_tmp()
 
-    # Test artifacts in /tmp do not clean themselves up: conftest os._exit(0)
-    # bypasses pytest-tmpdir pruning (pytest-of-<user> grew to 2.3G), hermetic
-    # fixtures leave ariel-test-global-*, the eval harness — ariel-eval-*. The
-    # full /tmp on tmpfs filled up and stalled the local pre-push pytest gate (2026-09-06).
-    _TMP_CLEANUP_DAYS = 2
+    # Test artifacts in the temp dir do not clean themselves up: hermetic fixtures
+    # leave ariel-test-global-*, the eval harness — ariel-eval-*, pytest — its own
+    # pytest-of-<user>. A full /tmp on tmpfs stalled the local pre-push pytest gate
+    # (2026-09-06), and on 2026-10-06 the same tmpfs hit its user quota: every write
+    # started failing with EDQUOT, which took down every tool of the DSH sandbox
+    # because the harness writes its own command output to /tmp too.
+    #
+    # The window is HOURS, not days. This sweep is reachable only from `_do_backup`,
+    # so it runs about once a day: a 2-day threshold meant a leak had to survive two
+    # daily passes before anything touched it, and a day's worth of artifacts sat in
+    # the temp dir in the meantime — exactly what filled it in both incidents. Six
+    # hours is far longer than anything that legitimately writes here (the full suite
+    # takes ~90 s, pytest caps a single test at 60 s, and the eval and hermetic dirs
+    # are per-session), yet short enough that a leak is collected the same day.
+    _TMP_CLEANUP_HOURS = 6.0
 
     def _cleanup_tmp(self, tmp_root: Path | None = None) -> int:
         """Tear down stale test artifacts in the temp dir. Strict prefixes, best-effort."""
@@ -506,23 +516,29 @@ class BackupCron:
         # Resolve the real temp dir: TMPDIR can point elsewhere (/var/tmp on 2026-10-01),
         # and a hardcoded /tmp left 4.4G of pytest/eval artifacts uncleaned (2026-10-01).
         root = tmp_root or Path(tempfile.gettempdir())
-        cutoff = time.time() - self._TMP_CLEANUP_DAYS * 86400
+        cutoff = time.time() - self._TMP_CLEANUP_HOURS * 3600
         candidates: list[Path] = []
         pytest_base = root / f"pytest-of-{getpass.getuser()}"
         if pytest_base.is_dir() and not pytest_base.is_symlink():
             candidates.extend(pytest_base.glob("pytest-*"))
         candidates.extend(root.glob("ariel-test-global-*"))
         candidates.extend(root.glob("ariel-eval-*"))
+        # pytest points `pytest-current` at the run in progress, and an age test alone
+        # cannot recognise it: a run that started one minute ago and one that finished
+        # one minute ago both look fresh. Skipping that target is cheap and exact, and
+        # it is what keeps a shortened window safe for a suite being run right now.
+        current = pytest_base / "pytest-current"
+        live = {os.path.realpath(current)} if current.is_symlink() else set()
         removed = 0
         for d in candidates:
             try:
-                if d.is_dir() and not d.is_symlink() and d.stat().st_mtime < cutoff:
+                if d.is_dir() and not d.is_symlink() and os.path.realpath(d) not in live and d.stat().st_mtime < cutoff:
                     _shutil.rmtree(d)
                     removed += 1
             except OSError:
                 continue  # someone else's / busy directory — not our concern
         if removed:
-            logger.info("Tmp cleanup: removed %d stale test dirs (>%dd)", removed, self._TMP_CLEANUP_DAYS)
+            logger.info("Tmp cleanup: removed %d stale test dirs (>%gh)", removed, self._TMP_CLEANUP_HOURS)
         return removed
 
     def _sync_wiki(self) -> None:

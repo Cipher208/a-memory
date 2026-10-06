@@ -95,6 +95,42 @@ two passes occupy the loop at once; a pass still unfinished after `NIGHTLY_INFLI
 treated as lost so retries can never be blocked forever. `cycles_state.json`'s `last_nightly` is
 written only after both layers finish, so an interrupted pass still leaves the cycle due.
 
+## Tests and the Temp Filesystem
+
+`/tmp` on the development host is a **7.9 GiB tmpfs** — RAM, shared with the whole machine, and
+carrying a per-user quota. A full suite run leaves ~725 MiB there (one memory instance per test), so
+the suite no longer uses it: `tests/_tmp_policy.py` points `TMPDIR` at `~/.cache/ariel-test-tmp` on the
+root filesystem before pytest's `tmp_path` fixture resolves anything, and prunes superseded run trees
+and bare `mkdtemp` leftovers at startup. Set `ARIEL_TEST_TMPDIR` to move it; an explicitly set
+`TMPDIR` is honoured as-is (and then *not* swept for bare `mkdtemp`, since a pattern like `tmp????????`
+has no business deleting things out of an operator-chosen `/var/tmp`).
+
+This is not cosmetic. On 2026-10-06 the quota ran out and **every write to `/tmp` began failing with
+`EDQUOT` (-122)** — the DSH tool sandbox lost all of its tools, because the harness writes its own
+command output to `/tmp` and so could not run even the command that would have cleaned up. Two
+accumulators fed it: `eval/harness.py` leaked one `ariel-eval-*` per arm (972 / 1.62 GB in 48 h, fixed
+in `0ac8a69`), and `pytest-of-<user>` held 715 MiB per run.
+
+Two traps worth remembering:
+
+- **`df` lies on this tmpfs.** At the moment drives failed, `df -h /tmp` still reported *1.6 G free*
+  while `dd` died with `Disk quota exceeded`. Only a trial write tells you the quota is exhausted.
+- **`tempfile.tempdir` caches its answer in a module global.** Setting `TMPDIR` after anything has
+  called `tempfile.gettempdir()` has no effect — the variable looks set while the suite keeps writing
+  to the old place. `_tmp_policy.install()` resets that global and then *verifies*
+  `gettempdir()` against the destination, returning `None` rather than claiming success.
+
+Pruning is conservative on purpose. A tree is removed only when it is both beyond the newest
+`KEEP_PYTEST_RUNS` (2, i.e. ~1.5 GiB) **and** older than a 10-minute grace, and never when pytest's
+`pytest-current` symlink points at it: two suites can run at once (a pre-commit gate and a hand-run
+one), and "keep the newest N" alone would delete the older suite's tree while it was still running.
+Measured: a 1-hour grace let four consecutive runs grow the directory to 2.2 GiB, because a burst of
+runs never ages past the threshold and nothing is ever evicted — the grace has to be a few multiples
+of a real run (~2.2 min here), not an hour.
+
+`features/backup_cron._cleanup_tmp` is the separate, daily backstop for anything that survives a
+crash; its window is 6 hours, not days, because the pass that calls it runs about once a day.
+
 ## Debugging a Running Server
 
 `kill -USR1 <pid>` appends every thread's Python stack to

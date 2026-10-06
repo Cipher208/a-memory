@@ -1,8 +1,11 @@
-"""backup_cron._cleanup_tmp — /tmp test-artifact hygiene (2026-09-06 incident).
+"""backup_cron._cleanup_tmp — temp-dir test-artifact hygiene (2026-09-06 incident).
 
 Полный /tmp на tmpfs встал (pytest-of-murat 2.3G + ariel-test-global-*) и
-повесил локальный pre-push pytest-гейт. Чистка теперь часть ежедневного
-_backup-прохода: строгие префиксы, порог 2 дня, best-effort.
+повесил локальный pre-push pytest-гейт. 06.10.2026 тот же tmpfs упёрся в
+пользовательскую квоту: записи падали с EDQUOT (-122) и у песочницы DSH
+отвалились все инструменты, потому что харнесс пишет туда свой вывод.
+Чистка — часть ежедневного _backup-прохода: строгие префиксы, best-effort,
+порог 6 часов (был 2 дня: проход суточный, значит утечка жила двое суток).
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ def test_cleanup_tmp_removes_only_stale_known_prefixes(tmp_path: Path) -> None:
     stale_pytest = _mk(pytest_base, "pytest-42", 3)
     fresh_pytest = _mk(pytest_base, "pytest-43", 0.1)  # живая сессия — не трогаем
     stale_ariel = _mk(tmp_path, "ariel-test-global-aaa", 3)
-    fresh_ariel = _mk(tmp_path, "ariel-eval-bbb", 0.5)
+    fresh_ariel = _mk(tmp_path, "ariel-eval-bbb", 1.2 / 24)  # младше окна — не трогаем
     outsider = _mk(tmp_path, "pytest-of-nobody", 30)  # чужой user — не наш префикс
     keeper = _mk(tmp_path, "unrelated-data", 30)  # не матчится префиксами
 
@@ -44,6 +47,47 @@ def test_cleanup_tmp_removes_only_stale_known_prefixes(tmp_path: Path) -> None:
     assert not stale_pytest.exists() and not stale_ariel.exists()
     assert fresh_pytest.exists() and fresh_ariel.exists()
     assert outsider.exists() and keeper.exists()
+
+
+def test_cleanup_tmp_window_is_hours_not_days(tmp_path: Path) -> None:
+    """Порог измеряется часами: проход суточный, поэтому 2-дневное окно означало,
+    что утечка обязана пережить двое суток, а всё это время копится ровно тот
+    объём, который и забил tmpfs в обоих инцидентах.
+
+    12 часов — уже мусор (при прежнем пороге он бы выжил), 5 часов — ещё нет.
+    """
+    cron = BackupCron(base_dir=str(tmp_path))
+    twelve_hours = _mk(tmp_path, "ariel-eval-12h", 12 / 24)
+    five_hours = _mk(tmp_path, "ariel-eval-5h", 5 / 24)
+
+    removed = cron._cleanup_tmp(tmp_root=tmp_path)
+
+    assert removed == 1
+    assert not twelve_hours.exists()
+    assert five_hours.exists()
+
+
+def test_cleanup_tmp_never_removes_the_current_pytest_run(tmp_path: Path) -> None:
+    """Каталог, на который pytest указывает `pytest-current`, не удаляется.
+
+    Возраст этого не ловит: прогон, начавшийся минуту назад, и прогон,
+    закончившийся минуту назад, выглядят одинаково свежими. Ловит только сама
+    ссылка — она и есть то, что делает укороченное окно безопасным для набора,
+    который гоняют прямо сейчас.
+    """
+    import getpass
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    pytest_base = tmp_path / f"pytest-of-{getpass.getuser()}"
+    live_run = _mk(pytest_base, "pytest-7", 3)  # старый по mtime, но он текущий
+    dead_run = _mk(pytest_base, "pytest-6", 3)
+    (pytest_base / "pytest-current").symlink_to(live_run)
+
+    removed = cron._cleanup_tmp(tmp_root=tmp_path)
+
+    assert removed == 1
+    assert live_run.exists(), "удалён каталог текущего прогона pytest"
+    assert not dead_run.exists()
 
 
 def test_cleanup_tmp_defaults_to_real_tempdir(tmp_path: Path, monkeypatch) -> None:

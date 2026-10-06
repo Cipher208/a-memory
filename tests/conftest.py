@@ -10,8 +10,27 @@ os.environ["BACKUP_CRON_DISABLED"] = "1"
 # Deterministic + fast: never load sentence-transformers in tests even when
 # the optional extra is installed locally.
 os.environ["ARIEL_HASH_EMBEDDINGS"] = "1"
+# Off tmpfs and bounded, before anything can call tempfile: a full run needs
+# ~700 MiB, and /tmp here is a 7.9 GiB RAM volume shared with the whole machine
+# (its per-user quota ran out on 2026-10-06 and took every tool of the DSH
+# sandbox with it). Runs after this point see the new TMPDIR.
+from tests._tmp_policy import install as _install_tmp_policy
+
+TMP_POLICY_DIR = _install_tmp_policy()
 
 import pytest
+
+
+def pytest_report_header(config):
+    """Show where temporary files go.
+
+    A suite that needs ~700 MiB of scratch space should say where it puts it:
+    when this quietly landed on a shared 7.9 GiB tmpfs, the first symptom was
+    not a test failure but every tool of the sandbox dying with EDQUOT.
+    """
+    if TMP_POLICY_DIR is None:
+        return f"test tmpdir: {tempfile.gettempdir()} (NOT relocated — see tests/_tmp_policy.py)"
+    return f"test tmpdir: {TMP_POLICY_DIR}"
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -61,6 +80,13 @@ def hermetic_global_db():
         pass
     connection_manager.base_dir = original_dir
     connection_manager._conns.clear()
+    # This fixture is the only thing that ever learns the path, so it is the
+    # only thing that can remove it — same rule the eval harness had to learn
+    # the hard way (one leaked directory per run, 972 of them / 1.6G in 48h).
+    # After the connections are closed and base_dir points elsewhere again.
+    import shutil as _shutil
+
+    _shutil.rmtree(session_dir, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
