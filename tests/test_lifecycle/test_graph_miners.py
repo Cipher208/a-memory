@@ -1077,3 +1077,82 @@ async def test_miner_embedding_edges_identical_to_reference_scan(db, monkeypatch
 
     assert first["edges"] == second["edges"]
     assert rows_new == rows_fallback
+
+
+@pytest.mark.asyncio
+async def test_miner_embedding_inhibits_once_against_the_finished_hub(db):
+    """06.10: miner_embedding ингибирует хаб ОДИН раз по итоговому набору рёбер.
+
+    Было (per-edge): ингибиция бежала после каждой вставки, то есть по
+    недостроенному окружению — к моменту вставки слабого ребра его сильные
+    соседи уже были подавлены друг другом, поэтому оно подавлялось СЛАБЕЕ.
+    Стало (batched): формула применяется один раз, к готовому окружению —
+    как у минеров #1/#2/#3/#4.
+
+    Хаб с двумя чужими heuristic-рёбрами (0.9 и 0.6) плюс две semantic_overlap
+    пары равного веса 0.5. Арифметика (β=0.15, top_m=7) для ребра 0.5 при
+    сильных соседях {0.9, 0.6}: 0.5 − 0.15·((0.9−0.5)+(0.6−0.5)) = 0.425.
+    У ребра 0.6 при соседе {0.9}: 0.6 − 0.15·0.3 = 0.555.
+
+    Замерено на этом стенде:
+      per-edge: hub-c=0.43175, hub-d=0.323  — две ОДИНАКОВЫЕ по устройству
+                пары получают разные веса, потому что вторую успели
+                переингибировать по набору, куда уже вошла первая;
+      batched:  hub-c=0.425,   hub-d=0.425  — и это ровно формула из
+                докстринга `lateral_inhibition`.
+
+    Одинаковый вес у одинаковых пар — наблюдаемый признак «один проход по
+    готовому окружению», в отличие от «сколько рёбер успело прийти раньше».
+    """
+    conn = await connection_manager.get(DB_NAME)
+
+    hub_t, c_t, d_t, a_t, b_t = (
+        "общий узел синхронизации очередей",
+        "вариант раз",
+        "вариант два",
+        "далёкий факт про духовку",
+        "далёкий факт про капусту",
+    )
+    # 384 бита: hub — все; c — первые 280; d — 280 начиная со 104.
+    # J(hub,c)=J(hub,d)=280/384=0.729 ≥ 0.7; J(c,d)=176/384=0.458 < 0.7.
+    await _seed_vector(hub_t, _V_ALL_ON)
+    await _seed_vector(c_t, [0.5 if i < 280 else -0.5 for i in range(384)])
+    await _seed_vector(d_t, [0.5 if 104 <= i < 384 else -0.5 for i in range(384)])
+    # Два «далёких» узла тоже получают ЯВНЫЕ векторы: без них обе вершины
+    # уходят в hash-fallback, а он для похожих фраз («про духовку» / «про
+    # капусту») даёт J ≥ 0.7 и лишнее ребро — тест становится плавающим.
+    # Здесь a и b взаимно ортогональны и далеки от hub/c/d: максимум
+    # J(a,c)=150/280=0.536, J(b,d)=134/280=0.479.
+    await _seed_vector(a_t, [0.5 if i < 150 else -0.5 for i in range(384)])
+    await _seed_vector(b_t, [0.5 if 250 <= i < 384 else -0.5 for i in range(384)])
+    hub, n_c, n_d, n_a, n_b = [await _node(t, T) for t in (hub_t, c_t, d_t, a_t, b_t)]
+    for peer, w in ((n_a, 0.9), (n_b, 0.6)):
+        lo, hi = min(hub, peer), max(hub, peer)
+        await conn.execute(
+            "INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags) VALUES (?, ?, 'topic_overlap', ?, ?, ?)",
+            (lo, hi, w, T, json.dumps(["heuristic:tokens"])),
+        )
+    await conn.commit()
+
+    from lifecycle.graph_miners import miner_embedding
+
+    result = await miner_embedding(db, "user")
+    assert result["edges"] == 2, f"ровно две пары с хабом: {result}"
+
+    weights = {}
+    for r in await _edges("semantic_overlap"):
+        other = r["target_id"] if r["source_id"] == hub else r["source_id"]
+        weights[other] = round(float(r["weight"]), 6)
+    assert set(weights) == {n_c, n_d}, f"обе пары с хабом: {weights}"
+    assert weights[n_c] == pytest.approx(0.425), weights
+    assert weights[n_d] == pytest.approx(0.425), weights
+    assert weights[n_c] == weights[n_d], "одинаковые пары обязаны получить одинаковый вес"
+
+    # Чужие рёбра хаба: сильнейшее не подавляется (строго больших соседей нет),
+    # среднее 0.6 уступает только 0.9 → 0.6 − 0.15·0.3 = 0.555.
+    strong = {}
+    for r in await _edges("topic_overlap"):
+        peer = r["target_id"] if r["source_id"] == hub else r["source_id"]
+        strong[peer] = round(float(r["weight"]), 6)
+    assert strong[n_a] == pytest.approx(0.9), strong
+    assert strong[n_b] == pytest.approx(0.555), strong

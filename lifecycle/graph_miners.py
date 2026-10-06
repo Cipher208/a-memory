@@ -39,7 +39,28 @@ async def _inhibit_dirty(conn: Any, dirty: set[int]) -> int:
 
     19.09 (issue G, part 2): miners insert thousands of edges per nightly;
     inhibiting per edge is O(E²) per call. Collect dirty nodes during the
-    run and sweep once at the end — same end state, linear passes.
+    run and sweep once at the end — linear passes.
+
+    06.10: the original claim here — "same end state" as per-edge inhibition —
+    was wrong and is retracted. Per-edge inhibition fires against a half-built
+    neighbourhood: by the time a weak edge is inserted, its stronger neighbours
+    have already been suppressed by each other, so the new edge is suppressed
+    by LESS than the formula gives for the finished neighbourhood. Batched runs
+    the formula once, against the neighbourhood as it finally stands.
+
+    Measured on a `VACUUM INTO` snapshot of live hermes (WAL included),
+    `miner_embedding`, layer `user`, each variant run to convergence (from the
+    3rd run on it writes nothing, so these are fixed points):
+
+        per-edge steady: sem_zero=8218, sem_wsum=23697.3
+        batched  steady: sem_zero=7419, sem_wsum=23982.6
+
+    ~800 `semantic_overlap` edges (≈10 %) stay alive under batching that
+    per-edge drove to 0.0. A 0.0 weight is not a no-op: it contributes
+    0.5*weight*confidence = 0 to retrieval, and `_dream_nrem` prunes the edge
+    once it is 30 days old, so a zeroed edge eventually leaves the graph. The
+    gap is far smaller than the first-run transient suggests (sem_zero 26805 vs
+    11078), but it is real and it persists.
     """
     from lifecycle.graph_sanitation import lateral_inhibition
 
@@ -1028,6 +1049,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
         await conn.commit()
 
     edges = 0
+    dirty: set[int] = set()
 
     async def _write_edge(i: int, j: int) -> bool:
         """Apply the crosscheck vote and write the edge.
@@ -1036,6 +1058,9 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
         loop checked `degree` before the crosscheck. A crosscheck rejection
         returns False and therefore consumes no budget, exactly as the previous
         `continue` left `degree` untouched.
+
+        Inhibition is deferred: `dirty` collects the touched nodes for one sweep
+        at the end, as miners #1/#2/#3/#4 already do (see `_inhibit_dirty`).
         """
         nonlocal edges
         a, b = nodes[i][0], nodes[j][0]
@@ -1046,9 +1071,9 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
             lex_agree = bool(token_sets[i] & token_sets[j]) or bool(set(tags.get(a, [])) & set(tags.get(b, [])))
             if not lex_agree:
                 return False
-            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_CONFIRMED_WEIGHT, "embedding")
+            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_CONFIRMED_WEIGHT, "embedding", dirty)
         else:
-            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_WEIGHT, "embedding")
+            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_WEIGHT, "embedding", dirty)
         return True
 
     open_nodes = sum(1 for b in bits if b)
@@ -1099,6 +1124,14 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
                     open_nodes -= 1
                 if budget[j] == 0:
                     open_nodes -= 1
+    # One lateral_inhibition per touched node, after every edge is in place,
+    # instead of one per edge against a half-built neighbourhood: the pattern
+    # `_inhibit_dirty` exists for and that miners #1/#2/#3/#4 already use.
+    # A/B on two identical `VACUUM INTO` snapshots of live hermes, fresh WAL
+    # included, same layer: 66.2 s -> 25.3 s. The graph ends up with the same
+    # edges either way; what changes is where inhibition lands (see the
+    # `_inhibit_dirty` docstring).
+    await _inhibit_dirty(conn, dirty)
     await conn.commit()
     return {"edges": edges, "anomalies": flagged}
 
