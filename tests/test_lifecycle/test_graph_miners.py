@@ -822,3 +822,130 @@ async def test_miner_structural_community_bridge_inside_community(db):
 
     again = await miner_structural(db, "user")
     assert again["edges"] == 0  # (A,C) уже соединены — повторного моста нет
+
+
+# --- NER-кэш: не пересчитывать spaCy для неизменённых узлов (06.10.2026) ---
+
+
+@pytest.mark.asyncio
+async def test_entities_cached_skips_second_extraction(db, monkeypatch):
+    """Повторный проход не парсит те же тексты снова — ради этого кэш и заведён."""
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    syn = {"лили": ["lily"]}
+    texts = ["Лили принесла отчёт", "Lily обновила документацию"]
+
+    calls: list[str] = []
+    real = gm._entities
+
+    def counting(text: str, s: dict[str, list[str]], nlp: Any = None) -> set[str]:
+        calls.append(text)
+        return real(text, s, nlp)
+
+    monkeypatch.setattr(gm, "_entities", counting)
+
+    first = await gm._entities_cached(conn, texts, syn, None)
+    parsed_on_first = len(calls)
+    second = await gm._entities_cached(conn, texts, syn, None)
+
+    assert first == second, "кэш обязан вернуть те же множества"
+    assert parsed_on_first == len(texts), f"первый проход парсит все тексты, а не {parsed_on_first}"
+    assert len(calls) == parsed_on_first, "второй проход не должен вызывать извлечение вообще"
+
+
+@pytest.mark.asyncio
+async def test_entities_cached_dedupes_identical_texts(db, monkeypatch):
+    """Одинаковый текст дважды — одно извлечение, оба результата."""
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    syn = {"лили": ["lily"]}
+
+    calls: list[str] = []
+    real = gm._entities
+    monkeypatch.setattr(gm, "_entities", lambda t, s, n=None: (calls.append(t), real(t, s, n))[1])
+
+    out = await gm._entities_cached(conn, ["Лили здесь", "Лили здесь"], syn, None)
+
+    assert out[0] == out[1]
+    assert len(calls) == 1, f"дубликат текста парсится один раз, а не {len(calls)}"
+
+
+@pytest.mark.asyncio
+async def test_entities_cached_invalidated_by_dictionary_change(db):
+    """Смена словаря обязана инвалидировать кэш, а не отдавать старые сущности."""
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    text = "Лили и Борис здесь"
+    syn_small = {"лили": ["lily"]}
+    syn_wide = {"лили": ["lily"], "борис": ["boris"]}
+
+    assert gm._ner_cache_tag(syn_small, None) != gm._ner_cache_tag(syn_wide, None)
+
+    before = await gm._entities_cached(conn, [text], syn_small, None)
+    after = await gm._entities_cached(conn, [text], syn_wide, None)
+
+    # _canon приводит к канонической форме класса, поэтому «Борис» → 'boris'
+    assert "boris" not in before[0], f"до расширения словаря Бориса быть не должно: {before[0]}"
+    assert "boris" in after[0], f"после расширения словаря Борис должен появиться: {after[0]}"
+
+
+def test_ner_cache_tag_separates_dict_only_from_ner_backend():
+    """dict-only и spaCy дают разные множества — теги не имеют права совпасть."""
+    import lifecycle.graph_miners as gm
+
+    class _FakeNlp:
+        meta = {"name": "fake_ner", "version": "1.0"}
+
+    syn = {"лили": ["lily"]}
+    assert gm._ner_cache_tag(syn, None) != gm._ner_cache_tag(syn, _FakeNlp())
+    assert "dict-only" in gm._ner_cache_tag(syn, None)
+    assert "fake_ner" in gm._ner_cache_tag(syn, _FakeNlp())
+
+
+@pytest.mark.asyncio
+async def test_miner_entities_second_run_does_not_reparse(db, monkeypatch):
+    """Второй прогон: spaCy больше не зовётся, новых рёбер нет.
+
+    `edges == 0` на втором проходе — это штатное поведение `INSERT OR IGNORE`
+    по PK: ребро уже существует, значит не добавляется. Ценность теста в другом
+    — что извлечение сущностей не повторяется.
+    """
+    import lifecycle.graph_miners as gm
+
+    await _node("Лили принесла отчёт по проекту", T)
+    await _node("Lily обновила документацию", T)
+
+    calls: list[str] = []
+    real = gm._entities
+    monkeypatch.setattr(gm, "_entities", lambda t, s, n=None: (calls.append(t), real(t, s, n))[1])
+
+    first = await gm.miner_entities(db, "user")
+    parsed = len(calls)
+    assert first["edges"] == 1, "первый прогон создаёт ребро по общей сущности"
+    assert parsed >= 2, "первый прогон обязан извлечь сущности"
+
+    second = await gm.miner_entities(db, "user")
+
+    assert second["edges"] == 0, "ребро уже есть — INSERT OR IGNORE не дублирует"
+    assert len(calls) == parsed, "второй прогон не должен извлекать сущности заново"
+
+
+@pytest.mark.asyncio
+async def test_ner_cache_rows_are_keyed_by_tag(db):
+    """Строки кэша разделены тегом: разные бэкенды не перезаписывают друг друга."""
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    syn = {"лили": ["lily"]}
+
+    await gm._entities_cached(conn, ["Лили здесь"], syn, None)
+    await gm._entities_cached(conn, ["нечто иное"], syn, None)
+
+    rows = await (await conn.execute("SELECT text_hash, tag, entities FROM ner_cache")).fetchall()
+    assert len(rows) == 2
+    assert all(r["tag"] == gm._ner_cache_tag(syn, None) for r in rows)
+    for r in rows:
+        assert isinstance(json.loads(r["entities"]), list)

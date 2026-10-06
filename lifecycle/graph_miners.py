@@ -294,7 +294,7 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
 
     syn = load_synonyms()
     nlp = _get_ner()
-    ents = [_entities(str(c), syn, nlp) for _, c in nodes]
+    ents = await _entities_cached(conn, [str(c) for _, c in nodes], syn, nlp)
     edges = 0
     dirty: set[int] = set()
     degree: dict[int, int] = {}
@@ -330,6 +330,107 @@ def _entities(text: str, syn: dict[str, list[str]], nlp: Any = None) -> set[str]
 
 _NER_LABELS = {"ORG", "GPE"}
 _ner = None
+
+# Chunk size for `... WHERE text_hash IN (?, ...)`: SQLite allows 32766 variables
+# on modern builds and 999 on older ones; this stays below both.
+_NER_CACHE_CHUNK = 500
+
+
+def _ner_dict_fingerprint(syn: dict[str, list[str]]) -> str:
+    """Identity of the synonym dictionary `_entities` consults.
+
+    The dictionary half of `_entities` decides part of the result, so a cached
+    entity set must not outlive the dictionary that produced it — otherwise
+    editing synonyms would keep serving the old entities forever.
+    """
+    vocab = sorted(set(syn) | {v for vs in syn.values() for v in vs})
+    return hashlib.sha256("\n".join(vocab).encode("utf-8")).hexdigest()[:16]
+
+
+def _ner_cache_tag(syn: dict[str, list[str]], nlp: Any) -> str:
+    """Cache tag tying a row to BOTH the dictionary and the NER backend.
+
+    A row computed with `nlp=None` (dictionary only) must never be served once
+    spaCy becomes available, and vice versa: the two produce different sets, and
+    mixing them would silently change which co_mentions edges get written.
+    """
+    if nlp is None:
+        backend = "dict-only"
+    else:
+        meta = getattr(nlp, "meta", None) or {}
+        backend = f"{meta.get('name', 'ner')}-{meta.get('version', '?')}"
+    return f"{_ner_dict_fingerprint(syn)}|{backend}"
+
+
+async def _ensure_ner_cache(conn: Any) -> None:
+    """Idempotent schema for the entity-extraction cache (same idea as ensure_co_pairs)."""
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS ner_cache ("
+        " text_hash TEXT NOT NULL,"
+        " tag TEXT NOT NULL,"
+        " entities TEXT NOT NULL,"
+        " created_at DATETIME DEFAULT CURRENT_TIMESTAMP,"
+        " PRIMARY KEY (text_hash, tag))"
+    )
+
+
+async def _entities_cached(conn: Any, texts: list[str], syn: dict[str, list[str]], nlp: Any) -> list[set[str]]:
+    """`_entities` for every text, computing only what the cache does not hold.
+
+    Why: entity extraction dominated the nightly budget — spaCy inference over
+    the whole layer, measured at 10.5 s for cowagent's 1860 nodes and 46.0 s for
+    hermes's 5516 (both ~0.07-0.10 ms/KB, i.e. linear in text volume, not in node
+    count). `_layer_nodes` has no LIMIT, so every night re-parsed every unchanged
+    node. Node content is immutable once written, so a content-hash cache is
+    exactly "do not recompute what did not change".
+
+    Misses are parsed synchronously, then written in one transaction; identical
+    texts are parsed once.
+    """
+    if not texts:
+        return []
+    tag = _ner_cache_tag(syn, nlp)
+    hashes = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
+    await _ensure_ner_cache(conn)
+
+    cached: dict[str, set[str]] = {}
+    unique = list(dict.fromkeys(hashes))
+    for start in range(0, len(unique), _NER_CACHE_CHUNK):
+        chunk = unique[start : start + _NER_CACHE_CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        rows = await (
+            await conn.execute(
+                f"SELECT text_hash, entities FROM ner_cache WHERE tag=? AND text_hash IN ({placeholders})",
+                (tag, *chunk),
+            )
+        ).fetchall()
+        for row in rows:
+            with contextlib.suppress(Exception):
+                cached[str(row[0])] = set(json.loads(row[1]))
+
+    fresh: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for text_hash, text in zip(hashes, texts, strict=True):
+        if text_hash in cached or text_hash in seen:
+            continue
+        seen.add(text_hash)
+        fresh.append((text_hash, text))
+
+    if fresh:
+        writes: list[tuple[str, str, str]] = []
+        for text_hash, text in fresh:
+            ents = _entities(text, syn, nlp)
+            cached[text_hash] = ents
+            # sorted: a set has no stable order, and a stable blob keeps the
+            # table diffable and the tests deterministic
+            writes.append((text_hash, tag, json.dumps(sorted(ents), ensure_ascii=False)))
+        await conn.executemany(
+            "INSERT OR REPLACE INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+            writes,
+        )
+        await conn.commit()
+
+    return [cached[h] for h in hashes]
 
 
 def _get_ner() -> Any:
