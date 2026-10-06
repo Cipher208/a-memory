@@ -131,7 +131,11 @@ def _try_hf(limit: int) -> tuple[list[EvalQuestion], dict[str, str]] | None:
     # 2) HF-repo (разные схемы именования — перебор кандидатов)
     if rows is None:
         try:
-            from datasets import load_dataset  # type: ignore[import-untyped]
+            # `datasets` is an optional HF dependency of the eval harness and is not
+            # declared in pyproject/uv.lock, so mypy reports import-not-found, not
+            # import-untyped — the old code suppressed nothing and failed the
+            # pre-push gate.
+            from datasets import load_dataset  # type: ignore[import-not-found]
 
             for name in _HF_CANDIDATES:
                 try:
