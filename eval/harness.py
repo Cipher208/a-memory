@@ -17,6 +17,7 @@ import math
 import os
 import random
 import re
+import shutil
 import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
@@ -176,7 +177,13 @@ async def run_eval(
     prev_mode = os.environ.get("RETRIEVAL_MODE")
     os.environ["RETRIEVAL_MODE"] = arm
     original_dir = connection_manager.base_dir
-    connection_manager.base_dir = Path(tempfile.mkdtemp(prefix="ariel-eval-"))
+    # The tmp instance is ours alone: nothing outside this call ever learns the
+    # path, so this function is also the one that must delete it. Before that,
+    # `mkdtemp` here leaked one directory per arm — 972 of them / 1.6G in 48h on
+    # 2026-10-06, which filled the /tmp tmpfs of the host and stalled every
+    # process that needed a temp file (the DSH tool sandbox included).
+    eval_dir = Path(tempfile.mkdtemp(prefix="ariel-eval-"))
+    connection_manager.base_dir = eval_dir
     connection_manager._conns.clear()
     try:
         await MigrationManager(cm=connection_manager).migrate()
@@ -210,6 +217,11 @@ async def run_eval(
             await connection_manager.close_all()
         connection_manager._conns.clear()
         connection_manager.base_dir = original_dir
+        # Remove the eval instance only after its connections are closed and
+        # base_dir points somewhere else again. Best-effort on purpose: a
+        # cleanup failure must not replace the real result or mask the real
+        # exception that got us into this `finally`.
+        shutil.rmtree(eval_dir, ignore_errors=True)
 
 
 async def _score(

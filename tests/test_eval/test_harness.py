@@ -127,3 +127,25 @@ def test_render_markdown_table() -> None:
     assert "n/a" in md  # recall_at5 None
     assert "proxy" in md  # честная плашка judge
     assert "0.800" in md
+
+
+async def test_run_eval_removes_its_tmp_instance(tmp_path: Path, monkeypatch) -> None:
+    """Прогон arms не оставляет за собой tmp-инстанс (инцидент /tmp 2026-10-06).
+
+    `run_arm` поднимает изолированную память в `mkdtemp(prefix="ariel-eval-")`.
+    Уборки не было: за 48 часов накопилось 972 каталога / 1.6G, tmpfs хоста
+    заполнился и встали все, кому нужен временный файл — включая песочницу
+    инструментов DSH. Здесь TMPDIR уводится в tmp_path, поэтому прогон
+    проверяемо не может оставить мусор в общем каталоге: он либо удалил своё,
+    либо тест это увидит.
+    """
+    import tempfile
+
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    assert Path(tempfile.gettempdir()) == tmp_path, "TMPDIR не подхватился — тест беззубый"
+
+    await run_eval("mini", "full", limit=10)
+
+    leftovers = list(tmp_path.glob("ariel-eval-*"))
+    assert not leftovers, f"прогон оставил tmp-инстанс: {[p.name for p in leftovers]}"
