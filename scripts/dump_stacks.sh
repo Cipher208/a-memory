@@ -32,7 +32,18 @@ for base in "${targets[@]}"; do
         dir=$(tr '\0' '\n' < "/proc/${candidate}/environ" 2>/dev/null \
               | sed -n 's/^MCP_MEMORY_DATA_DIR=//p')
         [ "$(basename "${dir:-}")" = "$want" ] || continue
-        # The server itself is the one running the venv python module.
+        # The server itself is the one running a python interpreter. Checking the
+        # FIRST cmdline field matters: mimocode's launcher is
+        # `sh -c 'set -a; . secrets.env; set +a; python3 .../mcp_server/server.py'`,
+        # whose cmdline also contains "mcp_server", and whose `set -a` exports
+        # MCP_MEMORY_DATA_DIR into its OWN environ — so it passes the env check
+        # too. Signalling that shell would dump nothing (and on old code, with no
+        # handler, it would kill the launcher).
+        first=$(tr '\0' '\n' < "/proc/${candidate}/cmdline" 2>/dev/null | head -1)
+        case "$(basename "${first:-}")" in
+            python*) ;;
+            *) continue ;;
+        esac
         if tr '\0' ' ' < "/proc/${candidate}/cmdline" 2>/dev/null | grep -q "mcp_server"; then
             pid="$candidate"
             break
@@ -41,6 +52,27 @@ for base in "${targets[@]}"; do
 
     if [ -z "$pid" ]; then
         echo "  ${base}: сервер не найден (не запущен?)" >&2
+        continue
+    fi
+
+    # NEVER signal blind. SIGUSR1's default disposition is to TERMINATE the
+    # process, so a server that predates _install_faulthandler would be killed by
+    # the very command meant to inspect it. This is not hypothetical: an earlier
+    # version of this script checked only that the dump file grew, i.e. after the
+    # fact, and signalling three live servers on old code killed all three at
+    # 2026-10-06 14:21:28 CEST.
+    #
+    # /proc/<pid>/status:SigCgt lists caught signals as a hex bitmask; bit
+    # (SIGUSR1-1) = 9 is set exactly when a handler is installed. Measured on this
+    # host: armed python 0x6e8 (bit set), unarmed 0x0 (bit clear). Reading it is
+    # free, non-invasive, and decided BEFORE the signal is sent.
+    sigcgt=$(sed -n 's/^SigCgt:[[:space:]]*//p' "/proc/${pid}/status" 2>/dev/null)
+    if [ -z "$sigcgt" ]; then
+        echo "  ${base}: не прочитать SigCgt для pid=${pid} — не сигналю" >&2
+        continue
+    fi
+    if [ "$(( (0x${sigcgt} >> 9) & 1 ))" -ne 1 ]; then
+        echo "  ${base}: pid=${pid} БЕЗ обработчика SIGUSR1 (код старше faulthandler) — сигнал НЕ отправлен, процесс цел. Перезапустите службу, чтобы получить дампы." >&2
         continue
     fi
 
@@ -60,12 +92,12 @@ for base in "${targets[@]}"; do
         echo "  ${base}: дамп добавлен (pid=${pid}, +$((after - before)) байт) → ${dump}"
         found_any=1
     else
-        echo "  ${base}: сигнал ушёл (pid=${pid}), но дамп не вырос — процесс без faulthandler?" >&2
+        echo "  ${base}: обработчик есть, сигнал ушёл (pid=${pid}), но дамп не вырос — проверьте права на ${dump}" >&2
     fi
 done
 
 if [ "$found_any" -eq 0 ]; then
-    echo "Ни одного дампа не получено. Проверьте, что процессы памяти запущены и что в них новый код (mcp_server/server.py:_install_faulthandler)." >&2
+    echo "Ни одного дампа не получено. Либо процессы памяти не запущены, либо в них код старше _install_faulthandler — тогда перезапуск службы включает дампы. Ни один процесс при этом не пострадал: сигнал отправляется только при наличии обработчика." >&2
     exit 1
 fi
 

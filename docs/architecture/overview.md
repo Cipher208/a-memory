@@ -105,11 +105,18 @@ budget leaves its coroutine RUNNING on the shared main loop (the timeout
 abandons, it does not cancel).
 
 Use `scripts/dump_stacks.sh [hermes|mimocode|cowagent]` rather than signalling a
-pid you found by hand. The obvious pid is often the wrong one: mimocode's server
-sits behind an `sh -c` wrapper that does not forward SIGUSR1, so signalling the
-wrapper kills it and dumps nothing. The script resolves the server by its own
-`MCP_MEMORY_DATA_DIR` and says so plainly when a process has no handler yet
-(i.e. it predates this code and needs a restart).
+pid you found by hand. It resolves the server by its own `MCP_MEMORY_DATA_DIR`
+and requires a python interpreter as the first cmdline field, because
+mimocode's launcher is `sh -c '... python3 .../mcp_server/server.py'` — a shell
+that also carries the env var and also matches "mcp_server".
+
+**It checks `/proc/<pid>/status:SigCgt` before signalling, and this is not
+optional.** SIGUSR1's default disposition is to terminate, so a server running
+code older than `_install_faulthandler` would be killed by the command meant to
+inspect it — which is what happened to all three servers on 2026-10-06
+14:21:28 CEST. Bit 9 of `SigCgt` is set exactly when the handler is installed; if
+it is clear the script refuses and says the service needs a restart. Never
+replace that check with a post-hoc "did the dump grow" test.
 
 py-spy is the better tool when you have root — with `ptrace_scope=1` it cannot
 attach otherwise. It is not installed; `uvx py-spy dump --pid <pid>` fetches it
