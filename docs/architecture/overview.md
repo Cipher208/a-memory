@@ -61,6 +61,10 @@ Single SQLite file (WAL mode) with 23 domain tables:
 - `archived_memories` — Shadow Bin for soft-deleted content
 - `audit_log`, `importance_audit`, `memory_conflicts` — observability
 - `rate_limits`, `embedding_cache`, `saga_step_log`, `memory_kind_registry` — infrastructure
+- `ner_cache` — entity-extraction cache, created on demand by `graph_miners._ensure_ner_cache()`
+  (like `co_pairs_cache`, not a migration). Keyed by `(text_hash, tag)` where the tag fingerprints
+  the synonym dictionary and the NER backend, so a dictionary edit or model upgrade invalidates it
+  instead of serving stale entities.
 
 ## Platform-Aware Async
 
