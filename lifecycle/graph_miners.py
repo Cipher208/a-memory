@@ -709,6 +709,8 @@ async def _f_pair_edges(conn: Any, layer: str, rows: list[Any]) -> int:
 
 _EMBED_JACCARD = 0.7
 _EMBED_TOPK = 15  # at most 15 semantic_overlap edges per node from this miner
+_SEMANTIC_BLOCK = 512  # rows per numpy block in the pairwise scan
+_SEMANTIC_CHUNK = 1 << 16  # candidates per bulk-skip step in the greedy
 _SEMANTIC_WEIGHT = 0.5
 # B6 post-eval: the per-node co_mentions cap — a multi-topic dump (a summary
 # with 11 synonym classes) gathered 109 of 137 edges; hubs drown entity-RRF.
@@ -888,6 +890,88 @@ def _bit_jaccard(a: int, b: int) -> float:
     return inter / (a | b).bit_count()
 
 
+def _packed_words(binary: list[bytes]) -> Any | None:
+    """Bit vectors as uint64 words, so the scan is 6 planes wide, not 48 bytes.
+
+    Returns None when padding cannot be expressed or numpy is absent, so the
+    caller can fall back to the integer path.
+    """
+    import numpy as np
+
+    if not binary or not hasattr(np, "bitwise_count"):
+        return None
+    n = len(binary)
+    width = len(binary[0])
+    if width == 0 or any(len(b) != width for b in binary):
+        return None
+    packed = np.frombuffer(b"".join(binary), dtype=np.uint8).reshape(n, width)
+    if width % 8:
+        packed = np.pad(packed, ((0, 0), (0, 8 - width % 8)))
+    return np.ascontiguousarray(packed).view(np.uint64)
+
+
+def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[Any, Any] | None:
+    """Candidate pairs in the exact order the greedy loop below expects.
+
+    The previous shape — append every qualifying pair as a `(jacc, i, j)` tuple,
+    then `sorted(..., reverse=True)` — is what made this miner expensive: on
+    hermes it built 15 907 509 tuples and peaked at 2.4 GB RSS.
+
+    The ordering is load-bearing, not cosmetic. Jaccard here is a ratio of two
+    small integer popcounts, so equal values are common (13 446 distinct values
+    across the 22 271 possible fractions above the threshold), and
+    `sorted(cands, reverse=True)` breaks those ties by `i` descending and then by
+    `j` descending. Reproducing that only approximately changes which pairs the
+    greedy accepts: an earlier version of this function ordered ties per block
+    and produced 39 431 edges where the original produced 38 593. Hence one
+    global `lexsort` over (value desc, i desc, j desc).
+
+    `union` is `|a| + |b| - inter`, so one popcount per pair suffices instead of
+    two, and the per-vector counts are computed once.
+
+    Returns `(ii, jj)` aligned arrays, or None to request the integer fallback.
+    """
+    import numpy as np
+
+    words = _packed_words(binary)
+    if words is None:
+        return None
+    n = len(binary)
+    counts = np.bitwise_count(words).sum(axis=1).astype(np.int32)
+    active = np.flatnonzero(counts > 0)  # a zero vector has no bits to share
+    cols = np.arange(n)
+
+    row_parts: list[Any] = []
+    col_parts: list[Any] = []
+    val_parts: list[Any] = []
+    for start in range(0, len(active), _SEMANTIC_BLOCK):
+        rows = active[start : start + _SEMANTIC_BLOCK]
+        block = words[rows]
+        inter = np.zeros((len(rows), n), dtype=np.int32)
+        for word in range(words.shape[1]):
+            inter += np.bitwise_count(block[:, word][:, None] & words[None, :, word])
+        union = counts[rows][:, None] + counts[None, :] - inter
+        jac = np.divide(
+            inter,
+            np.maximum(union, 1),
+            out=np.zeros(inter.shape, dtype=np.float64),
+            where=union > 0,
+        )
+        bi, bj = np.nonzero((jac >= threshold) & (cols[None, :] > rows[:, None]))
+        row_parts.append(rows[bi].astype(np.int32))
+        col_parts.append(bj.astype(np.int32))
+        val_parts.append(jac[bi, bj])
+
+    if not row_parts:
+        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
+    values = np.concatenate(val_parts)
+    ii = np.concatenate(row_parts)
+    jj = np.concatenate(col_parts)
+    # lexsort's LAST key is primary: jaccard desc, then i desc, then j desc
+    order = np.lexsort((-jj, -ii, -values))
+    return ii[order], jj[order]
+
+
 async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
     """#9: rich embedding (content+tags) → MIB bits → pairwise Jaccard >=0.7 → `semantic_overlap`.
 
@@ -927,7 +1011,8 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
         # anomaly:* tags (addendum 10) never enter the text — a flag does not
         # change the node's vector.
         vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
-        bits = [_bits_int(embed_to_binary(v, dim=len(v))) for v in vecs]
+        binary = [embed_to_binary(v, dim=len(v)) for v in vecs]
+        bits = [_bits_int(b) for b in binary]
     except Exception:
         return {"edges": 0}  # embedding backend unavailable (no numpy/model) — miner skipped
 
@@ -942,32 +1027,78 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     if flagged:
         await conn.commit()
 
-    cands: list[tuple[float, int, int]] = []
-    for i in range(len(nodes)):
-        if not bits[i]:
-            continue
-        for j in range(i + 1, len(nodes)):
-            jacc = _bit_jaccard(bits[i], bits[j])
-            if jacc >= _EMBED_JACCARD:
-                cands.append((jacc, i, j))
     edges = 0
-    degree: dict[int, int] = {}
-    for _, i, j in sorted(cands, reverse=True):
+
+    async def _write_edge(i: int, j: int) -> bool:
+        """Apply the crosscheck vote and write the edge.
+
+        The top-k budget is checked by the caller, in the same order the previous
+        loop checked `degree` before the crosscheck. A crosscheck rejection
+        returns False and therefore consumes no budget, exactly as the previous
+        `continue` left `degree` untouched.
+        """
+        nonlocal edges
         a, b = nodes[i][0], nodes[j][0]
-        if degree.get(a, 0) >= _EMBED_TOPK or degree.get(b, 0) >= _EMBED_TOPK:
-            continue  # top-k=15 per node
         if crosscheck:
             # addendum 9: keyword vote — shared canon-tokens OR shared tags;
             # "vector-similar but with no lexical or tag trace" on hash
             # vectors = noise → the edge is not written (addendum 9 "dropped").
             lex_agree = bool(token_sets[i] & token_sets[j]) or bool(set(tags.get(a, [])) & set(tags.get(b, [])))
             if not lex_agree:
-                continue
+                return False
             edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_CONFIRMED_WEIGHT, "embedding")
         else:
             edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_WEIGHT, "embedding")
-        degree[a] = degree.get(a, 0) + 1
-        degree[b] = degree.get(b, 0) + 1
+        return True
+
+    open_nodes = sum(1 for b in bits if b)
+    pairs = _semantic_candidate_order(binary, _EMBED_JACCARD)
+    if pairs is None:
+        # numpy unavailable — the original integer scan, with the same sort order
+        # so that a machine without numpy produces byte-identical edges.
+        cands: list[tuple[float, int, int]] = []
+        for i in range(len(nodes)):
+            if not bits[i]:
+                continue
+            for j in range(i + 1, len(nodes)):
+                jacc = _bit_jaccard(bits[i], bits[j])
+                if jacc >= _EMBED_JACCARD:
+                    cands.append((jacc, i, j))
+        remaining = [_EMBED_TOPK] * len(nodes)
+        for _, i, j in sorted(cands, reverse=True):
+            if remaining[i] <= 0 or remaining[j] <= 0:
+                continue
+            if await _write_edge(i, j):
+                remaining[i] -= 1
+                remaining[j] -= 1
+    else:
+        import numpy as np
+
+        ii, jj = pairs
+        # Top-k budget per node INDEX: each node appears once in `nodes`, so this
+        # is the same accounting the previous `degree` dict kept by node_id.
+        budget = np.full(len(nodes), _EMBED_TOPK, dtype=np.int32)
+        for start in range(0, len(ii), _SEMANTIC_CHUNK):
+            if open_nodes < 2:
+                break  # an edge needs BOTH endpoints below the cap
+            ci = ii[start : start + _SEMANTIC_CHUNK]
+            cj = jj[start : start + _SEMANTIC_CHUNK]
+            # drop, a chunk at a time, pairs whose endpoints are already capped —
+            # they can never be accepted and no longer need a per-pair check
+            keep = (budget[ci] > 0) & (budget[cj] > 0)
+            if not keep.any():
+                continue
+            for i, j in zip(ci[keep].tolist(), cj[keep].tolist(), strict=True):
+                if budget[i] <= 0 or budget[j] <= 0:
+                    continue
+                if not await _write_edge(i, j):
+                    continue
+                budget[i] -= 1
+                budget[j] -= 1
+                if budget[i] == 0:
+                    open_nodes -= 1
+                if budget[j] == 0:
+                    open_nodes -= 1
     await conn.commit()
     return {"edges": edges, "anomalies": flagged}
 

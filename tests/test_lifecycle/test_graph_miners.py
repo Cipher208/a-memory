@@ -949,3 +949,131 @@ async def test_ner_cache_rows_are_keyed_by_tag(db):
     assert all(r["tag"] == gm._ner_cache_tag(syn, None) for r in rows)
     for r in rows:
         assert isinstance(json.loads(r["entities"]), list)
+
+
+# --- O(n^2) скан без изменения порядка кандидатов (06.10.2026) ---
+
+
+def _ref_candidates(bits: list[int], threshold: float = 0.7) -> list[tuple[float, int, int]]:
+    """Дословная копия прежнего двойного цикла: эталон порядка."""
+    out: list[tuple[float, int, int]] = []
+    for i in range(len(bits)):
+        if not bits[i]:
+            continue
+        for j in range(i + 1, len(bits)):
+            inter = (bits[i] & bits[j]).bit_count()
+            jacc = 0.0 if inter == 0 else inter / (bits[i] | bits[j]).bit_count()
+            if jacc >= threshold:
+                out.append((jacc, i, j))
+    return out
+
+
+def _bits_from_ints(values: list[int]) -> list[bytes]:
+    return [v.to_bytes(48, "big") for v in values]
+
+
+def test_semantic_candidate_order_matches_reference_scan():
+    """Новый скан обязан дать ТОТ ЖЕ порядок, что прежний двойной цикл.
+
+    Порядок здесь не косметика: жаккар — дробь двух целых, поэтому равных
+    значений много, и `sorted(..., reverse=True)` разрешает ничьи по i и j.
+    Ранняя версия сортировала ничьи внутри блока и дала 39 431 ребро вместо
+    38 593 на живой базе hermes.
+    """
+    import random
+
+    from lifecycle.graph_miners import _semantic_candidate_order
+
+    rnd = random.Random(11)
+    # кластеры дают пары выше порога, как настоящие e5-векторы
+    centers = [rnd.getrandbits(384) for _ in range(5)]
+    values = []
+    for _ in range(120):
+        v = centers[rnd.randrange(len(centers))]
+        for _ in range(rnd.randrange(0, 40)):
+            v ^= 1 << rnd.randrange(384)
+        values.append(v)
+    values.append(0)  # нулевой вектор: битов нет, пар быть не должно
+
+    expected = sorted(_ref_candidates(values), reverse=True)
+    ii, jj = _semantic_candidate_order(_bits_from_ints(values), 0.7)
+    got = list(zip(ii.tolist(), jj.tolist(), strict=True))
+
+    assert got == [(i, j) for _, i, j in expected], "порядок кандидатов разошёлся с эталоном"
+
+
+def test_semantic_candidate_order_breaks_ties_by_index_descending():
+    """При равных жаккарах порядок — по i убыв., затем j убыв. (как sorted reverse)."""
+    import decimal
+
+    from lifecycle.graph_miners import _semantic_candidate_order
+
+    # три вектора с ОДИНАКОВЫМ числом битов: все пары дадут ровно 1.0
+    v = (1 << 384) - 1
+    values = [v, v, v]
+    ii, jj = _semantic_candidate_order(_bits_from_ints(values), 0.7)
+    assert list(zip(ii.tolist(), jj.tolist(), strict=True)) == [(1, 2), (0, 2), (0, 1)]
+    # и это ровно то, что даёт эталон
+    expected = sorted(_ref_candidates(values), reverse=True)
+    assert [(i, j) for _, i, j in expected] == [(1, 2), (0, 2), (0, 1)]
+    del decimal
+
+
+def test_semantic_candidate_order_spans_more_than_one_block(monkeypatch):
+    """Равенство порядка должно держаться и когда кандидаты не влезли в один блок."""
+    import random
+
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_SEMANTIC_BLOCK", 4)  # заведомо много блоков
+    rnd = random.Random(5)
+    centers = [rnd.getrandbits(384) for _ in range(3)]
+    values = []
+    for _ in range(40):
+        v = centers[rnd.randrange(len(centers))]
+        for _ in range(rnd.randrange(0, 25)):
+            v ^= 1 << rnd.randrange(384)
+        values.append(v)
+
+    expected = sorted(_ref_candidates(values), reverse=True)
+    ii, jj = gm._semantic_candidate_order(_bits_from_ints(values), 0.7)
+    assert list(zip(ii.tolist(), jj.tolist(), strict=True)) == [(i, j) for _, i, j in expected]
+
+
+def test_semantic_candidate_order_returns_none_when_numpy_unavailable(monkeypatch):
+    """Без numpy скан честно просит фолбэк, а не падает."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_packed_words", lambda _binary: None)
+    assert gm._semantic_candidate_order(_bits_from_ints([1, 3]), 0.7) is None
+
+
+@pytest.mark.asyncio
+async def test_miner_embedding_edges_identical_to_reference_scan(db, monkeypatch):
+    """Сквозная проверка: рёбра минера совпадают с прежним алгоритмом поштучно.
+
+    Заменяем только скан (заставляем вернуть None — ветка фолбэка), затем
+    сверяем с прогоном через новый скан на том же графе.
+    """
+    await _seed_vector("очередь событий починки воркера", _V_ALL_ON)
+    await _seed_vector("очередь событий воркера починена", _V_NEAR)
+    await _seed_vector("совершенно посторонний сюжет про ужин", _V_HALF)
+    for text in ("очередь событий починки воркера", "очередь событий воркера починена", "совершенно посторонний сюжет про ужин"):
+        await _node(text, T)
+
+    import lifecycle.graph_miners as gm
+
+    # 1) новый скан
+    first = await gm.miner_embedding(db, "user")
+    rows_new = [(r["source_id"], r["target_id"], round(r["weight"], 6)) for r in await _edges("semantic_overlap")]
+
+    # 2) сбрасываем рёбра и прогоняем ветку фолбэка (прежний алгоритм)
+    conn = await connection_manager.get(DB_NAME)
+    await conn.execute("DELETE FROM epi_edges WHERE relation='semantic_overlap'")
+    await conn.commit()
+    monkeypatch.setattr(gm, "_semantic_candidate_order", lambda *a, **k: None)
+    second = await gm.miner_embedding(db, "user")
+    rows_fallback = [(r["source_id"], r["target_id"], round(r["weight"], 6)) for r in await _edges("semantic_overlap")]
+
+    assert first["edges"] == second["edges"]
+    assert rows_new == rows_fallback
