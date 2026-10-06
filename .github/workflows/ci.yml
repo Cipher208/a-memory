@@ -29,6 +29,9 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
       - run: ruff format --check .
+      - uses: astral-sh/setup-uv@v5
+      - name: Verify uv.lock is in sync with pyproject.toml
+        run: uv lock --check
 
   typecheck:
     runs-on: ubuntu-latest
