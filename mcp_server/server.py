@@ -249,6 +249,58 @@ def _setup_logging() -> None:
         logging.getLogger(__name__).info("tool exposure: %d/%d tools (ARIEL_EXPOSE=%s)", exposed, total, expose)
 
 
+# Kept referenced for the process lifetime: faulthandler holds only the fd, so a
+# collected file object would close the dump target silently.
+_STACK_DUMP_FILE: Any = None
+
+
+def _install_faulthandler() -> None:
+    """Make a wedged server say WHERE it is stuck, without a debugger.
+
+    `kill -USR1 <pid>` appends every thread's Python stack to
+    `<data_dir>/logs/stack-dump.txt`. 2026-10-06: the nightly pass was dying and
+    one candidate cause was a stuck maintenance thread; answering "is it alive
+    and where is it" needed a debugger. `py-spy` gives better stacks but must
+    attach, and `ptrace_scope=1` here means attaching to a systemd-spawned server
+    needs root — a password an automated tool call does not have. faulthandler's
+    handler runs in C, so it still reports while the event loop is blocked, and
+    needs no privileges at all.
+
+    Relevant to the retry work in `features/backup_cron.py`: a layer call that
+    runs past its budget leaves the coroutine RUNNING on the shared main loop
+    (the timeout abandons, it does not cancel). If such a hook ever wedges
+    permanently, this is how we find out where.
+
+    A file rather than stderr: these servers are spawned by the house/gateway and
+    their stderr goes to the parent's pipe, where a dump would be lost. The same
+    idiom already guards the autohooks daemon (`autohooks/__main__.py`). Every
+    step is best-effort — under pytest stderr has no fileno and the log dir may
+    be unwritable, and neither must stop the server from starting.
+    """
+    global _STACK_DUMP_FILE
+
+    import contextlib
+    import faulthandler
+    import signal
+    import time
+
+    with contextlib.suppress(OSError, ValueError, RuntimeError):
+        faulthandler.enable()
+
+    data_dir = os.environ.get("MCP_MEMORY_DATA_DIR", os.path.expanduser("~/.mcp-ariel-memory"))
+    try:
+        log_dir = Path(data_dir) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        _STACK_DUMP_FILE = (log_dir / "stack-dump.txt").open("a", encoding="utf-8")
+        # A marker per process: several servers write this file over a day, and a
+        # bare dump with no pid/time is hard to attribute.
+        _STACK_DUMP_FILE.write(f"\n=== SIGUSR1 stack dumps armed: pid={os.getpid()} {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        _STACK_DUMP_FILE.flush()
+        faulthandler.register(signal.SIGUSR1, file=_STACK_DUMP_FILE, all_threads=True)
+    except (OSError, ValueError, RuntimeError):
+        logging.getLogger(__name__).debug("SIGUSR1 stack dumps not installed", exc_info=True)
+
+
 def main() -> None:
     import argparse
 
@@ -280,6 +332,7 @@ def main() -> None:
         args.port = int(_cfg.get("dashboard", "port", default=8000))
 
     _setup_logging()
+    _install_faulthandler()
 
     if args.no_auth:
         os.environ["MCP_AUTH_DISABLED"] = "1"

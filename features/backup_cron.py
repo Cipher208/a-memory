@@ -152,7 +152,11 @@ class BackupCron:
             return
         self._running = True
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        # Named so a py-spy dump reads `Thread ... "backup-cron"` instead of an
+        # anonymous "Thread-N". Note faulthandler (the no-root SIGUSR1 path in
+        # mcp_server/server.py) prints only bare thread ids — names live in
+        # py-spy, which needs root here.
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="backup-cron")
         self._thread.start()
         jitter_info = f" (+{self.jitter_seconds}s jitter)" if self.jitter_seconds else ""
         logger.info(f"Backup cron started (interval={self.interval_hours}h{jitter_info})")
