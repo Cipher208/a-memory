@@ -44,6 +44,14 @@ _DDL = """
     );
 """
 
+# Reading a matched ghost row is the failure `probe` reports; how SQLite *words*
+# it depends on the build, so the tests assert the failure, not the phrase.
+# 3.47+ names the missing row (`fts5: missing row 99 from content table
+# 'main'.'wiki_index'`); older builds only diagnose the image (measured: 3.50.4
+# locally vs 3.46.x on the CI runner, which turned the suite red for 17 runs).
+# Do not tighten these to one spelling — the contract is "the read failed".
+_GHOST_READ_FAILURES = ("missing row", "database disk image is malformed")
+
 
 @pytest.fixture()
 def healthy(tmp_path: Path) -> Path:
@@ -148,7 +156,9 @@ def test_a_posting_without_content_is_reported_as_drift(healthy: Path) -> None:
     try:
         problems = probe(conn)
         assert any("absent from wiki_index" in d for _t, d in problems), problems
-        assert any("missing row 99 from content table" in d for _t, d in problems), problems
+        failed = [d for _t, d in problems if "reading a matched row" in d and "failed:" in d]
+        assert failed, problems
+        assert any(frag in failed[0].lower() for frag in _GHOST_READ_FAILURES), failed
     finally:
         conn.close()
 
@@ -164,8 +174,9 @@ def test_reading_a_matched_ghost_row_raises_while_the_join_hides_it(healthy: Pat
     conn.execute("INSERT INTO wiki_fts(rowid, title, content, wiki_type, tags) VALUES (99, 'Ghost only', 'ghost body', 'note', '[]')")
     conn.commit()
 
-    with pytest.raises(sqlite3.DatabaseError, match="missing row 99"):
+    with pytest.raises(sqlite3.DatabaseError) as raised:
         conn.execute("SELECT title FROM wiki_fts WHERE wiki_fts MATCH ?", ('"ghost"',)).fetchall()
+    assert any(frag in str(raised.value).lower() for frag in _GHOST_READ_FAILURES), str(raised.value)
 
     joined = conn.execute(
         "SELECT wi.title FROM wiki_fts fts JOIN wiki_index wi ON fts.rowid = wi.entry_id WHERE wiki_fts MATCH ?",
