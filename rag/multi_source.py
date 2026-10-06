@@ -111,10 +111,19 @@ def merge_ranked(results: list[dict[str, Any]], now: float | None = None) -> lis
 
 
 class MultiSourceRAG:
-    def __init__(self, rag: Any, wiki: Any, cm: Any | None = None):
+    def __init__(self, rag: Any, wiki: Any, cm: Any | None = None, layer: str = "user"):
+        """Hybrid retrieval over the sources of ONE layer.
+
+        `layer` is not decoration: `_from_episodic`, `_from_core`, `_from_graph`
+        and `_from_entities` all read layer-scoped tables, and an instance built
+        for the agent layer that keeps the default `"user"` answers with the
+        wrong layer's rows (issue #78). The default keeps single-layer callers
+        (eval, most tests) working unchanged.
+        """
         self.rag = rag
         self.wiki = wiki
         self.cm = cm
+        self.layer = layer
 
     async def search(
         self,
@@ -227,7 +236,7 @@ class MultiSourceRAG:
     async def _from_episodic(self, query: str, user_id: str, limit: int, strategy: str, weight: float) -> list[dict[str, Any]]:
         from core.episodic import EpisodicMemory
 
-        episodic = EpisodicMemory(cm=self.cm)
+        episodic = EpisodicMemory(cm=self.cm, layer=self.layer)
         episodes: list[Any] = await episodic.search(user_id, query, limit=limit)
         from rag.actr import actr_activation
 
@@ -251,7 +260,7 @@ class MultiSourceRAG:
         from core.memory import CoreMemory
         from rag.actr import actr_activation
 
-        core = CoreMemory(cm=self.cm)
+        core = CoreMemory(cm=self.cm, layer=self.layer)
         facts = await core.search(user_id, query, limit=limit)
 
         # ACT-R frequency: one batched recall_useful count per entry.
@@ -297,8 +306,8 @@ class MultiSourceRAG:
 
         conn = await self.cm.get(DB_NAME)
         cur = await conn.execute(
-            "SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE user_id=? AND content LIKE ? LIMIT ?",
-            (user_id, f"%{query}%", limit),
+            "SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE layer=? AND user_id=? AND content LIKE ? LIMIT ?",
+            (self.layer, user_id, f"%{query}%", limit),
         )
         graph_rows = await cur.fetchall()
         return [
@@ -339,8 +348,8 @@ class MultiSourceRAG:
         conn = await self.cm.get(DB_NAME)
         likes = " OR ".join("content LIKE ?" for _ in members)
         cur = await conn.execute(
-            f"SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE user_id=? AND ({likes}) LIMIT ?",
-            (user_id, *(f"%{m}%" for m in sorted(members)), limit * 2),
+            f"SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE layer=? AND user_id=? AND ({likes}) LIMIT ?",
+            (self.layer, user_id, *(f"%{m}%" for m in sorted(members)), limit * 2),
         )
         return [
             {
@@ -378,7 +387,7 @@ class MultiSourceRAG:
         conn = await self.cm.get(DB_NAME)
         ph = ",".join("?" * len(node_ids))
         where_extra = ""
-        params: list[Any] = [*node_ids, *node_ids, user_id]
+        params: list[Any] = [*node_ids, *node_ids, self.layer, user_id]
         if edge_exclude:
             # epi_edges.tags — a JSON array of strings ('["heuristic:tokens"]'):
             # filter by substring for each exclude name.
@@ -391,7 +400,7 @@ class MultiSourceRAG:
                 JOIN epi_nodes n
                   ON (n.node_id = e.target_id AND e.source_id IN ({ph}))
                   OR (n.node_id = e.source_id AND e.target_id IN ({ph}))
-                WHERE n.user_id=?{where_extra}""",
+                WHERE n.layer=? AND n.user_id=?{where_extra}""",
             params,
         )
         existing = {r.get("id") for r in results}

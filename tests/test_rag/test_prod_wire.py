@@ -6,6 +6,7 @@ enrich_sessions подключён в backup_cron._fire_nightly_hooks (посл�
 agent-layer получает собственный nightly-хук (hooks/agent_hooks.AgentHooks._nightly).
 """
 
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,6 +14,7 @@ import pytest
 
 from rag.multi_source import MultiSourceRAG
 from shared.connection import connection_manager
+from shared.constants import DB_NAME
 from shared.migrations import MigrationManager
 
 
@@ -136,3 +138,82 @@ async def test_agent_nightly_hook_runs_on_empty_graph(db) -> None:
     hook_registry.register_instance(hooks)
     fired = await hook_registry.fire("nightly", "agent", {"trigger": "backup_cron"})
     assert fired.get("handler_count", 0) >= 1, f"nightly фаерится на agent-слой, got={fired}"
+
+
+# ---------------------------------------------------------------------------
+# issue #78 — the four layer-scoped sources must follow the instance layer,
+# and the production construction site must hand them a connection manager.
+# Every other test builds MultiSourceRAG explicitly with cm=, which is exactly
+# why the live server could run for months with self.cm=None.
+# ---------------------------------------------------------------------------
+
+#: Isolate one source family per assertion: everything else off.
+_NO_RAG_NO_WIKI = {"include_rag": False, "include_wiki": False}
+_MEMORY_ONLY = {**_NO_RAG_NO_WIKI, "include_graph": False, "include_entities": False}
+_GRAPH_ONLY = {**_NO_RAG_NO_WIKI, "include_episodic": False, "include_core": False, "include_entities": False}
+_ENTITY_ONLY = {**_NO_RAG_NO_WIKI, "include_episodic": False, "include_core": False, "include_graph": False}
+
+
+async def test_app_context_wires_cm_and_layer_into_both_multi_rag(db) -> None:
+    """issue #78 bug 2: the two lines in AppContext passed neither cm nor layer."""
+    from mcp_server.context import AppContext
+
+    app = AppContext()
+
+    assert app.user_multi.cm is not None, "user_multi без cm: graph/entities в проде всегда []"
+    assert app.agent_multi.cm is not None, "agent_multi без cm: graph/entities в проде всегда []"
+    assert app.user_multi.layer == "user"
+    assert app.agent_multi.layer == "agent", "agent_multi держал дефолт 'user': agent-dream читал user-строки"
+
+
+async def test_episodic_and_core_sources_follow_the_instance_layer(db) -> None:
+    """issue #78 bug 1: both built their memory object with the layer defaulted to 'user'."""
+    conn = await db.get(DB_NAME)
+    now = time.time()
+    for layer in ("user", "agent"):
+        await conn.execute(
+            "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, 'default', ?, 0.5, '[]', ?)",
+            (layer, f"zqzqxw {layer} episode", now),
+        )
+        await conn.execute(
+            "INSERT INTO core_memory (layer, user_id, key, value, created_at, updated_at) VALUES (?, 'default', 'zqzqxw', ?, ?, ?)",
+            (layer, f"{layer} core fact", now, now),
+        )
+    await conn.commit()
+
+    agent = MultiSourceRAG(rag=None, wiki=None, cm=db, layer="agent")
+    user = MultiSourceRAG(rag=None, wiki=None, cm=db, layer="user")
+
+    agent_hits = await agent.search("zqzqxw", user_id="default", limit=10, **_MEMORY_ONLY)
+    user_hits = await user.search("zqzqxw", user_id="default", limit=10, **_MEMORY_ONLY)
+
+    assert {h["source"] for h in agent_hits} == {"episodic", "core"}, agent_hits
+    assert all("agent" in h["content"] for h in agent_hits), agent_hits
+    assert {h["source"] for h in user_hits} == {"episodic", "core"}, user_hits
+    assert all("user" in h["content"] for h in user_hits), user_hits
+
+
+async def test_graph_and_entity_sources_respect_the_layer(db) -> None:
+    """`epi_nodes` carries a layer column the two node sources never filtered on."""
+    conn = await db.get(DB_NAME)
+    now = time.time()
+    for layer in ("user", "agent"):
+        await conn.execute(
+            "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, 'default', ?, 'fact', '[]', 0.5, ?)",
+            (layer, f"grafanadash {layer} node postgresql", now),
+        )
+    await conn.commit()
+
+    agent = MultiSourceRAG(rag=None, wiki=None, cm=db, layer="agent")
+    user = MultiSourceRAG(rag=None, wiki=None, cm=db, layer="user")
+
+    agent_graph = await agent.search("grafanadash", user_id="default", limit=10, **_GRAPH_ONLY)
+    user_graph = await user.search("grafanadash", user_id="default", limit=10, **_GRAPH_ONLY)
+    assert agent_graph and all("agent" in h["content"] for h in agent_graph), agent_graph
+    assert user_graph and all("user" in h["content"] for h in user_graph), user_graph
+
+    # "postgres" canonises to the postgresql class, so the node texts are reachable.
+    agent_ent = await agent.search("postgres", user_id="default", limit=10, **_ENTITY_ONLY)
+    user_ent = await user.search("postgres", user_id="default", limit=10, **_ENTITY_ONLY)
+    assert agent_ent and all("agent" in h["content"] for h in agent_ent), agent_ent
+    assert user_ent and all("user" in h["content"] for h in user_ent), user_ent

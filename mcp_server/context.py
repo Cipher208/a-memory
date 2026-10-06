@@ -30,8 +30,12 @@ class AppContext:
         # doc → searchable sections without a manual ingest step.
         self.user_wiki.rag = self.user_rag
         self.agent_wiki.rag = self.agent_rag
-        self.user_multi = MultiSourceRAG(self.user_rag, self.user_wiki)
-        self.agent_multi = MultiSourceRAG(self.agent_rag, self.agent_wiki)
+        # cm and layer are both load-bearing: without cm the graph/entity sources
+        # early-return [] in production, and without layer the episodic/core
+        # sources answer with the other layer's rows (issue #78). The unit tests
+        # missed it because they build MultiSourceRAG explicitly, with both set.
+        self.user_multi = MultiSourceRAG(self.user_rag, self.user_wiki, cm=self.mm._cm, layer="user")
+        self.agent_multi = MultiSourceRAG(self.agent_rag, self.agent_wiki, cm=self.mm._cm, layer="agent")
         self.user_graph = EpistemicGraph(layer="user")
         self.agent_graph = EpistemicGraph(layer="agent")
         self.temporal = TemporalGraph()
