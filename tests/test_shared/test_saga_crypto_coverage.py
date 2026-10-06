@@ -106,3 +106,50 @@ def test_write_state_atomic_chmod_error(tmp_path):
     # Should not raise even if chmod fails
     write_state_atomic(path, {"key": "value"})
     assert path.exists()
+
+
+def test_read_state_legacy_rotate_false_does_not_write(tmp_path):
+    """`rotate=False` — читаем plain JSON и НЕ переписываем файл.
+
+    06.10: ротация перешифровывает файл ключом ЧИТАТЕЛЯ. Для `_load_state`
+    в backup_cron это означало, что импорт модуля сторонним процессом с
+    другим ключом молча менял владельца файла: сервер после этого не мог
+    прочитать собственное состояние, `_last_backup` становился 0 и срабатывал
+    лишний бэкап. Замерено на живой базе: импорт `features.backup_cron`
+    превратил файл из 72 байт открытого JSON в 112 байт шифротекста.
+    """
+    path = tmp_path / "state.json"
+    payload = {"last_backup": 1791218696.8360813, "last_wiki_sync": 0.0}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    before = path.read_bytes()
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        loaded = read_state_legacy_or_encrypted(path, rotate=False)
+        assert loaded == payload
+        assert len(w) == 0, "без ротации предупреждать не о чем"
+
+    assert path.read_bytes() == before, "чтение обязано быть без побочных эффектов"
+    assert path.read_bytes().startswith(b"{")
+
+
+def test_backup_cron_load_state_keeps_plain_state_file(tmp_path):
+    """Конструктор BackupCron читает состояние, но не переписывает его.
+
+    Он выполняется на импорте модуля (синглтон `backup_cron`), то есть любой
+    процесс, импортировавший features.backup_cron, трогал бы файл живой базы.
+    """
+    import json as _json
+
+    from features.backup_cron import BackupCron
+
+    state = tmp_path / ".backup_cron_state.json"
+    payload = {"last_backup": 1791218696.8360813, "last_wiki_sync": 1791282176.149434}
+    state.write_text(_json.dumps(payload), encoding="utf-8")
+    before = state.read_bytes()
+
+    cron = BackupCron(base_dir=str(tmp_path))
+
+    assert cron._last_backup == payload["last_backup"]
+    assert cron._last_wiki_sync == payload["last_wiki_sync"]
+    assert state.read_bytes() == before, "импорт/конструктор не должен трогать файл состояния"

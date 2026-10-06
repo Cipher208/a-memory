@@ -81,11 +81,17 @@ class BackupCron:
             os.close(fd)
 
     def _load_state(self) -> None:
+        # Two plain `time.time()` values, so the file is deliberately left as
+        # plain JSON (see `_save_state`) — it then survives a master-key change.
+        # `rotate=False` is required: this runs at import time via the module
+        # singleton, and rotating would rewrite the file under WHOEVER imported
+        # us. A warm-cache tool with a different key did exactly that to a live
+        # base on 06.10, stranding the server's own state behind a foreign key.
         if self._state_file.exists():
             with contextlib.suppress(Exception):
                 from shared.saga import read_state_legacy_or_encrypted
 
-                state = read_state_legacy_or_encrypted(self._state_file)
+                state = read_state_legacy_or_encrypted(self._state_file, rotate=False)
                 self._last_backup = state.get("last_backup", 0.0)
                 self._last_wiki_sync = state.get("last_wiki_sync", 0.0)
 

@@ -69,11 +69,23 @@ def read_state(path: Path) -> dict[str, Any]:
     return dict(res) if isinstance(res, dict) else {}
 
 
-def read_state_legacy_or_encrypted(path: Path) -> dict[str, Any]:
+def read_state_legacy_or_encrypted(path: Path, *, rotate: bool = True) -> dict[str, Any]:
     """Read encrypted state, falling back to legacy plain JSON (then rotating).
 
     Decrypt-first is deterministic; the old magic-byte sniff misclassified
     encrypted files (~1/256 of writes) as plain JSON and crashed on decode.
+
+    06.10: `rotate=False` reads a plain file WITHOUT rewriting it. A read that
+    writes is a footgun here, because the rewrite re-encrypts with the CALLER's
+    master key: any process whose key differs from the writer's silently re-keys
+    the file, and the owner of the file then cannot read its own state. Measured
+    on a live base — importing `features.backup_cron` (its module-level
+    `BackupCron()` calls `_load_state`) from a tool that runs with a different
+    key flipped `.backup_cron_state.json` from 72-byte plain JSON to 112-byte
+    ciphertext under the tool's key, while the running server had `_save_state`
+    writing plain JSON. Callers that merely want the value must pass
+    `rotate=False`; the default stays True so genuine legacy migrations still
+    happen.
     """
     if not path.exists():
         raise FileNotFoundError(path)
@@ -84,8 +96,10 @@ def read_state_legacy_or_encrypted(path: Path) -> dict[str, Any]:
         return dict(res) if isinstance(res, dict) else {}
     except Exception as decrypt_error:
         logger.debug("not an encrypted saga state (%s); trying legacy JSON", decrypt_error)
-    warnings.warn(f"{path} is plain JSON; rotating to encrypted", DeprecationWarning, stacklevel=2)
+    if rotate:
+        warnings.warn(f"{path} is plain JSON; rotating to encrypted", DeprecationWarning, stacklevel=2)
     legacy: Any = json.loads(blob.decode("utf-8"))
     state: dict[str, Any] = dict(legacy) if isinstance(legacy, dict) else {}
-    write_state_atomic(path, state)
+    if rotate:
+        write_state_atomic(path, state)
     return state
