@@ -66,6 +66,13 @@ Single SQLite file (WAL mode) with 23 domain tables:
   the synonym dictionary and the NER backend, so a dictionary edit or model upgrade invalidates it
   instead of serving stale entities.
 
+Both content-hash caches start empty, and the nightly enrich of a layer has a 120 s budget
+(`features/backup_cron.py`), so a base whose layer has never been cached cannot fill them in one
+pass. `scripts/warm_embedding_cache.py` and `scripts/warm_ner_cache.py` fill `embedding_cache` and
+`ner_cache` for one live base outside that budget, for exactly the keys the miners will look up.
+Both are cache-only: they write no edges, roles or anomaly tags, so warming changes no graph state —
+verify that by comparing `epi_nodes`/`epi_edges`/`epi_tags` counts before and after.
+
 ## Platform-Aware Async
 
 - **Linux/macOS**: aiosqlite (true async SQLite)
