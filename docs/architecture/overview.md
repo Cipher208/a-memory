@@ -95,6 +95,27 @@ two passes occupy the loop at once; a pass still unfinished after `NIGHTLY_INFLI
 treated as lost so retries can never be blocked forever. `cycles_state.json`'s `last_nightly` is
 written only after both layers finish, so an interrupted pass still leaves the cycle due.
 
+## Debugging a Running Server
+
+`kill -USR1 <pid>` appends every thread's Python stack to
+`<data_dir>/logs/stack-dump.txt` (`mcp_server/server.py:_install_faulthandler`).
+The handler runs in C, so it still reports while the event loop is blocked —
+which is the case that matters, because a nightly layer call that runs past its
+budget leaves its coroutine RUNNING on the shared main loop (the timeout
+abandons, it does not cancel).
+
+Use `scripts/dump_stacks.sh [hermes|mimocode|cowagent]` rather than signalling a
+pid you found by hand. The obvious pid is often the wrong one: mimocode's server
+sits behind an `sh -c` wrapper that does not forward SIGUSR1, so signalling the
+wrapper kills it and dumps nothing. The script resolves the server by its own
+`MCP_MEMORY_DATA_DIR` and says so plainly when a process has no handler yet
+(i.e. it predates this code and needs a restart).
+
+py-spy is the better tool when you have root — with `ptrace_scope=1` it cannot
+attach otherwise. It is not installed; `uvx py-spy dump --pid <pid>` fetches it
+on demand. Note faulthandler prints bare `Thread 0x<id>` headers and never
+thread names, so the `backup-cron` thread name only shows up in a py-spy dump.
+
 ## Platform-Aware Async
 
 - **Linux/macOS**: aiosqlite (true async SQLite)
