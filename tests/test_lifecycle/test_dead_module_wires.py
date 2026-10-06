@@ -81,7 +81,10 @@ async def test_backup_cron_respects_cycles_gate(cm, monkeypatch):
     state.write_text(json.dumps({"last_nightly": 1000.0}))
 
     cron = BackupCron()
-    cron._await_on_main_loop = lambda coro: coro  # корутины не гоняем, только факт вызова
+    # `_await_on_main_loop(coro, timeout=120)`; ночной проход слоя передаёт свой
+    # бюджет явно, поэтому заглушка обязана принимать keyword — иначе она
+    # проверяет старую сигнатуру, а не поведение гейта.
+    cron._await_on_main_loop = lambda coro, **kwargs: coro  # корутины не гоняем, только факт вызова
 
     # цикл не созрел (24ч не прошло; cron зовёт nightly_gate без now → патчим время cycles)
     from features import cycles as cycles_mod

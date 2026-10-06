@@ -23,6 +23,15 @@ from shared.path_safety import safe_resolve
 
 logger = logging.getLogger(__name__)
 
+# Per-layer budget for the nightly maintenance pass. Raised from 120 s after
+# measuring the real cost on snapshots of the live bases: hermes spends 138 s in
+# the `user` layer alone with every content-hash cache warm, so at 120 s the pass
+# was cut mid-layer and the `agent` layer was skipped entirely.
+# NOT raised for the other maintenance steps, which keep the 120 s default: they
+# are separate jobs with their own cost, and widening them would change their
+# behaviour too.
+NIGHTLY_LAYER_BUDGET_S = 180
+
 
 class BackupCron:
     def __init__(self, base_dir: str | None = None):
@@ -190,11 +199,14 @@ class BackupCron:
                 # layer was in flight and what it really cost, without changing
                 # what runs. The bare "Nightly hook error" that used to be the
                 # only trace did not say which layer died or how close the other
-                # came to the 120 s budget.
+                # came to the nightly layer budget.
                 started = time.monotonic()
                 logger.info("Nightly pass: layer=%s starting", layer)
                 try:
-                    self._await_on_main_loop(hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}))
+                    self._await_on_main_loop(
+                        hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}),
+                        timeout=NIGHTLY_LAYER_BUDGET_S,
+                    )
                 finally:
                     logger.info("Nightly pass: layer=%s finished in %.1f s", layer, time.monotonic() - started)
             if state_path is not None:
