@@ -12,13 +12,45 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lifecycle.graph_sanitation import HUB_EXCLUSION_PARAMS, hub_exclusion_clause
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _timed_phase(layer: str, phase: str) -> Iterator[None]:
+    """Log how long one phase of graph_enrich took, without touching its control flow.
+
+    Measurement only. The `finally` re-raises whatever the phase raised, so every
+    surrounding `try/except` and `contextlib.suppress` still decides the outcome
+    exactly as it did before, and a logging failure cannot change a result.
+
+    Why this exists: the whole step measures ~48 s on cowagent while hermes runs
+    a *larger* graph (5539 nodes vs 1964) in a shorter one, so the cost is not
+    graph size. The bare step number cannot say which of the twelve miners or
+    which of the eleven post-miner phases spent it, and guessing at the O(n^2)
+    loop in `miner_embedding` without attribution would be exactly the mistake
+    this file is instrumented to avoid.
+    """
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        with contextlib.suppress(Exception):
+            logger.info(
+                "enrich phase: layer=%s phase=%s %.0f ms",
+                layer,
+                phase,
+                (time.monotonic() - started) * 1000,
+            )
+
 
 # Content markers of raw-harness junk that must never live as graph nodes.
 _JUNK_LIKE = ("[{%", "%tool_use_id%", "%[ariel recall]%")
@@ -239,28 +271,32 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
 
     cm = connection_manager
     conn = await cm.get(DB_NAME)
-    junk = await (
-        await conn.execute(
-            f"SELECT node_id, user_id, content FROM epi_nodes"
-            f" WHERE layer=? AND node_type='fact'"
-            f" AND (content LIKE {' OR content LIKE '.join(['?'] * len(_JUNK_LIKE))})",
-            (layer, *_JUNK_LIKE),
-        )
-    ).fetchall()
+    with _timed_phase(layer, "junk_scan"):
+        junk = await (
+            await conn.execute(
+                f"SELECT node_id, user_id, content FROM epi_nodes"
+                f" WHERE layer=? AND node_type='fact'"
+                f" AND (content LIKE {' OR content LIKE '.join(['?'] * len(_JUNK_LIKE))})",
+                (layer, *_JUNK_LIKE),
+            )
+        ).fetchall()
 
     cleaned = 0
     ids: list[int] = []
-    for row in junk:
-        # capture() never raises; junk must reach L0 before its node is gone.
-        await capture(event="graph_cleanup", layer=layer, user_id=str(row["user_id"]), text=str(row["content"]))
-        ids.append(int(row["node_id"]))
+    with _timed_phase(layer, "junk_capture"):
+        for row in junk:
+            # capture() never raises; junk must reach L0 before its node is gone.
+            await capture(event="graph_cleanup", layer=layer, user_id=str(row["user_id"]), text=str(row["content"]))
+            ids.append(int(row["node_id"]))
     if ids:
-        cleaned = await EpistemicGraph(cm=cm, layer=layer).delete_nodes(ids)
+        with _timed_phase(layer, "junk_delete"):
+            cleaned = await EpistemicGraph(cm=cm, layer=layer).delete_nodes(ids)
 
     miners: dict[str, dict[str, Any]] = {}
     for name, miner in MINERS.items():
         try:
-            res = await miner(cm, layer)
+            with _timed_phase(layer, f"miner:{name}"):
+                res = await miner(cm, layer)
             miners[name] = {"edges": int(res.get("edges", 0))}
         except Exception as exc:
             # Audit 05.09 (P0): a silently failed miner means the graph quietly
@@ -273,7 +309,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     from config import config
 
     if bool(config.get("graph", "embed_clusters", default=False)):
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(Exception), _timed_phase(layer, "embed_clusters"):
             from lifecycle.embedding_clusters import cluster_embeddings
 
             cluster_report = await cluster_embeddings(cm, layer=layer)
@@ -283,7 +319,8 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     # G5 sanitation: validity recheck (edges outside the window → status='expired').
     from lifecycle.graph_sanitation import validate_edges
 
-    expired = await validate_edges(conn)
+    with _timed_phase(layer, "validate_edges"):
+        expired = await validate_edges(conn)
 
     # G5 sanitation valence: fact nodes are classified by the valence of their edges
     # (classify_fact) → 'valence:<bucket>' tag ('primary' is not tagged — the default).
@@ -291,25 +328,26 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     try:
         from lifecycle.graph_sanitation import classify_fact
 
-        rel_rows = await _rows(
-            conn,
-            "SELECT e.source_id, e.target_id, e.relation FROM epi_edges e"
-            " JOIN epi_nodes n ON n.node_id = e.source_id OR n.node_id = e.target_id"
-            " WHERE n.layer=?",
-            (layer,),
-        )
-        node_rels: dict[int, list[str]] = {}
-        for r in rel_rows:
-            node_rels.setdefault(int(r["source_id"]), []).append(str(r["relation"]))
-            node_rels.setdefault(int(r["target_id"]), []).append(str(r["relation"]))
-        for nid, rels in node_rels.items():
-            bucket = classify_fact(rels)
-            if bucket == "primary":
-                continue
-            await conn.execute("DELETE FROM epi_tags WHERE node_id=? AND tag LIKE 'valence:%'", (nid,))
-            await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, ?)", (nid, f"valence:{bucket}"))
-            valence_tagged += 1
-        await conn.commit()
+        with _timed_phase(layer, "valence"):
+            rel_rows = await _rows(
+                conn,
+                "SELECT e.source_id, e.target_id, e.relation FROM epi_edges e"
+                " JOIN epi_nodes n ON n.node_id = e.source_id OR n.node_id = e.target_id"
+                " WHERE n.layer=?",
+                (layer,),
+            )
+            node_rels: dict[int, list[str]] = {}
+            for r in rel_rows:
+                node_rels.setdefault(int(r["source_id"]), []).append(str(r["relation"]))
+                node_rels.setdefault(int(r["target_id"]), []).append(str(r["relation"]))
+            for nid, rels in node_rels.items():
+                bucket = classify_fact(rels)
+                if bucket == "primary":
+                    continue
+                await conn.execute("DELETE FROM epi_tags WHERE node_id=? AND tag LIKE 'valence:%'", (nid,))
+                await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, ?)", (nid, f"valence:{bucket}"))
+                valence_tagged += 1
+            await conn.commit()
     except Exception as exc:
         logger.warning("valence tagging failed: %s", exc)
 
@@ -318,7 +356,8 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     try:
         from lifecycle.graph_sanitation import centrality_candidates
 
-        centrality_top = (await centrality_candidates(conn, layer))[:5]
+        with _timed_phase(layer, "centrality"):
+            centrality_top = (await centrality_candidates(conn, layer))[:5]
     except Exception as exc:
         logger.warning("centrality top failed: %s", exc)
 
@@ -326,26 +365,28 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     from lifecycle.tool_stats import tool_behavior_stats
 
     behavior: dict[str, dict[str, float]] = {}
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(Exception), _timed_phase(layer, "behavior"):
         behavior = await tool_behavior_stats()
 
     # S18 item 4 orphan-anchor GC — BEFORE the dream: REM bridges isolated nodes
     # (anchors 'episode:N' tokenize identically → Jaccard 1.0 → a bridge),
     # so edge-less anchors must be removed before the sleep phase.
-    orphaned = await _orphan_anchor_gc(conn, layer)
+    with _timed_phase(layer, "orphan_gc"):
+        orphaned = await _orphan_anchor_gc(conn, layer)
 
     # S18 item 9 gap-registry: question episodes + zero-result tails (best-effort).
     gap_written = 0
     try:
         from lifecycle.gap_registry import build_registry
 
-        gap_written = int((await build_registry(layer))["written"])
+        with _timed_phase(layer, "gap_registry"):
+            gap_written = int((await build_registry(layer))["written"])
     except Exception as exc:
         logger.debug("gap registry skipped: %s", exc)
 
     # C6: three-phase dream — NREM decay/prune → REM bridge → Insight abstracts.
     dream: dict[str, int] = {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0}
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(Exception), _timed_phase(layer, "dream"):
         dream = await _dream(conn, layer)
 
     # C8 segment-consolidation: Lychee boundary map of the daily L0 (report).
@@ -353,7 +394,8 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     try:
         from lifecycle.segment_consolidation import segment_l0
 
-        segment_map = await segment_l0(since_hours=24.0, layer=layer)
+        with _timed_phase(layer, "segments"):
+            segment_map = await segment_l0(since_hours=24.0, layer=layer)
     except Exception as exc:
         logger.debug("segment map skipped: %s", exc)
 
@@ -363,8 +405,9 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     try:
         from lifecycle.wiki_communities import detect_communities
 
-        res_c = await detect_communities(cm, layer=layer)
-        communities = res_c["communities"][:5]
+        with _timed_phase(layer, "wiki_communities"):
+            res_c = await detect_communities(cm, layer=layer)
+            communities = res_c["communities"][:5]
     except Exception as exc:
         logger.debug("wiki communities skipped: %s", exc)
 

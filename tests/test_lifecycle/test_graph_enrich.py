@@ -5,6 +5,8 @@ from typing import Any
 
 import pytest
 
+import contextlib
+import logging
 import time
 
 from shared.connection import connection_manager
@@ -289,3 +291,46 @@ async def test_sanitation_centrality_top_in_report(graph, no_miners):
     assert isinstance(top, list)
     moc = await (await conn.execute("SELECT node_id FROM epi_nodes WHERE node_type='moc' LIMIT 1")).fetchone()
     assert int(moc["node_id"]) not in top, f"moc-хаб вне centrality-топа, top={top}"
+
+
+@pytest.mark.asyncio
+async def test_timed_phase_logs_name_layer_and_ms(graph, caplog):
+    """Замер фазы: имя, слой и миллисекунды попадают в лог."""
+    from lifecycle.graph_enrich import _timed_phase
+
+    with caplog.at_level(logging.INFO, logger="lifecycle.graph_enrich"), _timed_phase("user", "miner:tags"):
+        pass
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "lifecycle.graph_enrich"]
+    assert any("phase=miner:tags" in m and "layer=user" in m and m.endswith("ms") for m in lines), lines
+
+
+def test_timed_phase_reraises_and_still_logs(caplog):
+    """Замер не глотает исключение и логирует фазу даже при падении.
+
+    Это главное свойство: вокруг фаз стоят `try/except` и
+    `contextlib.suppress`, и они должны решать исход ровно как раньше.
+    """
+    from lifecycle.graph_enrich import _timed_phase
+
+    with (
+        caplog.at_level(logging.INFO, logger="lifecycle.graph_enrich"),
+        pytest.raises(ValueError, match="boom"),
+        _timed_phase("user", "miner:broken"),
+    ):
+        raise ValueError("boom")
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "lifecycle.graph_enrich"]
+    assert any("phase=miner:broken" in m for m in lines), lines
+
+
+def test_timed_phase_suppress_still_decides():
+    """`contextlib.suppress` снаружи замера по-прежнему решает исход."""
+    from lifecycle.graph_enrich import _timed_phase
+
+    reached = False
+    with contextlib.suppress(ValueError), _timed_phase("user", "p"):
+        raise ValueError("suppressed")
+    reached = True
+
+    assert reached
