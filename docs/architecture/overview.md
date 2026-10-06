@@ -66,12 +66,34 @@ Single SQLite file (WAL mode) with 23 domain tables:
   the synonym dictionary and the NER backend, so a dictionary edit or model upgrade invalidates it
   instead of serving stale entities.
 
-Both content-hash caches start empty, and the nightly enrich of a layer has a 120 s budget
-(`features/backup_cron.py`), so a base whose layer has never been cached cannot fill them in one
-pass. `scripts/warm_embedding_cache.py` and `scripts/warm_ner_cache.py` fill `embedding_cache` and
-`ner_cache` for one live base outside that budget, for exactly the keys the miners will look up.
+Both content-hash caches start empty, and the nightly enrich of a layer has a per-layer budget
+(`NIGHTLY_LAYER_BUDGET_S`, 180 s since 06.10; 120 s before), so a base whose layer has never been
+cached cannot fill them in one pass. `scripts/warm_embedding_cache.py` and `scripts/warm_ner_cache.py`
+fill `embedding_cache` and `ner_cache` for one live base outside that budget, for exactly the keys the
+miners will look up.
 Both are cache-only: they write no edges, roles or anomaly tags, so warming changes no graph state —
 verify that by comparing `epi_nodes`/`epi_edges`/`epi_tags` counts before and after.
+
+## Nightly Schedule
+
+One cron thread (`features/backup_cron.BackupCron`, a tick a minute) drives two independent schedules:
+
+- **Backup** — every `backup_interval_hours` (24 h) plus jitter, under a per-base `flock` so the
+  gateway/dashboard twin processes cannot each write a full backup.
+- **Nightly pass** — gated by `features.cycles.nightly_gate`: the cycle is due 24 h after the last
+  *successful* pass, subject to the cost cap. It is deliberately NOT part of the backup branch. Until
+  06.10 it was reachable only from inside it, and `_do_backup` stamps `_last_backup` *before* the
+  hooks run, so a pass that died — on the layer budget, or on a restart in the middle of it — waited a
+  full day for its next attempt, leaving no trace that it had been tried. Two consecutive passes were
+  lost that way on the live hermes base, while both days still wrote a backup.
+
+A failed pass now backs off rather than waiting for the next backup: 15 min → 1 h → 4 h, persisted in
+`.backup_cron_state.json` so it survives the frequent restarts here. A layer call that runs past
+`NIGHTLY_LAYER_BUDGET_S` leaves its coroutine RUNNING on the shared main loop — the timeout abandons,
+it does not cancel — so an unfinished job refuses a new pass until it completes, rather than letting
+two passes occupy the loop at once; a pass still unfinished after `NIGHTLY_INFLIGHT_GRACE_S` is
+treated as lost so retries can never be blocked forever. `cycles_state.json`'s `last_nightly` is
+written only after both layers finish, so an interrupted pass still leaves the cycle due.
 
 ## Platform-Aware Async
 

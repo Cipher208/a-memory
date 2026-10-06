@@ -32,6 +32,29 @@ logger = logging.getLogger(__name__)
 # behaviour too.
 NIGHTLY_LAYER_BUDGET_S = 180
 
+# Retry policy for the nightly pass, deliberately decoupled from the 24 h backup
+# window. The pass used to be reachable only from inside `_check_backup`, which
+# returns early until a full day has passed since the last backup, while
+# `_do_backup` stamps `_last_backup` BEFORE the hooks run. A pass that died — on
+# the layer budget, or because the process was restarted mid-pass — therefore
+# waited a whole day for its next attempt, leaving no trace that it was ever
+# tried. Measured on the live hermes base: the 04.10 and 05.10 passes both died,
+# `cycles_state.last_nightly` stayed at 04.10 08:54, and both days still wrote a
+# backup with no nightly recorded next to it. Restarts are routine here (hermes
+# had 10 on 06.10 alone), so a retry must not wait for the next backup at all.
+# It backs off instead: 15 min -> 1 h -> 4 h, then 4 h for every further failure.
+NIGHTLY_BACKOFF_S = (900.0, 3600.0, 14400.0)
+
+# A pass whose `_await_on_main_loop(...).result(timeout=)` expired leaves its
+# coroutine RUNNING on the main loop — the timeout abandons, it does not cancel
+# (see `hooks/shared.timed_step`). The nightly must not be started again on top
+# of that: two passes over the same graph at once would occupy the event loop the
+# whole agent shares, which is the one thing this scheduler must never cause. The
+# unfinished-job guard therefore refuses a retry while work is still pending, but
+# not forever — a pass still unfinished after this long is treated as lost, so
+# the nightly can never be blocked permanently by a coroutine that never returns.
+NIGHTLY_INFLIGHT_GRACE_S = 1800.0
+
 
 class BackupCron:
     def __init__(self, base_dir: str | None = None):
@@ -57,6 +80,14 @@ class BackupCron:
         self._stop_event = threading.Event()
         self._last_backup = 0.0
         self._last_wiki_sync = 0.0
+        # Nightly retry bookkeeping. Persisted through `_save_state` because
+        # restarts are routine here: in-memory backoff would reset to 15 min on
+        # every restart, turning a restart-heavy day into an attempt-heavy one.
+        self._nightly_failures = 0
+        self._nightly_retry_at = 0.0
+        self._nightly_started_at = 0.0
+        # Coroutines handed to the main loop that have not finished yet.
+        self._pending_futures: list[Any] = []
         self._state_file = self.base_dir / ".backup_cron_state.json"
         self._lock_path = self.base_dir / ".backup_cron.lock"
         self._load_state()
@@ -94,9 +125,21 @@ class BackupCron:
                 state = read_state_legacy_or_encrypted(self._state_file, rotate=False)
                 self._last_backup = state.get("last_backup", 0.0)
                 self._last_wiki_sync = state.get("last_wiki_sync", 0.0)
+                self._nightly_failures = int(state.get("nightly_failures", 0) or 0)
+                self._nightly_retry_at = float(state.get("nightly_retry_at", 0.0) or 0.0)
 
     def _save_state(self) -> None:
-        self._state_file.write_text(json.dumps({"last_backup": self._last_backup, "last_wiki_sync": self._last_wiki_sync}), encoding="utf-8")
+        self._state_file.write_text(
+            json.dumps(
+                {
+                    "last_backup": self._last_backup,
+                    "last_wiki_sync": self._last_wiki_sync,
+                    "nightly_failures": self._nightly_failures,
+                    "nightly_retry_at": self._nightly_retry_at,
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def start(self) -> None:
         if self._running:
@@ -127,7 +170,14 @@ class BackupCron:
 
     def _await_on_main_loop(self, coro: Any, timeout: float = 120) -> Any:
         if self._main_loop is not None and self._main_loop.is_running():
-            return asyncio.run_coroutine_threadsafe(coro, self._main_loop).result(timeout=timeout)
+            future = asyncio.run_coroutine_threadsafe(coro, self._main_loop)
+            # Remember it before waiting. `.result(timeout=)` abandons the
+            # coroutine on expiry instead of cancelling it, so an expired pass
+            # leaves real work on the shared main loop; `_nightly_busy` reads
+            # this list to refuse starting a second nightly on top of it.
+            self._pending_futures = [f for f in self._pending_futures if not f.done()]
+            self._pending_futures.append(future)
+            return future.result(timeout=timeout)
         return asyncio.run(coro)
 
     def stop(self) -> None:
@@ -147,8 +197,103 @@ class BackupCron:
 
     def _tick(self) -> None:
         now = time.time()
-        self._check_backup(now)
-        self._check_wiki_sync(now)
+        # Each schedule is isolated: a failure in one (an unwritable state file, a
+        # lock error) must not cost the others their tick. Before, the three ran
+        # bare inside one try, so an exception in the first cancelled the backup
+        # for that tick — and the wiki sync, which writes nothing, silently.
+        #
+        # Nightly first, and on its own schedule: it is the pass that used to be
+        # lost for a whole day when it died, and the one that holds the
+        # single-writer lock for minutes. A backup that waits one tick for that
+        # lock is harmless; a nightly that waits a day is not.
+        for step in (self._check_nightly, self._check_backup, self._check_wiki_sync):
+            try:
+                step(now)
+            except Exception:
+                logger.exception("Backup cron step %s failed", step.__name__)
+
+    def _cycles_state_path(self) -> Path:
+        # This base's own cycle state, not the connection manager's: they are the
+        # same base in production (the singleton defaults to it), and keeping it
+        # on `self.base_dir` means a BackupCron built for an explicit base reads
+        # that base's cycles — not whatever base the process happens to have, and
+        # not the live one while a test runs.
+        return self.base_dir / "cycles_state.json"
+
+    def _nightly_busy(self, now: float) -> bool:
+        """Is work from an earlier nightly pass still running on the main loop."""
+        self._pending_futures = [f for f in self._pending_futures if not f.done()]
+        if not self._pending_futures:
+            self._nightly_started_at = 0.0
+            return False
+        if self._nightly_started_at and now - self._nightly_started_at > NIGHTLY_INFLIGHT_GRACE_S:
+            logger.warning(
+                "Nightly pass still has %d unfinished job(s) on the main loop after %.0f min — "
+                "treating it as lost and allowing a retry; a second pass may briefly overlap",
+                len(self._pending_futures),
+                (now - self._nightly_started_at) / 60.0,
+            )
+            self._pending_futures.clear()
+            self._nightly_started_at = 0.0
+            return False
+        return True
+
+    def _check_nightly(self, now: float) -> None:
+        """Run the nightly pass when the cycle is due, independent of backups.
+
+        See `NIGHTLY_BACKOFF_S` for why this is not called from `_check_backup`
+        any more. The gate (`nightly_gate`) still decides *when* the cycle is
+        due; what changed is how often we are allowed to ask and what happens
+        when an attempt fails: the next attempt comes after a backoff, not after
+        the next 24 h backup window.
+        """
+        if self._nightly_busy(now):
+            logger.info("Nightly skipped: the previous pass is still running")
+            return
+        if now < self._nightly_retry_at:
+            return
+
+        state_path = self._cycles_state_path()
+        try:
+            from features.cycles import nightly_gate
+
+            gate = nightly_gate(state_path)
+        except Exception:
+            logger.exception("Cycles gate error — running nightly unguarded")
+            gate = {"action": "run", "budget": "unknown", "reason": "gate_error"}
+        if gate.get("action") != "run":
+            logger.info("Nightly skipped by cycles gate: %s", gate)
+            return
+
+        # Same single-writer lock as the backup, so gateway/dashboard MCP twins
+        # cannot both run the pass. Not being the leader is NOT a failure: the
+        # leader is doing the work, so no backoff is recorded.
+        fd = self._acquire_backup_lock()
+        if fd is None:
+            logger.info("Nightly skipped: another writer holds the lock")
+            return
+        self._nightly_started_at = now
+        try:
+            verdict = self._fire_nightly_hooks(state_path, gate_checked=True)
+        finally:
+            self._release_backup_lock(fd)
+
+        if verdict == "failed":
+            self._nightly_failures += 1
+            delay = NIGHTLY_BACKOFF_S[min(self._nightly_failures, len(NIGHTLY_BACKOFF_S)) - 1]
+            self._nightly_retry_at = time.time() + delay
+            self._save_state()
+            logger.warning(
+                "Nightly pass failed (%d in a row) — next attempt in %.0f min",
+                self._nightly_failures,
+                delay / 60.0,
+            )
+        else:
+            if self._nightly_failures:
+                logger.info("Nightly pass recovered after %d failed attempt(s)", self._nightly_failures)
+            self._nightly_failures = 0
+            self._nightly_retry_at = 0.0
+            self._save_state()
 
     def _check_backup(self, now: float) -> None:
         next_backup = self._last_backup + self.interval_hours * 3600
@@ -171,7 +316,6 @@ class BackupCron:
         try:
             self._do_backup()
             self._cleanup_old()
-            self._fire_nightly_hooks()
         finally:
             self._release_backup_lock(fd)
 
@@ -179,23 +323,35 @@ class BackupCron:
         if now - self._last_wiki_sync >= self.wiki_sync_interval * 60:
             self._sync_wiki()
 
-    def _fire_nightly_hooks(self) -> None:
-        """Trigger nightly maintenance hooks for both layers."""
+    def _fire_nightly_hooks(self, state_path: Path | None = None, *, gate_checked: bool = False) -> str:
+        """Run the nightly maintenance pass. Returns 'ok', 'failed' or 'skipped'.
+
+        The verdict is new and is the point of the change: a pass that died used
+        to return normally, so the caller could not tell it apart from a pass
+        that finished, and the backup had already marked itself done by then.
+        Callers scheduling a retry read 'failed'.
+
+        `gate_checked=True` means the caller already consulted `nightly_gate`
+        (that is `_check_nightly`, which needs the answer before taking the
+        lock). The default re-checks it, so a direct call still refuses to run
+        an unripe cycle.
+        """
+        if state_path is None:
+            state_path = self._cycles_state_path()
         # C7 cycles-daemon gate: cycle_due (persistent last_run) + triple
         # cost-cap. The nightly pass runs only when the cycle is due and the
         # budget is not blocked — the scheduler from the S13 design doc.
-        state_path: Path | None = None
-        try:
-            from features.cycles import nightly_gate
-            from shared.connection import connection_manager as _cm
+        if not gate_checked:
+            try:
+                from features.cycles import nightly_gate
 
-            state_path = Path(str(_cm.base_dir)) / "cycles_state.json"
-            gate = nightly_gate(state_path)
-            if gate["action"] != "run":
-                logger.info("Nightly skipped by cycles gate: %s", gate)
-                return
-        except Exception:
-            logger.exception("Cycles gate error — running nightly unguarded")
+                gate = nightly_gate(state_path)
+                if gate["action"] != "run":
+                    logger.info("Nightly skipped by cycles gate: %s", gate)
+                    return "skipped"
+            except Exception:
+                logger.exception("Cycles gate error — running nightly unguarded")
+        verdict = "ok"
         try:
             from hooks.registry import hook_registry
 
@@ -215,13 +371,13 @@ class BackupCron:
                     )
                 finally:
                     logger.info("Nightly pass: layer=%s finished in %.1f s", layer, time.monotonic() - started)
-            if state_path is not None:
-                with contextlib.suppress(Exception):
-                    from features.cycles import record_nightly_done
+            with contextlib.suppress(Exception):
+                from features.cycles import record_nightly_done
 
-                    record_nightly_done(state_path)  # record the successful pass
+                record_nightly_done(state_path)  # record the successful pass
         except Exception:
             logger.exception("Nightly hook error")
+            verdict = "failed"
         # Compact-to-budget after nightly builds (graph_build runs inside the
         # "nightly" hook above): evict lowest-activation L4 facts to archive.
         with contextlib.suppress(Exception):
@@ -275,6 +431,7 @@ class BackupCron:
 
             self._await_on_main_loop(regenerate_bridge("default", "agent"))
             self._await_on_main_loop(ingest_drain("default", "agent"))
+        return verdict
 
     def _do_backup(self) -> str:
         import shutil
@@ -445,6 +602,8 @@ class BackupCron:
             "wiki_sync_interval_minutes": self.wiki_sync_interval,
             "last_backup": self._last_backup,
             "next_backup": self._last_backup + self.interval_hours * 3600,
+            "nightly_failures": self._nightly_failures,
+            "next_nightly_retry": self._nightly_retry_at,
             "backup_count": len(list(self.backup_dir.iterdir())),
         }
 
