@@ -4,7 +4,7 @@ from pathlib import Path
 from shared.importance.models import ImportanceConfig, ImportanceSignals, ScorerResult
 
 # Repo-relative, not an absolute host path: CI checkouts live elsewhere
-# (was /home/murat/Projects/repos/... → FileNotFoundError on GitHub Actions).
+# (an absolute operator path → FileNotFoundError on GitHub Actions).
 ASSET_PATH = Path(__file__).resolve().parents[2] / "shared" / "assets" / "importance_config.json"
 
 

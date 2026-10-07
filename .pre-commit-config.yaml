@@ -17,6 +17,16 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  # House layer: secret scanning catches credentials, and infrastructure
+  # disclosure has no credential shape in it. Verified against the 2026-09-13
+  # leak commit: the default ruleset was silent, .gitleaks.toml fires on it
+  # eight times. Rules and rationale live in .gitleaks.toml; the contributor
+  # rule in CONTRIBUTING.md § Test Data and Fixtures.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
   - repo: local
     hooks:
       - id: skylos

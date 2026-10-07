@@ -131,7 +131,7 @@ WIKI = L4.5 knowledge layer — НАМЕРЕННАЯ запись, НЕ дист
 
 > Мой v1-черновик (co-occurrence/similar_to/follows_in_time) ПОГЛОЩЁН списком из
 > `a-memory-graph-miners.md` — он шире (8 сигналов + эмбеддинг-слой) и привязан к
-> существующей инфраструктуре. Источник: /home/murat/cow/knowledge/analysis/a-memory-graph-miners.md
+> существующей инфраструктуре. Источник: <home>/cow/knowledge/analysis/a-memory-graph-miners.md
 
 **Фундамент (прежде минеров)**: рёбра пишут только builder'ы (B1.3 ночной, A1.6 communities,
 MCP relates_to/causal) — реальных связей они не находят; recall-телеметрии пар НЕТ (нужен
@@ -410,7 +410,7 @@ MCP relates_to/causal) — реальных связей они не наход�
 5. **8 циклов автономии при 3 LLM-классах (nano/mini/gpt-4.1)** — экономика подтверждает E8-вердикт: гейт инициативы (WhisperGate) — это harness-задача с nano-моделью, ariel остаётся keyless. Патент-pending + «license subject to change» — ещё одна причина не заимствовать механики напрямую (только идеи, как с AGPL у OpenViking).
 
 **Резюме**: MemoryMuse — пятый подряд конкурент с «взять»-листом внутри черновика. Ценное из деталей: per-kind капы и явный порядок inject-блоков (усиление F-спеки инъекции), private-флаг объединяющий C5+scratchpad. Стек (Mongo+Qdrant+Memgraph+docker) — антипример local-first.
-- 2026-09-04: v14 — ПАЙПЛАЙН ЭЛИ/ЛИЛИ (a-memory-l0-l4-pipeline.md + a-memory-graph-miners.md, /home/murat/cow/knowledge/analysis/) принят как ОСНОВА Phase F и Phase G. Мой v1 поглощён. Диагноз кода проверен 04.09 — все дыры реальны (L2 без сообщений, staging_-обрубки, decay_rate игнорируется промоцией, remember дублирует в граф, 4 параллельных входа). Поправки к их доку: CLACK не найден (сжатие = A3+zlib), add_edge «не вызывается нигде» устарело (B1.3/A1.6 пишут, минеры не наполняют), sentence-transformers 6.0.0 уже в venv (минер #9 возможен сейчас). Phase F = их конвейер + мои гейты/журнал/replay; Phase G = их 8+1 минеров + моя санитария/graph_enrich-оркестратор. Ключевые новые обязательства: канонические ключи (не обрубки), kind-роутинг инвариант/событие в G1, противоречия → memory_conflicts вместо молчаливого UPDATE, wiki = L4.5 [[fact:]]-linking без дублирования, L0-тиры жизни 30/180 + дистилляция освобождает сырьё, журнал co-retrieval пар (новый), пре-чистка JSON-узлов перед минерами.
+- 2026-09-04: v14 — ПАЙПЛАЙН ЭЛИ/ЛИЛИ (a-memory-l0-l4-pipeline.md + a-memory-graph-miners.md, <home>/cow/knowledge/analysis/) принят как ОСНОВА Phase F и Phase G. Мой v1 поглощён. Диагноз кода проверен 04.09 — все дыры реальны (L2 без сообщений, staging_-обрубки, decay_rate игнорируется промоцией, remember дублирует в граф, 4 параллельных входа). Поправки к их доку: CLACK не найден (сжатие = A3+zlib), add_edge «не вызывается нигде» устарело (B1.3/A1.6 пишут, минеры не наполняют), sentence-transformers 6.0.0 уже в venv (минер #9 возможен сейчас). Phase F = их конвейер + мои гейты/журнал/replay; Phase G = их 8+1 минеров + моя санитария/graph_enrich-оркестратор. Ключевые новые обязательства: канонические ключи (не обрубки), kind-роутинг инвариант/событие в G1, противоречия → memory_conflicts вместо молчаливого UPDATE, wiki = L4.5 [[fact:]]-linking без дублирования, L0-тиры жизни 30/180 + дистилляция освобождает сырьё, журнал co-retrieval пар (новый), пре-чистка JSON-узлов перед минерами.
 
 ## Sequencing (user decision 2026-09-04)
 

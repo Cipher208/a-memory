@@ -36,7 +36,7 @@ def test_live_broadcast_fixture_catch_rate() -> None:
         "memory_search FIXED (2026-09-12, compose-debug protocol): root cause — rag/dual_route.py s2_exhaustive.",
         "DAY CLOSE CHECKPOINT (2026-09-12, session ses_f6e223cc, ~350k tok): MIGRATION DAY COMPLETE.",
         "memory_search fix COMMITTED (2026-09-12, ariel repo commit 2990233, pre-commit full pytest gate green 1660/0).",
-        "NATIVE AWG MIGRATION CUTOVER SUCCESS (2026-09-12 11:57 UTC): vps2 production VPN moved.",
+        "NATIVE AWG MIGRATION CUTOVER SUCCESS (2026-09-12 11:57 UTC): node-b production VPN moved.",
     ],
 )
 def test_broadcast_examples_detected(line: str) -> None:

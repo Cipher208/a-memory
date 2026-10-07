@@ -68,7 +68,7 @@ async def test_episode_axis_surfaces_recent_work(tmp_base):
                     summary="Personas CowAgent memory isolation second leak analysis",
                     created_at=now - 86400,
                 ),
-                SimpleNamespace(summary="picoclaw router notes", created_at=now - 60 * 86400),
+                SimpleNamespace(summary="service-b router notes", created_at=now - 60 * 86400),
             ]
         )
     )
@@ -76,7 +76,7 @@ async def test_episode_axis_surfaces_recent_work(tmp_base):
     eps = [b for b in blocks if b["axis"] == "episodes"]
     assert len(eps) == 1
     assert "Personas" in eps[0]["content"]
-    assert "picoclaw" not in eps[0]["content"]
+    assert "service-b" not in eps[0]["content"]
 
 
 @pytest.mark.asyncio

@@ -156,7 +156,7 @@ Restart after ariel code updates: `systemctl --user restart ariel-autohooks-*`.
 CowAgent additionally runs under a **system** unit `cowagent.service`
 (Restart=always) — the agent itself, not the daemon; killing its PID
 auto-respawns it with new code (do NOT manual-nohup: `-m app` needs
-cwd=/home/murat/cowagent).
+cwd=<home>/cowagent).
 
 ### Hermes — native `MemoryProvider` plugin (preferred path)
 
