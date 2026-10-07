@@ -18,6 +18,21 @@ from tests._tmp_policy import install as _install_tmp_policy
 
 TMP_POLICY_DIR = _install_tmp_policy()
 
+# Several modules resolve their data directory ONCE, at import time, from this
+# variable: `shared/saga/impl/storage.py` (`SAGA_DIR`), `shared/read_only.py`
+# (which builds the module-level `read_only_replica` singleton on import) and
+# `features/auth/__init__.py` (`DEFAULT_KEYS_FILE`, `DEFAULT_TOKEN_FILE`).
+# Importing any of them while the real value is in place is enough to write to
+# the operator's live memory directory — no test body has to do anything wrong.
+# Measured on 2026-10-07 before this line existed: `~/.mcp-ariel-memory/replica`
+# held a 14 MB database and `sagas/` 15875 state files (63 MB).
+#
+# This has to run here, before pytest imports the first test module, because by
+# the time a fixture executes the constants above are already resolved.
+_OPERATOR_DATA_DIR = os.environ.get("MCP_MEMORY_DATA_DIR")
+SESSION_DATA_DIR = tempfile.mkdtemp(prefix="ariel-test-data-")
+os.environ["MCP_MEMORY_DATA_DIR"] = SESSION_DATA_DIR
+
 import pytest
 
 
@@ -54,10 +69,16 @@ def hermetic_global_db():
     cm (adaptive_threshold, DreamBuffer, ConsolidationEngine...) would
     otherwise read/write the real ~/.mcp-ariel-memory data dir. Mutating the
     singleton in place keeps those references valid.
+
+    The dir is the one already published as MCP_MEMORY_DATA_DIR in this file
+    (see the top): the module-level constants that resolve from it are created
+    on import, so this fixture cannot be what points them somewhere safe — it
+    can only agree with what was decided there. Its own teardown below is what
+    removes the directory and puts the operator's value back.
     """
     from shared.connection import connection_manager
 
-    session_dir = tempfile.mkdtemp(prefix="ariel-test-global-")
+    session_dir = SESSION_DATA_DIR
     original_dir = connection_manager.base_dir
     connection_manager.base_dir = Path(session_dir)
     connection_manager._conns.clear()  # drop any already-open real-dir handles
@@ -80,6 +101,13 @@ def hermetic_global_db():
         pass
     connection_manager.base_dir = original_dir
     connection_manager._conns.clear()
+    # Put the operator's value back: this process is not the only consumer of
+    # the variable, and leaving a deleted path published would be worse than
+    # never having set it.
+    if _OPERATOR_DATA_DIR is None:
+        os.environ.pop("MCP_MEMORY_DATA_DIR", None)
+    else:
+        os.environ["MCP_MEMORY_DATA_DIR"] = _OPERATOR_DATA_DIR
     # This fixture is the only thing that ever learns the path, so it is the
     # only thing that can remove it — same rule the eval harness had to learn
     # the hard way (one leaked directory per run, 972 of them / 1.6G in 48h).

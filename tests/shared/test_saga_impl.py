@@ -12,7 +12,7 @@ def _pin_master_key(monkeypatch):
     _secrets._master_cache.clear()
 
 
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock
 from pathlib import Path
 import tempfile
 
@@ -41,53 +41,57 @@ def engine(store):
 
 
 @pytest.mark.asyncio
-async def test_backup_saga_success(engine, temp_dir):
-    # Setup mock environment
-    with patch("pathlib.Path.home", return_value=temp_dir):
-        base = temp_dir / ".mcp-ariel-memory"
-        base.mkdir(parents=True)
-        db_file = base / DB_NAME
-        db_file.write_text("dummy database content")
+async def test_backup_saga_success(engine, temp_dir, monkeypatch):
+    # The saga resolves its base dir from MCP_MEMORY_DATA_DIR, which the suite
+    # now points at its own session dir (see tests/conftest.py), so patching
+    # `pathlib.Path.home` no longer decides anything: the variable wins. The
+    # test has to say where it wants its database instead of relying on the
+    # variable being unset.
+    base = temp_dir / ".mcp-ariel-memory"
+    base.mkdir(parents=True)
+    monkeypatch.setenv("MCP_MEMORY_DATA_DIR", str(base))
+    (base / DB_NAME).write_text("dummy database content")
 
-        steps = create_backup_saga()
-        state = SagaState(saga_id="backup_test", name="backup", context={})
+    steps = create_backup_saga()
+    state = SagaState(saga_id="backup_test", name="backup", context={})
 
-        # Execute
-        result = await engine.execute(state, steps)
+    # Execute
+    result = await engine.execute(state, steps)
 
-        # Verify
-        assert "backup_path" in result
-        backup_path = Path(result["backup_path"])
-        assert backup_path.exists()
-        assert (backup_path / DB_NAME).exists()
-        assert state.status == SagaStatus.COMPLETED
+    # Verify
+    assert "backup_path" in result
+    backup_path = Path(result["backup_path"])
+    assert backup_path.exists()
+    assert (backup_path / DB_NAME).exists()
+    assert state.status == SagaStatus.COMPLETED
 
 
 @pytest.mark.asyncio
-async def test_backup_saga_compensation(engine, temp_dir):
+async def test_backup_saga_compensation(engine, temp_dir, monkeypatch):
     # Setup mock environment where verification fails
-    with patch("pathlib.Path.home", return_value=temp_dir):
-        base = temp_dir / ".mcp-ariel-memory"
-        base.mkdir(parents=True)
-        db_file = base / DB_NAME
-        db_file.write_text("dummy database content")
+    base = temp_dir / ".mcp-ariel-memory"
+    base.mkdir(parents=True)
+    monkeypatch.setenv("MCP_MEMORY_DATA_DIR", str(base))
+    (base / DB_NAME).write_text("dummy database content")
 
-        steps = create_backup_saga()
-        # Force failure in second step
-        steps[1].action = AsyncMock(side_effect=ValueError("verify failed"))
+    steps = create_backup_saga()
+    # Force failure in second step
+    steps[1].action = AsyncMock(side_effect=ValueError("verify failed"))
 
-        state = SagaState(saga_id="backup_fail", name="backup", context={})
+    state = SagaState(saga_id="backup_fail", name="backup", context={})
 
-        # Execute
-        with pytest.raises(ValueError, match="verify failed"):
-            await engine.execute(state, steps)
+    # Execute
+    with pytest.raises(ValueError, match="verify failed"):
+        await engine.execute(state, steps)
 
-        # Verify compensation (backup dir removed)
-        assert state.status == SagaStatus.COMPENSATED
-        # We need to find the backup dir from context
-        backup_path_str = state.context.get("backup_path")
-        if backup_path_str:
-            assert not Path(backup_path_str).exists()
+    # Verify compensation (backup dir removed)
+    assert state.status == SagaStatus.COMPENSATED
+    # The backup has to have been made for its removal to mean anything; before
+    # this test named its own data dir the source was missing, the first step
+    # reported `skipped_no_source`, and this assertion never ran.
+    backup_path_str = state.context.get("backup_path")
+    assert backup_path_str, "the backup step must have produced a directory to compensate"
+    assert not Path(backup_path_str).exists()
 
 
 @pytest.mark.asyncio
