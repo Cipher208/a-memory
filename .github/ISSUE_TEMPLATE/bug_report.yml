@@ -10,8 +10,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: mcp-ariel-memory version
-      description: "Output of `pip show mcp-ariel-memory | grep Version`"
+      label: a-memory version
+      description: "Output of `pip show a-memory | grep Version`"
       placeholder: "1.0.0"
     validations:
       required: true

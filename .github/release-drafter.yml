@@ -5,9 +5,8 @@ template: |
 
   $CHANGES
 
-  ## Contributors
-
-  $CONTRIBUTORS
+  <!-- The body actually published comes from CHANGELOG.md — see
+       .github/workflows/release.yml. This draft is a working aid only. -->
 
 categories:
   - title: '🚀 Features'
@@ -36,7 +35,10 @@ categories:
     labels:
       - 'security'
 
-change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+# No `@$AUTHOR`: a commit author is a person, and this repository commits under
+# a global git identity that is not meant to appear in release text. The
+# `$CONTRIBUTORS` section was removed for the same reason.
+change-template: '- $TITLE (#$NUMBER)'
 change-title-escapes: '\<*_&'
 version-resolver:
   major:

@@ -27,11 +27,32 @@ jobs:
           pip install build
           python -m build
 
+      # The release body comes from CHANGELOG.md, never from generated notes.
+      # `generate_release_notes` built it out of PR titles and authors, which
+      # put a real committer identity into a public release ("@Cipher208 and
+      # Murat"). Notes written by hand in the CHANGELOG say what changed and
+      # why; a list of who touched it says neither. Failing here when the
+      # section is missing is deliberate — an empty body is better than a
+      # silently generated one, and the tag would be mis-built anyway.
+      - name: Take the release body from CHANGELOG.md
+        run: |
+          python - "${{ github.ref_name }}" > RELEASE_BODY.md <<'PY'
+          import re, sys
+          tag = sys.argv[1].lstrip("v")
+          text = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(rf"^## \[{re.escape(tag)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+                        text, re.M | re.S)
+          if not m:
+              sys.exit(f"CHANGELOG.md has no '## [{tag}]' section — add one before tagging")
+          print(m.group(1).strip())
+          PY
+          test -s RELEASE_BODY.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: RELEASE_BODY.md
 
       - name: Publish to PyPI
         env:
