@@ -1283,16 +1283,17 @@ async def miner_zero_results(cm: AsyncConnectionManager, layer: str) -> dict[str
     if not rows:
         return {"edges": 0}
     surfaced = 0
-    try:
-        from graph.epistemic import EpistemicGraph
+    # No try/except here, for the same reason `miner_embedding` has none: a
+    # failure that returns `{"edges": 0}` is indistinguishable from "there was
+    # nothing to surface", and this one logged at `debug`, which is invisible
+    # at the level this service actually runs at. Letting it escape reaches the
+    # handler in `graph_enrich` that records `edges: -1` with a warning.
+    from graph.epistemic import EpistemicGraph
 
-        g = EpistemicGraph(cm=cm, layer=layer)
-        for r in rows:
-            await g.find_or_add_entity(str(r["user_id"]), str(r["query"])[:300], "question")
-            surfaced += 1
-    except Exception:
-        logger.debug("zero-result surfacing failed", exc_info=True)
-        return {"edges": 0}
+    g = EpistemicGraph(cm=cm, layer=layer)
+    for r in rows:
+        await g.find_or_add_entity(str(r["user_id"]), str(r["query"])[:300], "question")
+        surfaced += 1
     return {"edges": surfaced}
 
 
