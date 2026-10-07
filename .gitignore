@@ -17,6 +17,8 @@ backups/
 exports/
 archives/
 *.log
+test_output.txt
+full_test_output.txt
 .env
 .venv/
 venv/

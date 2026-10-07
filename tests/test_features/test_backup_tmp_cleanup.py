@@ -1,6 +1,6 @@
 """backup_cron._cleanup_tmp — temp-dir test-artifact hygiene (2026-09-06 incident).
 
-Полный /tmp на tmpfs встал (pytest-of-murat 2.3G + ariel-test-global-*) и
+Полный /tmp на tmpfs встал (pytest-of-<user> 2.3G + ariel-test-global-*) и
 повесил локальный pre-push pytest-гейт. 06.10.2026 тот же tmpfs упёрся в
 пользовательскую квоту: записи падали с EDQUOT (-122) и у песочницы DSH
 отвалились все инструменты, потому что харнесс пишет туда свой вывод.
@@ -94,7 +94,7 @@ def test_cleanup_tmp_defaults_to_real_tempdir(tmp_path: Path, monkeypatch) -> No
     """Боевой вызов не передаёт tmp_root — умолчание обязано быть настоящим temp-каталогом.
 
     Инцидент 2026-10-01: TMPDIR указывал на /var/tmp, а чистка смотрела в /tmp —
-    4.4G (pytest-of-murat 3.4G + 74 ariel-eval-*) копились две недели незамеченными.
+    4.4G (pytest-of-<user> 3.4G + 74 ariel-eval-*) копились две недели незамеченными.
     Прежние тесты всегда передавали tmp_root=tmp_path, поэтому хардкод не исполнялся.
     rmtree заглушен: до исправления тест не должен трогать настоящий /tmp.
     """

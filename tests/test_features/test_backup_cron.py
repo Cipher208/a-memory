@@ -257,7 +257,7 @@ def test_nightly_backoff_survives_a_restart(tmp_path, monkeypatch) -> None:
 def test_failed_layer_does_not_record_the_cycle_as_done(tmp_path, monkeypatch) -> None:
     """Слой упал → цикл НЕ отмечается выполненным, и проход рапортует 'failed'.
 
-    Именно так `cycles_state.last_nightly` у Люси замер на 04.10 08:54: запись
+    Именно так `cycles_state.last_nightly` замер на 04.10 08:54: запись
     идёт после обоих слоёв, поэтому обрыв её не оставлял.
     """
     import json as _json

@@ -99,7 +99,33 @@ Issues = "https://github.com/Cipher208/a-memory/issues"
 Documentation = "https://cipher208.github.io/a-memory/"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+# Explicit, not `packages = ["."]`. The dot made the repository root the package
+# root, so the wheel shipped tests/ (115 files), docs/, .github/, uv.lock, the
+# Dockerfile and the raw pytest logs — a map of the project rather than the
+# project. Everything listed below is runtime code; anything missing here is a
+# file the installed package no longer has, so add new top-level packages here.
+only-include = [
+    "mcp_server",
+    "shared",
+    "features",
+    "rag",
+    "lifecycle",
+    "core",
+    "hooks",
+    "graph",
+    "wiki",
+    "alembic",
+    "config.py",
+    "config.yaml",
+    "py.typed",
+    "alembic.ini",
+]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "full_test_output.txt",
+    "test_output.txt",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -173,7 +199,7 @@ ignore = [
     "N817",     # camelcase-as-acronym (standard for MM)
     "NPY002",   # legacy-numpy-random (standard here)
     "B023",     # loop-variable-non-binding (standard pattern)
-    "D100",     # Missing docstring in public module (handled by Lucy)
+    "D100",     # Missing docstring in public module
     "D101",     # Missing docstring in public class
     "D102",     # Missing docstring in public method
     "D103",     # Missing docstring in public function

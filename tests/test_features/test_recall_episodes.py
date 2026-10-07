@@ -1,4 +1,4 @@
-"""Recall must surface query-relevant L3 episodes (Elli 16.09 D3).
+"""Recall must surface query-relevant L3 episodes (2026-09-16, D3).
 
 Semantic recall searches wiki-only rag_pages; recent session work lives in
 episodes and was invisible (persona/leak work never surfaced).

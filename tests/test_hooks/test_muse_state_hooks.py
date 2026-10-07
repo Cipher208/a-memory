@@ -92,7 +92,7 @@ async def test_state_entered_saves_episode(ensure_schema: Path, registered_hooks
         "state_entered",
         "agent",
         "u1",
-        {"state": "mommy", "intensity": 0.4, "trigger": "lily joined"},
+        {"state": "mommy", "intensity": 0.4, "trigger": "persona joined"},
         mem,
         _FakeGraph(),
     )

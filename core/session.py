@@ -44,7 +44,7 @@ def is_service_session(session: Any) -> bool:
 
     Single source for the rule: service rows may surface (silence is worse),
     but must always be labeled so they never pose as "what I was doing"
-    (Elli 16.09 D2/D5).
+    (design review 16.09, D2/D5).
     """
     return int(getattr(session, "message_count", 0) or 0) <= 0
 

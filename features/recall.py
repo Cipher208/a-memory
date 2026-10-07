@@ -122,7 +122,7 @@ async def _collect_session(mem: Any, user_id: str, cutoff: float) -> list[tuple[
 
 
 async def _collect_episodes(mem: Any, user_id: str, query: str, limit: int = 5) -> list[_Candidate]:
-    """Axis episodes: query-relevant L3 episodes, newest first (Elli 16.09 D3).
+    """Axis episodes: query-relevant L3 episodes, newest first (design review 16.09, D3).
 
     Semantic recall searches wiki-only rag_pages; recent session work lives
     in episodes and was invisible to it. EpisodicMemory.search is tokenized

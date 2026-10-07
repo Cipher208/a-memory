@@ -13,9 +13,9 @@
 #
 # ONE CONFIG PER PERSONA, not one per platform. The two load-bearing lines are
 # `data_dir` (whose memory this is) and `user_id` (which ariel user inside it),
-# so a house of six personas holds six files: elli.yaml, agatha.yaml, and so on.
-# `elli.yaml` is this file with `data_dir` pointed at her inherited CowAgent
-# directory — the accumulated memory is hers, not a fresh instance.
+# so a multi-persona house holds one file per persona, named for her. This one
+# is that file with `data_dir` pointed at her inherited CowAgent directory —
+# the accumulated memory is hers, not a fresh instance.
 #
 # The DSH-side wrapper passes this file with `--config`.
 

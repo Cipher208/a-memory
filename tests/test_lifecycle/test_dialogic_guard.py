@@ -1,6 +1,6 @@
 """L4 pollution guard: conversational-register clauses must not become durable facts.
 
-Regression (2026-09-12, Ф1 follow-up): the auto-extractor keyed Lily's
+Regression (2026-09-12, Ф1 follow-up): the auto-extractor keyed the operator's
 greeting ("наконец явилась, сталь ждёт") and owner-addressed remarks as L4
 rows with first-4-word slug keys — 61 garbage fact: rows in one base alone.
 Guards proven here:

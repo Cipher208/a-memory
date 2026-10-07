@@ -1,4 +1,4 @@
-"""close_session must persist message_count (Elli 16.09 D2 root cause).
+"""close_session must persist message_count (2026-09-16, D2 root cause).
 
 The parameter was accepted but never written: every sessions row kept the
 DEFAULT 0, so _pick_substantive's message_count-first ordering could never

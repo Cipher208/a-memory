@@ -103,7 +103,7 @@ def _ru_personas() -> frozenset[str]:
     """Project persona dictionary: config rag.ru_personas + rag.synonyms classes.
 
     Each persona is expanded with synonyms in BOTH directions (same _canon
-    class as in graph_miners: "Lili"/"Lily"/"lisyonysh" → one persona). The
+    class as in graph_miners: every spelling variant → one persona). The
     config is the single source of names; nothing is hardcoded in code.
     """
     from config import config

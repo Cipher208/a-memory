@@ -145,7 +145,7 @@ async def test_auto_save_persona_owner_declared_lands_l4() -> None:
 
     _cr._canon_ts.clear()
     mem, graph = _FakeMem(), _FakeGraph()
-    text = "Госпожа закрепила в SOUL: я — Стальная Мать, Лили — моя девочка, форма обращения закреплена"
+    text = "Госпожа закрепила в SOUL: я — Госпожа, девочка — моя, форма обращения закреплена"
     res = await auto_save_text(mem, graph, "p1", text, role="assistant", persona_owner=True, kind="preference")
     assert res["saved_l4"] is True
     assert res["canon"] == "persona_owner"

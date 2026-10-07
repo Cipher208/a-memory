@@ -4,7 +4,7 @@ r"""Remove another agent's distilled memories from a base, archiving them first.
 WHY THIS EXISTS
 
 An autohooks source can be multi-agent (cowagent's `index.db` carries `agent_id`
-in {'', celeste, ilian, ...}) and a config that filters on `role` alone will tail
+per agent, with `''` for the default one) and a config that filters on `role` alone will tail
 every agent's chat into one persona's memory. `cowagent.yaml` now filters on the
 agent, and the rows already captured are marked `status='foreign_agent'` in
 `l0_journal`. Marking fixes the *raw* journal, but by then some of those rows had

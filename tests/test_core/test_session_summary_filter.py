@@ -1,6 +1,6 @@
 """Service sessions are labeled, never silent, never posing as work.
 
-Elli 16.09 D5: the audit row led every recall block as "last session".
+2026-09-16, D5: the audit row led every recall block as "last session".
 Rule (single source: is_service_session): zero-message runs surface with a
 [service] tag; substantive rows stay untagged.
 """

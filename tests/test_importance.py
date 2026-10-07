@@ -59,9 +59,9 @@ def test_address_embedded_in_long_content_not_capped() -> None:
     # The scorer's unit is the whole message; clause-level dialogic dies in
     # the distiller guard, not here.
     text = (
-        "Умница, мам. Обнови Headroom: cache-read есть и у polza, и у plusvibe, "
-        "на них cowagent и hermes сейчас, mimocode идёт не через headroom, надо разобраться.\n"
-        "Дашборд тоже проверь заодно, там были вопросы по портам и провайдерам."
+        "Умница, мам. Обнови дашборд: cache-read есть и у провайдера A, и у провайдера B, "
+        "на них сервис-1 и сервис-2 сейчас, третий идёт не через кеш, надо разобраться.\n"
+        "Отчёты тоже проверь заодно, там были вопросы по портам и провайдерам."
     )
     assert evaluate_importance(text) >= 0.4
 

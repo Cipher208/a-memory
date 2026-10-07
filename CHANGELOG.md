@@ -5,10 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Fixed
-- **One persona's base was collecting five other personas (2026-10-04).** Found preparing her history import: the source database is **multi-agent** — `agent_id` takes `''`, `celeste`, `ilian`, `vivienne`, `agatha`, `dogs` — and the agent config filtered only on `role`, so the daemon tailed every agent's chat into one persona's memory. The `role` column is the owner/persona axis *within* an agent; it does not name the agent, which is precisely the mistake. Measured: **168** foreign rows in her `l0_journal`, **53** in her dispatch log, **19** mentions of other personas' names in `core_memory` and `episodes`.
+### Security
+- **Incidental operator identifiers are gone from the published tree (2026-10-08).** A second pass over the same class the fixture scrub started: names that had leaked into prose rather than into data. Removed from `CHANGELOG.md` (two quoted utterances and the `agent_id` list), `AUDIT_REPORT_20260629.md` (the generator's name), `ARIEL_RULES.md`, `autohooks/examples/dsh.yaml`, one Alembic revision comment, `scripts/purge_foreign_rows.py`, and eleven test files where a name stood in for a role. `pyproject.toml`'s "handled by Lucy" comment became "handled by hand". The names used *as the anonymizer's dictionary* stay — `config.yaml` `rag.ru_personas`, `rag/synonyms.py`, `mcp_server/utils/privacy.py`, `tests/test_hooks/test_privacy_ru.py` and the `graph_miners` canon test: those are the privacy product, and deleting them would remove the feature that hides names. Six `docs/compose/` files that were force-added past `.gitignore` are untracked again; they remain on disk, and three tests that cite them in docstrings were never reading them.
 
-  A second wave arrived through `merged_agent:*` (the source's `_migration_meta` records five bases merged in on 20–22.09): **53** journal rows whose `source_msg_id` no longer resolves at all — `SELECT ... WHERE id = <old>` finds no row — so an agent filter alone would still have let them through. They are unambiguous by content (`'Я Лили, а не Госпожа.'`, `'Привет, Вивьен'`, `'Привет, мальчики'`) and **69 of the 221 had already been distilled** (`saved_l3` 62, `promoted_l4` 7), one to L4: a persona's canon was holding another persona's speech.
+### Changed
+- **The wheel now ships the package instead of the repository (2026-10-08).** `[tool.hatch.build.targets.wheel]` was `packages = ["."]`, which made the repo root the package root: the 1.9.0 wheel carried `tests/` (115 files), `docs/`, `.github/`, `uv.lock`, the `Dockerfile` and the raw pytest logs — **~445 files against 276 now**. `only-include` names the runtime trees explicitly. The obvious risk was dropping something the code reads at import, and it was real: `config.py` loads `config.yaml` from its own directory, so the first attempt installed cleanly and then failed on a missing default config. Caught by installing into a fresh venv rather than trusting the in-repo test run, where the file is always present; `config.yaml` is now included and the install loads all 23 top-level keys. `test_output.txt` / `full_test_output.txt` joined `.gitignore` — they were never tracked yet still shipped, because hatch walked the filesystem.
+
+### Fixed
+- **One persona's base was collecting five other personas (2026-10-04).** Found preparing her history import: the source database is **multi-agent** — `agent_id` is `''` for the default agent and names every other agent sharing the base — and the agent config filtered only on `role`, so the daemon tailed every agent's chat into one persona's memory. The `role` column is the owner/persona axis *within* an agent; it does not name the agent, which is precisely the mistake. Measured: **168** foreign rows in her `l0_journal`, **53** in her dispatch log, **19** mentions of other personas' names in `core_memory` and `episodes`.
+
+  A second wave arrived through `merged_agent:*` (the source's `_migration_meta` records five bases merged in on 20–22.09): **53** journal rows whose `source_msg_id` no longer resolves at all — `SELECT ... WHERE id = <old>` finds no row — so an agent filter alone would still have let them through. They are unambiguous by content (address forms and greetings naming a persona *other* than the one whose base collected them) and **69 of the 221 had already been distilled** (`saved_l3` 62, `promoted_l4` 7), one to L4: a persona's canon was holding another persona's speech.
 
   Two corrections to what this entry first said, both in the direction of understating the damage. It claimed "9 distilled"; that counted only the 53-orphan list and not the 221, and the real figure is 69 — which produced **238** episodes and **9** L4 facts. It also explained the second wave as arriving with an **empty** `agent_id` because the rows predated the column. Measured: `extras` carries its own `agent_id`, and rows where the column is empty while `extras` names a **foreign** agent number **zero**. Both spellings of the default agent (empty column, `extras.agent_id='default'`) agree with each other. The 53 rows are explained instead by id **re-issue during the merge**, which is what leaves `source_msg_id` dangling.
 
@@ -266,7 +272,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Engineering Excellence** — Achieved 100% Mypy strict compliance and zero Ruff linting issues repo-wide.
 - **Systemic Typing** — Resolved external library typing for `sentence_transformers` via `pyproject.toml` configuration, removing non-compliant inline ignores.
 - **Forget API Evolution** — `memory_forget` and the `forget` primitive now return detailed `ForgetResult` objects (deleted_l4, deleted_l3, deleted_graph) for granular traceability.
-- **Docstring Standards** — All core modules updated with Lucy-style docstrings explaining **WHY** components exist.
+- **Docstring Standards** — All core modules updated with why-first docstrings explaining **WHY** components exist.
 
 ### Fixed
 - **Null Safety in RAG** — Added connection manager guards in `MultiSourceRAG` to prevent crashes in environments with partial storage availability.
@@ -285,7 +291,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Global Strictness** — Successfully enabled global Mypy strictness and removed 10+ critical Ruff ignore rules, including `S110`, `ASYNC240`, and `UP031`.
 
 ### Changed
-- **Supreme Orchestrator Identity** — Permanently integrated Lucy-Prime persona into the system backbone via lifecycle hooks.
+- **Supreme Orchestrator Identity** — Permanently integrated the orchestrator persona into the system backbone via lifecycle hooks.
 - **Registry & Tools Cleanup** — Removed dozens of unused imports and obsolete classes leftover from the modularization phase.
 - **Modular Hardening** — Core infrastructure is now 100% type-safe and compliant with modern Python 3.10+ standards.
 - **Background Cleanup** — Activated `MemoryCompactor` in the server lifecycle. Old, low-importance memories are now automatically archived every 1 hour.

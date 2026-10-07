@@ -338,8 +338,8 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
 def _entities(text: str, syn: dict[str, list[str]], nlp: Any = None) -> set[str]:
     """Entities of a text: synonym-dictionary canon classes + spaCy ORG/GPE (Latin).
 
-    Canonicalization via _canon — full class in both directions: 'Lili'/'Lily'/
-    'lisenyonshchik' collapse into one entity.
+    Canonicalization via _canon — full class in both directions: every spelling variant
+    collapses into one entity.
     """
     vocab = set(syn) | {v for vs in syn.values() for v in vs}
     found = {_canon(w, syn) for w in _TOKEN_RE.findall(text.lower()) if w in vocab}
