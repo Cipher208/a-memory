@@ -22,6 +22,12 @@ full_test_output.txt
 .env
 .venv/
 venv/
+.venv-embeddings/
+.mypy_cache/
+.ruff_cache/
+.skylos/
+.hypothesis/
+.vscode/
 
 .ai-memory/
 docs/compose/
