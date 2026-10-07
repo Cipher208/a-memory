@@ -1025,17 +1025,28 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
 
     crosscheck = bool(config.get("graph", "embedding_crosscheck", default=False))
 
-    try:
-        # A-MEM rich embedding: f"{content} {tags}"; canonicalization (_canon from T2)
-        # applies to tags so that name/technology variants land in one meaning
-        # cache key. Cache key = raw content — reuses vectors seeded by the ingestor.
-        # anomaly:* tags (addendum 10) never enter the text — a flag does not
-        # change the node's vector.
-        vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
-        binary = [embed_to_binary(v, dim=len(v)) for v in vecs]
-        bits = [_bits_int(b) for b in binary]
-    except Exception:
-        return {"edges": 0}  # embedding backend unavailable (no numpy/model) — miner skipped
+    # No try/except here, on purpose. This used to be
+    # `except Exception: return {"edges": 0}` with a comment claiming it only
+    # covered "no numpy/model" — two things that are both wrong. `embed_texts`
+    # does not raise when no model is available (it falls back to hash vectors,
+    # see `_compute_missing_embeddings`), and `embed_to_binary` has its own
+    # numpy-less path, so the only exceptions reaching here are real failures:
+    # a dead or slow embedding service above all.
+    #
+    # Swallowing them made a six-day outage of this one miner invisible: the
+    # graph lost `semantic_overlap` while the log stayed empty and this miner
+    # still reported a normal zero. `graph_enrich` already knows how to report
+    # a failed miner (`{"edges": -1}` plus a warning) and that branch is only
+    # reachable if the exception is allowed to escape.
+    #
+    # A-MEM rich embedding: f"{content} {tags}"; canonicalization (_canon from T2)
+    # applies to tags so that name/technology variants land in one meaning
+    # cache key. Cache key = raw content — reuses vectors seeded by the ingestor.
+    # anomaly:* tags (addendum 10) never enter the text — a flag does not
+    # change the node's vector.
+    vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
+    binary = [embed_to_binary(v, dim=len(v)) for v in vecs]
+    bits = [_bits_int(b) for b in binary]
 
     # S17 addendum 10: bit-degenerate vectors (0 bits — text without significant
     # tokens, junk from L3 dumps) → flagged `anomaly:junk_vector`, cleanup candidate.

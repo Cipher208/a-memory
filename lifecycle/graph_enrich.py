@@ -324,6 +324,15 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
             logger.warning("miner %s failed: %s", name, exc)
             miners[name] = {"edges": -1, "error": str(exc)[:200]}  # -1 = failure (edge counts are non-negative)
 
+    # Per-miner edge counts, on one line. The phase timings above already say
+    # which miner ran; they cannot say that a miner ran and produced nothing.
+    # A miner returning a flat 0 used to be indistinguishable from a healthy
+    # miner with no work, and on 2026-10-05 that hid a six-day outage of
+    # `embedding`: `semantic_overlap` stayed frozen while every other relation
+    # kept growing. `-1` here means the miner failed outright and the reason is
+    # on the warning line above.
+    logger.info("miner edges: layer=%s %s", layer, " ".join(f"{name}={res.get('edges')}" for name, res in miners.items()))
+
     # S17 addendum 11: HDBSCAN clusters of MIB vectors + cross-check against louvain — a
     # report section behind a flag (graph.embed_clusters, default off — the report shape stays stable).
     from config import config
