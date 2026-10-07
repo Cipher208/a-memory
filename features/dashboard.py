@@ -182,6 +182,7 @@ class Dashboard:
 
         um = self.mm.user_memory(user_id)
         am = self.mm.agent_memory(user_id)
+        ug_edges = await ug.count_edges(user_id)
 
         return {
             "l1_buffer": um.l1.size(),
@@ -190,6 +191,9 @@ class Dashboard:
             "l4_facts": await um.l4.count(user_id),
             "wiki_pages": await uw.count(user_id),
             "graph_nodes": await ug.count_nodes(user_id),
+            "graph_edges": ug_edges["total"],
+            "graph_edges_live": ug_edges["live"],
+            "graph_edges_dead": ug_edges["dead"],
             "agent_l1": am.l1.size(),
             "agent_l2": await am.l2.count_sessions(user_id),
             "agent_l3": await am.l3.count(user_id),

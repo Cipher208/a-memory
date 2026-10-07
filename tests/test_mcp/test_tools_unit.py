@@ -158,9 +158,14 @@ async def test_stats(monkeypatch):
     wiki = app.user_wiki
     wiki.count = AsyncMock(return_value=0)
     graph = app.user_graph
-    graph.count_nodes = AsyncMock(return_value=0)
+    graph.count_nodes = AsyncMock(return_value=7)
+    graph.count_edges = AsyncMock(return_value={"total": 12, "live": 9, "dead": 3})
     result = await memory_stats(layer="user", user_id="u1", ctx=ctx)
     assert isinstance(result, dict)
+    assert result["graph_nodes"] == 7
+    assert result["graph_edges"] == 12
+    assert result["graph_edges_live"] == 9
+    assert result["graph_edges_dead"] == 3
 
 
 # ── memory_graph_edges direction (B1.1 backlinks) ──

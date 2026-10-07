@@ -76,9 +76,29 @@ async def _dream_nrem(conn: Any, now: float) -> dict[str, int]:
 
     Freshly co-fired heuristic edges +0.05, stale inactive ones −0.01;
     weight < floor — prune.
+
+    Only the two actionable age bands are read, and the bounds are decided in
+    SQL. An edge between a day and a month old is most of the graph and nothing
+    happens to it, so pulling those rows into Python only to compute an age and
+    fall through was the bulk of the work: on the busiest house database this
+    read 155 486 heuristic edges to touch a few thousand. The comparison is the
+    same one the loop made — `created_at < now − 30 d` is stale, and
+    `created_at >= now − 1 d` is fresh, inclusive, matching `age_days <= 1`.
+
+    A row with a NULL `created_at` is now skipped rather than raising
+    `float(None)`; no house database has one, and "unknown age" is not a reason
+    to decay, boost, or prune an edge.
     """
+    stale_before = now - NREM_STALE_DAYS * 86400.0
+    fresh_from = now - NREM_FRESH_DAYS * 86400.0
     decayed = pruned = boosted = 0
-    for r in await _rows(conn, "SELECT source_id, target_id, relation, weight, created_at FROM epi_edges WHERE tags LIKE '%heuristic:%'"):
+    rows = await _rows(
+        conn,
+        "SELECT source_id, target_id, relation, weight, created_at FROM epi_edges"
+        " WHERE tags LIKE '%heuristic:%' AND (created_at < ? OR created_at >= ?)",
+        (stale_before, fresh_from),
+    )
+    for r in rows:
         w = float(r["weight"])
         age_days = (now - float(r["created_at"])) / 86400.0
         key = (r["source_id"], r["target_id"], r["relation"])
