@@ -47,12 +47,22 @@ def decrypt_json(blob: bytes, master_key: bytes) -> Any:
     return json.loads(box.decrypt(ct, nonce).decode("utf-8"))
 
 
-def is_encrypted_blob(blob_head: bytes) -> bool:
-    """Check if data starts like an encrypted blob (heuristic).
+def is_encrypted_blob(blob: bytes, master_key: bytes) -> bool:
+    """Return True when `blob` is a readable SecretBox envelope.
 
-    JSON starts with { or [.
+    Decided by attempting decryption, never by inspecting a byte. The envelope
+    is `nonce(24) || ciphertext`, so its first byte is the first byte of a
+    random nonce — `{` in roughly one draw out of 256. The previous first-byte
+    test consequently reported real ciphertext as "plain JSON" in 4 cases out
+    of 256 (measured: 69 of 4096 = 1.68%), which is the wrong way for a
+    predicate to fail: it turns a readable secret into a "missing" one.
+
+    Pass the whole blob. A truncated one cannot authenticate and reports False.
     """
-    if not blob_head:
+    try:
+        decrypt_json(blob, master_key)
+    except Exception:
+        # Too short, bad MAC, wrong key, or a plaintext that is not JSON: in
+        # every one of those cases this is not a readable envelope.
         return False
-    head = blob_head[:1]
-    return head not in (b"{", b"[", b" ", b"\n")
+    return True

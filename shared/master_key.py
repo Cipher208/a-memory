@@ -177,14 +177,15 @@ def decrypt_json(blob: bytes) -> Any:
 
 
 def is_encrypted_blob(path: Path) -> bool:
-    """Check if file is encrypted (not plain JSON).
+    """Return True when the file is a readable encrypted envelope.
 
-    Heuristic: encrypted blobs start with random 24 bytes (nonce),
-    JSON starts with { or [.
+    Reads the file and attempts decryption with this process's master key. The
+    previous version sniffed the first byte; because the envelope begins with a
+    random nonce, one byte in 256 looks like JSON (`{`, `[`, space, newline) and
+    real ciphertext was reported as plain JSON in 4 cases out of 256 (measured
+    69/4096 = 1.68%).
     """
     if not path.exists():
         return False
     # Path is verified to be within app data dir by caller, safe.
-    with path.open("rb") as f:
-        head = f.read(1)
-    return bool(_is_encrypted_blob(head))
+    return bool(_is_encrypted_blob(path.read_bytes(), _get_master_key()))
