@@ -63,3 +63,75 @@ async def test_add_edge_backcompat_no_tags(hermetic_graph):
     dst = await g.add_node("u1", "b", "fact")
     await g.add_edge(src, dst, "knows")  # no tags — old call sites keep working
     assert True
+
+
+# ── count_edges: the graph's edge numbers, split live/dead ──
+
+
+async def test_count_edges_splits_live_and_dead(hermetic_graph):
+    """A zeroed weight is counted as dead, not dropped and not mixed into live.
+
+    Zero is what `lateral_inhibition` writes and what `_insert_edge` later
+    overwrites, so it must be visible as its own number: reporting only a total
+    would hide that most of a graph can be sitting at zero.
+    """
+    g, tmp = hermetic_graph
+    a = await g.add_node("u1", "узел a", "fact")
+    b = await g.add_node("u1", "узел b", "fact")
+    c = await g.add_node("u1", "узел c", "fact")
+    await g.add_edge(a, b, "knows", weight=0.8)
+    await g.add_edge(b, c, "knows", weight=0.8)
+
+    conn = sqlite3.connect(tmp / "memory.db")
+    conn.execute("UPDATE epi_edges SET weight=0 WHERE source_id=? AND target_id=?", (b, c))
+    conn.commit()
+    conn.close()
+
+    assert await g.count_edges("u1") == {"total": 2, "live": 1, "dead": 1}
+
+
+async def test_count_edges_is_zeroed_graph(hermetic_graph):
+    """No edges at all reports zeros rather than raising or returning None."""
+    g, _ = hermetic_graph
+    await g.add_node("u1", "одинокий узел", "fact")
+    assert await g.count_edges("u1") == {"total": 0, "live": 0, "dead": 0}
+
+
+async def test_count_edges_uses_source_node_layer(hermetic_graph):
+    """epi_edges has no layer column, so an edge belongs to its SOURCE node's layer."""
+    g, tmp = hermetic_graph
+    user_src = await g.add_node("u1", "user source", "fact")
+    user_dst = await g.add_node("u1", "user target", "fact")
+    await g.add_edge(user_src, user_dst, "knows")
+
+    agent_src = await g.add_node("u1", "agent source", "fact")
+    agent_dst = await g.add_node("u1", "agent target", "fact")
+    await g.add_edge(agent_src, agent_dst, "knows")
+    conn = sqlite3.connect(tmp / "memory.db")
+    conn.execute("UPDATE epi_nodes SET layer='agent' WHERE node_id IN (?,?)", (agent_src, agent_dst))
+    conn.commit()
+    conn.close()
+
+    from graph.epistemic import EpistemicGraph
+
+    assert await g.count_edges("u1") == {"total": 1, "live": 1, "dead": 0}
+    assert await EpistemicGraph(layer="agent", cm=connection_manager).count_edges("u1") == {"total": 1, "live": 1, "dead": 0}
+
+
+async def test_count_edges_ignores_edges_whose_source_node_is_gone(hermetic_graph):
+    """An orphan edge is in no bucket rather than guessed into one."""
+    g, tmp = hermetic_graph
+    a = await g.add_node("u1", "a", "fact")
+    b = await g.add_node("u1", "b", "fact")
+    orphan = await g.add_node("u1", "orphan", "fact")
+    await g.add_edge(a, b, "knows")
+    await g.add_edge(orphan, b, "knows")
+
+    conn = sqlite3.connect(tmp / "memory.db")
+    conn.execute("DELETE FROM epi_nodes WHERE node_id=?", (orphan,))
+    conn.commit()
+    rows = conn.execute("SELECT COUNT(*) FROM epi_edges").fetchone()[0]
+    conn.close()
+
+    assert rows == 2, "ребро осталось в таблице"
+    assert await g.count_edges("u1") == {"total": 1, "live": 1, "dead": 0}

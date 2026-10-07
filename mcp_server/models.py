@@ -59,6 +59,9 @@ class StatsResult(BaseModel):
     l4_facts: int = Field(description="L4 fact count")
     wiki_pages: int = Field(description="Wiki page count")
     graph_nodes: int = Field(description="Graph node count")
+    graph_edges: int = Field(default=0, description="Graph edge count (all rows)")
+    graph_edges_live: int = Field(default=0, description="Graph edges with weight > 0")
+    graph_edges_dead: int = Field(default=0, description="Graph edges with weight <= 0 (revivable, not yet pruned)")
     avg_session_quality: float | None = Field(default=None, description="Average session quality score (0-100) over scored sessions")
     recall_count: int = Field(default=0, description="Total recall (dream) calls for the user")
 

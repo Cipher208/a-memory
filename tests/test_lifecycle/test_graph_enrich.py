@@ -196,6 +196,35 @@ async def test_dream_nrem_decays_and_prunes_weak_edges(graph, no_miners):
 
 
 @pytest.mark.asyncio
+async def test_dream_nrem_leaves_midlife_edges_alone(graph, no_miners):
+    """An edge between a day and a month old is neither boosted nor decayed.
+
+    This is the band the pass now filters out in SQL instead of reading every
+    heuristic edge and falling through in Python. If the bounds were wrong the
+    edge would come back changed, so the untouched weight is the assertion that
+    narrowing the read kept the same behaviour.
+    """
+    ids = await _dream_graph(graph)
+    conn = await connection_manager.get("memory.db")
+    await _age_edge(conn, ids["a"], ids["b"], days=10)
+    await _age_edge(conn, ids["b"], ids["c"], days=10, weight=0.42)
+    await conn.commit()
+
+    from lifecycle.graph_enrich import graph_enrich
+
+    result = await graph_enrich(layer="user")
+    dream = result["dream"]
+
+    rows = await (await conn.execute("SELECT source_id, target_id, weight FROM epi_edges")).fetchall()
+    weights = {(r["source_id"], r["target_id"]): float(r["weight"]) for r in rows}
+    assert weights[(ids["a"], ids["b"])] == pytest.approx(0.6), "ребро в 10 суток не усилено и не ослаблено"
+    assert weights[(ids["b"], ids["c"])] == pytest.approx(0.42), "ребро в 10 суток не усилено и не ослаблено"
+    # `nrem_decayed` folds in boosts (see the dream result builder), so a zero here
+    # means neither band matched anything.
+    assert dream["nrem_decayed"] == 0 and dream["nrem_pruned"] == 0, f"средний возраст вне компетенции NREM, dream={dream}"
+
+
+@pytest.mark.asyncio
 async def test_dream_rem_bridges_isolated_duplicates(graph, no_miners):
     ids = await _dream_graph(graph)
     conn = await connection_manager.get("memory.db")

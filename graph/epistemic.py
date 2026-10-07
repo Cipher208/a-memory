@@ -317,6 +317,41 @@ class EpistemicGraph:
         row = await cur.fetchone()
         return row[0] if row else 0
 
+    async def count_edges(self, user_id: str | None = None) -> dict[str, int]:
+        """Count this layer's edges, split into live and dead by weight.
+
+        Returns `{"total", "live", "dead"}`.
+
+        `epi_edges` carries no `layer` column, so an edge belongs to the layer
+        of its SOURCE node — the same convention `memory_graph_edges` already
+        uses. An edge whose source node is gone is counted by none of the three
+        numbers rather than guessed into one.
+
+        "Dead" is `weight <= 0`, not `weight < NREM_FLOOR`: measured on all
+        three house databases, only 0.1% of edges fall strictly between zero and
+        the 0.05 floor, so the coarse split is the accurate one. A dead edge is
+        not garbage — it is the resting state from which the next miner pass
+        revives it (see `_insert_edge`), which is why nothing prunes zero
+        eagerly.
+        """
+        conn = await self._cm.get(DB_NAME)
+        where = "s.layer = ?"
+        params: tuple[Any, ...] = (self.layer,)
+        if user_id:
+            where += " AND s.user_id = ?"
+            params = (self.layer, user_id)
+        cur = await conn.execute(
+            "SELECT COUNT(*),"
+            " COALESCE(SUM(CASE WHEN e.weight > 0 THEN 1 ELSE 0 END), 0),"
+            " COALESCE(SUM(CASE WHEN e.weight <= 0 THEN 1 ELSE 0 END), 0)"
+            f" FROM epi_edges e JOIN epi_nodes s ON e.source_id = s.node_id WHERE {where}",
+            params,
+        )
+        row = await cur.fetchone()
+        if not row:
+            return {"total": 0, "live": 0, "dead": 0}
+        return {"total": int(row[0]), "live": int(row[1]), "dead": int(row[2])}
+
     async def delete_nodes_older_than(self, user_id: str, cutoff: float) -> int:
         """Delete this layer's nodes created after cutoff; cleans tags/edges."""
         sql_ids = "SELECT node_id FROM epi_nodes WHERE layer=? AND user_id=? AND created_at > ?"
