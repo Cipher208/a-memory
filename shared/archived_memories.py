@@ -10,6 +10,30 @@ from shared.constants import DB_NAME
 class ArchivedMemories:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
+        self._ready = False
+
+    async def ensure(self) -> None:
+        """Create the table if it is not there yet, once per instance.
+
+        Same shape as `DreamBuffer.ensure`, and for the same reason: this class
+        is constructed in several places that never run migrations, so a method
+        that touches the table has to be able to bring it into existence.
+
+        Why it was needed: `archive()` and `get_archived()` used to assume the
+        table existed. On a database that had run the migration it did, which
+        hid the problem — `tests/test_shared/test_shared.py::test_archived_memories`
+        passed only when another test had migrated the shared session database
+        first. Run alone, or with `-p no:randomly`, it failed with
+        `no such table: archived_memories`. A test that needs a neighbour to
+        pass is not testing the class.
+        """
+        if self._ready:
+            return
+        conn = await self._cm.get(DB_NAME)
+        cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(archived_memories)")).fetchall()]
+        if not cols:
+            await self._init_db()
+        self._ready = True
 
     async def _init_db(self) -> None:
         await self._cm.execute_script(
@@ -36,6 +60,7 @@ class ArchivedMemories:
         original_id: int | None = None,
         reason: str = "manual",
     ) -> int:
+        await self.ensure()
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason) VALUES (?, ?, ?, ?, ?, ?)",
@@ -46,6 +71,7 @@ class ArchivedMemories:
         return int(last_id) if last_id is not None else 0
 
     async def get_archived(self, user_id: str = "default", limit: int = 50) -> list[dict[str, Any]]:
+        await self.ensure()
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
             "SELECT * FROM archived_memories WHERE user_id=? ORDER BY archived_at DESC LIMIT ?",
@@ -64,11 +90,13 @@ class ArchivedMemories:
         ]
 
     async def count(self, user_id: str = "default") -> int:
+        await self.ensure()
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM archived_memories WHERE user_id=?", (user_id,))).fetchone()
         return int(row[0]) if row else 0
 
     async def restore(self, archived_id: int) -> dict[str, Any] | None:
+        await self.ensure()
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT * FROM archived_memories WHERE id=?", (archived_id,))).fetchone()
         if row:
