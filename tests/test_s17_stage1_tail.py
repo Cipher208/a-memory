@@ -243,6 +243,35 @@ async def test_zero_result_single_hit_not_surfaced(migrated_cm) -> None:
     assert res["edges"] == 0, "один провал — не сигнал"
 
 
+@pytest.mark.asyncio
+async def test_zero_result_miner_lets_a_failure_escape(migrated_cm, monkeypatch) -> None:
+    """Сбой обязан выйти наружу, а не стать нулём с записью в `debug`.
+
+    07.10.2026: здесь был второй такой же глушитель, как в `miner_embedding` —
+    `except Exception` писал в `debug` (невидимо на рабочем уровне) и возвращал
+    `{"edges": 0}`, то есть «нечего выносить». Договор один на всех шахтёров:
+    ноль — это работа, которая не нашлась, а сбой пусть ловит `graph_enrich`.
+    """
+    from graph.epistemic import EpistemicGraph
+    from lifecycle.graph_miners import log_zero_result, miner_zero_results
+    from shared.constants import DB_NAME
+
+    cm = migrated_cm
+    conn = await cm.get(DB_NAME)
+    await conn.execute("DELETE FROM recall_zero_results")
+    await conn.commit()
+    for _ in range(2):
+        await log_zero_result(cm, "user", "s17zr3", "провал запроса, который надо вынести наверх")
+
+    async def _boom(self, *args, **kwargs):
+        raise RuntimeError("find_or_add_entity is down")
+
+    monkeypatch.setattr(EpistemicGraph, "find_or_add_entity", _boom)
+
+    with pytest.raises(RuntimeError, match="find_or_add_entity is down"):
+        await miner_zero_results(cm, "user")
+
+
 # ── 7. counter-signal алиасы ─────────────────────────────────────────────────
 
 
