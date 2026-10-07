@@ -565,6 +565,30 @@ async def test_miner_embedding_skips_tool_junk(db):
 
 
 @pytest.mark.asyncio
+async def test_miner_embedding_lets_a_backend_failure_escape(db, monkeypatch):
+    """Сбой эмбеддингов обязан выйти наружу, а не стать тихим нулём.
+
+    07.10.2026: `except Exception: return {"edges": 0}` прятал сбой шесть дней —
+    `semantic_overlap` стоял на месте, а в логе было пусто. Договор теперь такой:
+    ноль означает «делать было нечего», сбой обязан дойти до `graph_enrich`,
+    который запишет `edges: -1` и предупреждение.
+    """
+    await _node("первый текст про деплой сервиса", T)
+    await _node("второй текст про мониторинг", T)
+
+    import shared.embeddings as emb
+    from lifecycle.graph_miners import miner_embedding
+
+    async def _boom(texts: list[str], prefix: str = "") -> list[list[float]]:
+        raise RuntimeError("embeddings service is down")
+
+    monkeypatch.setattr(emb, "embed_texts", _boom)
+
+    with pytest.raises(RuntimeError, match="embeddings service is down"):
+        await miner_embedding(db, "user")
+
+
+@pytest.mark.asyncio
 async def test_miner_entities_synonym_canon_creates_co_mentions(db):
     # «Лили» и «Lily» — один канон-класс сущности (словарь rag.synonyms, обе стороны)
     n1 = await _node("Лили принесла отчёт по проекту", T)

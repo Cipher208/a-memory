@@ -86,6 +86,46 @@ async def test_graph_enrich_miner_stubs_report_zero_edges(graph):
 
 
 @pytest.mark.asyncio
+async def test_graph_enrich_reports_a_failed_miner_as_minus_one(graph, monkeypatch):
+    """Сбой майнера — это `-1` и текст ошибки, а не честный ноль.
+
+    07.10.2026: молчаливый `except` внутри `miner_embedding` обесценивал эту
+    ветку — исключение до неё не доходило, и один тип связей пропал на шесть
+    дней без единой строки в логе.
+    """
+    import lifecycle.graph_miners as gm
+    from lifecycle.graph_enrich import graph_enrich
+
+    async def _boom(cm: Any, layer: str) -> dict[str, int]:
+        raise RuntimeError("embedding service is down")
+
+    monkeypatch.setattr(gm, "MINERS", {"embedding": _boom})
+
+    result = await graph_enrich(layer="user")
+
+    assert result["miners"]["embedding"]["edges"] == -1
+    assert "embedding service is down" in result["miners"]["embedding"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_graph_enrich_logs_edge_counts_per_miner(graph, monkeypatch, caplog):
+    """Число рёбер по каждому майнеру идёт в лог — «дал 0» видно сразу."""
+    import lifecycle.graph_miners as gm
+    from lifecycle.graph_enrich import graph_enrich
+
+    async def _seven(cm: Any, layer: str) -> dict[str, int]:
+        return {"edges": 7}
+
+    monkeypatch.setattr(gm, "MINERS", {"embedding": _seven})
+
+    with caplog.at_level(logging.INFO, logger="lifecycle.graph_enrich"):
+        await graph_enrich(layer="user")
+
+    lines = [r.getMessage() for r in caplog.records if r.name == "lifecycle.graph_enrich"]
+    assert any("miner edges:" in m and "embedding=7" in m for m in lines), lines
+
+
+@pytest.mark.asyncio
 async def test_graph_enrich_noop_layer_keeps_stats_shape(graph):
     from lifecycle.graph_enrich import graph_enrich
 

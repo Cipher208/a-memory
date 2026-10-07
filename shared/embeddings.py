@@ -61,6 +61,17 @@ def _decode_int8(blob: bytes) -> list[float] | None:
 # limit is 32766 on modern builds but 999 on older ones, so stay well below both.
 _CACHE_LOOKUP_CHUNK = 500
 
+# Texts per HTTP request to the embedding service, and the per-request timeout.
+# The whole list used to travel in ONE POST, bounded by a fixed 30 s timeout,
+# and the measured batch time for a ~6k-text layer was 24.4 s — about 20 % of
+# headroom. `miner_embedding` used to swallow the resulting timeout as a silent
+# zero, which is how one relation stayed frozen for six days. Splitting keeps a
+# single request near 2 s, so the timeout stops being a ceiling on layer size.
+# 500 matches `_CACHE_LOOKUP_CHUNK`, already the convention for "how much goes
+# into one round trip".
+_REMOTE_BATCH_SIZE = 500
+_REMOTE_TIMEOUT_S = 30.0
+
 
 def _decode_blob(blob: bytes) -> list[float] | None:
     """Decode a stored cache blob; None for corrupt/truncated rows (→ cache miss).
@@ -330,6 +341,18 @@ class EmbeddingCache:
         return results, to_compute
 
     async def _remote_embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed any number of texts, one bounded request per `_REMOTE_BATCH_SIZE`.
+
+        Callers pass a whole layer; the service is asked in pieces so that one
+        slow response cannot exceed `_REMOTE_TIMEOUT_S` for the entire layer.
+        Vectors are returned in input order.
+        """
+        out: list[list[float]] = []
+        for batch in _chunked(texts, _REMOTE_BATCH_SIZE):
+            out.extend(await self._remote_embed_batch(batch))
+        return out
+
+    async def _remote_embed_batch(self, texts: list[str]) -> list[list[float]]:
         """POST /v1/embeddings to the configured embeddings.url.
 
         Response is model-tagged with the configured model name, so cache
@@ -354,7 +377,7 @@ class EmbeddingCache:
 
         def _post() -> dict[str, Any]:
             # Scheme is validated above (http/https only).
-            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=_REMOTE_TIMEOUT_S) as resp:  # noqa: S310
                 data: dict[str, Any] = json.loads(resp.read())
                 return data
 
