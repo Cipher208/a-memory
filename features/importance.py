@@ -80,8 +80,8 @@ def evaluate_importance(text: str) -> float:
         # Short dialogic messages are pure chat (greetings, thanks, vocative
         # ping-pong) — cap below the default gate. LONG vocative-wrapped
         # messages stay eligible: the scorer's unit is the whole message and
-        # Lily routinely embeds instructions in address ("Умница, мам. Обнови
-        # Headroom..."). The dialogic CLAUSES of those die later, in the
+        # operators routinely embed instructions in address ("Умница, мам. Обнови
+        # дашборд..."). The dialogic CLAUSES of those die later, in the
         # distiller's per-clause guard — the right granularity.
         score = min(score, 0.35)
     from shared.broadcast import is_status_broadcast

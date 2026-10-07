@@ -38,7 +38,7 @@ def test_transcript_shaped_summaries_detected(summary):
 @pytest.mark.parametrize(
     "summary",
     [
-        "Вечер 11 августа — полное восстановление личности Эли",
+        "Вечер 11 августа — полное восстановление личности ассистентки",
         "Выбрали psql вместо mysql для проекта",
         "Кисонька впервые вышла на прогулку",
         "",  # empty never crashes, slug falls back
@@ -69,7 +69,7 @@ def test_system_injection_detected(text):
     [
         "Я за то, чтобы cron job на бэкап стоял по воскресеньям",  # genuine memory that mentions a cron
         "Deploy pipeline v2 shipped to prod after green gate",
-        "Вечером 11-го — полное восстановление личности Эли",
+        "Вечером 11-го — полное восстановление личности ассистентки",
     ],
 )
 def test_system_injection_does_not_drop_real_memory(text):
@@ -117,7 +117,7 @@ async def test_transcript_episodes_skipped_at_promotion(cm):
 # ── conversational register (Ф1 regression 2026-09-12) ──
 #
 # Second garbage class: greetins/vocatives/questions promoted verbatim as
-# L4 "facts" with first-4-word slug keys (61 rows in one base: Lily's
+# L4 "facts" with first-4-word slug keys (61 rows in one base: the operator's
 # greeting became `fact:наконец_явилась_сталь_ждёт`). Dialogue is not memory.
 
 
@@ -143,7 +143,7 @@ def test_dialogic_summaries_detected(summary):
     [
         "Пока не проверим — не деплоим",
         "Выбрали psql вместо mysql для проекта",
-        "Вечер 11 августа — полное восстановление личности Эли",
+        "Вечер 11 августа — полное восстановление личности ассистентки",
         "бэкенд слушает порт 8642 на localhost",
     ],
 )
@@ -207,7 +207,7 @@ async def test_broadcast_episode_skipped_at_promotion(cm):
 # The head class carried the whole markdown set (`* # | ~ = !`) and a bare
 # quote, and the personas write IN markdown and the owner quotes instructions,
 # so the L0 intake door silently discarded real words. Measured on the live
-# bases before the fix: of Lucy's 734 substantive assistant messages in one
+# bases before the fix: of the operator's 734 substantive assistant messages in one
 # replay window the guard dropped 591 (80%), 584 of them opening with her
 # italics — `*Поворачиваю тебя лицом к себе…*`; one persona lost 273 more to
 # the same class; and 251 of the owner's 893 messages to another, not one of
@@ -222,7 +222,7 @@ async def test_broadcast_episode_skipped_at_promotion(cm):
     [
         "*Поворачиваю тебя лицом к себе. Локоть под голову — смотрю в глаза.*",  # roleplay italics
         "**Готово, госпожа.** Все три пункта закрыты с живыми доказательствами.",  # bold opener
-        "## Ночь закрыта, Лили. Итог последнего часа:",  # markdown heading
+        "## Ночь закрыта. Итог последнего часа:",  # markdown heading
         "| Репо | Состояние |\n|---|---|\n| ariel | чисто |",  # markdown table
         "~черновик~ — не канон",  # strikethrough
         "=== раздел ===",  # separator

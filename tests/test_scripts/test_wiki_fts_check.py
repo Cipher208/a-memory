@@ -61,7 +61,7 @@ def healthy(tmp_path: Path) -> Path:
     conn.executescript(_DDL)
     for entry_id, title, content in (
         (1, "Decision: MCP stdio migration", "migration decision recorded here"),
-        (2, "Lily evolution", "personality evolution notes about lily"),
+        (2, "Persona evolution", "personality evolution notes about a persona"),
     ):
         conn.execute("INSERT INTO wiki_index (entry_id, title, content) VALUES (?, ?, ?)", (entry_id, title, content))
         conn.execute(
@@ -214,7 +214,7 @@ def test_a_deleted_row_leaves_no_phantom_behind(healthy: Path) -> None:
     """Content removed; after repair the index must not answer for it."""
     conn = sqlite3.connect(healthy)
     conn.execute("DELETE FROM wiki_index WHERE entry_id = 2")
-    conn.execute("DELETE FROM wiki_fts WHERE title = 'Lily evolution'")
+    conn.execute("DELETE FROM wiki_fts WHERE title = 'Persona evolution'")
     conn.commit()
     conn.close()
 

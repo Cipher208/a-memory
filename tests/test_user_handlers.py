@@ -170,7 +170,7 @@ async def test_session_ended_skips_arc_echo_summary() -> None:
     prose-safe digits."""
     hooks = uh.UserHooks()
     mem = _Mem()
-    junk = "61 msgs; started with: [Session Arc Summary (d1, node 12)] # Arc Snapshot — Lucy & Lily (2026-09-15) …"
+    junk = "61 msgs; started with: [Session Arc Summary (d1, node 12)] # Arc Snapshot — (2026-09-15) …"
     result = await hooks._session_ended({"user_id": "u1", "summary": junk}, mem=mem)
     assert result["saved"] is False
     assert mem.saved == []

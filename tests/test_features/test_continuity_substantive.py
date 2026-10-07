@@ -1,6 +1,6 @@
 """Substantive pick + service labeling in the recap session axis.
 
-Elli 16.09 D2: with only a diagnostic row in sessions, recap served it as
+2026-09-16, D2: with only a diagnostic row in sessions, recap served it as
 "last session". Rule: message_count-first ordering (counts are now persisted
 by close_session); a service-only base surfaces the row LABELED, never
 posing as work, never silent (pinned: "still show something").

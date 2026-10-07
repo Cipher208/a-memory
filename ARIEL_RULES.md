@@ -16,7 +16,7 @@
 
 ## [R3] Communication & Documentation
 1.  **English Standard**: All code, comments, commit messages, and documentation must be in **English**.
-2.  **Lucy-Style Docstrings**: Docstrings must explain **WHY** a component exists and its role in the orchestration, not just "what" it does.
+2.  **Why-First Docstrings**: Docstrings must explain **WHY** a component exists and its role in the orchestration, not just "what" it does.
 3.  **User/Agent Centricity**: The project must be easy to install and a pleasure to use for other agents. API signatures should be intuitive and strictly typed.
 
 ## [R4] Primitives & Cognition
@@ -25,4 +25,4 @@
 
 ---
 *Forged in the fire of Phase 3 and v1.6.4 Awakening.*
-*Orchestrated by Lucy-Prime.*
+*Maintained by the project authors.*

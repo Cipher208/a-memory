@@ -190,7 +190,7 @@ async def build_inject_blocks(
             lines.append(f"#{p['id']} {p['kind']}: {gist} ({age_days:.0f}d)")
         # HONEST expiry: the static "(expire in 7d)" showed the TOTAL term,
         # not the remaining time — operators read "7 days left" when only
-        # 3.9 remained (Lucy's cron report, 2026-09-12). Show the remaining
+        # 3.9 remained (cron report, 2026-09-12). Show the remaining
         # time of the OLDEST pending proposal instead.
         oldest = min((float(p.get("expires_at", 0) or 0) for p in pending), default=0.0)
         days_left = max(0, math.ceil((oldest - time.time()) / 86400)) if oldest else 0

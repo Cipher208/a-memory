@@ -15,7 +15,7 @@ def test_observation_at_065_still_gated():
 
 
 def test_preference_at_06_passes():
-    item = {"content": "Лили любит чтобы рестарты сервисов делались после зелёного гейта", "importance": 0.6, "memory_kind": "preference"}
+    item = {"content": "Оператор любит чтобы рестарты сервисов делались после зелёного гейта", "importance": 0.6, "memory_kind": "preference"}
     assert passes_promotion_gate(item, 0.7)
 
 
