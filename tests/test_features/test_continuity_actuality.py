@@ -111,7 +111,7 @@ async def test_recap_session_prefers_substantive(monkeypatch):
     now = time.time()
     rows = [
         _sess("Memory audit session — no user interaction", 0, now - 60),
-        _sess("Migration day complete: opencode + vps2 VPN cutover", 52, now - 7200),
+        _sess("Migration day complete: opencode + node-b VPN cutover", 52, now - 7200),
     ]
     monkeypatch.setattr("core.session.SessionStore", lambda: _FakeSessionStore(rows))
 
