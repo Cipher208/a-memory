@@ -17,8 +17,13 @@ def test_write_state_atomic_creates_encrypted_file(tmp_path):
     assert path.exists()
     data = path.read_bytes()
     assert len(data) > 0
-    # Should not be plain JSON (encrypted)
-    assert not data.startswith(b"{")
+    # Encrypted, not plain JSON. Deliberately NOT asserted on the first byte:
+    # the blob opens with the first byte of a random 24-byte nonce, which is `{`
+    # in 1 write out of 256, so that assertion failed about once per 256 full
+    # runs (measured: 14 of 4096 encrypt_json calls begin with `{`).
+    with pytest.raises((UnicodeDecodeError, json.JSONDecodeError)):
+        json.loads(data.decode("utf-8"))
+    assert read_state(path) == state
 
 
 def test_write_state_atomic_creates_parent_dirs(tmp_path):
@@ -67,9 +72,14 @@ def test_read_state_legacy_rotates_to_encrypted(tmp_path):
         assert len(w) == 1
         assert "rotating" in str(w[0].message).lower()
 
-    # File should now be encrypted
-    data = path.read_bytes()
-    assert not data.startswith(b"{")
+    # File should now be encrypted. Asserted on behaviour, not on the first
+    # byte: a second read must not treat it as plain JSON again (no rotation
+    # warning) and must decrypt. The old `not data.startswith(b"{")` was the
+    # same 1-in-256 flake as above.
+    with warnings.catch_warnings(record=True) as w_after:
+        warnings.simplefilter("always")
+        assert read_state_legacy_or_encrypted(path) == {"legacy": True}
+        assert len(w_after) == 0, "a second read must not classify the file as plain JSON"
 
 
 def test_read_state_legacy_reads_encrypted(tmp_path):

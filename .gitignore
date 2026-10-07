@@ -38,3 +38,15 @@ site/
 .pytest_cache/
 reports/
 scripts/purge-archive/
+
+# Kept on disk, out of the tree. `AUDIT_REPORT_20260629.md` audits 18 of what are
+# now 731 files; `ROADMAP.md` opens by declaring itself legacy and frozen against
+# reality; the rest is local tool state. All five are still here locally.
+AUDIT_REPORT_20260629.md
+ROADMAP.md
+.ai-memory.toml
+.compose/
+# Named here rather than by a nested `.codegraph/.gitignore`: git reads a nested
+# ignore file, build backends read only this one, and that difference already put
+# a 5.6 GB venv into a source distribution once.
+.codegraph/
