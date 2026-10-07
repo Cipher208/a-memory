@@ -213,7 +213,7 @@ async def test_recap_notes_reads_latest_tail(recap_db, tmp_path, monkeypatch):
     new_dir.mkdir(parents=True)
     (old_dir / "notes.md").write_text("stale handoff\n", encoding="utf-8")
     (new_dir / "notes.md").write_text(
-        "# Session notes\n\n## day close\n- POLZA key rotation pending\n",
+        "# Session notes\n\n## day close\n- PROVIDER key rotation pending\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -224,7 +224,7 @@ async def test_recap_notes_reads_latest_tail(recap_db, tmp_path, monkeypatch):
 
     blocks = await session_recap(_FakeMem(), "u1")
     notes = next(b for b in blocks if b["axis"] == "recap_notes")
-    assert "POLZA key rotation pending" in notes["content"]
+    assert "PROVIDER key rotation pending" in notes["content"]
     assert "stale handoff" not in notes["content"]
 
 

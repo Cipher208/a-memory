@@ -54,7 +54,7 @@ async def test_promote_creates_skill_page_and_tags():
     from features.skill_pipeline import promote_episodes
 
     wiki = _FakeWiki()
-    mem = _FakeMem([_ep(7, "Deploy ariel: ssh vm1282008, uv sync, restart units")])
+    mem = _FakeMem([_ep(7, "Deploy ariel: ssh srv-01, uv sync, restart units")])
     res = await promote_episodes(mem, wiki, "u1", [7])
     assert res["count"] == 1 and not res["skipped"]
     page = wiki.pages[0]

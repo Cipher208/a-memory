@@ -23,7 +23,7 @@ def test_mid_text_marker_rejected():
 
 
 def test_case_insensitive_still_works():
-    res = detect_dream_marker("dream: memory: server migrated to vm1282008")
+    res = detect_dream_marker("dream: memory: server migrated to srv-01")
     assert res is not None and res["target"] == "memory"
 
 
