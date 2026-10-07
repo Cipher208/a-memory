@@ -27,12 +27,16 @@ def test_tampered_ciphertext_rejected():
 
 
 def test_is_encrypted_blob(tmp_path: Path):
-    from features.secrets import is_encrypted_blob
+    from features.secrets import encrypt_json, is_encrypted_blob
 
     plain = tmp_path / "plain.json"
     enc = tmp_path / "enc.json"
     plain.write_text('{"a": 1}')
-    enc.write_bytes(b"\xab\xcd" * 30)
+    # A real envelope. This used to be filler bytes (b"\xab\xcd" * 30), which
+    # only ever passed because the old check looked at a single byte and
+    # anything not `{`/`[`/space/newline counted as encrypted. Detection now
+    # decrypts, so the file has to be genuinely encrypted to count.
+    enc.write_bytes(encrypt_json({"a": 1}))
     assert not is_encrypted_blob(plain)
     assert is_encrypted_blob(enc)
 

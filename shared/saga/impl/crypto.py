@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from shared.master_key import decrypt_json, encrypt_json
-from shared.crypto import is_encrypted_blob as _is_crypto_encrypted_blob
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +28,19 @@ __all__ = [
 
 
 def is_encrypted_blob(path: Path) -> bool:
-    """Check if file is encrypted (not plain JSON)."""
+    """Return True when the file is a readable encrypted envelope.
+
+    Decrypt-based, matching shared.master_key.is_encrypted_blob. The previous
+    first-byte sniff called real ciphertext plain JSON whenever the nonce began
+    with `{`, `[`, a space or a newline — 4 bytes in 256 (measured 1.68%).
+    """
     if not path.exists():
         return False
-    with path.open("rb") as f:
-        head = f.read(1)
-    return bool(_is_crypto_encrypted_blob(head))
+    try:
+        decrypt_json(path.read_bytes())
+    except Exception:
+        return False
+    return True
 
 
 if TYPE_CHECKING:
