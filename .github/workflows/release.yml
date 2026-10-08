@@ -48,15 +48,23 @@ jobs:
           PY
           test -s RELEASE_BODY.md
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          body_path: RELEASE_BODY.md
-
+      # Publish to PyPI BEFORE announcing the release, on purpose.
+      #
+      # 1.11.0 taught this the hard way: the order was release-then-upload, the
+      # upload was refused, and the result was a published GitHub Release whose
+      # package did not exist on PyPI. Anyone reading the release page had no way
+      # to know the install command would fail with "No matching distribution".
+      # A failure here now stops the announcement; the reverse mistake — a package
+      # uploaded but not announced — is recoverable by re-running the job.
       - name: Publish to PyPI
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
           pip install twine
           twine upload --non-interactive --config-file /dev/null -u __token__ -p "$PYPI_TOKEN" dist/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: RELEASE_BODY.md
