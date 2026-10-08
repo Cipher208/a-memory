@@ -27,9 +27,11 @@ hides these names. This test only forbids them from reaching release output.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import InvalidRequirement, Requirement
 
 from mcp_server.utils.privacy import _ru_personas
 
@@ -97,3 +99,63 @@ def test_persona_dictionary_is_not_empty() -> None:
     assert len(personas) >= 10, f"anonymizer dictionary shrank to {len(personas)}: {sorted(personas)}"
     # The two that leaked into release text during this change, by construction.
     assert "Murat" in personas and "Эли" in personas
+
+
+def _declared_requirements() -> list[tuple[str, str]]:
+    """Every requirement this project publishes, with the table it came from."""
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = data["project"]
+    found = [("dependencies", spec) for spec in project.get("dependencies", [])]
+    for extra, specs in (project.get("optional-dependencies") or {}).items():
+        found += [(f"optional-dependencies.{extra}", spec) for spec in specs]
+    return found
+
+
+def test_published_metadata_carries_no_direct_reference() -> None:
+    """PyPI refuses a distribution whose metadata holds a direct URL.
+
+    1.11.0 failed its upload with a bare `HTTP 400 Bad Request` — the GitHub
+    Release was published, the wheel was not. The cause was two spaCy model
+    dependencies declared as `name @ https://...`, which reached `Requires-Dist`.
+    Neither model is on PyPI (`en-core-web-sm` 404s; `ru-core-news-sm` is an
+    unrelated placeholder), so there was no way to name them instead.
+
+    What made it invisible is the part worth keeping: the project also declared
+    `[tool.hatch.metadata] allow-direct-references = true`, so the build
+    *succeeded* and only the upload was refused. The flag is gone on purpose —
+    without it, hatchling refuses to build a wheel carrying a URL dependency,
+    which is a failure at the point where it is cheap.
+
+    This test asserts both halves, so neither can come back alone.
+    """
+    bad: list[str] = []
+    for table, spec in _declared_requirements():
+        try:
+            requirement = Requirement(spec)
+        except InvalidRequirement as exc:  # a malformed spec is its own release blocker
+            bad.append(f"{table}: {spec!r} is not a valid requirement ({exc})")
+            continue
+        if requirement.url:
+            bad.append(f"{table}: {spec!r}")
+    assert not bad, (
+        "these requirements carry a direct URL and would make the upload fail with "
+        f"HTTP 400 after the release was already published: {bad}. Move them out of "
+        "published metadata — a [dependency-groups] entry is excluded by PEP 735."
+    )
+
+
+def test_the_flag_that_hid_it_is_still_gone() -> None:
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    metadata = data.get("tool", {}).get("hatch", {}).get("metadata", {})
+    assert not metadata.get("allow-direct-references"), (
+        "allow-direct-references lets hatchling emit URL dependencies into Requires-Dist, "
+        "which PyPI rejects at upload time — the build passes and the release does not"
+    )
+
+
+def test_ner_models_are_a_dependency_group_not_a_dependency() -> None:
+    """The models still have to be installable somewhere, or the fix lost a feature."""
+    data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    group = data.get("dependency-groups", {}).get("ner", [])
+    names = {Requirement(spec).name for spec in group}
+    assert {"en-core-web-sm", "ru-core-news-sm"} <= names, group

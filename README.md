@@ -49,6 +49,20 @@ pip install a-memory
 a-memory          # MCP server on stdio — connect from any MCP client
 ```
 
+The server runs without them, but the **privacy gate** (`hooks` ingest) and the graph
+miners need two spaCy NER models. Neither is on PyPI — `en-core-web-sm` 404s there and
+`ru-core-news-sm` is an unrelated placeholder — so they install by wheel URL and are
+therefore **not** project dependencies (PyPI rejects any distribution whose metadata
+carries a direct URL). They live in a `[dependency-groups] ner` entry, and one command
+installs them from it:
+
+```bash
+python scripts/install_ner_models.py            # from a source checkout
+python scripts/install_ner_models.py --check    # report what is missing, install nothing
+```
+
+Skipping them is safe: the gate falls back and reports `degraded` instead of failing.
+
 Point your MCP client at it:
 
 ```json
