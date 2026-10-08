@@ -108,6 +108,7 @@ nav:
     - Deployment: operations/deployment.md
     - Monitoring: operations/monitoring.md
     - Testing: operations/testing.md
+    - Model Licensing: model-licensing.md
   - API Reference:
     - Secrets: api/secrets.md
     - Importance: api/importance.md

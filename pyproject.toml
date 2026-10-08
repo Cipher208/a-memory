@@ -57,13 +57,11 @@ dependencies = [
 # URL dependency ever reaches the metadata again, the build fails loudly rather
 # than producing a wheel PyPI will not accept.
 #
-# A dependency group is excluded from published metadata by specification
-# (PEP 735), so `uv sync --group ner` still installs them for development.
-[dependency-groups]
-ner = [
-    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
-    "ru-core-news-sm @ https://github.com/explosion/spacy-models/releases/download/ru_core_news_sm-3.8.0/ru_core_news_sm-3.8.0-py3-none-any.whl",
-]
+# The URLs live in `mcp_server/utils/ner_models.py`, which ships inside the wheel,
+# and are installed by the `a-memory-ner` console script below. They are NOT also
+# listed here: a `[dependency-groups]` entry would be a second literal copy of the
+# same URLs, and pip does not install groups anyway — CI broke on exactly that.
+# One list, in the artifact every kind of user receives.
 
 [project.optional-dependencies]
 dev = [
@@ -104,6 +102,11 @@ all = [
 a-memory = "mcp_server.server:main"
 ariel-memory = "mcp_server.server:main"
 mcp-ariel-memory = "mcp_server.server:main"
+# Optional spaCy NER models for the privacy gate. They cannot be dependencies
+# (see the note above `[project.optional-dependencies]`), so they install with
+# their own command — and it has to be a console script, because a `pip install
+# a-memory` user never receives `scripts/`.
+a-memory-ner = "mcp_server.utils.ner_models:main"
 
 [project.urls]
 Homepage = "https://github.com/Cipher208/a-memory"

@@ -102,12 +102,19 @@ def test_persona_dictionary_is_not_empty() -> None:
 
 
 def _declared_requirements() -> list[tuple[str, str]]:
-    """Every requirement this project publishes, with the table it came from."""
+    """Every requirement named in pyproject.toml, with the table it came from.
+
+    Includes `[dependency-groups]`, which is NOT published metadata (PEP 735) and
+    is therefore not a PyPI risk — it is scanned so that a URL appearing there is
+    still noticed as a second copy of something the package already declares.
+    """
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     project = data["project"]
     found = [("dependencies", spec) for spec in project.get("dependencies", [])]
     for extra, specs in (project.get("optional-dependencies") or {}).items():
         found += [(f"optional-dependencies.{extra}", spec) for spec in specs]
+    for group, specs in (data.get("dependency-groups") or {}).items():
+        found += [(f"dependency-groups.{group}", spec) for spec in specs]
     return found
 
 
@@ -129,7 +136,7 @@ def test_published_metadata_carries_no_direct_reference() -> None:
     This test asserts both halves, so neither can come back alone.
     """
     bad: list[str] = []
-    for table, spec in _declared_requirements():
+    for table, spec in _published_requirements():
         try:
             requirement = Requirement(spec)
         except InvalidRequirement as exc:  # a malformed spec is its own release blocker
@@ -140,7 +147,7 @@ def test_published_metadata_carries_no_direct_reference() -> None:
     assert not bad, (
         "these requirements carry a direct URL and would make the upload fail with "
         f"HTTP 400 after the release was already published: {bad}. Move them out of "
-        "published metadata — a [dependency-groups] entry is excluded by PEP 735."
+        "published metadata and install them from a package module instead."
     )
 
 
@@ -153,9 +160,59 @@ def test_the_flag_that_hid_it_is_still_gone() -> None:
     )
 
 
-def test_ner_models_are_a_dependency_group_not_a_dependency() -> None:
-    """The models still have to be installable somewhere, or the fix lost a feature."""
+def _published_requirements() -> list[tuple[str, str]]:
+    """The requirements that end up in `Requires-Dist`, and so in an upload.
+
+    `[dependency-groups]` is deliberately excluded: PEP 735 keeps it out of
+    published metadata, so a URL there cannot fail an upload — only duplicate a
+    list, which the duplicate check in the model-URL test covers.
+    """
+    return [(table, spec) for table, spec in _declared_requirements() if not table.startswith("dependency-groups")]
+
+
+def _model_urls() -> list[str]:
+    """Model URLs as the package declares them, importable without spaCy installed."""
+    from mcp_server.utils.ner_models import MODELS
+
+    return [spec for _import_name, spec in MODELS]
+
+
+def test_ner_models_declare_urls_that_are_not_project_dependencies() -> None:
+    """One list of model URLs, in the package — never a second copy for uv.
+
+    The first attempt put them in `[dependency-groups] ner`, which is the uv-native
+    way to say "developers need these" and is excluded from published metadata. It
+    also broke CI (pip does not install groups) and gave a `pip install a-memory`
+    user no way to run it at all, because `scripts/` is not in the wheel. Keeping
+    both would mean two literal copies of these URLs drifting apart.
+    """
+    urls = _model_urls()
+    assert len(urls) == 2, urls
+    for spec in urls:
+        requirement = Requirement(spec)
+        assert requirement.url, f"{spec!r} should be a direct URL"
+        assert requirement.name in {"en-core-web-sm", "ru-core-news-sm"}, requirement.name
+
+    declared = {spec for _table, spec in _declared_requirements()}
+    duplicated = declared.intersection(urls)
+    assert not duplicated, f"model URLs are declared in pyproject.toml as well: {duplicated}"
+
+
+def test_ner_models_ship_an_entry_point_that_reaches_a_pip_user() -> None:
+    """`scripts/` is not in the wheel, so the console script is the only path."""
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    group = data.get("dependency-groups", {}).get("ner", [])
-    names = {Requirement(spec).name for spec in group}
-    assert {"en-core-web-sm", "ru-core-news-sm"} <= names, group
+    scripts = data["project"]["scripts"]
+    target = scripts.get("a-memory-ner")
+    assert target == "mcp_server.utils.ner_models:main", scripts
+
+    module, _, attribute = target.partition(":")
+    assert (REPO_ROOT / Path(*module.split(".")).with_suffix(".py")).is_file(), module
+    assert attribute == "main"
+
+
+def test_the_install_script_holds_no_copy_of_the_urls() -> None:
+    """The `scripts/` wrapper must delegate, or the URLs exist twice again."""
+    text = (REPO_ROOT / "scripts" / "install_ner_models.py").read_text(encoding="utf-8")
+    assert "spacy-models/releases" not in text, (
+        "scripts/install_ner_models.py repeats the model URLs; it should import them from mcp_server.utils.ner_models so there is one source of truth"
+    )
