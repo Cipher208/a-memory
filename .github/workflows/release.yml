@@ -29,11 +29,11 @@ jobs:
 
       # The release body comes from CHANGELOG.md, never from generated notes.
       # `generate_release_notes` built it out of PR titles and authors, which
-      # put a real committer identity into a public release ("@Cipher208 and
-      # Murat"). Notes written by hand in the CHANGELOG say what changed and
-      # why; a list of who touched it says neither. Failing here when the
-      # section is missing is deliberate — an empty body is better than a
-      # silently generated one, and the tag would be mis-built anyway.
+      # put a real committer identity into a public release. Notes written by
+      # hand in the CHANGELOG say what changed and why; a list of who touched
+      # it says neither. Failing here when the section is missing is
+      # deliberate — an empty body is better than a silently generated one,
+      # and the tag would be mis-built anyway.
       - name: Take the release body from CHANGELOG.md
         run: |
           python - "${{ github.ref_name }}" > RELEASE_BODY.md <<'PY'

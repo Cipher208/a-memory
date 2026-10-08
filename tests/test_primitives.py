@@ -25,7 +25,7 @@ def test_auto_route_agent_voice():
 
 def test_auto_route_user_facts():
     assert _auto_route("the user likes short answers") == "user"
-    assert _auto_route("Murat prefers Russian for conversation") == "user"
+    assert _auto_route("the user prefers Russian for conversation") == "user"
 
 
 def test_auto_route_tie_defaults_user():
