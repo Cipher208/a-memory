@@ -26,7 +26,12 @@ hides these names. This test only forbids them from reaching release output.
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -216,3 +221,85 @@ def test_the_install_script_holds_no_copy_of_the_urls() -> None:
     assert "spacy-models/releases" not in text, (
         "scripts/install_ner_models.py repeats the model URLs; it should import them from mcp_server.utils.ner_models so there is one source of truth"
     )
+
+
+def _identity_check(name: str, email: str, env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the identity guard against an identity set in a throwaway repository.
+
+    The identity goes into the temporary repo's **local** config, which is where
+    `.git/config` really decides authorship and which nothing in the ambient
+    environment can outrank. Setting it through `GIT_CONFIG_COUNT` instead made the
+    first version of these tests fail under pre-commit: the surrounding
+    environment won, and the guard reported the *host* identity rather than the one
+    under test. Environment variables are also scrubbed for the same reason.
+
+    Neutral addresses throughout — `example.com` — so this file itself carries no
+    address that must stay out of the repository.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        git = shutil.which("git") or "git"
+        clean = {key: value for key, value in os.environ.items() if not key.startswith("GIT_") and key != "A_MEMORY_ALLOW_ANY_COMMIT_IDENTITY"}
+        clean.update(env_overrides or {})
+
+        subprocess.run([git, "init", "-q", tmp], check=True, capture_output=True, env=clean)
+        subprocess.run([git, "config", "user.name", name], cwd=tmp, check=True, env=clean)
+        subprocess.run([git, "config", "user.email", email], cwd=tmp, check=True, env=clean)
+
+        return subprocess.run(
+            [sys.executable, str(REPO_ROOT / "scripts" / "check_commit_identity.py")],
+            cwd=tmp,
+            capture_output=True,
+            text=True,
+            env=clean,
+            check=False,
+        )
+
+
+def test_identity_guard_blocks_an_unrecognised_address() -> None:
+    """The guard fails, not warns: an address in published history is permanent."""
+    result = _identity_check("Someone", "someone@example.com")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "not a public account" in result.stderr
+    # The remedy has to be in the message, or the hook only blocks.
+    assert "git config user.email" in result.stderr
+    assert "users.noreply.github.com" in result.stderr
+
+
+def test_identity_guard_is_an_allowlist_not_a_list_of_known_bad_names() -> None:
+    """An address nobody has thought of yet must still be refused.
+
+    A denylist would pass this one; that is the point. Naming the forbidden values
+    in the script made gitleaks reject the commit — correctly, since those values
+    are the very thing that must not be written down.
+    """
+    result = _identity_check("Unknown", "unknown-operator@some-other-host.example")
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
+def test_identity_guard_passes_a_github_noreply_identity() -> None:
+    result = _identity_check("Cipher208", "269750686+Cipher208@users.noreply.github.com")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Cipher208" in result.stdout
+
+
+def test_identity_guard_override_is_deliberate() -> None:
+    """An override exists — but only when asked for explicitly, by name."""
+    result = _identity_check(
+        "Someone",
+        "someone@example.com",
+        {"A_MEMORY_ALLOW_ANY_COMMIT_IDENTITY": "1"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "allowed by" in result.stdout
+
+
+def test_the_identity_guard_is_wired_into_pre_commit() -> None:
+    """A guard nobody runs is a comment. It must be registered as a hook."""
+    import yaml
+
+    config = yaml.safe_load((REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    local = next(r for r in config["repos"] if r.get("repo") == "local")
+    hooks = {h["id"]: h for h in local["hooks"]}
+    assert "commit-identity" in hooks, sorted(hooks)
+    assert "check_commit_identity" in hooks["commit-identity"]["entry"]
+    assert hooks["commit-identity"]["always_run"] is True

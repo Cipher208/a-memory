@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **A pre-commit check that refuses to commit under a personal identity (2026-10-08).** During the 1.11.0 release the same identity leak appeared three times — in a CHANGELOG entry, in a workflow comment, and in pasted assertion output — and grepping caught it each time, which is discipline rather than a boundary. Commit authorship is the same shape of problem: `.git/config` decides it, not intent, and a fresh `git init` inherits whatever identity the machine has. `scripts/check_commit_identity.py` now fails the commit, with the fix as an explicit opt-in (`A_MEMORY_ALLOW_ANY_COMMIT_IDENTITY=1`) so an override is a decision and not a workaround.
+
+  It is an **allowlist of public accounts**, not a list of addresses to refuse — and that distinction was found the hard way. The first version named the addresses to block, and **gitleaks rejected the commit**: the values it needed to name are the very thing that must stay out of the repository, so the guard was itself the fourth leak, written while fixing the first three. An allowlist contains no secret, and it also refuses an address nobody has thought of yet. `pytest` fails if the hook stops being registered, and the tests set their identity in a temporary repository's local config, where nothing in the ambient environment can outrank it.
+
 ## [1.11.1] - 2026-10-08
 
 ### Fixed
