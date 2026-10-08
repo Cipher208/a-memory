@@ -3,6 +3,15 @@
 All notable changes to mcp-ariel-memory are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+- **1.11.0 told `pip install a-memory` users to run a file they never received (2026-10-08).** The README for that release said `python scripts/install_ner_models.py`, and `scripts/` is **not in the wheel** — the wheel carries `alembic/`, `config.py`, `config.yaml`, `py.typed` and the package trees, not the repository. Only someone on an sdist or a source checkout had that file. So the documented way to install the optional spaCy NER models did not exist for the audience that needed it most.
+
+  The model URLs and the install logic now live in **`mcp_server/utils/ner_models.py`**, which is inside the package and therefore inside every artifact, and are reached through a console script: **`a-memory-ner`**, with `a-memory-ner --check` to report without installing. `scripts/install_ner_models.py` is a thin wrapper for source checkouts and holds **no copy** of the URLs.
+
+  The `[dependency-groups] ner` entry from 1.11.0 is **removed**. It was the uv-native way to state the same requirement, but it gave no route to a pip user, pip does not install groups (which is how it broke CI), and keeping it would have meant two literal copies of two URLs — the drift between copies being the exact failure class this episode was made of. One list, in the artifact everyone receives. `pytest` still asserts both halves: no URL in any published requirement, and no duplicate of the model URLs in `pyproject.toml`.
+
 ## [1.11.0] - 2026-10-08
 
 ### Added
