@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-10-08
+
 ### Fixed
 - **1.11.0 told `pip install a-memory` users to run a file they never received (2026-10-08).** The README for that release said `python scripts/install_ner_models.py`, and `scripts/` is **not in the wheel** — the wheel carries `alembic/`, `config.py`, `config.yaml`, `py.typed` and the package trees, not the repository. Only someone on an sdist or a source checkout had that file. So the documented way to install the optional spaCy NER models did not exist for the audience that needed it most.
 
