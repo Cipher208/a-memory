@@ -15,7 +15,6 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
-    { name = "en-core-web-sm" },
     { name = "mcp", extra = ["cli"] },
     { name = "networkx" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -26,7 +25,6 @@ dependencies = [
     { name = "pynacl" },
     { name = "python-frontmatter" },
     { name = "pyyaml" },
-    { name = "ru-core-news-sm" },
     { name = "scikit-learn" },
     { name = "spacy" },
     { name = "starlette" },
@@ -82,13 +80,18 @@ win = [
     { name = "aiosqlite" },
 ]
 
+[package.dev-dependencies]
+ner = [
+    { name = "en-core-web-sm" },
+    { name = "ru-core-news-sm" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "a-memory", extras = ["dev", "win", "binary", "vec", "ann", "embeddings"], marker = "extra == 'all'" },
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "aiosqlite", marker = "extra == 'win'", specifier = ">=0.21.0,!=0.22.0" },
     { name = "alembic", specifier = ">=1.20.0" },
-    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "hnswlib", marker = "extra == 'ann'", specifier = ">=0.7" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=2,<3" },
@@ -110,7 +113,6 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.0" },
     { name = "python-frontmatter", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "ru-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/ru_core_news_sm-3.8.0/ru_core_news_sm-3.8.0-py3-none-any.whl" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1" },
     { name = "scikit-learn", specifier = ">=1.6" },
     { name = "sentence-transformers", marker = "extra == 'embeddings'", specifier = ">=6.1.0" },
@@ -120,6 +122,12 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.52.1" },
 ]
 provides-extras = ["dev", "docs", "win", "binary", "vec", "ann", "embeddings", "all"]
+
+[package.metadata.requires-dev]
+ner = [
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
+    { name = "ru-core-news-sm", url = "https://github.com/explosion/spacy-models/releases/download/ru_core_news_sm-3.8.0/ru_core_news_sm-3.8.0-py3-none-any.whl" },
+]
 
 [[package]]
 name = "aiosqlite"
