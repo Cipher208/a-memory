@@ -29,6 +29,21 @@ repos:
 
   - repo: local
     hooks:
+      # Authorship is decided by .git/config, not by intent, and a fresh
+      # `git init` inherits the machine's identity. This fails the commit and
+      # prints the remedy — the boundary, where grepping the same leak three times
+      # during the 1.11.0 release was only discipline.
+      #
+      # It allows public accounts and refuses everything else. The reverse — a
+      # list of addresses to block — was rejected by gitleaks, correctly: naming
+      # the forbidden values writes them down, so the guard became the leak.
+      - id: commit-identity
+        name: commit identity must be a public account, not a personal address
+        entry: python3 scripts/check_commit_identity.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: skylos
         name: skylos
         # .venv-embeddings is vendored third-party code (.venv precedent);
