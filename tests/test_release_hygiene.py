@@ -255,6 +255,28 @@ def _identity_check(name: str, email: str, env_overrides: dict[str, str] | None 
         )
 
 
+def _identity_guard_module():
+    """Load `scripts/check_commit_identity.py` so tests read its real constants.
+
+    Importing beats repeating: the assertions below check that the guard's message
+    advertises the guard's own allowlist, which they cannot do from a copy.
+
+    It also keeps a bare domain literal out of this file. `"<domain>" in text` is
+    the shape of CodeQL's `py/incomplete-url-substring-sanitization`, which flagged
+    the literal that used to be here — an assert is not sanitization, but the
+    pattern is identical and the alert is real noise. A value read from the module
+    cannot be mistaken for one.
+    """
+    import importlib.util
+
+    path = REPO_ROOT / "scripts" / "check_commit_identity.py"
+    spec = importlib.util.spec_from_file_location("check_commit_identity", path)
+    assert spec is not None and spec.loader is not None, path
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_identity_guard_blocks_an_unrecognised_address() -> None:
     """The guard fails, not warns: an address in published history is permanent."""
     result = _identity_check("Someone", "someone@example.com")
@@ -262,7 +284,9 @@ def test_identity_guard_blocks_an_unrecognised_address() -> None:
     assert "not a public account" in result.stderr
     # The remedy has to be in the message, or the hook only blocks.
     assert "git config user.email" in result.stderr
-    assert "users.noreply.github.com" in result.stderr
+    # And it must name the allowlist the guard actually applies.
+    advertised = _identity_guard_module().ALLOWED_EMAIL_SUFFIXES[0]
+    assert advertised in result.stderr
 
 
 def test_identity_guard_is_an_allowlist_not_a_list_of_known_bad_names() -> None:
@@ -277,7 +301,8 @@ def test_identity_guard_is_an_allowlist_not_a_list_of_known_bad_names() -> None:
 
 
 def test_identity_guard_passes_a_github_noreply_identity() -> None:
-    result = _identity_check("Cipher208", "269750686+Cipher208@users.noreply.github.com")
+    suffix = _identity_guard_module().ALLOWED_EMAIL_SUFFIXES[0]
+    result = _identity_check("Cipher208", f"269750686+Cipher208{suffix}")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Cipher208" in result.stdout
 
