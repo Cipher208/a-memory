@@ -58,6 +58,39 @@ class RestoreOutcome:
     refused: list[dict[str, Any]] = field(default_factory=list)
     #: Ids that name no archived row for this owner and kind.
     not_found: list[int] = field(default_factory=list)
+    #: One entry per row this call **resolved** — restored, or that would be restored
+    #: under `dry_run`. Carries the destination and, per row, the fields of the target
+    #: table the archive never kept. A caller cannot see the destination from an id,
+    #: and `not_recorded` is the limit of `undo` stated where the answer is read.
+    restored_items: list[dict[str, Any]] = field(default_factory=list)
+    #: True when nothing was written. `restored` is then 0 while `restored_items`
+    #: still describes the plan — the same contract `forget`'s own preview keeps.
+    dry_run: bool = False
+
+
+#: Which columns of the destination table an archived row **can** fill. The archive keeps
+#: eight columns (`user_id`, `original_id`, `content`, `memory_type`, `importance`,
+#: `archive_reason`, `archived_at`, `id`); `episodes` and `core_memory` have more, and the
+#: difference is what a restore cannot bring back.
+_CARRIED_INTO_EPISODES = frozenset({"user_id", "summary", "emotional_weight"})
+_CARRIED_INTO_CORE = frozenset({"user_id", "key", "value", "importance", "memory_kind"})
+
+
+async def _not_carried(conn: Any, table: str, carried: frozenset[str]) -> set[str]:
+    """Return the columns of `table` an archive row cannot fill — **read from the schema**.
+
+    Not a list written by hand, and that is the point of asking `PRAGMA` instead: a
+    hand-written account of "what is lost" goes stale the first time somebody adds a
+    column, and it is exactly the kind of list a caller believes without checking.
+    Measured 2026-10-11 on a migrated database, this answers `episode_id, tags,
+    created_at, memory_kind, layer` for an episode and nine names for a core row,
+    including `expires_at`, `source`, `metadata` and `visibility`.
+
+    `table` is never caller input: it is one of two literals this module chooses from
+    the row's route, which is why an interpolated `PRAGMA` is safe here.
+    """
+    rows = await (await conn.execute(f"PRAGMA table_info({table})")).fetchall()
+    return {r["name"] for r in rows} - carried
 
 
 class ForgettingSystem:
@@ -156,8 +189,14 @@ class ForgettingSystem:
             logger.exception("archive_entries failed")
             return 0
 
-    async def restore_entries(self, ids: list[int], user_id: str, memory_type: str | None = None) -> RestoreOutcome:
+    async def restore_entries(self, ids: list[int], user_id: str, memory_type: str | None = None, dry_run: bool = False) -> RestoreOutcome:
         """Bring archived rows back, matched on owner and kind (C1.13 revert).
+
+        `dry_run=True` runs the same matching loop and writes nothing: no `save`, no
+        `INSERT`, no `DELETE`. The preview is the pass, so it cannot drift from it —
+        the same contract `forget`'s own dry run keeps on the other end. `restored`
+        is then 0, because nothing was restored, and `restored_items` still names
+        every row the real call would return.
 
         WHY THE MATCH IS NO LONGER ONE FIELD. This used to be
         `WHERE original_id = ?`. `original_id` is an integer shared by two tables
@@ -222,6 +261,7 @@ class ForgettingSystem:
         try:
             conn = await self._cm.get(DB_NAME)
             now = time.time()
+            outcome.dry_run = dry_run
             for original_id in ids:
                 sql = "SELECT * FROM archived_memories WHERE original_id = ? AND user_id = ?"
                 params: list[Any] = [original_id, user_id]
@@ -262,11 +302,27 @@ class ForgettingSystem:
                     )
                     continue
                 if route_of(row["memory_type"]) == ROUTE_EPISODES:
-                    await self._restore_episode(row, user_id)
+                    destination, carried = "episodes", _CARRIED_INTO_EPISODES
                 else:
-                    await self._restore_core(conn, row, original_id, now)
-                await conn.execute("DELETE FROM archived_memories WHERE id = ?", (row["id"],))
-                outcome.restored += 1
+                    destination, carried = "core_memory", _CARRIED_INTO_CORE
+                if not dry_run:
+                    if destination == "episodes":
+                        await self._restore_episode(row, user_id)
+                    else:
+                        await self._restore_core(conn, row, original_id, now)
+                    await conn.execute("DELETE FROM archived_memories WHERE id = ?", (row["id"],))
+                    outcome.restored += 1
+                outcome.restored_items.append(
+                    {
+                        "original_id": original_id,
+                        "memory_type": row["memory_type"],
+                        "destination": destination,
+                        # The limit, per row, where the answer is read. A caller who
+                        # gets a summary back and no tags should learn why from this
+                        # answer rather than from a missing tag weeks later.
+                        "not_recorded": sorted(await _not_carried(conn, destination, carried)),
+                    }
+                )
             await conn.commit()
             return outcome
         except Exception:
@@ -289,9 +345,12 @@ class ForgettingSystem:
         mem = EpisodicMemory(cm=self._cm, layer=self.layer)
         # `None` is checked, not truthiness. `row["importance"] or 0.5` — the earlier
         # form — treats a recorded `0.0` as absent and returns the episode with a
-        # different weight than it had. Measured 2026-10-11: no archived row in the
-        # base carries `importance` 0.0 or NULL, so this was latent rather than live;
-        # it is still the same substitution this repair exists to remove, so it goes.
+        # different weight than it had. **This was live, not latent.** An earlier
+        # version of this comment said the base held no such row; that was measured on
+        # one instance and is false of the set of them. Measured 2026-10-11 from copies:
+        # the `-hermes` base holds one archived episode with `importance=0.0` and reason
+        # `forget_primitive_fuzzy_l3`, so the old form would have restored that episode
+        # at 0.5. There is no single base to measure — the archive is per instance.
         weight = 0.5 if row["importance"] is None else float(row["importance"])
         return await mem.save(user_id, str(row["content"]), emotional_weight=weight)
 

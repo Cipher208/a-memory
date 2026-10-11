@@ -52,6 +52,9 @@ class _Outcome:
     episodes: list[dict[str, Any]] = field(default_factory=list)
     graph_nodes: list[dict[str, Any]] = field(default_factory=list)
     not_found: list[int] = field(default_factory=list)
+    restored: int = 0
+    restored_items: list[dict[str, Any]] = field(default_factory=list)
+    refused: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _preview(text: Any) -> str:
@@ -73,25 +76,34 @@ def _node_hit(node: Any) -> dict[str, Any]:
 
 async def forget(
     key: str = "",
-    scope: Literal["exact", "fuzzy", "recent", "episode_ids"] = "exact",
+    scope: Literal["exact", "fuzzy", "recent", "episode_ids", "undo"] = "exact",
     layer: Literal["user", "agent"] = "user",
     user_id: str = "default",
     minutes: int = 60,
     shadow_bin: bool = True,
     dry_run: bool = False,
     episode_ids: list[int] | None = None,
+    archived_ids: list[int] | None = None,
+    memory_type: str | None = None,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Universal Primitive: context-aware forgetting with Shadow Bin support.
 
     Scope: `exact` one L4 key; `fuzzy` a pattern across L4, L3 and the graph;
     `recent` everything newer than `minutes`; `episode_ids` exactly those
-    `episodes.episode_id` values. Every scope reports what it touched, in
-    `entries` / `episodes` / `graph_nodes` / `not_found`.
+    `episodes.episode_id` values; `undo` puts the `archived_ids` back where they
+    came from. Every scope reports what it touched, in `entries` / `episodes` /
+    `graph_nodes` / `not_found`.
 
     `dry_run=True` matches and writes nothing — the same computation as the real
     pass, so the preview cannot drift from it. Refused for `recent`, which has no
-    shadow bin and so cannot be undone.
+    shadow bin.
+
+    `undo` refuses a purged row, a row whose archived kind is unknown, and another
+    owner's id — each with its reason rather than a bare zero; `dry_run=True` shows
+    what would return. An id that two archived rows share is refused too, unless
+    `memory_type` names the one you want. The archive is not a backup:
+    `restored_items` names the fields a restored row could not bring back.
     """
     # Why `episode_ids` and not `ids`: `episodes.episode_id`,
     # `core_memory.entry_id` and `epi_nodes.node_id` are independent sequences
@@ -122,8 +134,24 @@ async def forget(
         return {"error": "key_required", "detail": f"scope={scope!r} needs a non-empty key"}
     if scope == "episode_ids" and not episode_ids:
         return {"error": "episode_ids_required", "detail": "scope='episode_ids' needs a non-empty episode_ids list"}
+    if scope == "undo" and not archived_ids:
+        return {
+            "error": "archived_ids_required",
+            "detail": "scope='undo' needs a non-empty archived_ids list — an empty list is not 'everything'",
+        }
     if scope == "recent" and dry_run:
         return {"error": "dry_run_unsupported", "detail": _RECENT_NOT_PREVIEWABLE}
+
+    if scope == "undo":
+        outcome = await _undo_archived(app, [int(i) for i in archived_ids or []], user_id, layer, dry_run, memory_type)
+        _invalidate_cache(layer, user_id)
+        return ForgetResult(
+            dry_run=dry_run,
+            restored=outcome.restored,
+            restored_items=outcome.restored_items,
+            refused=outcome.refused,
+            not_found=outcome.not_found,
+        ).dict()
 
     mem = _get_memory(app, layer, user_id)
     graph = _get_graph(app, layer)
@@ -295,6 +323,37 @@ async def _forget_recent(app: AppContext, user_id: str, minutes: int, mem: Any, 
     outcome.deleted_l3 = await mem.l3.delete_older_than(user_id, cutoff)
     outcome.deleted_graph = await graph.delete_nodes_older_than(user_id, cutoff)
     await _purge_staging(user_id)
+    return outcome
+
+
+async def _undo_archived(
+    app: AppContext, archived_ids: list[int], user_id: str, layer: str, dry_run: bool, memory_type: str | None = None
+) -> _Outcome:
+    """Put shadowed rows back, by delegating to the one restore implementation.
+
+    There is deliberately no second restore path here — `ArchivedMemories.restore()`
+    was deleted in the repair for exactly that reason. `restore_entries` owns the
+    owner match, the kind routing and the refusals; this function carries its answer
+    into the tool's shape and adds nothing to the rules.
+
+    `memory_type` is the archived label as the listing returns it, and it exists for
+    one case: an id that two rows share. Refusing such an id without offering a way to
+    answer would leave the listing advertising a row that nothing here could return.
+
+    `layer` is passed through because a restored episode lands in the layer this call
+    was made in, the archive having never recorded one. That is a limit, and
+    `restored_items` names it per row rather than leaving it to be noticed.
+    """
+    from lifecycle.forgetting import ForgettingSystem
+
+    restored = await ForgettingSystem(cm=app.mm._cm, layer=layer).restore_entries(
+        archived_ids, user_id=user_id, memory_type=memory_type, dry_run=dry_run
+    )
+    outcome = _Outcome()
+    outcome.restored = restored.restored
+    outcome.restored_items = restored.restored_items
+    outcome.refused = restored.refused
+    outcome.not_found = list(restored.not_found)
     return outcome
 
 
