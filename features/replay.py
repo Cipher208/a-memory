@@ -32,11 +32,13 @@ async def record_recall_useful(cm: Any, layer: str, user_id: str, entries: list[
         return 0
     conn = await cm.get(DB_NAME)
     now = time.time()
+    borrowed = conn.in_transaction
     await conn.executemany(
         "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?, 'recall_useful', 'core_memory', ?, ?, ?)",
         [(user_id, str(entry_id), json.dumps({"key": key}), now) for entry_id, key in entries],
     )
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return len(entries)
 
 

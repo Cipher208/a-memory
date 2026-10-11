@@ -51,11 +51,13 @@ async def record_recall(
     """Insert a recall record and return its event_id."""
     await ensure(cm)
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     cursor = await conn.execute(
         "INSERT INTO recall_events (layer, user_id, query, intent, result_count, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
         (layer, user_id, query[:500], intent, result_count, time.time()),
     )
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return int(cursor.lastrowid or 0)
 
 

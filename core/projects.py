@@ -192,5 +192,10 @@ class ProjectMemory:
 
     async def touch(self, name: str) -> None:
         conn = await self._cm.get(PROJECTS_DB)
+        # Shared handle: `projects.db` is written by every part of this store, so a transaction
+        # open here may be another caller's. Moving an `updated_at` is best-effort housekeeping and
+        # must not commit their work; ownership is read before our own UPDATE opens a transaction.
+        borrowed = conn.in_transaction
         await conn.execute("UPDATE projects SET updated_at=? WHERE name=?", (time.time(), name))
-        await conn.commit()
+        if not borrowed:
+            await conn.commit()

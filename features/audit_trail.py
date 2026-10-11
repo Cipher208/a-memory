@@ -96,8 +96,10 @@ class AuditTrail:
     async def cleanup_old(self, retention_days: int = 30) -> int:
         cutoff = time.time() - (retention_days * 86400)
         conn = await self._cm.get(DB_NAME)
+        borrowed = conn.in_transaction
         cursor = await conn.execute("DELETE FROM audit_log WHERE timestamp < ?", (cutoff,))
-        await conn.commit()
+        if not borrowed:
+            await conn.commit()
         return cast("int", cursor.rowcount)
 
     async def archive_and_prune(self, retention_days: int = 30, archive_dir: str | None = None) -> dict[str, int]:

@@ -171,6 +171,7 @@ async def _layer_nodes(conn: Any, layer: str) -> list[tuple[int, str]]:
 async def miner_tags(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
     """#1: shared epi_tags → `tagged`, weight = min(0.3 + 0.1*shared, 0.6)."""
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     rows = await (
         await conn.execute(
             """
@@ -189,7 +190,8 @@ async def miner_tags(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
     for a, b, shared in rows:
         edges += await _insert_edge(conn, int(a), int(b), "tagged", min(0.3 + 0.1 * int(shared), 0.6), "tags", dirty)
     await _inhibit_dirty(conn, dirty)
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -203,6 +205,7 @@ async def miner_tokens(cm: AsyncConnectionManager, layer: str) -> dict[str, int]
     from lifecycle.graph_sanitation import mad_threshold
 
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     nodes = await (await conn.execute("SELECT node_id, content FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
     syn: dict[str, list[str]] | None = None
     toks: dict[int, set[str]] = {}
@@ -230,7 +233,8 @@ async def miner_tokens(cm: AsyncConnectionManager, layer: str) -> dict[str, int]
         if jaccard >= tau:
             edges += await _insert_edge(conn, a, b, "topic_overlap", jaccard, "tokens", dirty)
     await _inhibit_dirty(conn, dirty)
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -242,6 +246,7 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
     canon-tokens with cluster texts (synonym canonicalization).
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     l0 = await (
         await conn.execute(
             "SELECT ts, source_msg_id, text FROM l0_journal WHERE layer=? AND raw_type='user-message' ORDER BY ts",
@@ -294,7 +299,8 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str) -> dict[str, in
                 degree[a] = degree.get(a, 0) + 1
                 degree[b] = degree.get(b, 0) + 1
     await _inhibit_dirty(conn, dirty)
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -308,6 +314,7 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
     (same pattern as miner #9's _EMBED_TOPK).
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     nodes = await _layer_nodes(conn, layer)
     if len(nodes) < 2:
         return {"edges": 0}
@@ -331,7 +338,8 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str) -> dict[str, in
                 degree[a] = degree.get(a, 0) + 1
                 degree[b] = degree.get(b, 0) + 1
     await _inhibit_dirty(conn, dirty)
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -408,6 +416,9 @@ async def _entities_cached(conn: Any, texts: list[str], syn: dict[str, list[str]
     Misses are parsed synchronously, then written in one transaction; identical
     texts are parsed once.
     """
+    # `conn` arrives from the caller, so ownership has to be read here, before this helper's own
+    # DML: the caller's transaction is not ours to end, and our writes ride along with it.
+    borrowed = conn.in_transaction
     if not texts:
         return []
     tag = _ner_cache_tag(syn, nlp)
@@ -449,7 +460,8 @@ async def _entities_cached(conn: Any, texts: list[str], syn: dict[str, list[str]
             "INSERT OR REPLACE INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
             writes,
         )
-        await conn.commit()
+        if not borrowed:
+            await conn.commit()
 
     return [cached[h] for h in hashes]
 
@@ -510,6 +522,7 @@ async def log_co_pairs(cm: AsyncConnectionManager, query: str, hits: list[dict[s
     if len(refs) < 2:
         return 0
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     qhash = hashlib.sha1(query.encode("utf-8", "ignore")).hexdigest()[:16]
     ts = time.time()
     written = 0
@@ -521,7 +534,8 @@ async def log_co_pairs(cm: AsyncConnectionManager, query: str, hits: list[dict[s
                 (ts, lo, hi, qhash),
             )
             written += int(cur.rowcount or 0)
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return written
 
 
@@ -533,6 +547,7 @@ async def miner_provenance(cm: AsyncConnectionManager, layer: str) -> dict[str, 
     Wiki [[fact:]] links are not wired yet — direct parents only.
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     rows = await (await conn.execute("SELECT user_id, value, metadata FROM core_memory WHERE layer=?", (layer,))).fetchall()
     edges = 0
     for r in rows:
@@ -570,7 +585,8 @@ async def miner_provenance(cm: AsyncConnectionManager, layer: str) -> dict[str, 
             else:
                 ep_id = int(ep["node_id"])
             edges += await _insert_edge(conn, ep_id, fact_id, "sourced_from", 0.5, "provenance")
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -585,6 +601,7 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
     are skipped.
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     import re as _re
 
     links = await (
@@ -656,7 +673,8 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
                     source=str(fact_row["source"] or "consolidation:wiki_link"),
                     metadata=meta,
                 )
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -670,6 +688,7 @@ async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str
     """
     await ensure_co_pairs(cm)
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     rows = await (
         await conn.execute(
             "SELECT node_a, node_b, COUNT(*) AS c FROM recall_co_pairs WHERE node_a LIKE ? AND node_b LIKE ? GROUP BY node_a, node_b HAVING c >= 2",
@@ -690,7 +709,8 @@ async def miner_co_retrieval(cm: AsyncConnectionManager, layer: str) -> dict[str
             continue
         edges += await _insert_edge(conn, min(na, nb), max(na, nb), "co_recalled", min(0.3 + 0.1 * int(c), 0.6), "co_retrieval")
     edges += await _f_pair_edges(conn, layer, frows)
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -755,6 +775,7 @@ async def miner_markers(cm: AsyncConnectionManager, layer: str) -> dict[str, int
     token or outside the window — no edge.
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     from rag.synonyms import load_synonyms
 
     syn = load_synonyms()
@@ -771,7 +792,8 @@ async def miner_markers(cm: AsyncConnectionManager, layer: str) -> dict[str, int
             delta = abs(tb_ts - ta_ts)
             if _MARKER_MIN <= delta <= _MARKER_MAX:
                 edges += await _insert_edge(conn, lo, hi, "led_to", 0.3, "marker")
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -787,6 +809,7 @@ async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, 
       but sharing an epi_tag → `community_bridge` 0.2.
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     edges = 0
 
     # --- co-citation ---
@@ -854,7 +877,8 @@ async def miner_structural(cm: AsyncConnectionManager, layer: str) -> dict[str, 
                         edges += 1
                         linked.add((a, b))
 
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges, "boosted": boosted}
 
 
@@ -1002,6 +1026,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     (~200 nodes = 20k pairs); top-k=15 per node.
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     nodes = await _layer_nodes(conn, layer)
     if len(nodes) < 2:
         return {"edges": 0}
@@ -1056,7 +1081,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
         if b == 0:
             await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, 'anomaly:junk_vector')", (nid,))
             flagged += 1
-    if flagged:
+    if flagged and not borrowed:
         await conn.commit()
 
     edges = 0
@@ -1143,7 +1168,8 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str) -> dict[str, i
     # edges either way; what changes is where inhibition lands (see the
     # `_inhibit_dirty` docstring).
     await _inhibit_dirty(conn, dirty)
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges, "anomalies": flagged}
 
 
@@ -1176,6 +1202,7 @@ async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str) -> dict[st
     from lifecycle.tool_stats import _SNIP, scan_tool_pairs, tool_query_text, tool_result_text
 
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     pairs, _ = await scan_tool_pairs(conn, 0.0, layer=layer)
     edges = 0
     for use, result in pairs:
@@ -1190,7 +1217,8 @@ async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str) -> dict[st
         o_id = await _find_or_add_node(conn, layer, uid, o_type, outcome)
         edges += await _insert_edge(conn, q_id, a_id, "query_tool", 0.5, "triplets")
         edges += await _insert_edge(conn, a_id, o_id, "tool_outcome", 0.5, "triplets")
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return {"edges": edges}
 
 
@@ -1254,12 +1282,14 @@ async def log_zero_result(cm: AsyncConnectionManager, layer: str, user_id: str, 
     """Log a failed query (0 hits) as a miner signal "what to model next"."""
     await ensure_zero_result(cm)
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     qhash = hashlib.sha1(query.encode("utf-8", "ignore")).hexdigest()[:16]
     await conn.execute(
         "INSERT INTO recall_zero_results (ts, layer, user_id, query, query_hash) VALUES (?, ?, ?, ?, ?)",
         (time.time(), layer, user_id, query[:500], qhash),
     )
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
 
 
 async def miner_zero_results(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:

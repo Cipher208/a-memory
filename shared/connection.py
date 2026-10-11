@@ -116,6 +116,32 @@ if not _USE_SYNC:
         logger.warning("aiosqlite not installed, falling back to sync sqlite3")
 
 
+def split_statements(script: str) -> list[str]:
+    """Split a SQL script into whole statements, without running it.
+
+    `executescript()` is the natural way to run a schema script, but it issues an implicit `COMMIT`
+    first — measured on this host: with a stranger's transaction open on the connection, one
+    `executescript()` call made their uncommitted row durable. So when the shared handle is already
+    inside somebody else's transaction, the statements have to be run one at a time through
+    `execute()`, which does not commit; this is how they are cut apart.
+
+    `sqlite3.complete_statement` does the parsing rather than a split on `;`, because a semicolon
+    can sit inside a string literal, a trigger body or a comment. A trailing fragment without its
+    own terminator is returned as a final statement so nothing is silently dropped.
+    """
+    statements: list[str] = []
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            if buffer.strip():
+                statements.append(buffer)
+            buffer = ""
+    if buffer.strip():
+        statements.append(buffer)
+    return statements
+
+
 class _SyncConnectionWrapper:
     """Wrap sync sqlite3.Connection to look like aiosqlite for Windows fallback."""
 
@@ -311,8 +337,20 @@ class AsyncConnectionManager:
     # ------------------------------------------------------------------
 
     async def execute_script(self, db_name: str, script: str) -> None:
-        """Execute a SQL script (e.g. CREATE TABLE) and commit."""
+        """Run a schema script (e.g. `CREATE TABLE IF NOT EXISTS`), committing only our own work.
+
+        `executescript()` commits implicitly, so with a transaction already open on the shared
+        handle it would flush another component's half-finished work — and skipping our own
+        `commit()` would not prevent it. In that case the statements are run individually instead,
+        which leaves their transaction whole. Riding along is the right call for this method: every
+        script it is called with is idempotent (`CREATE ... IF NOT EXISTS`, existence-checked
+        `ALTER`), so a schema lost to somebody's later `rollback()` is recreated by the next call.
+        """
         conn = await self.get(db_name)
+        if conn.in_transaction:
+            for statement in split_statements(script):
+                await conn.execute(statement)
+            return
         await conn.executescript(script)
         await conn.commit()
 
