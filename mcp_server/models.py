@@ -22,6 +22,11 @@ class ForgetResult(BaseModel):
     deleted_l4: int = Field(default=0, description="Deleted core memory records")
     deleted_l3: int = Field(default=0, description="Deleted episodes")
     deleted_graph: int = Field(default=0, description="Deleted graph nodes")
+    dry_run: bool = Field(default=False, description="True when nothing was written — the lists below are a preview")
+    entries: list[dict[str, Any]] = Field(default_factory=list, description="Core entries hit, or that would be hit under dry_run")
+    episodes: list[dict[str, Any]] = Field(default_factory=list, description="Episodes hit, or that would be hit under dry_run")
+    graph_nodes: list[dict[str, Any]] = Field(default_factory=list, description="Graph nodes hit, or that would be hit under dry_run")
+    not_found: list[int] = Field(default_factory=list, description="Requested ids naming no row in this layer — reported instead of guessed at")
 
 
 class EvolveResult(BaseModel):

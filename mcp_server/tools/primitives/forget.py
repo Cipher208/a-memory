@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from mcp.server.mcpserver import Context  # noqa: TC002 — runtime: MCPServer evaluates this annotation at registration
@@ -22,17 +23,87 @@ from mcp_server.context import AppContext  # noqa: TC001 — runtime: MCPServer 
 
 logger = logging.getLogger(__name__)
 
+#: How much of a hit's text a result echoes back. Long enough to recognise a row,
+#: short enough that a preview of ten episodes cannot flood a context.
+PREVIEW_CHARS = 120
+
+#: Why `scope="recent"` has no preview, in the caller's words. Kept next to the
+#: code that returns it so the refusal and its reason cannot drift apart.
+_RECENT_NOT_PREVIEWABLE = (
+    "scope='recent' purges without a shadow bin: nothing it deletes can be recovered, and it cannot be previewed "
+    "without a second copy of its three filters — a mirror is what this primitive is being fixed to stop relying on. "
+    "Use 'exact', 'fuzzy' or 'episode_ids' when you need to see the cut before making it."
+)
+
+
+@dataclass(slots=True)
+class _Outcome:
+    """What one pass did — or, under `dry_run`, what it would have done.
+
+    Replaces the `tuple[int, int, int]` the helpers used to return: counts alone
+    cannot answer "which episodes?", and that is the question a caller has to be
+    able to ask before `fuzzy` widens a match past what they meant.
+    """
+
+    deleted_l4: int = 0
+    deleted_l3: int = 0
+    deleted_graph: int = 0
+    entries: list[dict[str, Any]] = field(default_factory=list)
+    episodes: list[dict[str, Any]] = field(default_factory=list)
+    graph_nodes: list[dict[str, Any]] = field(default_factory=list)
+    not_found: list[int] = field(default_factory=list)
+
+
+def _preview(text: Any) -> str:
+    s = "" if text is None else str(text)
+    return s if len(s) <= PREVIEW_CHARS else s[:PREVIEW_CHARS] + "…"
+
+
+def _entry_hit(entry: Any) -> dict[str, Any]:
+    return {"entry_id": entry.entry_id, "key": entry.key, "memory_kind": getattr(entry, "memory_kind", None)}
+
+
+def _episode_hit(episode: Any) -> dict[str, Any]:
+    return {"episode_id": episode.episode_id, "summary": _preview(episode.summary)}
+
+
+def _node_hit(node: Any) -> dict[str, Any]:
+    return {"node_id": node.node_id, "node_type": node.node_type, "content": _preview(node.content)}
+
 
 async def forget(
-    key: str,
-    scope: Literal["exact", "fuzzy", "recent"] = "exact",
+    key: str = "",
+    scope: Literal["exact", "fuzzy", "recent", "episode_ids"] = "exact",
     layer: Literal["user", "agent"] = "user",
     user_id: str = "default",
     minutes: int = 60,
     shadow_bin: bool = True,
+    dry_run: bool = False,
+    episode_ids: list[int] | None = None,
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
-    """Universal Primitive: context-aware forgetting with Shadow Bin support."""
+    """Universal Primitive: context-aware forgetting with Shadow Bin support.
+
+    Scope: `exact` one L4 key; `fuzzy` a pattern across L4, L3 and the graph;
+    `recent` everything newer than `minutes`; `episode_ids` exactly those
+    `episodes.episode_id` values. Every scope reports what it touched, in
+    `entries` / `episodes` / `graph_nodes` / `not_found`.
+
+    `dry_run=True` matches and writes nothing — the same computation as the real
+    pass, so the preview cannot drift from it. Refused for `recent`, which has no
+    shadow bin and so cannot be undone.
+    """
+    # Why `episode_ids` and not `ids`: `episodes.episode_id`,
+    # `core_memory.entry_id` and `epi_nodes.node_id` are independent sequences
+    # whose values overlap in a live base, so a bare `ids=[...]` would be three
+    # parameters wearing one name. The parameter names its kind instead.
+    #
+    # Why `recent` refuses `dry_run` rather than answering: a count of what a
+    # purge would take needs a second copy of its three filters, and a mirror is
+    # the exact construct this primitive is being fixed to stop relying on —
+    # `restore_entries` mirrors `archive_entries` and had already drifted. The
+    # refusal names that, and it is also the one scope with no way back, which is
+    # worth saying out loud every time it is called.
     app: AppContext = _get_ctx(ctx)
     metrics.inc("tool_calls")
     metrics.inc("tool_forget_primitive")
@@ -42,30 +113,57 @@ async def forget(
         return dict(rate_limit)
 
     _validate_layer(layer)
+
+    # `key` is optional only because `episode_ids` does not use it, and an empty
+    # one is not harmless: `fuzzy` hands it to a LIKE search (`%%` matches every
+    # core row) and to `find_nodes_matching` (`%%` matches every node). Refusing
+    # beats matching the whole layer.
+    if scope in ("exact", "fuzzy") and not key.strip():
+        return {"error": "key_required", "detail": f"scope={scope!r} needs a non-empty key"}
+    if scope == "episode_ids" and not episode_ids:
+        return {"error": "episode_ids_required", "detail": "scope='episode_ids' needs a non-empty episode_ids list"}
+    if scope == "recent" and dry_run:
+        return {"error": "dry_run_unsupported", "detail": _RECENT_NOT_PREVIEWABLE}
+
     mem = _get_memory(app, layer, user_id)
     graph = _get_graph(app, layer)
 
     if scope == "exact":
-        deleted_l4, deleted_l3, deleted_graph = await _forget_exact(app, key, user_id, mem, shadow_bin)
+        outcome = await _forget_exact(app, key, user_id, mem, shadow_bin, dry_run)
     elif scope == "fuzzy":
-        deleted_l4, deleted_l3, deleted_graph = await _forget_fuzzy(app, key, user_id, mem, graph, shadow_bin)
+        outcome = await _forget_fuzzy(app, key, user_id, mem, graph, shadow_bin, dry_run)
     elif scope == "recent":
-        deleted_l4, deleted_l3, deleted_graph = await _forget_recent(app, user_id, minutes, mem, graph)
+        outcome = await _forget_recent(app, user_id, minutes, mem, graph)
+    elif scope == "episode_ids":
+        outcome = await _forget_episode_ids(app, [int(i) for i in episode_ids or []], user_id, mem, shadow_bin, dry_run)
     else:
-        deleted_l4 = deleted_l3 = deleted_graph = 0
+        outcome = _Outcome()
 
     _invalidate_cache(layer, user_id)
-    return ForgetResult(deleted_l4=deleted_l4, deleted_l3=deleted_l3, deleted_graph=deleted_graph).dict()
+    return ForgetResult(
+        deleted_l4=outcome.deleted_l4,
+        deleted_l3=outcome.deleted_l3,
+        deleted_graph=outcome.deleted_graph,
+        dry_run=dry_run,
+        entries=outcome.entries,
+        episodes=outcome.episodes,
+        graph_nodes=outcome.graph_nodes,
+        not_found=outcome.not_found,
+    ).dict()
 
 
-async def _forget_exact(app: AppContext, key: str, user_id: str, mem: Any, shadow_bin: bool) -> tuple[int, int, int]:
+async def _forget_exact(app: AppContext, key: str, user_id: str, mem: Any, shadow_bin: bool, dry_run: bool = False) -> _Outcome:
     """Delete one L4 key, archiving it first when Shadow Bin is on."""
-    am = await _archived_memories(app)
     entry = await mem.l4.get(user_id, key)
     if not entry:
-        return 0, 0, 0
+        return _Outcome()
+
+    outcome = _Outcome(entries=[_entry_hit(entry)])
+    if dry_run:
+        return outcome
 
     if shadow_bin:
+        am = await _archived_memories(app)
         await am.archive(
             user_id=user_id,
             content=f"{entry.key}={entry.value}",
@@ -75,79 +173,129 @@ async def _forget_exact(app: AppContext, key: str, user_id: str, mem: Any, shado
             reason="forget_primitive_exact",
         )
     await mem.forget(key)
-    return 1, 0, 0
+    outcome.deleted_l4 = 1
+    return outcome
 
 
-async def _forget_fuzzy(app: AppContext, key: str, user_id: str, mem: Any, graph: Any, shadow_bin: bool) -> tuple[int, int, int]:
+async def _forget_fuzzy(app: AppContext, key: str, user_id: str, mem: Any, graph: Any, shadow_bin: bool, dry_run: bool = False) -> _Outcome:
     """Pattern delete across L4, L3 and Graph, archiving each hit first."""
-    from shared.archived_memories import ArchivedMemories
+    outcome = _Outcome()
 
-    am = ArchivedMemories(cm=app.mm._cm)
-    await am._init_db()
-
-    deleted_l4 = 0
-    l4_hits = await mem.l4.search(user_id, key, limit=10)
-    for hit in l4_hits:
+    entries = []
+    for hit in await mem.l4.search(user_id, key, limit=10):
         entry = await mem.l4.get(user_id, hit["key"])
-        if not entry:
-            continue
-        if shadow_bin:
-            await am.archive(
-                user_id=user_id,
-                content=f"{entry.key}={entry.value}",
-                memory_type=entry.memory_kind,
-                importance=entry.importance,
-                original_id=entry.entry_id,
-                reason="forget_primitive_fuzzy_l4",
-            )
-        if await mem.l4.delete(user_id, hit["key"]):
-            deleted_l4 += 1
+        if entry:
+            entries.append(entry)
+    outcome.entries = [_entry_hit(e) for e in entries]
 
-    deleted_l3 = await _delete_matching_episodes(am, key, user_id, mem, shadow_bin)
-    deleted_graph = await _delete_matching_nodes(am, key, user_id, graph, shadow_bin)
-    return deleted_l4, deleted_l3, deleted_graph
+    if not dry_run:
+        if shadow_bin and entries:
+            am = await _archived_memories(app)
+            for entry in entries:
+                await am.archive(
+                    user_id=user_id,
+                    content=f"{entry.key}={entry.value}",
+                    memory_type=entry.memory_kind,
+                    importance=entry.importance,
+                    original_id=entry.entry_id,
+                    reason="forget_primitive_fuzzy_l4",
+                )
+        for entry in entries:
+            if await mem.l4.delete(user_id, entry.key):
+                outcome.deleted_l4 += 1
+
+    outcome.deleted_l3, outcome.episodes = await _delete_matching_episodes(app, key, user_id, mem, shadow_bin, dry_run)
+    outcome.deleted_graph, outcome.graph_nodes = await _delete_matching_nodes(app, key, user_id, graph, shadow_bin, dry_run)
+    return outcome
 
 
-async def _delete_matching_episodes(am: Any, key: str, user_id: str, mem: Any, shadow_bin: bool) -> int:
-    episodes = await mem.l3.search(user_id, key, limit=10)
+async def _forget_episode_ids(app: AppContext, episode_ids: list[int], user_id: str, mem: Any, shadow_bin: bool, dry_run: bool = False) -> _Outcome:
+    """Delete exactly these episodes, archiving them first when the bin is on.
+
+    The answer to a fuzzy match that swept more than the caller meant: nothing is
+    matched by pattern here, so the cut is the list that was asked for.
+    """
+    found = []
+    not_found = []
+    for episode_id in episode_ids:
+        episode = await mem.l3.get_by_id(episode_id)
+        if episode is None:
+            not_found.append(episode_id)
+        else:
+            found.append(episode)
+
+    outcome = _Outcome(episodes=[_episode_hit(e) for e in found], not_found=not_found)
+    if dry_run or not found:
+        return outcome
+
     if shadow_bin:
-        for e in episodes:
+        am = await _archived_memories(app)
+        for episode in found:
             await am.archive(
                 user_id=user_id,
-                content=e.summary,
+                content=episode.summary,
                 memory_type="episode",
-                importance=e.emotional_weight,
-                original_id=e.episode_id,
+                importance=episode.emotional_weight,
+                original_id=episode.episode_id,
+                reason="forget_primitive_episode_ids",
+            )
+    outcome.deleted_l3 = int(await mem.l3.delete_by_ids([e.episode_id for e in found]))
+    return outcome
+
+
+async def _delete_matching_episodes(
+    app: AppContext, key: str, user_id: str, mem: Any, shadow_bin: bool, dry_run: bool = False
+) -> tuple[int, list[dict[str, Any]]]:
+    episodes = await mem.l3.search(user_id, key, limit=10)
+    hits = [_episode_hit(e) for e in episodes]
+    if dry_run or not episodes:
+        return 0, hits
+    if shadow_bin:
+        am = await _archived_memories(app)
+        for episode in episodes:
+            await am.archive(
+                user_id=user_id,
+                content=episode.summary,
+                memory_type="episode",
+                importance=episode.emotional_weight,
+                original_id=episode.episode_id,
                 reason="forget_primitive_fuzzy_l3",
             )
-    return int(await mem.l3.delete_by_ids([e.episode_id for e in episodes]))
+    return int(await mem.l3.delete_by_ids([e.episode_id for e in episodes])), hits
 
 
-async def _delete_matching_nodes(am: Any, key: str, user_id: str, graph: Any, shadow_bin: bool) -> int:
+async def _delete_matching_nodes(
+    app: AppContext, key: str, user_id: str, graph: Any, shadow_bin: bool, dry_run: bool = False
+) -> tuple[int, list[dict[str, Any]]]:
     nodes = await graph.find_nodes_matching(user_id, f"%{key}%")
+    hits = [_node_hit(n) for n in nodes]
+    if dry_run or not nodes:
+        return 0, hits
     if shadow_bin:
-        for n in nodes:
+        am = await _archived_memories(app)
+        for node in nodes:
             await am.archive(
                 user_id=user_id,
-                content=n.content,
-                memory_type=f"graph:{n.node_type}",
-                importance=n.confidence,
-                original_id=n.node_id,
+                content=node.content,
+                memory_type=f"graph:{node.node_type}",
+                importance=node.confidence,
+                original_id=node.node_id,
                 reason="forget_primitive_fuzzy_graph",
             )
-    return int(await graph.delete_nodes([n.node_id for n in nodes]))
+    return int(await graph.delete_nodes([n.node_id for n in nodes])), hits
 
 
-async def _forget_recent(app: AppContext, user_id: str, minutes: int, mem: Any, graph: Any) -> tuple[int, int, int]:
+async def _forget_recent(app: AppContext, user_id: str, minutes: int, mem: Any, graph: Any) -> _Outcome:
     """Mass purge of everything newer than the window (no shadow bin)."""
     from mcp_server.tools.ops import _purge_staging
 
     cutoff = time.time() - (minutes * 60)
-    deleted_l4 = await mem.l4.delete_older_than(user_id, cutoff)
-    deleted_l3 = await mem.l3.delete_older_than(user_id, cutoff)
-    deleted_graph = await graph.delete_nodes_older_than(user_id, cutoff)
+    outcome = _Outcome()
+    outcome.deleted_l4 = await mem.l4.delete_older_than(user_id, cutoff)
+    outcome.deleted_l3 = await mem.l3.delete_older_than(user_id, cutoff)
+    outcome.deleted_graph = await graph.delete_nodes_older_than(user_id, cutoff)
     await _purge_staging(user_id)
-    return deleted_l4, deleted_l3, deleted_graph
+    return outcome
 
 
 async def _archived_memories(app: AppContext) -> Any:
