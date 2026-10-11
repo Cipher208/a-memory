@@ -44,7 +44,16 @@ def ensure_schema(fresh_dir: Path) -> Path:
             user_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
             importance REAL DEFAULT 0.5, is_conflict INTEGER DEFAULT 0,
             conflict_group_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL,
-            memory_kind TEXT, expires_at REAL, source TEXT DEFAULT 'manual', metadata TEXT
+            memory_kind TEXT, expires_at REAL, source TEXT DEFAULT 'manual', metadata TEXT,
+            -- Added 2026-10-11, one day late. This fixture hand-writes a *partial* schema
+            -- instead of running the migrations, and it did not carry `layer`. So every test
+            -- here that restored an L4 row ran against a table with no such column — which is
+            -- exactly the column `_restore_core` was silently leaving to its default. A restore
+            -- that filed a row into the wrong layer could not fail here, because here there was
+            -- no layer to file it into. Keep this block in step with the migrated schema, or
+            -- the same blind spot comes back.
+            layer TEXT NOT NULL DEFAULT 'user',
+            visibility TEXT NOT NULL DEFAULT 'visible'
         );
         CREATE TABLE IF NOT EXISTS archived_memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL DEFAULT 'default',
@@ -239,3 +248,37 @@ async def test_revert_rejects_consolidate_kind(ensure_schema: Path) -> None:
     conn.close()
     with pytest.raises(ValueError, match="revert not supported"):
         await staging.revert(1, mem=_FakeApp())
+
+
+async def test_revert_puts_the_row_back_in_the_layer_the_proposal_staged(ensure_schema: Path) -> None:
+    """The layer of the revert is the proposal's, and the row must land in it.
+
+    This is the case the suite could not see until 2026-10-11. `_restore_core` wrote a
+    `core_memory` row without naming the `layer` column, so it took the column default
+    `'user'` no matter which layer the caller worked in — and this fixture hand-wrote a
+    `core_memory` with **no `layer` column at all**, so nothing here could have noticed. A
+    revert staged in `agent` restored the row into `user`, and every assertion in this file
+    still passed.
+
+    Measured, not assumed: with the column named, the row lands in `agent`; without it, in
+    `user`. The rest of the suite would go on passing either way, which is why the
+    assertion is here rather than with the others.
+    """
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    conn.execute(
+        "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason)"
+        " VALUES ('u1', 7, 'agent_key=agent_value', 'fact', 0.5, 'inactive_90d')"
+    )
+    conn.commit()
+    conn.close()
+
+    pid = await staging.propose("forgetting", "archive", "u1", "agent", {"ids": [7], "owners": {"7": "u1"}, "kinds": {"7": "fact"}})
+    await staging.decide(pid, True, mem=_FakeApp())
+    out = await staging.revert(pid, mem=_FakeApp())
+
+    assert out["status"] == "reverted"
+    assert out["restored"] == 1, out
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    rows = conn.execute("SELECT layer, key, value FROM core_memory WHERE user_id='u1'").fetchall()
+    conn.close()
+    assert rows == [("agent", "agent_key", "agent_value")], f"the layer of the revert, not the column default: {rows}"

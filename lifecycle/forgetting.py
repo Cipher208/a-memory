@@ -6,11 +6,12 @@ Forgetting System — type-aware decay, archiving, compression
 
 import contextlib
 import logging
+import sqlite3
 import time
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -20,9 +21,6 @@ from shared.memory_types import (
     apply_decay,
     validate_kind,
 )
-
-if TYPE_CHECKING:
-    import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +50,100 @@ class RestoreOutcome:
     """
 
     restored: int = 0
-    #: Refused ids, each `{"original_id": int, "reason": "purged" | "unroutable" | "ambiguous", ...}`
-    #: with `memory_type` attached, and `kinds` on an ambiguous one. The reasons are
-    #: the same names the listing counts in `omitted_by_reason`.
+    #: Refused ids, each `{"original_id": int, "reason": "purged" | "unroutable" |
+    #: "ambiguous" | "already_present", ...}` with `memory_type` attached, `kinds` on an
+    #: ambiguous one and `detail` on one the write refused. The first two are the same
+    #: names the listing counts in `omitted_by_reason`; the last two depend on the call.
     refused: list[dict[str, Any]] = field(default_factory=list)
     #: Ids that name no archived row for this owner and kind.
     not_found: list[int] = field(default_factory=list)
+    #: One entry per row this call **resolved** — restored, or that would be restored
+    #: under `dry_run`. Carries the destination and, per row, the fields of the target
+    #: table the archive never kept. A caller cannot see the destination from an id,
+    #: and `not_recorded` is the limit of `undo` stated where the answer is read.
+    restored_items: list[dict[str, Any]] = field(default_factory=list)
+    #: True when nothing was written. `restored` is then 0 while `restored_items`
+    #: still describes the plan — the same contract `forget`'s own preview keeps.
+    dry_run: bool = False
+
+
+#: Which columns of the destination table an archived row **can** fill. The archive keeps
+#: eight columns (`user_id`, `original_id`, `content`, `memory_type`, `importance`,
+#: `archive_reason`, `archived_at`, `id`); `episodes` and `core_memory` have more, and the
+#: difference is what a restore cannot bring back.
+_CARRIED_INTO_EPISODES = frozenset({"user_id", "summary", "emotional_weight"})
+_CARRIED_INTO_CORE = frozenset({"user_id", "key", "value", "importance", "memory_kind"})
+
+
+async def _not_carried(conn: Any, table: str, carried: frozenset[str]) -> set[str]:
+    """Return the columns of `table` an archive row cannot fill — **read from the schema**.
+
+    Not a list written by hand, and that is the point of asking `PRAGMA` instead: a
+    hand-written account of "what is lost" goes stale the first time somebody adds a
+    column, and it is exactly the kind of list a caller believes without checking.
+    Measured 2026-10-11 on a migrated database, this answers `episode_id`, `tags`,
+    `created_at`, `memory_kind` and `layer` for an episode, and for a core row the
+    columns the archive cannot fill, among them `expires_at`, `source`, `metadata` and
+    `visibility`.
+
+    That sentence used to end in a count — "nine names for a core row" — and the count
+    was wrong in the one place the paragraph above argues against: measured on a freshly
+    migrated database it is **ten**, and **eleven** on Эли's live base, whose `core_memory`
+    carries a stray `id INTEGER` column (index `idx_core_id`) that appears in no migration.
+    A hand-written number cannot survive that, which is why there is no number here now —
+    the caller reads `not_recorded` from the answer instead.
+
+    `table` is never caller input: it is one of two literals this module chooses from
+    the row's route, which is why an interpolated `PRAGMA` is safe here.
+    """
+    rows = await (await conn.execute(f"PRAGMA table_info({table})")).fetchall()
+    return {r["name"] for r in rows} - carried
+
+
+def _split_core_content(row: Any, original_id: int) -> tuple[str, str]:
+    """Return the `key` / `value` an archived L4 row becomes, in the one place both callers read.
+
+    Two callers need this and they must agree: `_restore_core` writes the pair, and
+    `restore_entries` asks whether the key is already taken before allowing the write.
+    A second copy of the rule would let the question and the write disagree about which
+    key is being discussed, which is the same shape of defect as the `fetchone()` this
+    method replaced — a guess that looks right until the two drift.
+
+    `partition` splits on the first `=` only, so a value containing one survives whole:
+    `k=v=w` gives key `k` and value `v=w`. An empty side falls back to the whole content:
+    a row archived from an episode that later routes here, or one written without a
+    separator, keeps its text rather than becoming a key with nothing after it.
+
+    Both sides are **stripped**, and that is a repair rather than a nicety. The archive
+    keeps no `key` and no `value` of its own, only `content`; the writers join the two
+    with a space around the `=` — `scripts/purge_foreign_rows.py:225` stores
+    `f"{key} = {value}"`, and `forget`'s shadow bin does the same. Splitting without
+    stripping therefore returns the *separator's* padding as part of the key: a fact
+    archived as `dup_77 = 77` came back with the key `'dup_77 '`, which is a different
+    key — a second row beside the original rather than a restore of it, and one the
+    `already_present` check could not match either, since it asked after the padded name.
+    """
+    key, _, value = str(row["content"]).partition("=")
+    key, value = key.strip(), value.strip()
+    return (key or f"restored_{original_id}", value or str(row["content"]))
+
+
+async def _core_key_taken(conn: Any, layer: str, user_id: str, key: str) -> bool:
+    """Whether `core_memory` already holds this `(layer, user_id, key)`.
+
+    The question the `UNIQUE` index `idx_core_layer_user_key` would ask by raising, asked
+    in advance so the answer can be a refusal with a reason instead of an exception that
+    takes the call with it — and asked in `dry_run` too, so the preview and the pass give
+    the same answer about the same row.
+
+    A race remains between this and the write: another writer on another connection could
+    take the key in between. That is why `restore_entries` still catches the index, and
+    why this is a check and not a guarantee.
+    """
+    row = await (
+        await conn.execute("SELECT 1 FROM core_memory WHERE layer = ? AND user_id = ? AND key = ? LIMIT 1", (layer, user_id, key))
+    ).fetchone()
+    return row is not None
 
 
 class ForgettingSystem:
@@ -156,8 +242,14 @@ class ForgettingSystem:
             logger.exception("archive_entries failed")
             return 0
 
-    async def restore_entries(self, ids: list[int], user_id: str, memory_type: str | None = None) -> RestoreOutcome:
+    async def restore_entries(self, ids: list[int], user_id: str, memory_type: str | None = None, dry_run: bool = False) -> RestoreOutcome:
         """Bring archived rows back, matched on owner and kind (C1.13 revert).
+
+        `dry_run=True` runs the same matching loop and writes nothing: no `save`, no
+        `INSERT`, no `DELETE`. The preview is the pass, so it cannot drift from it —
+        the same contract `forget`'s own dry run keeps on the other end. `restored`
+        is then 0, because nothing was restored, and `restored_items` still names
+        every row the real call would return.
 
         WHY THE MATCH IS NO LONGER ONE FIELD. This used to be
         `WHERE original_id = ?`. `original_id` is an integer shared by two tables
@@ -167,7 +259,7 @@ class ForgettingSystem:
         into `core_memory` whatever it had been.
 
         **How often they collide is a property of the base, so the number must not be
-        memorised.** Measured 2026-10-11 from copies: the `-cowagent` base held 904 id
+        memorised.** Measured 2026-10-11 from copies: the `-cowagent` base held 931 id
         values in both tables and **108** `original_id` values carrying two archived
         rows of different kinds for one owner; the `-hermes` base held 17 and **738**.
         An earlier version of this docstring quoted one pair as though it were the
@@ -214,7 +306,13 @@ class ForgettingSystem:
         The rule is settled rather than pending: separating that metadata is
         separate work, deliberately not done here.
         """
-        from shared.archived_memories import ROUTE_EPISODES, refusal_reason, route_of
+        from shared.archived_memories import (
+            REFUSAL_ALREADY_PRESENT,
+            REFUSAL_FAILED,
+            ROUTE_EPISODES,
+            refusal_reason,
+            route_of,
+        )
 
         outcome = RestoreOutcome()
         if not ids:
@@ -222,7 +320,19 @@ class ForgettingSystem:
         try:
             conn = await self._cm.get(DB_NAME)
             now = time.time()
-            for original_id in ids:
+            outcome.dry_run = dry_run
+            in_flight: int | None = None
+            # Asked once per distinct id. A caller may repeat one — `[77, 77]` is a
+            # redundant question, not an error — and answering it twice used to
+            # contradict itself: the first pass gave the row back and consumed its
+            # archive entry, so the second pass looked for the id in a bin the first
+            # pass had just emptied and reported the caller's own id as never having
+            # existed. One answer, with the same number in `restored` and in
+            # `not_found`. De-duplicating preserves the requested order and keeps
+            # `restored + len(not_found) <= len(ids)` true, which is the property a
+            # caller can check.
+            for original_id in dict.fromkeys(ids):
+                in_flight = original_id
                 sql = "SELECT * FROM archived_memories WHERE original_id = ? AND user_id = ?"
                 params: list[Any] = [original_id, user_id]
                 if memory_type is not None:
@@ -249,8 +359,11 @@ class ForgettingSystem:
                 # The refusal is decided by the same function the listing asks, so
                 # the listing and the restore cannot disagree about a reason or a kind.
                 # It is asked before the kind is acted on: a purge row is refused
-                # whatever it claims to be, which is what keeps the 41% out of reach
-                # even when a caller names the id and the kind.
+                # whatever it claims to be, which is what keeps a deliberately removed
+                # row out of reach even when a caller names the id and the kind. An
+                # earlier version of this line said "the 41%" — a share measured on one
+                # instance and meaningless on the others, which is the class of number
+                # this repository does not memorise.
                 why = refusal_reason(row["archive_reason"], row["memory_type"])
                 if why is not None:
                     outcome.refused.append(
@@ -262,17 +375,107 @@ class ForgettingSystem:
                     )
                     continue
                 if route_of(row["memory_type"]) == ROUTE_EPISODES:
-                    await self._restore_episode(row, user_id)
+                    destination, carried = "episodes", _CARRIED_INTO_EPISODES
                 else:
-                    await self._restore_core(conn, row, original_id, now)
-                await conn.execute("DELETE FROM archived_memories WHERE id = ?", (row["id"],))
-                outcome.restored += 1
-            await conn.commit()
+                    destination, carried = "core_memory", _CARRIED_INTO_CORE
+                if destination == "core_memory":
+                    # Asked *before* the write, and in `dry_run` as well as in the pass,
+                    # because otherwise the two modes answer differently about the same
+                    # row: the preview would offer to give back a key that is already in
+                    # the table while the pass refused it. That is the drift this pair of
+                    # modes is supposed to make impossible, and asking a question the pass
+                    # will ask anyway is what closes it.
+                    key_candidate, _ = _split_core_content(row, original_id)
+                    if await _core_key_taken(conn, self.layer, user_id, key_candidate):
+                        outcome.refused.append(
+                            {
+                                "original_id": original_id,
+                                "reason": REFUSAL_ALREADY_PRESENT,
+                                "memory_type": row["memory_type"],
+                                # The index is UNIQUE on (layer, user_id, key), and the row
+                                # stays in the bin: giving it back would need either a
+                                # replaced key — inventing data — or a replaced row.
+                                "detail": f"core_memory already holds key {key_candidate!r} for this owner in layer {self.layer!r}",
+                            }
+                        )
+                        continue
+                if not dry_run:
+                    try:
+                        if destination == "episodes":
+                            await self._restore_episode(row, user_id)
+                        else:
+                            await self._restore_core(conn, row, original_id, now)
+                        await conn.execute("DELETE FROM archived_memories WHERE id = ?", (row["id"],))
+                    except sqlite3.IntegrityError as exc:
+                        # A backstop, not the decision: the collision is asked about above,
+                        # so reaching here means the check and the write disagreed — another
+                        # writer between the two, on a connection this method does not own.
+                        # Nothing is rolled back, and that is deliberate rather than an
+                        # oversight. A failed statement writes nothing, so there is no half
+                        # row to undo; and the two obvious ways to clean up are both worse
+                        # than doing nothing: a whole-transaction `rollback()` would take
+                        # back the rows this same call already restored while
+                        # `outcome.restored` went on counting them, and a savepoint per row
+                        # would commit at `RELEASE` when it happens to be the outermost one,
+                        # quietly making a multi-row undo non-atomic. A refusal with a
+                        # reason and the rest of the batch carried on is the honest answer.
+                        outcome.refused.append(
+                            {
+                                "original_id": original_id,
+                                "reason": REFUSAL_ALREADY_PRESENT,
+                                "memory_type": row["memory_type"],
+                                "detail": str(exc),
+                            }
+                        )
+                        continue
+                    outcome.restored += 1
+                outcome.restored_items.append(
+                    {
+                        "original_id": original_id,
+                        "memory_type": row["memory_type"],
+                        "destination": destination,
+                        # The limit, per row, where the answer is read. A caller who
+                        # gets a summary back and no tags should learn why from this
+                        # answer rather than from a missing tag weeks later.
+                        "not_recorded": sorted(await _not_carried(conn, destination, carried)),
+                    }
+                )
+            # Only the pass commits. An unconditional `commit()` here was reached on the
+            # preview path too, where this method has written nothing of its own — and
+            # because `AsyncConnectionManager.get()` hands out **one shared connection per
+            # database**, that commit flushed whatever *another* component had left pending
+            # on the same handle. So `dry_run=True` could put somebody else's half-finished
+            # transaction on disk, which is the opposite of a preview. The existing
+            # "writes nothing" test counted rows on the same connection and saw uncommitted
+            # state anyway, so it could not have caught this.
+            if not dry_run:
+                await conn.commit()
             return outcome
-        except Exception:
+        except Exception as exc:
             logger.exception("restore_entries failed")
-            # The partial outcome, not a zero: whatever landed before the failure
-            # did land, and saying otherwise would be the same silence in reverse.
+            # The partial outcome, not a zero: a row that landed did land, and saying
+            # otherwise would be the same silence in reverse. "Landed" is narrower than it
+            # sounds and worth being exact about. `_restore_episode` writes through
+            # `EpisodicMemory.save()`, which commits for itself, so an episode is durable
+            # the moment it is written and no rollback can take it back. The L4 path writes
+            # on this connection, so those rows are still pending here, and what happens to
+            # them decides whether the count below is true. Rolling back would discard the
+            # L4 rows while `outcome.restored` went on counting them and the episodes stayed
+            # — the outcome would describe a state that is in neither place. Committing is
+            # what makes `restored` mean "in the table", and each committed row carries its
+            # own archive `DELETE` in the same transaction, so the bin and the tables stay
+            # consistent. A row interrupted *between* its write and that `DELETE` is the one
+            # case this cannot tidy: it stays restorable in name and a retry refuses it as
+            # `already_present`. Recoverable, and reported rather than left to be found.
+            with contextlib.suppress(Exception):
+                await conn.commit()
+            outcome.refused.append(
+                {
+                    "original_id": in_flight,
+                    "reason": REFUSAL_FAILED,
+                    "detail": f"{type(exc).__name__}: {exc}",
+                }
+            )
             return outcome
 
     async def _restore_episode(self, row: Any, user_id: str) -> int:
@@ -289,9 +492,12 @@ class ForgettingSystem:
         mem = EpisodicMemory(cm=self._cm, layer=self.layer)
         # `None` is checked, not truthiness. `row["importance"] or 0.5` — the earlier
         # form — treats a recorded `0.0` as absent and returns the episode with a
-        # different weight than it had. Measured 2026-10-11: no archived row in the
-        # base carries `importance` 0.0 or NULL, so this was latent rather than live;
-        # it is still the same substitution this repair exists to remove, so it goes.
+        # different weight than it had. **This was live, not latent.** An earlier
+        # version of this comment said the base held no such row; that was measured on
+        # one instance and is false of the set of them. Measured 2026-10-11 from copies:
+        # the `-hermes` base holds one archived episode with `importance=0.0` and reason
+        # `forget_primitive_fuzzy_l3`, so the old form would have restored that episode
+        # at 0.5. There is no single base to measure — the archive is per instance.
         weight = 0.5 if row["importance"] is None else float(row["importance"])
         return await mem.save(user_id, str(row["content"]), emotional_weight=weight)
 
@@ -306,14 +512,25 @@ class ForgettingSystem:
         method never saw written, and the same guess `fetchone()` used to make about
         which row it had found. A row with no recorded kind cannot reach here:
         `refusal_reason` refuses it first.
+
+        **The layer is named, and that is a repair.** This `INSERT` used to leave the
+        column out, so it took the column default `'user'` whatever layer the caller
+        was working in — while `_restore_episode` takes the call's layer as an argument,
+        so the two routes disagreed about a rule neither of them stated. The archive
+        records no layer either way, so `not_recorded` says so on both; what it does not
+        say is that one route leaves the column to a default, and it should not have to.
+        The consequence was not only a row filed in the wrong place: the UNIQUE index is
+        on `(layer, user_id, key)`, so filing into `'user'` is also what put a restore in
+        another layer on a collision course with the rows already there.
         """
-        key, _, value = str(row["content"]).partition("=")
+        key, value = _split_core_content(row, original_id)
         await conn.execute(
-            "INSERT INTO core_memory (user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
+                self.layer,
                 row["user_id"],
-                key or f"restored_{original_id}",
-                value or str(row["content"]),
+                key,
+                value,
                 row["importance"],
                 now,
                 now,

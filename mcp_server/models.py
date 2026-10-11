@@ -27,6 +27,18 @@ class ForgetResult(BaseModel):
     episodes: list[dict[str, Any]] = Field(default_factory=list, description="Episodes hit, or that would be hit under dry_run")
     graph_nodes: list[dict[str, Any]] = Field(default_factory=list, description="Graph nodes hit, or that would be hit under dry_run")
     not_found: list[int] = Field(default_factory=list, description="Requested ids naming no row in this layer — reported instead of guessed at")
+    restored: int = Field(default=0, description="Archived rows put back by scope='undo'. Always 0 under dry_run")
+    restored_items: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Each row scope='undo' restored, or would restore under dry_run: original_id, memory_type, destination table, and the destination fields the archive never kept",
+    )
+    refused: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Ids scope='undo' would not hand back, each with its reason — purged, unroutable, ambiguous, "
+            "already_present, or error when the call itself broke. Distinct from not_found: a refusal is not an absence"
+        ),
+    )
 
 
 class EvolveResult(BaseModel):
