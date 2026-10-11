@@ -124,7 +124,7 @@ async def test_full_memory_lifecycle(e2e):
     res = await forget(key="dark mode", scope="fuzzy", layer="user", user_id=uid, shadow_bin=True, ctx=ctx)
     assert res["deleted_l4"] + res["deleted_l3"] + res["deleted_graph"] >= 0  # placement may vary; archive is the contract
     archived = await am.get_archived(uid, limit=50)
-    assert any("dark mode" in (a["content"] or "").lower() or "prefers dark mode" in (a["content"] or "") for a in archived)
+    assert any("dark mode" in (a["content"] or "").lower() or "prefers dark mode" in (a["content"] or "") for a in archived["entries"])
 
     # ── 7. evolve records personality shift (agent core + temporal) ──
     res = await evolve(instruction="Be terse in code reviews", user_id=uid, ctx=ctx)

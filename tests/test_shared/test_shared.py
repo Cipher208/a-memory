@@ -35,6 +35,13 @@ def test_archived_memories(tmp_path):
 
     Хозяин базы теперь свой, и он же проверяет настоящее свойство класса:
     таблица появляется сама (см. `ArchivedMemories.ensure`).
+
+    Строка архивируется **с типом**, и это часть спецификации, а не украшение.
+    `get_archived` отдаёт агенту только восстановимое, а по типу определяется, в
+    какую таблицу строка вернётся: строка без записанного типа невосстановима, и
+    `route_of` отказывает ей. Раньше тест клал строку без типа и ждал её в
+    листинге — верно, пока листинг не спрашивал о маршруте. `count()` при этом
+    остаётся полным: он считает всё в корзине, включая невосстановимое.
     """
     from shared.archived_memories import ArchivedMemories
     from shared.connection import AsyncConnectionManager
@@ -42,16 +49,22 @@ def test_archived_memories(tmp_path):
     async def t():
         cm = AsyncConnectionManager(base_dir=str(tmp_path))
         am = ArchivedMemories(cm=cm)
-        await am.archive("test_sh", "Old memory", importance=0.2, reason="test")
+        await am.archive("test_sh", "Old memory", memory_type="fact", importance=0.2, reason="test")
         archived = await am.get_archived("test_sh")
-        assert len(archived) >= 1
+        assert len(archived["entries"]) >= 1
         await cm.close_all()
 
     asyncio.run(t())
 
 
 def test_archived_memories_works_on_a_migrated_database(tmp_path):
-    """На мигрированной базе класс работает и таблицу не ломает."""
+    """На мигрированной базе класс работает и таблицу не ломает.
+
+    Здесь же — контраст, который стоит держать на виду: строка без записанного
+    типа лежит в корзине (`count` её считает) и **не** показывается агенту,
+    потому что по типу определяется маршрут возврата. Это не потеря строки, а
+    честная граница: корзина знает о ней, восстановление — нет.
+    """
     from shared.archived_memories import ArchivedMemories
     from shared.connection import AsyncConnectionManager
     from shared.migrations import MigrationManager
@@ -63,6 +76,9 @@ def test_archived_memories_works_on_a_migrated_database(tmp_path):
         assert await am.count("test_sh") == 0
         await am.archive("test_sh", "Migrated db row", reason="test")
         assert await am.count("test_sh") == 1
+        listing = await am.get_archived("test_sh")
+        assert listing["entries"] == [], "a row with no recorded kind was shown as restorable"
+        assert listing["omitted_by_reason"]["unroutable"] == 1
         await cm.close_all()
 
     asyncio.run(t())

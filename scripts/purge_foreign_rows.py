@@ -35,9 +35,22 @@ because a foreign row happened to produce the same summary.
 NOTHING IS ERASED
 
 Every removed row is copied to `archived_memories` with its reason before the
-delete, using the same class `features.compression` uses. `--restore-archived`
-puts a run back from those rows. Deleting without archiving would be the same
-class of mistake as the bug that put the rows there.
+delete, using the same class `features.compression` uses. Deleting without
+archiving would be the same class of mistake as the bug that put the rows there.
+
+**These rows are not restorable through anything an agent can call.** The archive
+reason is `foreign_agent_contamination`, and `PURGE_REASONS` makes that a refusal
+with no off switch — by design, because a row removed on purpose is not a row that
+was forgotten. An earlier version of this docstring advertised a `--restore-archived`
+flag that does not exist and never did. Putting a run back is an out-of-band operator
+job, and it would have to bypass the refusal deliberately rather than by calling it.
+
+`memory_type` is written as the **source**, not the kind: `"episode"` for a row from
+`episodes` and `"core_memory"` for one from `core_memory`, which is how `route_of`
+reads it. The content is stored as `key = value` with spaces, whereas
+`_restore_core` splits on the first `=` without trimming — so a restore of one of
+these rows would keep the padding in the key. Unreachable today because the reason
+refuses first; noted here so that unwinding the refusal is not done blind.
 
 The L0 hash chain is not touched at all: `l0_journal` rows are left in place with
 `status='foreign_agent'`, so `verify_chain` stays clean and the chain remains a
