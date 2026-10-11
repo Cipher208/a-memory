@@ -365,10 +365,10 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
         # constant (`"default"`) while the ids come from `_find_archivable_entries`,
         # a query with no owner filter — so it describes the proposal, not the rows,
         # and using it would file one owner's row under another's. Measured
-        # 2026-10-11: two live bases hold three owners between them (`default`,
-        # `test_sh`, `lily`). No payload without owners exists in the base measured
-        # that day — `kind='archive'` proposals: 0 — so nothing regresses by
-        # refusing; a payload that cannot name its owner cannot be reverted safely.
+        # 2026-10-11: the `-cowagent` archive holds three owners, the `-hermes` two.
+        # No payload without owners exists in the bases measured that day —
+        # `kind='archive'` proposals: 0 — so refusing regresses nothing; a payload
+        # that cannot name its owner cannot be reverted safely.
         owners = payload.get("owners") or {}
         kinds = payload.get("kinds") or {}
         groups: dict[tuple[str | None, str | None], list[int]] = {}

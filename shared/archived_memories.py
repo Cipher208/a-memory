@@ -40,13 +40,28 @@ ROUTE_CORE = "core_memory"
 #: so their rows are refused rather than written into `core_memory` as though they
 #: had lived there: `graph:<node_type>` is written by `forget`'s shadow bin for a
 #: graph node, and `project_archive` for a **wiki page** (`project.py` deletes the
-#: file). `core_memory` is in this set because it is a table name that leaked into
-#: a kind field, never a kind.
-_NO_ROUTE_KINDS = frozenset({"project_archive", "core_memory"})
+#: file). Neither has a restore path in this repository, so the honest answer is
+#: that there is nowhere to put them.
+#:
+#: `core_memory` is deliberately **not** in this set. It was, on a story that turned
+#: out to be invented — that the value was a table name which had leaked into a kind
+#: field. It has not: `scripts/purge_foreign_rows.py:209` writes it for rows it
+#: selected **from** `core_memory`, so it names the source, exactly as `episode`
+#: names `episodes`. See `route_of`.
+_NO_ROUTE_KINDS = frozenset({"project_archive"})
 _NO_ROUTE_PREFIXES = ("graph:",)
 
-#: The two rules, and the only two: every refusal the bin can produce is one of
-#: these, so a caller can switch on them and a count can be kept per reason.
+#: The reasons a **row's reason or kind** can put it out of reach. These are the two
+#: the bin counts in `omitted_by_reason`, and between them they are complete for that
+#: question.
+#:
+#: They are not the only refusals a restore can return. `ambiguous` is a third, and it
+#: is decided in `ForgettingSystem.restore_entries` because it depends on the *call*
+#: — an id naming two rows of different kinds for one owner is refused when no kind is
+#: given and accepted when it is. `not_found` is a fourth and is not a refusal at all,
+#: just an id that names nothing. So a listing that hides on these two reasons can
+#: still be asked for a row that the restore then refuses, and the difference is the
+#: kind the listing returns — see the anti-drift test.
 REFUSAL_PURGED = "purged"
 REFUSAL_UNROUTABLE = "unroutable"
 
@@ -59,18 +74,32 @@ def is_restorable_reason(reason: str | None) -> bool:
 def route_of(memory_type: str | None) -> str | None:
     """Where a row carrying this kind goes back to, or `None` if nowhere.
 
-    `None` is answered in two different situations on purpose — a kind that was
-    never recorded, and a kind whose source has no restore path — because both
-    mean the same thing to a caller: this row cannot be handed back, and writing
-    it into `core_memory` would be inventing a provenance it never had.
+    The convention is that the value names the table the row came from: `episode`
+    for `episodes` (the name is singular, the table is not), `core_memory` for
+    `core_memory` — which is what `scripts/purge_foreign_rows.py:209` writes — and
+    an L4 kind such as `fact` or `rule` for a row from `core_memory`, where the kind
+    is the more useful thing to know. So `episodes` is named explicitly and
+    `core_memory` is the default, with a small closed set of labels that name no
+    table this can write to (`_NO_ROUTE_KINDS`, `_NO_ROUTE_PREFIXES`).
+
+    `None` is answered in two different situations on purpose — a kind that was never
+    recorded, and a label with no restore path — because both mean the same thing to
+    a caller: this row cannot be handed back, and writing it into `core_memory` would
+    be inventing a provenance it never had.
     """
     kind = (memory_type or "").strip()
     if not kind:
-        # The writer did not say. Three callers leave it empty and two of them
-        # archive rows that were never in `core_memory` (`rag/conflict.py` archives
-        # `memory_conflicts`), so filling in a default here is the same guess
-        # `fetchone()` used to make about which row it had found.
+        # The writer did not say. **One** caller in this repository leaves it empty:
+        # `rag/conflict.py:177` archives rows out of `memory_conflicts`, which are not
+        # core rows and have no table of their own to return to. Filling in a default
+        # here is the same guess `fetchone()` used to make about which row it had
+        # found, so it is refused instead.
         return None
+    if kind == "episode":
+        return ROUTE_EPISODES
+    if kind in _NO_ROUTE_KINDS or kind.startswith(_NO_ROUTE_PREFIXES):
+        return None
+    return ROUTE_CORE
     if kind == "episode":
         return ROUTE_EPISODES
     if kind in _NO_ROUTE_KINDS or kind.startswith(_NO_ROUTE_PREFIXES):
@@ -79,13 +108,20 @@ def route_of(memory_type: str | None) -> str | None:
 
 
 def refusal_reason(reason: str | None, memory_type: str | None) -> str | None:
-    """Why the bin will not hand this row back, or `None` if it will.
+    """Why this row's reason or kind puts it out of reach, or `None` if neither does.
 
-    **The listing and the restore both ask this one function, in this one order**,
-    so the bin can never advertise a row the restore would refuse. The order is
-    part of the answer: a purge reason is refused whatever the row claims to be,
-    which is what keeps a deliberately removed row out of reach even when a caller
-    names its id and its kind.
+    The listing and the restore both ask this one function, in this one order, so
+    they cannot drift apart about a reason or a kind. The order is part of the
+    answer: a purge reason is refused whatever the row claims to be, which is what
+    keeps a deliberately removed row out of reach even when a caller names its id
+    and its kind.
+
+    **What this does not decide.** A `None` here does not mean the restore will
+    certainly accept the row. It means this row's reason and kind are not themselves
+    a bar — `ambiguous` and `not_found` depend on the call, not the row, and are
+    returned by `restore_entries`. That is also why the listing can offer an id the
+    restore would refuse *in that call*: the `memory_type` it returns is the argument
+    which resolves it.
     """
     if not is_restorable_reason(reason):
         return REFUSAL_PURGED
@@ -156,12 +192,15 @@ class ArchivedMemories:
         guessing a destination.
 
         So the two ends are not the same expression, even though they look alike.
-        Nine call sites pass `memory_kind or "fact"`, and on the **writing** side
-        that is legitimate: the row was just read out of `core_memory`, so naming it
-        a core kind records where it came from. The same `or "fact"` on the
-        **reading** side is the defect `route_of` exists to prevent — there the
-        origin is unknown, and a default is a guess about a table the reader never
-        saw the row leave.
+        Two of this method's callers pass `memory_kind or "fact"`, and on the
+        **writing** side that is legitimate: the row was just read out of
+        `core_memory`, so naming it a core kind records where it came from. The same
+        `or "fact"` on the **reading** side is the defect `route_of` exists to
+        prevent — there the origin is unknown, and a default is a guess about a table
+        the reader never saw the row leave. (The string also appears elsewhere in the
+        repository — `core/memory.py`, `hooks/shared.py`, `importance_scheduler.py` —
+        but those are not calls to this method and were counted as though they were
+        in an earlier version of this docstring.)
         """
         await self.ensure()
         conn = await self._cm.get(DB_NAME)

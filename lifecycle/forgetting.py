@@ -161,13 +161,18 @@ class ForgettingSystem:
 
         WHY THE MATCH IS NO LONGER ONE FIELD. This used to be
         `WHERE original_id = ?`. `original_id` is an integer shared by two tables
-        that number independently — `episodes.episode_id` and
-        `core_memory.entry_id` — and the archive holds the kind in `memory_type`,
-        which the query never looked at. On the base measured 2026-10-11, 870 id
-        values existed in both tables and 10 `original_id` values already carried
-        two archived rows of different kinds under one number. `fetchone()` took
-        whichever it met first, and the row was written into `core_memory`
-        whatever it had been.
+        that number independently — `episodes.episode_id` and `core_memory.entry_id`
+        — and the archive holds the kind in `memory_type`, which the query never
+        looked at. `fetchone()` took whichever it met first, and the row was written
+        into `core_memory` whatever it had been.
+
+        **How often they collide is a property of the base, so the number must not be
+        memorised.** Measured 2026-10-11 from copies: the `-cowagent` base held 904 id
+        values in both tables and **108** `original_id` values carrying two archived
+        rows of different kinds for one owner; the `-hermes` base held 17 and **738**.
+        An earlier version of this docstring quoted one pair as though it were the
+        truth about "the" base; it was not reproducible on either, because there is no
+        single base — each instance has its own archive.
 
         **The owner is required, not defaulted.** The old signature had no owner
         at all, which is what kept a cross-user restore latent rather than
@@ -179,24 +184,28 @@ class ForgettingSystem:
         cut an episode whose text contains `=` at that character and file the
         halves as a key and a value.
 
-        WHAT CANNOT BE RESTORED, returned as a reason rather than a silent zero.
-        The reason and its order are decided by `refusal_reason` in
+        WHAT CANNOT BE RESTORED, returned as a reason rather than a silent zero. A
+        row's *reason and kind* are judged by `refusal_reason` in
         `shared.archived_memories.py` — **the same function the listing asks** — so
-        the bin cannot advertise a row this would then refuse:
+        the bin cannot be filtered on a different rule from the one this applies:
 
         - a row whose `archive_reason` is a purge reason — a deliberate removal is
           not a forgetting, and this has no off switch (see `PURGE_REASONS`);
         - a row whose recorded kind names no table this can write to: a `NULL` kind,
-          which means the writer did not say, and the sources that were never in
-          `core_memory` anyway (`graph:<node_type>` from `forget`'s shadow bin,
-          `project_archive` from a wiki page, `core_memory` itself — a table name
-          leaked into a kind field). Nor is a default substituted here: a guessed
-          `fact` is the same guess `fetchone()` used to make about which row it had
-          found;
+          which means the writer did not say, and the labels with no restore path in
+          this repository (`graph:<node_type>` from `forget`'s shadow bin, and
+          `project_archive`, a **wiki page** body from `project.py`). Nor is a default
+          substituted for a missing kind: a guessed `fact` is the same guess
+          `fetchone()` used to make about which row it had found;
         - an id matching **more than one** row for this owner, refused instead of
           picked. Naming the kind narrows the match, so in practice this means an
           unnamed kind over an id that two tables happen to share — the old
           `fetchone()` behaviour, returned as a refusal.
+
+        The first two are decided from the row alone, which is why the listing can
+        pre-filter them. The third is not — it depends on the call — so a row the
+        listing offers can still be refused, and the `memory_type` the listing returns
+        is the argument that resolves it rather than a contradiction of it.
 
         WHAT IS LOST. `layer` is not in the archive and neither are an episode's
         `tags`, `created_at` or its layer, so a restored episode lands in this
@@ -224,20 +233,24 @@ class ForgettingSystem:
                     outcome.not_found.append(original_id)
                     continue
                 if len(rows) > 1:
+                    # The kinds are reported as they are recorded, `None` included:
+                    # `str(None)` here would print the string `"None"` and invent a
+                    # kind that is not in the table — a small lie in the one payload
+                    # whose whole job is to say precisely which rows collided.
                     outcome.refused.append(
                         {
                             "original_id": original_id,
                             "reason": "ambiguous",
-                            "kinds": sorted({str(r["memory_type"]) for r in rows}),
+                            "kinds": sorted({r["memory_type"] for r in rows}, key=lambda k: (k is None, str(k))),
                         }
                     )
                     continue
                 row = rows[0]
                 # The refusal is decided by the same function the listing asks, so
-                # the bin can never advertise a row this refuses. It is asked
-                # before the kind is acted on: a purge row is refused whatever it
-                # claims to be, which is what keeps the 41% out of reach even when
-                # a caller names the id and the kind.
+                # the listing and the restore cannot disagree about a reason or a kind.
+                # It is asked before the kind is acted on: a purge row is refused
+                # whatever it claims to be, which is what keeps the 41% out of reach
+                # even when a caller names the id and the kind.
                 why = refusal_reason(row["archive_reason"], row["memory_type"])
                 if why is not None:
                     outcome.refused.append(

@@ -3,9 +3,15 @@
 Why this file exists (measured 2026-10-11). `restore_entries` used to match an
 archived row on `original_id` alone — no owner, no kind. `original_id` is a number
 shared by two tables that count independently (`episodes.episode_id` and
-`core_memory.entry_id`): 870 id values existed in both, and 10 `original_id` values
-already carried two archived rows of different kinds. `fetchone()` took whichever
-came first and wrote it into `core_memory` regardless of what it had been.
+`core_memory.entry_id`), and the archive holds the kind in `memory_type`, which the
+query never looked at. `fetchone()` took whichever came first, and the row was
+written into `core_memory` regardless of what it had been.
+
+**The overlap is per base, and the number must not be memorised.** From copies: the
+`-cowagent` base held 904 id values in both tables and **108** `original_id` values
+with two archived rows of different kinds for one owner; the `-hermes` base held 17
+and **738**. An earlier version of this header quoted one pair as though it described
+"the" base; it reproduced on neither, because there is no single base.
 
 So these tests hold four promises, and the last two are the ones a reader should
 be suspicious of:
@@ -13,10 +19,11 @@ be suspicious of:
   1. the owner and the kind each decide which row comes back;
   2. an episode returns to `episodes`, where it came from;
   3. a deliberately purged row is refused with a reason, never restored;
-  4. the listing never offers what the restore refuses — asked of every row, and in
-     both directions. It is *not* the claim that the two are the same function: an
-     id that names two rows is shown, because the `memory_type` the listing now
-     returns is the argument that resolves it.
+  4. the listing never offers what the restore refuses for that row's **reason or
+     kind** — and it is not the stronger claim that the two are the same function.
+     An id naming two rows of different kinds is shown, because the `memory_type`
+     the listing returns is the argument that resolves it; `ambiguous` depends on
+     the call, not on the row, so it cannot be pre-filtered.
 
 Fixtures are synthetic throughout: no `original_id`, summary or owner value is
 copied out of a live base.
@@ -234,15 +241,22 @@ async def test_an_id_that_names_nothing_is_reported(cm: Any) -> None:
 
 
 async def test_an_unroutable_kind_is_refused_instead_of_written(cm: Any) -> None:
-    """A table name leaked into a kind field must never reach `core_memory` as a
-    `memory_kind` — an invalid kind is a row that later reads cannot classify."""
-    await _archive(cm, original_id=91, content="x=1", memory_type="core_memory", reason="test")
+    """A label with no restore path must never reach `core_memory` as a `memory_kind`.
+
+    This test used to use `core_memory` as its example, on the reasoning that the
+    value was a table name leaked into a kind field. That reasoning was invented and
+    is now known to be false — `purge_foreign_rows.py` writes it deliberately for rows
+    it selected from `core_memory`, so it routes there (see the test above). The
+    example is `project_archive` instead, which really has nowhere to go: `project.py`
+    archives a **wiki page** body, and this repository has no restore for one.
+    """
+    await _archive(cm, original_id=91, content="a wiki page's body", memory_type="project_archive", reason="project_archived")
 
     outcome = await _fs(cm).restore_entries([91], user_id=U1)
 
     assert outcome.restored == 0
     assert [r["reason"] for r in outcome.refused] == ["unroutable"]
-    assert outcome.refused[0]["memory_type"] == "core_memory"
+    assert outcome.refused[0]["memory_type"] == "project_archive"
     assert await _rows(cm, "SELECT entry_id FROM core_memory") == []
 
 
@@ -342,10 +356,16 @@ async def test_a_kind_the_enum_does_not_know_still_goes_back(cm: Any) -> None:
 
 
 async def test_a_row_whose_kind_was_never_recorded_is_refused_not_guessed(cm: Any) -> None:
-    """`NULL` means the writer did not say. Three writers leave it, and two of them
-    archive rows that were never in `core_memory` at all (`rag/conflict.py` archives
-    `memory_conflicts`, `forget`'s graph branch archives nodes). Substituting `fact`
-    is the same guess `fetchone()` was making, so it is refused instead."""
+    """`NULL` means the writer did not say, and the one production caller that leaves
+    it empty archives rows that were never in `core_memory` at all: `rag/conflict.py`
+    archives `memory_conflicts`. Substituting `fact` is the same guess `fetchone()`
+    was making, so it is refused instead.
+
+    An earlier version of this docstring said three writers left it empty and named
+    `forget`'s graph branch as one of them. Neither was true — the graph branch passes
+    `graph:<node_type>`, and `rag/conflict.py` is the only caller that omits the
+    argument. Found by reading every call site rather than by counting a grep.
+    """
     await _archive(cm, original_id=311, content="conflict_9: something", memory_type=None, reason="conflict_resolved")
 
     outcome = await _fs(cm).restore_entries([311], user_id=U1)
@@ -448,10 +468,12 @@ async def test_a_restored_episode_keeps_a_recorded_zero_weight(cm: Any) -> None:
     """`0.0` is a value the archive recorded, not an absent one.
 
     The first version of `_restore_episode` passed `float(row["importance"] or 0.5)`,
-    which reads a recorded `0.0` as missing and hands the episode back heavier than
-    it was. Measured 2026-10-11: no archived row in the base carries `importance`
-    0.0 or NULL, so this was latent — but it is the same substitution the whole
-    repair removes, on the reading side, and a test is what keeps it removed.
+    which reads a recorded `0.0` as missing and hands the episode back heavier than it
+    was. This docstring first called the case latent, on a measurement of one base;
+    the `-hermes` base holds **one** such row (an episode, `importance=0.0`, reason
+    `forget_primitive_fuzzy_l3`, measured 2026-10-11), so the old code would have
+    restored that episode at 0.5 instead of 0.0. It was live, not latent — which is
+    the difference between one base and all of them.
     """
     await _archive(cm, original_id=801, content="a silent episode", memory_type="episode", importance=0.0)
 
@@ -478,9 +500,13 @@ async def test_a_restored_episode_with_no_recorded_weight_gets_the_default(cm: A
 async def test_a_restored_core_row_without_a_separator_keeps_its_text(cm: Any) -> None:
     """`partition("=")` on content with no `=` gives an empty value. Writing the whole
     text into `value` as well is a fallback, and this pins that it is deliberate —
-    the alternative (an empty value) loses the text entirely. Measured 2026-10-11: no
-    routable row in the base lacks a `=`, because every core writer stores
-    `key=value`, so this documents the branch rather than a live case."""
+    the alternative (an empty value) loses the text entirely.
+
+    "No row lacks a `=`" is true of the rows routed to `core_memory`, and false of
+    the archive as a whole: episode summaries are bare text and 1324 of them in the
+    `-hermes` base contain no `=` (measured 2026-10-11). The first version of this
+    docstring said "no routable row", which counted the episodes in and made the
+    sentence wrong — routed to `episodes` is also routable."""
     await _archive(cm, original_id=821, content="a bare sentence with no separator", memory_type="fact")
 
     outcome = await _fs(cm).restore_entries([821], user_id=U1)
@@ -489,6 +515,35 @@ async def test_a_restored_core_row_without_a_separator_keeps_its_text(cm: Any) -
     row = await _rows(cm, "SELECT key, value FROM core_memory WHERE user_id=?", (U1,))
     assert row[0][0] == "a bare sentence with no separator"
     assert row[0][1] == "a bare sentence with no separator", "the text was dropped instead of kept whole"
+
+
+async def test_a_row_labelled_with_its_source_table_routes_there(cm: Any) -> None:
+    """`episode` names the table `episodes` and routes there. `core_memory` names
+    the table `core_memory`, and the value is written by `scripts/purge_foreign_rows.py`
+    for rows it selected **from** `core_memory` — so the same convention applies.
+
+    The first version of `route_of` refused it, on a story that turned out to be
+    invented: that the value was a table name which had leaked into a kind field.
+    It had not. The label is deliberate and it names the source; the reason these
+    rows are not recoverable in practice is `archive_reason`, not the route.
+
+    What the label does **not** carry is the row's original kind, so the restored
+    row keeps the label as its kind — a kind the registry does not list, which is
+    visible rather than disguised as `fact`.
+    """
+    await _archive(cm, original_id=901, content="purged_key=purged_value", memory_type="core_memory", reason="inactive_90d")
+
+    outcome = await _fs(cm).restore_entries([901], user_id=U1)
+
+    assert outcome.restored == 1, "a row whose label names its source table was called unroutable"
+    row = await _rows(cm, "SELECT key, value, memory_kind FROM core_memory WHERE user_id=?", (U1,))
+    assert row[0][0] == "purged_key" and row[0][1] == "purged_value"
+    # The consequence, asserted rather than left to be discovered: the label names the
+    # source, not the kind, so the restored row carries a kind the registry does not
+    # list. `validate_kind` rejects it and `decay_importance` skips such a row, so it
+    # will not decay. That is a real difference from a `fact` — and a visible one,
+    # which is the point of writing what was recorded instead of substituting a default.
+    assert row[0][2] == "core_memory"
 
 
 async def test_the_listing_never_offers_what_the_restore_refuses(cm: Any) -> None:
