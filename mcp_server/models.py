@@ -34,7 +34,10 @@ class ForgetResult(BaseModel):
     )
     refused: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="Ids scope='undo' would not hand back, each with its reason — purged, unroutable or ambiguous. Distinct from not_found: a refusal is not an absence",
+        description=(
+            "Ids scope='undo' would not hand back, each with its reason — purged, unroutable, ambiguous, "
+            "already_present, or error when the call itself broke. Distinct from not_found: a refusal is not an absence"
+        ),
     )
 
 

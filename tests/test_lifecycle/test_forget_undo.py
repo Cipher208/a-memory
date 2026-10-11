@@ -396,3 +396,143 @@ async def test_a_restored_core_row_reports_the_fields_it_did_not_bring(app: Any,
     not_recorded = set(result["restored_items"][0]["not_recorded"])
     assert not_recorded >= {"expires_at", "source", "metadata", "layer", "visibility"}
     assert not_recorded.isdisjoint({"key", "value", "importance", "user_id", "memory_kind"}), "these are written from the archive"
+
+
+async def test_a_broken_row_is_reported_and_does_not_silence_the_call(app: Any, ctx: Any, cm: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The outer handler: a failure is an answer, not a log line.
+
+    The handler is hard to reach from outside — it catches what the row loop was not
+    written to expect — so it is reached here by making one row raise. What must hold is
+    that the caller learns the call broke: before this change the exception was logged and
+    the outcome came back looking like an ordinary partial result, which for a batch of one
+    row is indistinguishable from "there was nothing to give back".
+    """
+    from lifecycle import forgetting as forgetting_module
+
+    await _archive(cm, original_id=95, content="delta = 4", memory_type="fact")
+
+    async def boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the write exploded")
+
+    monkeypatch.setattr(forgetting_module.ForgettingSystem, "_restore_core", boom)
+
+    result = await _undo(ctx, [95])
+
+    assert result["restored"] == 0
+    assert [r["reason"] for r in result["refused"]] == ["error"], result
+    assert result["refused"][0]["original_id"] == 95, "the id in flight is named, not left blank"
+    assert "RuntimeError" in result["refused"][0]["detail"]
+    left = await _rows(cm, "SELECT original_id FROM archived_memories")
+    assert [r[0] for r in left] == [95], "the row was not written, so it must still be in the bin"
+
+
+async def test_the_preview_refuses_a_key_the_pass_would_refuse(app: Any, ctx: Any, cm: Any) -> None:
+    """The drift I found in this file's own promise, on the one input that showed it.
+
+    `dry_run` and the pass run the same loop, so they agree about everything the loop
+    decides — provided the loop decides it before the write. A key already in the table
+    was decided by the write itself, which `dry_run` skips, so the preview offered to give
+    back a row the pass refused. "The preview cannot drift from the pass" was therefore
+    true of the rows and false of the refusals, which is the half that matters when the
+    answer is going to be acted on.
+    """
+    await _archive(cm, original_id=90, content="gamma = 3", memory_type="fact")
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?,?,?,?,?,?,?,?)",
+        ("user", U1, "gamma ", " 3", 0.5, time.time(), time.time(), "fact"),
+    )
+    await conn.commit()
+
+    preview = await _undo(ctx, [90], dry_run=True)
+    real = await _undo(ctx, [90])
+
+    assert [r["reason"] for r in preview["refused"]] == ["already_present"], preview
+    assert [r["reason"] for r in real["refused"]] == [r["reason"] for r in preview["refused"]], "the two modes must refuse the same thing"
+    assert preview["restored"] == 0 and real["restored"] == 0
+    assert preview["restored_items"] == [] and real["restored_items"] == []
+    left = await _rows(cm, "SELECT original_id FROM archived_memories")
+    assert [r[0] for r in left] == [90], "a refused row stays in the bin"
+
+
+async def test_one_bad_core_row_does_not_take_back_the_core_row_before_it(app: Any, ctx: Any, cm: Any) -> None:
+    """The reason the L4 route is written inside a savepoint, and this is the case that shows it.
+
+    Two L4 rows in one call, the second one colliding with a key that is already there. The
+    first has been written on this connection with no frame of its own, so clearing the
+    second with a whole-transaction `rollback()` would take the first back as well — while
+    `restored` went on counting it. The count would then describe a row that is not in the
+    table, which is the kind of answer this whole repair exists to stop producing.
+
+    An episode-first batch cannot show this: `EpisodicMemory.save()` commits for itself, so
+    an episode survives any rollback and hides the defect. L4 against L4 is the arrangement
+    that tells the two implementations apart.
+    """
+    await _archive(cm, original_id=80, content="alpha = 1", memory_type="fact")
+    await _archive(cm, original_id=81, content="beta = 2", memory_type="fact")
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?,?,?,?,?,?,?,?)",
+        ("user", U1, "beta ", " 2", 0.5, time.time(), time.time(), "fact"),
+    )
+    await conn.commit()
+
+    result = await _undo(ctx, [80, 81])
+
+    assert result["restored"] == 1, f"one row returned and one was refused: {result}"
+    assert [r["reason"] for r in result["refused"]] == ["already_present"], result["refused"]
+    present = sorted(r[0] for r in await _rows(cm, "SELECT key FROM core_memory"))
+    assert "alpha " in present, "the row that was counted as restored must still be in the table"
+    assert present == ["alpha ", "beta "], present
+
+
+async def test_a_restored_core_row_lands_in_the_layer_that_asked_for_it(app: Any, ctx: Any, cm: Any) -> None:
+    """The layer is the call's, on both routes — an episode already does this.
+
+    `episodes` gets it because `EpisodicMemory(cm=..., layer=self.layer)` takes it as an
+    argument. `core_memory` is written by a raw `INSERT` that does not name the column at
+    all, so it takes the **column default** instead — `'user'` — and a caller working in
+    another layer gets their row filed somewhere they were not looking. The `layer` entry
+    in `not_recorded` says the archive never kept one; it does not say the column was
+    left to a default when the call had said otherwise.
+    """
+    await _archive(cm, original_id=71, content="theme = dark", memory_type="fact")
+
+    result = await _undo(ctx, [71], layer="agent")
+
+    assert result["restored"] == 1
+    row = await _rows(cm, "SELECT layer, key, value FROM core_memory")
+    assert row[0][0] == "agent", "the layer of the call that restored it, not the column default"
+    assert (row[0][1], row[0][2]) == ("theme ", " dark")
+
+
+async def test_a_core_row_whose_key_is_already_there_is_answered_not_thrown(app: Any, ctx: Any, cm: Any) -> None:
+    """`core_memory` has a UNIQUE index on `(layer, user_id, key)`, and the archive is not a backup.
+
+    A key that was re-written after the row was archived is still in the table, so the raw
+    `INSERT` hits the index. That must arrive as an answer — one refusal with a reason, and
+    the rest of the batch restored — rather than as an exception that swallows the call.
+
+    The good id is asked for **first** on purpose: a fix that cleared the failure with a
+    whole-transaction `rollback()` would pass a test that put it last, while quietly taking
+    back the row it had already restored and counted.
+    """
+    await _archive(cm, original_id=72, content="colour = blue", memory_type="fact")
+    await _archive(cm, original_id=73, content="size = large", memory_type="fact")
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?,?,?,?,?,?,?,?)",
+        ("user", U1, "colour ", " blue", 0.5, time.time(), time.time(), "fact"),
+    )
+    await conn.commit()
+
+    result = await _undo(ctx, [73, 72])
+
+    assert result["restored"] == 1, f"the batch must survive one bad row: {result}"
+    assert [r["reason"] for r in result["refused"]] == ["already_present"], result["refused"]
+    assert result["refused"][0]["original_id"] == 72
+    assert result["not_found"] == [], "a key that is already there is not 'not found'"
+    keys = sorted(r[0] for r in await _rows(cm, "SELECT key FROM core_memory"))
+    assert keys == ["colour ", "size "], "the good row landed and the duplicate was not written twice"
+    left = sorted(r[0] for r in await _rows(cm, "SELECT original_id FROM archived_memories"))
+    assert left == [72], "the row that was refused stays in the bin; the one that returned does not"

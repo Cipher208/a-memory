@@ -64,6 +64,16 @@ _NO_ROUTE_PREFIXES = ("graph:",)
 #: kind the listing returns — see the anti-drift test.
 REFUSAL_PURGED = "purged"
 REFUSAL_UNROUTABLE = "unroutable"
+#: Unlike the two above, this one is not a property of the row: the same row is returned
+#: willingly into an empty table and refused when its key is already there. It is here so
+#: that the vocabulary of refusals has one home, and because the alternative — letting the
+#: `UNIQUE` index raise — takes the whole batch down with one row and reports nothing at
+#: all, which is the silence this module was repaired to end.
+REFUSAL_ALREADY_PRESENT = "already_present"
+#: The call itself broke. Listed here rather than invented at the raise, so a caller
+#: switching on the reason has one place to learn the vocabulary. `original_id` may be
+#: `None` on this one: the failure can happen with no row in flight.
+REFUSAL_FAILED = "error"
 
 
 def is_restorable_reason(reason: str | None) -> bool:

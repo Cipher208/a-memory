@@ -99,9 +99,10 @@ async def forget(
     pass, so the preview cannot drift from it. Refused for `recent`, which has no
     shadow bin.
 
-    `undo` refuses a purged row, a row whose archived kind is unknown, and another
-    owner's id — each with its reason rather than a bare zero; `dry_run=True` shows
-    what would return. An id that two archived rows share is refused too, unless
+    `undo` refuses a purged row, a row whose archived kind is unknown, another
+    owner's id, and a row whose key is already back in the table — each with its
+    reason rather than a bare zero; `dry_run=True` shows what would return and
+    refuses the same rows. An id that two archived rows share is refused too, unless
     `memory_type` names the one you want. The archive is not a backup:
     `restored_items` names the fields a restored row could not bring back.
     """
