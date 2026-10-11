@@ -145,6 +145,13 @@ async def forget(
 
     if scope == "undo":
         outcome = await _undo_archived(app, [int(i) for i in archived_ids or []], user_id, layer, dry_run, memory_type)
+        # Runs under `dry_run` too, and that is a known purity gap rather than an oversight.
+        # `_invalidate_cache` is `dict.pop` on a context cache: a preview can therefore evict
+        # an entry, and the next read rebuilds it. No result changes, so there is no failing
+        # test to write and no behaviour to fix on faith — reported to her instead of
+        # changed silently. If a preview ever needs to be side-effect-free in fact and not
+        # only in its writes, this is the line, and it wants a test that shows the harm
+        # first.
         _invalidate_cache(layer, user_id)
         return ForgetResult(
             dry_run=dry_run,

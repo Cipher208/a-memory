@@ -14,11 +14,15 @@ from shared.constants import DB_NAME
 #: was deliberately removed makes the removal decorative.
 #:
 #: `foreign_agent_contamination` is written by `scripts/purge_foreign_rows.py`,
-#: which archives before it removes. On the base measured 2026-10-11 that was 247
-#: of 606 archived rows (41%) — 238 episodes and 9 core entries. If they ever need
-#: to come back, that is an operator script run by hand, not a tool an agent can
-#: call — which is why nothing here, and nothing in the restore path, has a
-#: parameter that turns the refusal off.
+#: which archives before it removes. On **Эли's** base measured 2026-10-11 that was
+#: 247 of 606 archived rows (41%) — 238 episodes and 9 core entries. **Those 247 rows
+#: were then deleted, that same day, on her word**, so the figures describe a snapshot
+#: and not the live bin: that base now holds 359 rows and **zero** purges, and the
+#: numbers above reproduce only against the snapshot taken before the deletion
+#: (`/home/murat/backups/cowagent-purge-rows-20261011/memory.db`). The refusal stays,
+#: because a row can carry such a reason again. If they ever need to come back, that is
+#: an operator script run by hand, not a tool an agent can call — which is why nothing
+#: here, and nothing in the restore path, has a parameter that turns the refusal off.
 PURGE_REASONS = frozenset({"foreign_agent_contamination"})
 
 #: Where a row must go back to, named by its `memory_type`.
@@ -45,7 +49,7 @@ ROUTE_CORE = "core_memory"
 #:
 #: `core_memory` is deliberately **not** in this set. It was, on a story that turned
 #: out to be invented — that the value was a table name which had leaked into a kind
-#: field. It has not: `scripts/purge_foreign_rows.py:209` writes it for rows it
+#: field. It has not: `scripts/purge_foreign_rows.py:225` writes it for rows it
 #: selected **from** `core_memory`, so it names the source, exactly as `episode`
 #: names `episodes`. See `route_of`.
 _NO_ROUTE_KINDS = frozenset({"project_archive"})
@@ -86,7 +90,7 @@ def route_of(memory_type: str | None) -> str | None:
 
     The convention is that the value names the table the row came from: `episode`
     for `episodes` (the name is singular, the table is not), `core_memory` for
-    `core_memory` — which is what `scripts/purge_foreign_rows.py:209` writes — and
+    `core_memory` — which is what `scripts/purge_foreign_rows.py:225` writes — and
     an L4 kind such as `fact` or `rule` for a row from `core_memory`, where the kind
     is the more useful thing to know. So `episodes` is named explicitly and
     `core_memory` is the default, with a small closed set of labels that name no
@@ -105,11 +109,6 @@ def route_of(memory_type: str | None) -> str | None:
         # here is the same guess `fetchone()` used to make about which row it had
         # found, so it is refused instead.
         return None
-    if kind == "episode":
-        return ROUTE_EPISODES
-    if kind in _NO_ROUTE_KINDS or kind.startswith(_NO_ROUTE_PREFIXES):
-        return None
-    return ROUTE_CORE
     if kind == "episode":
         return ROUTE_EPISODES
     if kind in _NO_ROUTE_KINDS or kind.startswith(_NO_ROUTE_PREFIXES):

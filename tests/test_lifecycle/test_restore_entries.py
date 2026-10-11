@@ -8,7 +8,7 @@ query never looked at. `fetchone()` took whichever came first, and the row was
 written into `core_memory` regardless of what it had been.
 
 **The overlap is per base, and the number must not be memorised.** From copies: the
-`-cowagent` base held 904 id values in both tables and **108** `original_id` values
+`-cowagent` base held 931 id values in both tables and **108** `original_id` values
 with two archived rows of different kinds for one owner; the `-hermes` base held 17
 and **738**. An earlier version of this header quoted one pair as though it described
 "the" base; it reproduced on neither, because there is no single base.
@@ -178,8 +178,14 @@ async def test_an_episode_whose_text_was_re_added_is_still_counted_as_present(cm
 
 
 async def test_a_purged_row_is_refused_with_a_reason(cm: Any) -> None:
-    """The 41% stay out of reach. A silent 0 would look like an id that names
-    nothing; the caller has to be able to tell the two apart."""
+    """A purged row is out of reach, and the reason is why. A silent 0 would look like an
+    id that names nothing; the caller has to be able to tell the two apart.
+
+    This docstring used to say "The 41% stay out of reach" — a share of one instance's
+    archive, present-tense, in a file whose own header says a share of one base must not be
+    memorised. It is no longer true of anything: those rows were deleted from Эли's base on
+    2026-10-11 on her word, so the live bin holds 359 rows and **0** purges. The refusal
+    stays because a row can carry such a reason again; the number never belonged here."""
     purged = min(PURGE_REASONS)
     await _archive(cm, original_id=51, content="removed on purpose", memory_type="episode", reason=purged)
 

@@ -81,9 +81,17 @@ async def _not_carried(conn: Any, table: str, carried: frozenset[str]) -> set[st
     Not a list written by hand, and that is the point of asking `PRAGMA` instead: a
     hand-written account of "what is lost" goes stale the first time somebody adds a
     column, and it is exactly the kind of list a caller believes without checking.
-    Measured 2026-10-11 on a migrated database, this answers `episode_id, tags,
-    created_at, memory_kind, layer` for an episode and nine names for a core row,
-    including `expires_at`, `source`, `metadata` and `visibility`.
+    Measured 2026-10-11 on a migrated database, this answers `episode_id`, `tags`,
+    `created_at`, `memory_kind` and `layer` for an episode, and for a core row the
+    columns the archive cannot fill, among them `expires_at`, `source`, `metadata` and
+    `visibility`.
+
+    That sentence used to end in a count — "nine names for a core row" — and the count
+    was wrong in the one place the paragraph above argues against: measured on a freshly
+    migrated database it is **ten**, and **eleven** on Эли's live base, whose `core_memory`
+    carries a stray `id INTEGER` column (index `idx_core_id`) that appears in no migration.
+    A hand-written number cannot survive that, which is why there is no number here now —
+    the caller reads `not_recorded` from the answer instead.
 
     `table` is never caller input: it is one of two literals this module chooses from
     the row's route, which is why an interpolated `PRAGMA` is safe here.
@@ -105,8 +113,18 @@ def _split_core_content(row: Any, original_id: int) -> tuple[str, str]:
     `k=v=w` gives key `k` and value `v=w`. An empty side falls back to the whole content:
     a row archived from an episode that later routes here, or one written without a
     separator, keeps its text rather than becoming a key with nothing after it.
+
+    Both sides are **stripped**, and that is a repair rather than a nicety. The archive
+    keeps no `key` and no `value` of its own, only `content`; the writers join the two
+    with a space around the `=` — `scripts/purge_foreign_rows.py:225` stores
+    `f"{key} = {value}"`, and `forget`'s shadow bin does the same. Splitting without
+    stripping therefore returns the *separator's* padding as part of the key: a fact
+    archived as `dup_77 = 77` came back with the key `'dup_77 '`, which is a different
+    key — a second row beside the original rather than a restore of it, and one the
+    `already_present` check could not match either, since it asked after the padded name.
     """
     key, _, value = str(row["content"]).partition("=")
+    key, value = key.strip(), value.strip()
     return (key or f"restored_{original_id}", value or str(row["content"]))
 
 
@@ -241,7 +259,7 @@ class ForgettingSystem:
         into `core_memory` whatever it had been.
 
         **How often they collide is a property of the base, so the number must not be
-        memorised.** Measured 2026-10-11 from copies: the `-cowagent` base held 904 id
+        memorised.** Measured 2026-10-11 from copies: the `-cowagent` base held 931 id
         values in both tables and **108** `original_id` values carrying two archived
         rows of different kinds for one owner; the `-hermes` base held 17 and **738**.
         An earlier version of this docstring quoted one pair as though it were the
@@ -304,7 +322,16 @@ class ForgettingSystem:
             now = time.time()
             outcome.dry_run = dry_run
             in_flight: int | None = None
-            for original_id in ids:
+            # Asked once per distinct id. A caller may repeat one — `[77, 77]` is a
+            # redundant question, not an error — and answering it twice used to
+            # contradict itself: the first pass gave the row back and consumed its
+            # archive entry, so the second pass looked for the id in a bin the first
+            # pass had just emptied and reported the caller's own id as never having
+            # existed. One answer, with the same number in `restored` and in
+            # `not_found`. De-duplicating preserves the requested order and keeps
+            # `restored + len(not_found) <= len(ids)` true, which is the property a
+            # caller can check.
+            for original_id in dict.fromkeys(ids):
                 in_flight = original_id
                 sql = "SELECT * FROM archived_memories WHERE original_id = ? AND user_id = ?"
                 params: list[Any] = [original_id, user_id]
@@ -413,7 +440,16 @@ class ForgettingSystem:
                         "not_recorded": sorted(await _not_carried(conn, destination, carried)),
                     }
                 )
-            await conn.commit()
+            # Only the pass commits. An unconditional `commit()` here was reached on the
+            # preview path too, where this method has written nothing of its own — and
+            # because `AsyncConnectionManager.get()` hands out **one shared connection per
+            # database**, that commit flushed whatever *another* component had left pending
+            # on the same handle. So `dry_run=True` could put somebody else's half-finished
+            # transaction on disk, which is the opposite of a preview. The existing
+            # "writes nothing" test counted rows on the same connection and saw uncommitted
+            # state anyway, so it could not have caught this.
+            if not dry_run:
+                await conn.commit()
             return outcome
         except Exception as exc:
             logger.exception("restore_entries failed")

@@ -440,7 +440,7 @@ async def test_the_preview_refuses_a_key_the_pass_would_refuse(app: Any, ctx: An
     conn = await cm.get("memory.db")
     await conn.execute(
         "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?,?,?,?,?,?,?,?)",
-        ("user", U1, "gamma ", " 3", 0.5, time.time(), time.time(), "fact"),
+        ("user", U1, "gamma", "3", 0.5, time.time(), time.time(), "fact"),
     )
     await conn.commit()
 
@@ -456,24 +456,31 @@ async def test_the_preview_refuses_a_key_the_pass_would_refuse(app: Any, ctx: An
 
 
 async def test_one_bad_core_row_does_not_take_back_the_core_row_before_it(app: Any, ctx: Any, cm: Any) -> None:
-    """The reason the L4 route is written inside a savepoint, and this is the case that shows it.
+    """The case that decides between the two ways of clearing a bad row — and neither is used.
 
-    Two L4 rows in one call, the second one colliding with a key that is already there. The
-    first has been written on this connection with no frame of its own, so clearing the
-    second with a whole-transaction `rollback()` would take the first back as well — while
-    `restored` went on counting it. The count would then describe a row that is not in the
-    table, which is the kind of answer this whole repair exists to stop producing.
+    Two L4 rows in one call, the second colliding with a key that is already there. The first
+    has been written on this connection with no frame of its own, so clearing the second with
+    a whole-transaction `rollback()` would take the first back as well — while `restored`
+    went on counting it. The count would then describe a row that is not in the table, which
+    is the kind of answer this whole repair exists to stop producing.
 
-    An episode-first batch cannot show this: `EpisodicMemory.save()` commits for itself, so
-    an episode survives any rollback and hides the defect. L4 against L4 is the arrangement
-    that tells the two implementations apart.
+    A savepoint per row is the second obvious answer and is worse: `RELEASE` commits when it
+    happens to unwind the outermost frame, so a failed row would commit the rows before it
+    and a multi-row undo would stop being one transaction. Neither is needed — a failed
+    statement writes nothing, so there is nothing to unwind — and this test is what says so,
+    because **both** of those wrong implementations pass every test that puts an episode
+    first: `EpisodicMemory.save()` commits for itself, so an episode survives any rollback
+    and hides the difference. L4 against L4 is the arrangement that tells them apart.
+
+    This docstring previously claimed the L4 route *was* written inside a savepoint, which
+    was true of a draft of the repair and not of what shipped.
     """
     await _archive(cm, original_id=80, content="alpha = 1", memory_type="fact")
     await _archive(cm, original_id=81, content="beta = 2", memory_type="fact")
     conn = await cm.get("memory.db")
     await conn.execute(
         "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?,?,?,?,?,?,?,?)",
-        ("user", U1, "beta ", " 2", 0.5, time.time(), time.time(), "fact"),
+        ("user", U1, "beta", "2", 0.5, time.time(), time.time(), "fact"),
     )
     await conn.commit()
 
@@ -482,8 +489,8 @@ async def test_one_bad_core_row_does_not_take_back_the_core_row_before_it(app: A
     assert result["restored"] == 1, f"one row returned and one was refused: {result}"
     assert [r["reason"] for r in result["refused"]] == ["already_present"], result["refused"]
     present = sorted(r[0] for r in await _rows(cm, "SELECT key FROM core_memory"))
-    assert "alpha " in present, "the row that was counted as restored must still be in the table"
-    assert present == ["alpha ", "beta "], present
+    assert "alpha" in present, "the row that was counted as restored must still be in the table"
+    assert present == ["alpha", "beta"], present
 
 
 async def test_a_restored_core_row_lands_in_the_layer_that_asked_for_it(app: Any, ctx: Any, cm: Any) -> None:
@@ -503,7 +510,12 @@ async def test_a_restored_core_row_lands_in_the_layer_that_asked_for_it(app: Any
     assert result["restored"] == 1
     row = await _rows(cm, "SELECT layer, key, value FROM core_memory")
     assert row[0][0] == "agent", "the layer of the call that restored it, not the column default"
-    assert (row[0][1], row[0][2]) == ("theme ", " dark")
+    # The key/value are stripped of the separator's padding. This line used to assert
+    # `("theme ", " dark")` — the padded form — because that is what the code did when I
+    # wrote it: the assertion recorded the defect as the expected behaviour, so the suite
+    # would have gone on passing with it. `content` is the archive's only copy of the pair
+    # and the writers join it with `key = value`, so the spaces belong to the join.
+    assert (row[0][1], row[0][2]) == ("theme", "dark")
 
 
 async def test_a_core_row_whose_key_is_already_there_is_answered_not_thrown(app: Any, ctx: Any, cm: Any) -> None:
@@ -522,7 +534,7 @@ async def test_a_core_row_whose_key_is_already_there_is_answered_not_thrown(app:
     conn = await cm.get("memory.db")
     await conn.execute(
         "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?,?,?,?,?,?,?,?)",
-        ("user", U1, "colour ", " blue", 0.5, time.time(), time.time(), "fact"),
+        ("user", U1, "colour", "blue", 0.5, time.time(), time.time(), "fact"),
     )
     await conn.commit()
 
@@ -533,6 +545,85 @@ async def test_a_core_row_whose_key_is_already_there_is_answered_not_thrown(app:
     assert result["refused"][0]["original_id"] == 72
     assert result["not_found"] == [], "a key that is already there is not 'not found'"
     keys = sorted(r[0] for r in await _rows(cm, "SELECT key FROM core_memory"))
-    assert keys == ["colour ", "size "], "the good row landed and the duplicate was not written twice"
+    assert keys == ["colour", "size"], "the good row landed and the duplicate was not written twice"
     left = sorted(r[0] for r in await _rows(cm, "SELECT original_id FROM archived_memories"))
     assert left == [72], "the row that was refused stays in the bin; the one that returned does not"
+
+
+async def test_the_preview_commits_nothing_that_was_not_its_own(app: Any, ctx: Any, cm: Any) -> None:
+    """A preview must not flush somebody else's pending write.
+
+    The header of this file promises "`dry_run=True` writes nothing anywhere", and the test
+    that guards it counts rows on **the same connection** — which sees uncommitted state
+    anyway, so it could never catch the real defect: `restore_entries` ended in an
+    unconditional `await conn.commit()`, reached on the preview path too, where that method
+    has written nothing of its own.
+
+    Why that is not academic: `AsyncConnectionManager.get()` hands out **one shared
+    connection per database**, so a component with an uncommitted write shares that handle
+    with the preview. A preview was therefore what put another component's half-finished
+    transaction on disk.
+
+    Proved with a **second connection**, the only observer that can tell pending from
+    committed. Nothing here would fail if the row were read back on the first handle.
+
+    This calls `restore_entries` itself rather than the `forget` tool, and that is
+    deliberate: the tool runs the rate limiter first, and `features/rate_limiting.py:47`
+    commits the shared connection on every call — pre-existing (it arrives with the
+    original v1.0 `f2bb352`, and 14 tool call sites share it), so a preview through the
+    tool still flushes pending work for a reason that is not this method's. Reported to
+    her as a separate finding rather than fixed here.
+    """
+    import aiosqlite
+
+    from lifecycle.forgetting import ForgettingSystem
+
+    await _archive(cm, original_id=88, content="epsilon = 5", memory_type="fact")
+
+    # Somebody else's work in flight: written on the shared handle, not committed.
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO episodes (user_id, summary, emotional_weight, tags, created_at, memory_kind, layer) VALUES (?,?,?,?,?,?,?)",
+        (U1, "in flight, not committed", 0.5, "[]", time.time(), "episode", "user"),
+    )
+    assert conn.in_transaction, "the setup must leave a real pending transaction"
+
+    async with aiosqlite.connect(str(cm.base_dir / "memory.db")) as other:
+        before = (await (await other.execute("SELECT COUNT(*) FROM episodes")).fetchone())[0]
+        assert before == 0, "nothing should be on disk before the preview"
+
+        outcome = await ForgettingSystem(cm=cm, layer="user").restore_entries([88], user_id=U1, memory_type=None, dry_run=True)
+
+        after = (await (await other.execute("SELECT COUNT(*) FROM episodes")).fetchone())[0]
+
+    assert outcome.restored == 0
+    assert [r["original_id"] for r in outcome.restored_items] == [88], "the preview still names what it would give back"
+    assert after == 0, f"a preview committed another component's pending write: {after} row(s) durable"
+
+
+async def test_asking_twice_for_the_same_id_is_not_an_answer_that_contradicts_itself(app: Any, ctx: Any, cm: Any) -> None:
+    """A repeated id must not come back both restored and missing.
+
+    `restore_entries([77, 77])` used to answer `restored=1, refused=[], not_found=[77]`:
+    the first pass gave the row back and consumed its archive entry, and the second pass —
+    looking for the same id in a bin the first pass had just emptied — reported the caller's
+    own id as never having existed. One answer, naming the same number as done and absent.
+
+    Two invariants this restores, and the second is the one a caller can act on:
+    `restored + len(not_found) <= len(ids)`, and every id in `not_found` is genuinely
+    absent from the bin rather than absent *because this call just consumed it*. The
+    duplicate is dropped from the request, not answered: asking twice for one row is a
+    redundant question, not an error, so it is not a refusal either.
+    """
+    for original_id in (77,):
+        await _archive(cm, original_id=original_id, content=f"dup_{original_id} = {original_id}", memory_type="fact")
+
+    result = await _undo(ctx, [77, 77])
+
+    assert result["restored"] == 1, result
+    assert result["not_found"] == [], f"the same id came back both restored and missing: {result}"
+    assert result["refused"] == [], result
+    rows = await _rows(cm, "SELECT key FROM core_memory WHERE user_id = ?", (U1,))
+    assert [r[0] for r in rows] == ["dup_77"], "one row, restored once"
+    left = await _rows(cm, "SELECT original_id FROM archived_memories")
+    assert [r[0] for r in left] == [], "the archive row was consumed exactly once"
