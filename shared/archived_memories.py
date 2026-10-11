@@ -21,14 +21,77 @@ from shared.constants import DB_NAME
 #: parameter that turns the refusal off.
 PURGE_REASONS = frozenset({"foreign_agent_contamination"})
 
+#: Where a row must go back to, named by its `memory_type`.
+#:
+#: WHY THIS IS A DENYLIST AND NOT AN ALLOWLIST. An allowlist was tried first —
+#: `frozenset(MemoryKind)` — and it was wrong, because it assumed the column is
+#: constrained. It is not: `core_memory.memory_kind` is a bare `TEXT` with no
+#: CHECK, one write path coerces through `MemoryKind` and the column never does,
+#: and the live bases hold kinds the enum has never heard of — `log` (1 row) and
+#: `bug` (3 rows), measured 2026-10-11. An enum-shaped allowlist therefore refuses
+#: rows that legitimately came out of `core_memory`, and a false refusal is worse
+#: than the defect it replaces: it reads like a rule. What can be *named* here is
+#: the small, closed set of sources that are not `core_memory`; what can be a core
+#: kind is open, so that side is the default rather than a list.
+ROUTE_EPISODES = "episodes"
+ROUTE_CORE = "core_memory"
+
+#: Archived for the audit trail, with no restore implementation behind them. Named
+#: so their rows are refused rather than written into `core_memory` as though they
+#: had lived there: `graph:<node_type>` is written by `forget`'s shadow bin for a
+#: graph node, and `project_archive` for a **wiki page** (`project.py` deletes the
+#: file). `core_memory` is in this set because it is a table name that leaked into
+#: a kind field, never a kind.
+_NO_ROUTE_KINDS = frozenset({"project_archive", "core_memory"})
+_NO_ROUTE_PREFIXES = ("graph:",)
+
+#: The two rules, and the only two: every refusal the bin can produce is one of
+#: these, so a caller can switch on them and a count can be kept per reason.
+REFUSAL_PURGED = "purged"
+REFUSAL_UNROUTABLE = "unroutable"
+
 
 def is_restorable_reason(reason: str | None) -> bool:
-    """Whether a row carrying this reason may be handed back to a caller.
-
-    The listing and the restore both ask this one function, so the bin can never
-    advertise a row that the restore would then refuse.
-    """
+    """Whether a row carrying this reason may be handed back to a caller."""
     return (reason or "") not in PURGE_REASONS
+
+
+def route_of(memory_type: str | None) -> str | None:
+    """Where a row carrying this kind goes back to, or `None` if nowhere.
+
+    `None` is answered in two different situations on purpose — a kind that was
+    never recorded, and a kind whose source has no restore path — because both
+    mean the same thing to a caller: this row cannot be handed back, and writing
+    it into `core_memory` would be inventing a provenance it never had.
+    """
+    kind = (memory_type or "").strip()
+    if not kind:
+        # The writer did not say. Three callers leave it empty and two of them
+        # archive rows that were never in `core_memory` (`rag/conflict.py` archives
+        # `memory_conflicts`), so filling in a default here is the same guess
+        # `fetchone()` used to make about which row it had found.
+        return None
+    if kind == "episode":
+        return ROUTE_EPISODES
+    if kind in _NO_ROUTE_KINDS or kind.startswith(_NO_ROUTE_PREFIXES):
+        return None
+    return ROUTE_CORE
+
+
+def refusal_reason(reason: str | None, memory_type: str | None) -> str | None:
+    """Why the bin will not hand this row back, or `None` if it will.
+
+    **The listing and the restore both ask this one function, in this one order**,
+    so the bin can never advertise a row the restore would refuse. The order is
+    part of the answer: a purge reason is refused whatever the row claims to be,
+    which is what keeps a deliberately removed row out of reach even when a caller
+    names its id and its kind.
+    """
+    if not is_restorable_reason(reason):
+        return REFUSAL_PURGED
+    if route_of(memory_type) is None:
+        return REFUSAL_UNROUTABLE
+    return None
 
 
 class ArchivedMemories:
@@ -84,6 +147,22 @@ class ArchivedMemories:
         original_id: int | None = None,
         reason: str = "manual",
     ) -> int:
+        """Record a row in the bin.
+
+        `memory_type` is the **only** channel through which a later restore can
+        learn where a row came from, and nothing here enforces it: the column is a
+        bare `TEXT`, this parameter is free text, and a caller that omits it makes
+        the row unrestorable in place — `route_of` refuses such a row rather than
+        guessing a destination.
+
+        So the two ends are not the same expression, even though they look alike.
+        Nine call sites pass `memory_kind or "fact"`, and on the **writing** side
+        that is legitimate: the row was just read out of `core_memory`, so naming it
+        a core kind records where it came from. The same `or "fact"` on the
+        **reading** side is the defect `route_of` exists to prevent — there the
+        origin is unknown, and a default is a guess about a table the reader never
+        saw the row leave.
+        """
         await self.ensure()
         conn = await self._cm.get(DB_NAME)
         cursor = await conn.execute(
@@ -99,18 +178,30 @@ class ArchivedMemories:
 
         WHY THIS RETURNS A DICT AND NOT A LIST. A listing that silently omits
         rows is worse than a short one, because a bin that looks emptier than it
-        is breeds false confidence. So the purge rows are filtered out of
-        `entries` and their number is **declared** in `omitted`, with the reason
-        in `omitted_reason`. The arithmetic is part of the answer, not a
-        footnote: `shown + omitted` is everything this user has.
+        is breeds false confidence. So the rows the restore would refuse are
+        filtered out of `entries` and their number is **declared**, broken down by
+        the rule that hid them, in `omitted_by_reason`.
 
-        `shown` counts the page; `omitted` counts every hidden row for this user,
-        however many pages that would take. The two are different scopes on
-        purpose — a page size is not a fact about the bin.
+        THE ARITHMETIC, AND WHICH ONE IS TRUE. `restorable + omitted` is every row
+        this user has. `shown + omitted` is **not** — `shown` is one page — and an
+        earlier version of this docstring claimed it was, which is a statement that
+        holds only while the bin is smaller than the page. So the two scopes are
+        kept apart and both are returned: `shown` is the page, `restorable` is the
+        bin's count of rows a restore would act on, `omitted` is the bin's count of
+        rows it would not.
 
-        **Hidden is not deleted.** The purge rows stay in the database; hiding is
-        a view, and hiding is exactly how a thing gets forgotten, which is why
-        the count is not allowed to go quiet.
+        **Hidden is not deleted.** Those rows stay in the database; hiding is a
+        view, and hiding is exactly how a thing gets forgotten, which is why the
+        count is not allowed to go quiet. `omitted_by_reason` carries its zero keys
+        rather than dropping them, so an empty bin and a bin whose reasons were
+        never computed do not look alike.
+
+        WHICH ROWS ARE HIDDEN, AND WHICH ARE NOT. A purge reason, and a kind with
+        no route — both decided by `refusal_reason`, the same function the restore
+        asks, so the listing cannot drift from it. An id naming **two** rows of
+        different kinds is deliberately **shown**: the listing returns
+        `memory_type`, and that is exactly the argument that resolves it, so
+        hiding it would throw away a row that can be had.
 
         Each entry carries `memory_type` and `original_id` beside the content:
         without them a caller cannot name the row it wants back, and an
@@ -118,38 +209,56 @@ class ArchivedMemories:
         """
         await self.ensure()
         conn = await self._cm.get(DB_NAME)
-        hidden = sorted(PURGE_REASONS)
-        marks = ",".join(["?"] * len(hidden))
+        # Every row for this user, classified in Python by the same function the
+        # restore uses. A `WHERE` clause would be faster and would duplicate the
+        # rules in a second language — which is the drift this is built to avoid —
+        # and the counts below need every row anyway. `content` is deliberately not
+        # read here: rows that will be hidden never have their text loaded.
         cursor = await conn.execute(
-            f"SELECT * FROM archived_memories WHERE user_id=? AND archive_reason NOT IN ({marks}) ORDER BY archived_at DESC LIMIT ?",
-            (user_id, *hidden, limit),
+            "SELECT id, original_id, memory_type, importance, archive_reason, archived_at "
+            "FROM archived_memories WHERE user_id=? ORDER BY archived_at DESC, id DESC",
+            (user_id,),
         )
         rows = await cursor.fetchall()
-        count_row = await (
-            await conn.execute(
-                f"SELECT COUNT(*) FROM archived_memories WHERE user_id=? AND archive_reason IN ({marks})",
-                (user_id, *hidden),
-            )
-        ).fetchone()
-        omitted = int(count_row[0]) if count_row else 0
+
+        kept: list[Any] = []
+        omitted_by_reason = {REFUSAL_PURGED: 0, REFUSAL_UNROUTABLE: 0}
+        for row in rows:
+            why = refusal_reason(row["archive_reason"], row["memory_type"])
+            if why is None:
+                kept.append(row)
+            else:
+                omitted_by_reason[why] += 1
+
+        page = kept[:limit]
+        contents: dict[int, Any] = {}
+        if page:
+            marks = ",".join(["?"] * len(page))
+            fetched = await (
+                await conn.execute(
+                    f"SELECT id, content FROM archived_memories WHERE id IN ({marks})",
+                    tuple(int(r["id"]) for r in page),
+                )
+            ).fetchall()
+            contents = {int(r["id"]): r["content"] for r in fetched}
+
         return {
             "entries": [
                 {
                     "id": r["id"],
-                    "content": r["content"],
+                    "content": contents.get(int(r["id"])),
                     "importance": r["importance"],
                     "memory_type": r["memory_type"],
                     "original_id": r["original_id"],
                     "archive_reason": r["archive_reason"],
                     "archived_at": r["archived_at"],
                 }
-                for r in rows
+                for r in page
             ],
-            "shown": len(rows),
-            "omitted": omitted,
-            # None rather than a reason when nothing was hidden: naming a reason
-            # for an omission that did not happen is its own small lie.
-            "omitted_reason": "purge" if omitted else None,
+            "shown": len(page),
+            "restorable": len(kept),
+            "omitted": sum(omitted_by_reason.values()),
+            "omitted_by_reason": omitted_by_reason,
         }
 
     async def count(self, user_id: str = "default") -> int:

@@ -3,9 +3,10 @@
 S5 (Memanto): expiry is soft — expired rows are not destroyed but archived into
 archived_memories, and `ForgettingSystem.restore_entries` can bring one back.
 Archiving a row is not on its own a promise that it returns: the restore wants the
-id **and** the owner, and it refuses a row whose `archive_reason` is a purge
-reason. A row archived here is restorable; a row archived by a purge is not, and
-the whole difference lives in `archive_reason`.
+id **and** the owner, it refuses a row whose `archive_reason` is a purge reason, and
+it refuses a row whose recorded kind names no table it can write to. A row archived
+here is restorable; a row archived by a purge, or one whose kind was never recorded,
+is not — and the whole difference lives in `archive_reason` and `memory_type`.
 
 Protections (never touch more than is safe):
 - min_remain: never shrink a layer below min_remain live rows — the batch is

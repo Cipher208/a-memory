@@ -28,17 +28,17 @@ logger = logging.getLogger(__name__)
 
 ARCHIVE_DIR = Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives"
 
-#: Archived `memory_type` values a restore is allowed to route. `episode` is the
-#: episodic marker rather than a `MemoryKind` — episodes live in their own table —
-#: so it is named here explicitly. A kind outside this set is refused with a
-#: reason, never written into `core_memory` as an invalid `memory_kind`.
+#: Which archived kinds a restore may route used to be decided **here**, by an
+#: allowlist built from `MemoryKind`.
 #:
-#: Measured on the base on 2026-10-11: every archived `memory_type` is either
-#: `episode` or a real `MemoryKind`, and the one value that is neither —
-#: `core_memory`, a table name leaked into a kind field — appears only on purge
-#: rows, which the refusal below catches first. This set is therefore a guard
-#: against the future rather than a live workaround.
-ROUTABLE_ARCHIVE_KINDS = frozenset({k.value for k in MemoryKind}) | {"episode"}
+#: This used to be `frozenset(MemoryKind) | {"episode"}`, on the assumption that the
+#: kind column is constrained by the enum. **It is not** — `core_memory.memory_kind`
+#: is a bare `TEXT` with no CHECK, and measuring one base hid the others: `log` (1
+#: row) and `bug` (3 rows) exist in `core_memory` and the enum has never heard of
+#: either, so the allowlist refused rows that legitimately came from `core_memory`.
+#: The rule now lives in `shared/archived_memories.py` as `route_of`, as a denylist
+#: of the sources that are *not* `core_memory`, and the restore and the listing ask
+#: that one function so they cannot drift apart.
 
 
 @dataclass
@@ -52,7 +52,9 @@ class RestoreOutcome:
     """
 
     restored: int = 0
-    #: Refused ids, each `{"original_id": int, "reason": "purged" | "ambiguous" | "unsupported_kind", ...}`.
+    #: Refused ids, each `{"original_id": int, "reason": "purged" | "unroutable" | "ambiguous", ...}`
+    #: with `memory_type` attached, and `kinds` on an ambiguous one. The reasons are
+    #: the same names the listing counts in `omitted_by_reason`.
     refused: list[dict[str, Any]] = field(default_factory=list)
     #: Ids that name no archived row for this owner and kind.
     not_found: list[int] = field(default_factory=list)
@@ -177,15 +179,24 @@ class ForgettingSystem:
         cut an episode whose text contains `=` at that character and file the
         halves as a key and a value.
 
-        WHAT CANNOT BE RESTORED, returned as a reason rather than a silent zero:
+        WHAT CANNOT BE RESTORED, returned as a reason rather than a silent zero.
+        The reason and its order are decided by `refusal_reason` in
+        `shared.archived_memories.py` — **the same function the listing asks** — so
+        the bin cannot advertise a row this would then refuse:
 
         - a row whose `archive_reason` is a purge reason — a deliberate removal is
           not a forgetting, and this has no off switch (see `PURGE_REASONS`);
-        - an id matching **more than one** row for this owner when no kind was
-          named — refused instead of guessed, which is the behaviour the old
-          `fetchone()` had;
-        - a kind that is not routable, so an invalid `memory_kind` never reaches
-          `core_memory`.
+        - a row whose recorded kind names no table this can write to: a `NULL` kind,
+          which means the writer did not say, and the sources that were never in
+          `core_memory` anyway (`graph:<node_type>` from `forget`'s shadow bin,
+          `project_archive` from a wiki page, `core_memory` itself — a table name
+          leaked into a kind field). Nor is a default substituted here: a guessed
+          `fact` is the same guess `fetchone()` used to make about which row it had
+          found;
+        - an id matching **more than one** row for this owner, refused instead of
+          picked. Naming the kind narrows the match, so in practice this means an
+          unnamed kind over an id that two tables happen to share — the old
+          `fetchone()` behaviour, returned as a refusal.
 
         WHAT IS LOST. `layer` is not in the archive and neither are an episode's
         `tags`, `created_at` or its layer, so a restored episode lands in this
@@ -194,7 +205,7 @@ class ForgettingSystem:
         The rule is settled rather than pending: separating that metadata is
         separate work, deliberately not done here.
         """
-        from shared.archived_memories import is_restorable_reason
+        from shared.archived_memories import ROUTE_EPISODES, refusal_reason, route_of
 
         outcome = RestoreOutcome()
         if not ids:
@@ -222,17 +233,22 @@ class ForgettingSystem:
                     )
                     continue
                 row = rows[0]
-                # Checked before the kind is trusted: a purge row is refused
-                # whatever it claims to be, which is what keeps the 41% out of
-                # reach even when a caller names the id and the kind.
-                if not is_restorable_reason(row["archive_reason"]):
-                    outcome.refused.append({"original_id": original_id, "reason": "purged"})
+                # The refusal is decided by the same function the listing asks, so
+                # the bin can never advertise a row this refuses. It is asked
+                # before the kind is acted on: a purge row is refused whatever it
+                # claims to be, which is what keeps the 41% out of reach even when
+                # a caller names the id and the kind.
+                why = refusal_reason(row["archive_reason"], row["memory_type"])
+                if why is not None:
+                    outcome.refused.append(
+                        {
+                            "original_id": original_id,
+                            "reason": why,
+                            "memory_type": row["memory_type"],
+                        }
+                    )
                     continue
-                kind = str(row["memory_type"] or "fact")
-                if kind not in ROUTABLE_ARCHIVE_KINDS:
-                    outcome.refused.append({"original_id": original_id, "reason": "unsupported_kind", "memory_type": kind})
-                    continue
-                if kind == "episode":
+                if route_of(row["memory_type"]) == ROUTE_EPISODES:
                     await self._restore_episode(row, user_id)
                 else:
                     await self._restore_core(conn, row, original_id, now)
@@ -258,13 +274,25 @@ class ForgettingSystem:
         from core.episodic import EpisodicMemory
 
         mem = EpisodicMemory(cm=self._cm, layer=self.layer)
-        return await mem.save(user_id, str(row["content"]), emotional_weight=float(row["importance"] or 0.5))
+        # `None` is checked, not truthiness. `row["importance"] or 0.5` — the earlier
+        # form — treats a recorded `0.0` as absent and returns the episode with a
+        # different weight than it had. Measured 2026-10-11: no archived row in the
+        # base carries `importance` 0.0 or NULL, so this was latent rather than live;
+        # it is still the same substitution this repair exists to remove, so it goes.
+        weight = 0.5 if row["importance"] is None else float(row["importance"])
+        return await mem.save(user_id, str(row["content"]), emotional_weight=weight)
 
     async def _restore_core(self, conn: Any, row: Any, original_id: int, now: float) -> None:
         """Put an archived L4 row back into `core_memory`.
 
         `partition` splits on the first `=` only, so a value that contains one
         survives whole: `k=v=w` returns key `k`, value `v=w`.
+
+        The kind is written back **exactly as recorded**. An earlier version
+        substituted `"fact"` when the column was empty — a guess about a row this
+        method never saw written, and the same guess `fetchone()` used to make about
+        which row it had found. A row with no recorded kind cannot reach here:
+        `refusal_reason` refuses it first.
         """
         key, _, value = str(row["content"]).partition("=")
         await conn.execute(
@@ -276,7 +304,7 @@ class ForgettingSystem:
                 row["importance"],
                 now,
                 now,
-                row["memory_type"] or "fact",
+                row["memory_type"],
             ),
         )
 

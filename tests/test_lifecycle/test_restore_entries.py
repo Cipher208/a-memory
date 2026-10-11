@@ -13,8 +13,10 @@ be suspicious of:
   1. the owner and the kind each decide which row comes back;
   2. an episode returns to `episodes`, where it came from;
   3. a deliberately purged row is refused with a reason, never restored;
-  4. the listing and the restore answer the same question — every id the listing
-     hands out is an id the restore accepts, and none it omits is one it would take.
+  4. the listing never offers what the restore refuses — asked of every row, and in
+     both directions. It is *not* the claim that the two are the same function: an
+     id that names two rows is shown, because the `memory_type` the listing now
+     returns is the argument that resolves it.
 
 Fixtures are synthetic throughout: no `original_id`, summary or owner value is
 copied out of a live base.
@@ -239,7 +241,7 @@ async def test_an_unroutable_kind_is_refused_instead_of_written(cm: Any) -> None
     outcome = await _fs(cm).restore_entries([91], user_id=U1)
 
     assert outcome.restored == 0
-    assert [r["reason"] for r in outcome.refused] == ["unsupported_kind"]
+    assert [r["reason"] for r in outcome.refused] == ["unroutable"]
     assert outcome.refused[0]["memory_type"] == "core_memory"
     assert await _rows(cm, "SELECT entry_id FROM core_memory") == []
 
@@ -265,8 +267,8 @@ async def test_the_listing_omits_a_purged_row_and_declares_the_count(cm: Any) ->
     assert [e["original_id"] for e in listing["entries"]] == [101]
     assert listing["shown"] == 1
     assert listing["omitted"] == 1
-    assert listing["omitted_reason"] == "purge"
-    assert listing["shown"] + listing["omitted"] == 2, "the disclosure must account for every row the user has"
+    assert listing["omitted_by_reason"] == {"purged": 1, "unroutable": 0}
+    assert listing["restorable"] + listing["omitted"] == 2, "the disclosure must account for every row the user has"
     assert await _archived_count(cm, 102) == 1, "hidden is not deleted — the row must still be in the table"
 
 
@@ -288,7 +290,7 @@ async def test_the_listing_stays_quiet_when_it_hid_nothing(cm: Any) -> None:
     listing = await _am(cm).get_archived(U1)
 
     assert listing["omitted"] == 0
-    assert listing["omitted_reason"] is None
+    assert listing["omitted_by_reason"] == {"purged": 0, "unroutable": 0}, "the shape stays whole: zeros, not absent keys"
 
 
 async def test_the_listing_and_the_restore_answer_the_same_question(cm: Any) -> None:
@@ -311,3 +313,205 @@ async def test_the_listing_and_the_restore_answer_the_same_question(cm: Any) -> 
 
     refused = await _fs(cm).restore_entries([133], user_id=U1)
     assert [r["reason"] for r in refused.refused] == ["purged"], "an id the listing hid was accepted by the restore"
+
+
+# ---------------------------------------------------------------------------
+# The route, not the enum. `core_memory.memory_kind` is a bare `TEXT` with no
+# CHECK; one write path coerces it through `MemoryKind`, but the column does not,
+# and the bases hold kinds the enum has never heard of — `log` and `bug`, both
+# measured 2026-10-11. An allowlist built from the enum therefore refuses rows
+# that legitimately came out of `core_memory`, which is a worse defect than the
+# one this file was written to repair: a false refusal looks like a rule.
+#
+# The route table replaces it, and it is a denylist rather than an allowlist on
+# purpose. What can be *named* is small and closed — the sources that are not
+# `core_memory` — while what can be a core kind is open, because nothing
+# constrains it. Closing the open side is what the enum did wrong.
+# ---------------------------------------------------------------------------
+
+
+async def test_a_kind_the_enum_does_not_know_still_goes_back(cm: Any) -> None:
+    """`log` was a real row in `core_memory` and must come back as one. Measured:
+    1 `log` row and 3 `bug` rows exist in the live bases, in `core_memory`."""
+    await _archive(cm, original_id=301, content="logged=1", memory_type="log")
+
+    outcome = await _fs(cm).restore_entries([301], user_id=U1, memory_type="log")
+
+    assert outcome.restored == 1, "a kind the enum does not list is not ipso facto unroutable"
+    assert [r["value"] for r in await _rows(cm, "SELECT value FROM core_memory WHERE key='logged'")] == ["1"]
+
+
+async def test_a_row_whose_kind_was_never_recorded_is_refused_not_guessed(cm: Any) -> None:
+    """`NULL` means the writer did not say. Three writers leave it, and two of them
+    archive rows that were never in `core_memory` at all (`rag/conflict.py` archives
+    `memory_conflicts`, `forget`'s graph branch archives nodes). Substituting `fact`
+    is the same guess `fetchone()` was making, so it is refused instead."""
+    await _archive(cm, original_id=311, content="conflict_9: something", memory_type=None, reason="conflict_resolved")
+
+    outcome = await _fs(cm).restore_entries([311], user_id=U1)
+
+    assert outcome.restored == 0, "a row with no recorded kind was written into core_memory anyway"
+    assert [r["reason"] for r in outcome.refused] == ["unroutable"]
+    written = await _rows(cm, "SELECT COUNT(*) FROM core_memory WHERE key LIKE 'conflict%'")
+    assert written[0][0] == 0, "the conflict row was filed as an L4 key on a guessed kind"
+
+
+async def test_a_graph_row_is_refused_rather_than_filed_as_a_key(cm: Any) -> None:
+    """`graph:<node_type>` is written by `forget`'s shadow bin for the audit trail;
+    there is no restore into `graph_nodes`, so the row must not be written into
+    `core_memory` as though it had been one."""
+    await _archive(cm, original_id=321, content="a node's text", memory_type="graph:fact", reason="forget_primitive_fuzzy_graph")
+
+    outcome = await _fs(cm).restore_entries([321], user_id=U1)
+
+    assert outcome.restored == 0
+    assert [r["reason"] for r in outcome.refused] == ["unroutable"]
+    assert [r["memory_type"] for r in outcome.refused] == ["graph:fact"]
+
+
+async def test_a_project_archive_row_is_refused_rather_than_filed_as_a_key(cm: Any) -> None:
+    """`project_archive` comes from a **wiki page** (`project.py` deletes the file),
+    not from `core_memory`. It was restored into `core_memory` before this test."""
+    await _archive(cm, original_id=0, content="a wiki page's body", memory_type="project_archive", reason="project_archived")
+
+    outcome = await _fs(cm).restore_entries([0], user_id=U1)
+
+    assert outcome.restored == 0, "a wiki page was filed as an L4 key"
+    assert [r["reason"] for r in outcome.refused] == ["unroutable"]
+
+
+async def test_the_listing_hides_what_the_restore_would_refuse_beyond_purges(cm: Any) -> None:
+    """Her rule is about what `undo` can act on, and a row with no route is not
+    something it can act on — so it is hidden too, and counted."""
+    await _archive(cm, original_id=401, content="fine=1", memory_type="fact")
+    await _archive(cm, original_id=402, content="conflict_1: x", memory_type=None, reason="conflict_resolved")
+    await _archive(cm, original_id=403, content="a node", memory_type="graph:fact")
+
+    listing = await _am(cm).get_archived(U1)
+
+    assert [e["original_id"] for e in listing["entries"]] == [401]
+    assert listing["omitted"] == 2
+
+
+async def test_the_listing_declares_each_reason_separately(cm: Any) -> None:
+    """One total hides which rule hid what, and the two rules are not the same
+    decision: a purge is deliberate removal, an unroutable kind is a missing fact."""
+    purged = min(PURGE_REASONS)
+    await _archive(cm, original_id=411, content="fine=1", memory_type="fact")
+    await _archive(cm, original_id=412, content="p", memory_type="episode", reason=purged)
+    await _archive(cm, original_id=413, content="g", memory_type="graph:fact")
+    await _archive(cm, original_id=414, content="c", memory_type=None, reason="conflict_resolved")
+
+    listing = await _am(cm).get_archived(U1)
+
+    assert listing["omitted_by_reason"] == {"purged": 1, "unroutable": 2}
+    assert listing["omitted"] == 3
+
+
+async def test_the_page_is_not_the_bin(cm: Any) -> None:
+    """`shown` is a page size, `omitted` is a fact about the bin, and the two must
+    not be added together — the earlier docstring said `shown + omitted` was
+    everything the user has, which is false as soon as the page is truncated."""
+    for n in range(3):
+        await _archive(cm, original_id=500 + n, content=f"k{n}=v{n}", memory_type="fact")
+    await _archive(cm, original_id=599, content="p", memory_type="episode", reason=min(PURGE_REASONS))
+
+    listing = await _am(cm).get_archived(U1, limit=2)
+
+    assert listing["shown"] == 2, "the limit was not honoured"
+    assert listing["restorable"] == 3, "the arithmetic must count the bin, not the page"
+    assert listing["omitted"] == 1
+    assert listing["restorable"] + listing["omitted"] == 4, "the true disclosure: every row this user has"
+
+
+async def test_the_listing_shows_an_ambiguous_row_because_its_kind_resolves_it(cm: Any) -> None:
+    """The listing is not simply 'what the restore accepts without arguments'.
+    One id over two kinds is refused when the kind is unnamed and accepted when it
+    is named — and the listing now returns `memory_type`, which is exactly the
+    argument that resolves it. Hiding it would throw away a row that can be had."""
+    await _archive(cm, original_id=601, content="chosen_colour=green", memory_type="fact")
+    await _archive(cm, original_id=601, content="an episode summary", memory_type="episode")
+
+    listing = await _am(cm).get_archived(U1)
+    offered = sorted(e["memory_type"] for e in listing["entries"])
+
+    assert offered == ["episode", "fact"], "an ambiguous id was hidden, though the kind it returns resolves it"
+
+    blind = await _fs(cm).restore_entries([601], user_id=U1)
+    assert [r["reason"] for r in blind.refused] == ["ambiguous"]
+
+    named = await _fs(cm).restore_entries([601], user_id=U1, memory_type="fact")
+    assert named.restored == 1, "the kind the listing returns did not resolve the ambiguity"
+
+
+async def test_a_restored_episode_keeps_a_recorded_zero_weight(cm: Any) -> None:
+    """`0.0` is a value the archive recorded, not an absent one.
+
+    The first version of `_restore_episode` passed `float(row["importance"] or 0.5)`,
+    which reads a recorded `0.0` as missing and hands the episode back heavier than
+    it was. Measured 2026-10-11: no archived row in the base carries `importance`
+    0.0 or NULL, so this was latent — but it is the same substitution the whole
+    repair removes, on the reading side, and a test is what keeps it removed.
+    """
+    await _archive(cm, original_id=801, content="a silent episode", memory_type="episode", importance=0.0)
+
+    outcome = await _fs(cm).restore_entries([801], user_id=U1)
+
+    assert outcome.restored == 1
+    weights = await _rows(cm, "SELECT emotional_weight FROM episodes WHERE user_id=?", (U1,))
+    assert [float(r[0]) for r in weights] == [0.0], "a recorded zero weight was replaced by the default"
+
+
+async def test_a_restored_episode_with_no_recorded_weight_gets_the_default(cm: Any) -> None:
+    """The other side of the same line: `NULL` really is absent, and the default is
+    the honest answer there. Both cases are asserted so the fix cannot be mistaken
+    for 'always 0.5' or for 'never 0.5'."""
+    await _archive(cm, original_id=811, content="a weighted episode", memory_type="episode", importance=None)
+
+    outcome = await _fs(cm).restore_entries([811], user_id=U1)
+
+    assert outcome.restored == 1
+    weights = await _rows(cm, "SELECT emotional_weight FROM episodes WHERE user_id=?", (U1,))
+    assert [float(r[0]) for r in weights] == [0.5], "an absent weight did not fall back to the default"
+
+
+async def test_a_restored_core_row_without_a_separator_keeps_its_text(cm: Any) -> None:
+    """`partition("=")` on content with no `=` gives an empty value. Writing the whole
+    text into `value` as well is a fallback, and this pins that it is deliberate —
+    the alternative (an empty value) loses the text entirely. Measured 2026-10-11: no
+    routable row in the base lacks a `=`, because every core writer stores
+    `key=value`, so this documents the branch rather than a live case."""
+    await _archive(cm, original_id=821, content="a bare sentence with no separator", memory_type="fact")
+
+    outcome = await _fs(cm).restore_entries([821], user_id=U1)
+
+    assert outcome.restored == 1
+    row = await _rows(cm, "SELECT key, value FROM core_memory WHERE user_id=?", (U1,))
+    assert row[0][0] == "a bare sentence with no separator"
+    assert row[0][1] == "a bare sentence with no separator", "the text was dropped instead of kept whole"
+
+
+async def test_the_listing_never_offers_what_the_restore_refuses(cm: Any) -> None:
+    """The anti-drift test in the direction that matters, asked of every row
+    rather than of a hand-picked pair: for each row the listing shows, a restore
+    must not refuse it for its reason or its kind; for each row it hides, a restore
+    must refuse it. An `ambiguous` refusal is allowed on a shown row — that is the
+    one case the kind the listing returns is there to resolve."""
+    purged = min(PURGE_REASONS)
+    await _archive(cm, original_id=701, content="a=1", memory_type="fact")
+    await _archive(cm, original_id=702, content="b=2", memory_type="log")
+    await _archive(cm, original_id=703, content="c=3", memory_type="episode", reason=purged)
+    await _archive(cm, original_id=704, content="d=4", memory_type=None, reason="conflict_resolved")
+    await _archive(cm, original_id=705, content="e=5", memory_type="graph:fact")
+
+    listing = await _am(cm).get_archived(U1)
+    fs = _fs(cm)
+
+    for entry in listing["entries"]:
+        outcome = await fs.restore_entries([entry["original_id"]], user_id=U1, memory_type=entry["memory_type"])
+        assert outcome.refused == [], f"the listing offered id {entry['original_id']} that the restore refuses: {outcome.refused}"
+
+    hidden = {703, 704, 705}
+    for original_id in hidden:
+        outcome = await fs.restore_entries([original_id], user_id=U1)
+        assert outcome.refused, f"the listing hid id {original_id}, but the restore accepts it"

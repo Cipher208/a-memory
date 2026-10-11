@@ -118,7 +118,9 @@ async def test_revert_archive_restores_rows(ensure_schema: Path) -> None:
     conn.commit()
     conn.close()
 
-    pid = await staging.propose("forgetting", "archive", "u1", "user", {"ids": [entry_id]})
+    pid = await staging.propose(
+        "forgetting", "archive", "u1", "user", {"ids": [entry_id], "owners": {str(entry_id): "u1"}, "kinds": {str(entry_id): "fact"}}
+    )
     await staging.decide(pid, True, mem=_FakeApp())
     out = await staging.revert(pid, mem=_FakeApp())
     assert out["status"] == "reverted"
@@ -127,8 +129,6 @@ async def test_revert_archive_restores_rows(ensure_schema: Path) -> None:
     archived_left = conn.execute("SELECT count(*) FROM archived_memories WHERE original_id=?", (entry_id,)).fetchone()[0]
     conn.close()
     assert restored == 1 and archived_left == 0
-    # A payload staged before owners and kinds were recorded still works, and the
-    # outcome says so in the open rather than by staying silent.
     assert out["restored"] == 1
     assert out["refused"] == []
     assert out["not_found"] == []
@@ -193,6 +193,34 @@ async def test_revert_archive_reports_what_it_could_not_restore(ensure_schema: P
     assert out["restored"] == 0
     assert [r["reason"] for r in out["refused"]] == ["purged"]
     assert out["not_found"] == []
+
+
+async def test_revert_refuses_an_id_with_no_recorded_owner(ensure_schema: Path) -> None:
+    """A payload staged before owners were recorded names only ids, and the
+    proposal's own `user_id` is **not** the rows' owner — the producer writes a
+    constant there while the ids come from a query with no owner filter. Falling
+    back to it would write one owner's row into another's, which is the very
+    mistake that made `restore_entries` wrong in the first place."""
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    conn.execute(
+        "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason)"
+        " VALUES ('u_real', 5, 'k=v', 'fact', 0.5, 'inactive_90d')"
+    )
+    conn.commit()
+    conn.close()
+
+    pid = await staging.propose("forgetting", "archive", "default", "user", {"ids": [5]})
+    await staging.decide(pid, True, mem=_FakeApp())
+    out = await staging.revert(pid, mem=_FakeApp())
+
+    assert out["restored"] == 0, "an id with no recorded owner was guessed into another owner's namespace"
+    assert [r["reason"] for r in out["refused"]] == ["no_owner"]
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    conn.execute("SELECT 1")
+    left = conn.execute("SELECT count(*) FROM archived_memories WHERE original_id=5").fetchone()[0]
+    written = conn.execute("SELECT count(*) FROM core_memory").fetchone()[0]
+    conn.close()
+    assert left == 1 and written == 0, "the row was moved or copied on a guess"
 
 
 async def test_revert_rejects_non_applied(ensure_schema: Path) -> None:

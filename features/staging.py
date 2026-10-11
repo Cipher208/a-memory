@@ -360,10 +360,15 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
         # bare `original_id` — a number shared with `episodes.episode_id`. The
         # kind also routes: an archived episode goes back to `episodes`.
         #
-        # A payload staged before owners and kinds were recorded falls back to the
-        # proposal's own owner and an unnamed kind, where the restore refuses an id
-        # that names two rows rather than picking one. No such payload exists in the
-        # base measured 2026-10-11 — `kind='archive'` proposals: 0.
+        # An id with **no recorded owner is refused, never defaulted to the
+        # proposal's own `user_id`**. That value is written by the producer as a
+        # constant (`"default"`) while the ids come from `_find_archivable_entries`,
+        # a query with no owner filter — so it describes the proposal, not the rows,
+        # and using it would file one owner's row under another's. Measured
+        # 2026-10-11: two live bases hold three owners between them (`default`,
+        # `test_sh`, `lily`). No payload without owners exists in the base measured
+        # that day — `kind='archive'` proposals: 0 — so nothing regresses by
+        # refusing; a payload that cannot name its owner cannot be reverted safely.
         owners = payload.get("owners") or {}
         kinds = payload.get("kinds") or {}
         groups: dict[tuple[str | None, str | None], list[int]] = {}
@@ -371,7 +376,10 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
             key = str(raw)
             groups.setdefault((owners.get(key), kinds.get(key)), []).append(int(raw))
         for (owner, kind), group_ids in groups.items():
-            part = await fs.restore_entries(group_ids, user_id=owner or row["user_id"], memory_type=kind)
+            if owner is None:
+                refused.extend({"original_id": i, "reason": "no_owner"} for i in group_ids)
+                continue
+            part = await fs.restore_entries(group_ids, user_id=owner, memory_type=kind)
             restored += part.restored
             refused.extend(part.refused)
             not_found.extend(part.not_found)
