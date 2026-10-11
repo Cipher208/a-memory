@@ -155,6 +155,16 @@ class _SyncConnectionWrapper:
 
         await asyncio.to_thread(_do)
 
+    @property
+    def in_transaction(self) -> bool:
+        """Mirror `sqlite3.Connection.in_transaction`, which aiosqlite also exposes.
+
+        Callers that share one connection between components ask this to tell their own
+        transaction from one somebody else opened — so the answer has to exist on both
+        backends, not only where aiosqlite is installed.
+        """
+        return self._conn.in_transaction
+
     async def rollback(self) -> None:
         def _do() -> None:
             with self._lock:

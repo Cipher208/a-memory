@@ -111,6 +111,33 @@ def test_composite_indexes_exist(tmp_path):
     asyncio.run(t())
 
 
+async def test_sync_wrapper_answers_in_transaction_like_sqlite(tmp_path):
+    """The Windows fallback must answer `in_transaction`, because the rate limiter reads it.
+
+    `_USE_SYNC` is true on Windows and wherever aiosqlite is missing, and there `get()` returns
+    this wrapper instead of an aiosqlite connection. `sqlite3.Connection.in_transaction` is how
+    a caller asks "is somebody else's work in flight on this shared handle?" — a wrapper that
+    hides the flag turns that question into an `AttributeError` on one platform only, which is
+    the kind of breakage the Linux suite can never see.
+    """
+    import sqlite3
+
+    from shared.connection import _SyncConnectionWrapper
+
+    # `check_same_thread=False` because the wrapper runs every statement through
+    # `asyncio.to_thread`; this mirrors how `_get_sync_conn` opens it (connection.py:273).
+    wrapper = _SyncConnectionWrapper(sqlite3.connect(str(tmp_path / "wrapper.db"), check_same_thread=False))
+
+    assert wrapper.in_transaction is False, "a fresh connection has no transaction open"
+
+    await wrapper.execute("CREATE TABLE t (v TEXT)")
+    await wrapper.execute("INSERT INTO t VALUES ('x')")
+    assert wrapper.in_transaction is True, "the wrapper must show a pending transaction"
+
+    await wrapper.commit()
+    assert wrapper.in_transaction is False, "the commit must be visible through the wrapper"
+
+
 def test_connection_stale_reopen():
     """Stale connection should be reopened automatically."""
     from shared.connection import AsyncConnectionManager
