@@ -36,6 +36,12 @@ class RateLimiter:
         now = time.time()
         cutoff = now - self._window_seconds
         conn = await self._cm.get(DB_NAME)
+        # `get()` hands out one connection per database, shared with every other component, so a
+        # transaction may already be open on somebody else's behalf. Committing then would put
+        # *their* unfinished work on disk — and this runs at the top of every tool call
+        # (`mcp_server/tools/base.py:149`), which is what makes it the widest-reaching instance
+        # of that shape. Commit only a transaction this method started.
+        borrowed = conn.in_transaction
         await conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
         await conn.execute("INSERT INTO rate_limits (user_id, timestamp) VALUES (?, ?)", (user_id, now))
         cursor = await conn.execute(
@@ -44,7 +50,8 @@ class RateLimiter:
         )
         row = await cursor.fetchone()
         count = row["cnt"] if row else 0
-        await conn.commit()
+        if not borrowed:
+            await conn.commit()
 
         if count > self._max_per_user:
             cursor = await conn.execute(
@@ -70,8 +77,12 @@ class RateLimiter:
     async def cleanup_old(self) -> int:
         cutoff = time.time() - (self._window_seconds * 10)
         conn = await self._cm.get(DB_NAME)
+        # Same shape as `check()` above: the shared handle may carry another component's
+        # transaction, and this method has no business committing it.
+        borrowed = conn.in_transaction
         cursor = await conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
-        await conn.commit()
+        if not borrowed:
+            await conn.commit()
         return cast("int", cursor.rowcount)
 
 
