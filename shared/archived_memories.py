@@ -6,6 +6,30 @@ from typing import Any
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 
+#: Archive reasons that record a *deliberate* removal rather than a routine one.
+#:
+#: A row carrying one of these is not restorable through the primitive — ever,
+#: not even when the caller knows both its id and its kind. Only `archive_reason`
+#: can tell a forgotten fact from a removed one, and a bin that hands back what
+#: was deliberately removed makes the removal decorative.
+#:
+#: `foreign_agent_contamination` is written by `scripts/purge_foreign_rows.py`,
+#: which archives before it removes. On the base measured 2026-10-11 that was 247
+#: of 606 archived rows (41%) — 238 episodes and 9 core entries. If they ever need
+#: to come back, that is an operator script run by hand, not a tool an agent can
+#: call — which is why nothing here, and nothing in the restore path, has a
+#: parameter that turns the refusal off.
+PURGE_REASONS = frozenset({"foreign_agent_contamination"})
+
+
+def is_restorable_reason(reason: str | None) -> bool:
+    """Whether a row carrying this reason may be handed back to a caller.
+
+    The listing and the restore both ask this one function, so the bin can never
+    advertise a row that the restore would then refuse.
+    """
+    return (reason or "") not in PURGE_REASONS
+
 
 class ArchivedMemories:
     def __init__(self, cm: AsyncConnectionManager | None = None):
@@ -70,37 +94,66 @@ class ArchivedMemories:
         last_id: Any = cursor.lastrowid
         return int(last_id) if last_id is not None else 0
 
-    async def get_archived(self, user_id: str = "default", limit: int = 50) -> list[dict[str, Any]]:
+    async def get_archived(self, user_id: str = "default", limit: int = 50) -> dict[str, Any]:
+        """Return the bin as an agent may see it: restorable rows, and a count of the rest.
+
+        WHY THIS RETURNS A DICT AND NOT A LIST. A listing that silently omits
+        rows is worse than a short one, because a bin that looks emptier than it
+        is breeds false confidence. So the purge rows are filtered out of
+        `entries` and their number is **declared** in `omitted`, with the reason
+        in `omitted_reason`. The arithmetic is part of the answer, not a
+        footnote: `shown + omitted` is everything this user has.
+
+        `shown` counts the page; `omitted` counts every hidden row for this user,
+        however many pages that would take. The two are different scopes on
+        purpose — a page size is not a fact about the bin.
+
+        **Hidden is not deleted.** The purge rows stay in the database; hiding is
+        a view, and hiding is exactly how a thing gets forgotten, which is why
+        the count is not allowed to go quiet.
+
+        Each entry carries `memory_type` and `original_id` beside the content:
+        without them a caller cannot name the row it wants back, and an
+        unnameable bin is unusable rather than merely full.
+        """
         await self.ensure()
         conn = await self._cm.get(DB_NAME)
+        hidden = sorted(PURGE_REASONS)
+        marks = ",".join(["?"] * len(hidden))
         cursor = await conn.execute(
-            "SELECT * FROM archived_memories WHERE user_id=? ORDER BY archived_at DESC LIMIT ?",
-            (user_id, limit),
+            f"SELECT * FROM archived_memories WHERE user_id=? AND archive_reason NOT IN ({marks}) ORDER BY archived_at DESC LIMIT ?",
+            (user_id, *hidden, limit),
         )
         rows = await cursor.fetchall()
-        return [
-            {
-                "id": r["id"],
-                "content": r["content"],
-                "importance": r["importance"],
-                "archive_reason": r["archive_reason"],
-                "archived_at": r["archived_at"],
-            }
-            for r in rows
-        ]
+        count_row = await (
+            await conn.execute(
+                f"SELECT COUNT(*) FROM archived_memories WHERE user_id=? AND archive_reason IN ({marks})",
+                (user_id, *hidden),
+            )
+        ).fetchone()
+        omitted = int(count_row[0]) if count_row else 0
+        return {
+            "entries": [
+                {
+                    "id": r["id"],
+                    "content": r["content"],
+                    "importance": r["importance"],
+                    "memory_type": r["memory_type"],
+                    "original_id": r["original_id"],
+                    "archive_reason": r["archive_reason"],
+                    "archived_at": r["archived_at"],
+                }
+                for r in rows
+            ],
+            "shown": len(rows),
+            "omitted": omitted,
+            # None rather than a reason when nothing was hidden: naming a reason
+            # for an omission that did not happen is its own small lie.
+            "omitted_reason": "purge" if omitted else None,
+        }
 
     async def count(self, user_id: str = "default") -> int:
         await self.ensure()
         conn = await self._cm.get(DB_NAME)
         row = await (await conn.execute("SELECT COUNT(*) FROM archived_memories WHERE user_id=?", (user_id,))).fetchone()
         return int(row[0]) if row else 0
-
-    async def restore(self, archived_id: int) -> dict[str, Any] | None:
-        await self.ensure()
-        conn = await self._cm.get(DB_NAME)
-        row = await (await conn.execute("SELECT * FROM archived_memories WHERE id=?", (archived_id,))).fetchone()
-        if row:
-            await conn.execute("DELETE FROM archived_memories WHERE id=?", (archived_id,))
-            await conn.commit()
-            return {"content": row["content"], "importance": row["importance"]}
-        return None

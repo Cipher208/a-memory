@@ -8,6 +8,7 @@ import contextlib
 import logging
 import time
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -26,6 +27,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ARCHIVE_DIR = Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives"
+
+#: Archived `memory_type` values a restore is allowed to route. `episode` is the
+#: episodic marker rather than a `MemoryKind` — episodes live in their own table —
+#: so it is named here explicitly. A kind outside this set is refused with a
+#: reason, never written into `core_memory` as an invalid `memory_kind`.
+#:
+#: Measured on the base on 2026-10-11: every archived `memory_type` is either
+#: `episode` or a real `MemoryKind`, and the one value that is neither —
+#: `core_memory`, a table name leaked into a kind field — appears only on purge
+#: rows, which the refusal below catches first. This set is therefore a guard
+#: against the future rather than a live workaround.
+ROUTABLE_ARCHIVE_KINDS = frozenset({k.value for k in MemoryKind}) | {"episode"}
+
+
+@dataclass
+class RestoreOutcome:
+    """What a restore did, and what it refused to do.
+
+    A bare count cannot carry a refusal, and the refusals are the point of this
+    method: a row removed deliberately, an id that names two rows, a kind that
+    cannot be routed. Returning `0` for all three is the silence this repair
+    exists to end, so each gets its own list and its own reason.
+    """
+
+    restored: int = 0
+    #: Refused ids, each `{"original_id": int, "reason": "purged" | "ambiguous" | "unsupported_kind", ...}`.
+    refused: list[dict[str, Any]] = field(default_factory=list)
+    #: Ids that name no archived row for this owner and kind.
+    not_found: list[int] = field(default_factory=list)
 
 
 class ForgettingSystem:
@@ -124,43 +154,131 @@ class ForgettingSystem:
             logger.exception("archive_entries failed")
             return 0
 
-    async def restore_entries(self, ids: list[int]) -> int:
-        """Restore archived rows (matched by original_id) back into core_memory (C1.13 revert).
+    async def restore_entries(self, ids: list[int], user_id: str, memory_type: str | None = None) -> RestoreOutcome:
+        """Bring archived rows back, matched on owner and kind (C1.13 revert).
 
-        Mirror of archive_entries: deletes the archived row after restore.
-        Best-effort: missing archive rows are skipped.
+        WHY THE MATCH IS NO LONGER ONE FIELD. This used to be
+        `WHERE original_id = ?`. `original_id` is an integer shared by two tables
+        that number independently — `episodes.episode_id` and
+        `core_memory.entry_id` — and the archive holds the kind in `memory_type`,
+        which the query never looked at. On the base measured 2026-10-11, 870 id
+        values existed in both tables and 10 `original_id` values already carried
+        two archived rows of different kinds under one number. `fetchone()` took
+        whichever it met first, and the row was written into `core_memory`
+        whatever it had been.
+
+        **The owner is required, not defaulted.** The old signature had no owner
+        at all, which is what kept a cross-user restore latent rather than
+        impossible. A default would put the same hole back one argument to the
+        left, so there is none.
+
+        **Routing happens before the content is parsed.** An archived episode
+        holds a bare summary; an L4 row holds `key=value`. Parsing first would
+        cut an episode whose text contains `=` at that character and file the
+        halves as a key and a value.
+
+        WHAT CANNOT BE RESTORED, returned as a reason rather than a silent zero:
+
+        - a row whose `archive_reason` is a purge reason — a deliberate removal is
+          not a forgetting, and this has no off switch (see `PURGE_REASONS`);
+        - an id matching **more than one** row for this owner when no kind was
+          named — refused instead of guessed, which is the behaviour the old
+          `fetchone()` had;
+        - a kind that is not routable, so an invalid `memory_kind` never reaches
+          `core_memory`.
+
+        WHAT IS LOST. `layer` is not in the archive and neither are an episode's
+        `tags`, `created_at` or its layer, so a restored episode lands in this
+        system's own layer and carries the moment of its return. Data the archive
+        never kept cannot be restored, and this method does not pretend it can.
+        The rule is settled rather than pending: separating that metadata is
+        separate work, deliberately not done here.
         """
+        from shared.archived_memories import is_restorable_reason
+
+        outcome = RestoreOutcome()
         if not ids:
-            return 0
+            return outcome
         try:
             conn = await self._cm.get(DB_NAME)
             now = time.time()
-            restored = 0
-            for entry_id in ids:
-                cur = await conn.execute("SELECT * FROM archived_memories WHERE original_id = ?", (entry_id,))
-                row = await cur.fetchone()
-                if row is None:
+            for original_id in ids:
+                sql = "SELECT * FROM archived_memories WHERE original_id = ? AND user_id = ?"
+                params: list[Any] = [original_id, user_id]
+                if memory_type is not None:
+                    sql += " AND memory_type = ?"
+                    params.append(memory_type)
+                rows = await (await conn.execute(sql, tuple(params))).fetchall()
+                if not rows:
+                    outcome.not_found.append(original_id)
                     continue
-                key, _, value = str(row["content"]).partition("=")
-                await conn.execute(
-                    "INSERT INTO core_memory (user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        row["user_id"],
-                        key or f"restored_{entry_id}",
-                        value or str(row["content"]),
-                        row["importance"],
-                        now,
-                        now,
-                        row["memory_type"] or "fact",
-                    ),
-                )
+                if len(rows) > 1:
+                    outcome.refused.append(
+                        {
+                            "original_id": original_id,
+                            "reason": "ambiguous",
+                            "kinds": sorted({str(r["memory_type"]) for r in rows}),
+                        }
+                    )
+                    continue
+                row = rows[0]
+                # Checked before the kind is trusted: a purge row is refused
+                # whatever it claims to be, which is what keeps the 41% out of
+                # reach even when a caller names the id and the kind.
+                if not is_restorable_reason(row["archive_reason"]):
+                    outcome.refused.append({"original_id": original_id, "reason": "purged"})
+                    continue
+                kind = str(row["memory_type"] or "fact")
+                if kind not in ROUTABLE_ARCHIVE_KINDS:
+                    outcome.refused.append({"original_id": original_id, "reason": "unsupported_kind", "memory_type": kind})
+                    continue
+                if kind == "episode":
+                    await self._restore_episode(row, user_id)
+                else:
+                    await self._restore_core(conn, row, original_id, now)
                 await conn.execute("DELETE FROM archived_memories WHERE id = ?", (row["id"],))
-                restored += 1
+                outcome.restored += 1
             await conn.commit()
-            return restored
+            return outcome
         except Exception:
             logger.exception("restore_entries failed")
-            return 0
+            # The partial outcome, not a zero: whatever landed before the failure
+            # did land, and saying otherwise would be the same silence in reverse.
+            return outcome
+
+    async def _restore_episode(self, row: Any, user_id: str) -> int:
+        """Put an archived episode back into `episodes`, where it came from.
+
+        `EpisodicMemory.save()` dedups on `(layer, user_id, summary)` and returns
+        the existing id when the text is already present, so restoring an episode
+        whose summary was re-added is a no-op on the row count. That is counted as
+        restored — the text is in the table, which is what the caller asked for —
+        and it is a deliberate reading rather than an accident of the dedup.
+        """
+        from core.episodic import EpisodicMemory
+
+        mem = EpisodicMemory(cm=self._cm, layer=self.layer)
+        return await mem.save(user_id, str(row["content"]), emotional_weight=float(row["importance"] or 0.5))
+
+    async def _restore_core(self, conn: Any, row: Any, original_id: int, now: float) -> None:
+        """Put an archived L4 row back into `core_memory`.
+
+        `partition` splits on the first `=` only, so a value that contains one
+        survives whole: `k=v=w` returns key `k`, value `v=w`.
+        """
+        key, _, value = str(row["content"]).partition("=")
+        await conn.execute(
+            "INSERT INTO core_memory (user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                row["user_id"],
+                key or f"restored_{original_id}",
+                value or str(row["content"]),
+                row["importance"],
+                now,
+                now,
+                row["memory_type"] or "fact",
+            ),
+        )
 
     async def _find_archivable_entries(self, conn: Any, now: float) -> list[sqlite3.Row]:
         # Expired goals/todos/commitments

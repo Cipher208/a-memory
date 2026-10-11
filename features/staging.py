@@ -332,6 +332,11 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
     if row["status"] != "applied":
         raise ValueError(f"proposal {proposal_id} is not applied (status={row['status']}) — nothing to revert")
     payload = json.loads(row["payload"])
+    restored = 0
+    # What a restore could not do, kept beside the count it did: `restored: 0`
+    # with nothing attached is how a refusal stops being visible.
+    refused: list[dict[str, Any]] = []
+    not_found: list[int] = []
     if row["kind"] == "core_write":
         mem_obj = getattr(mem, "mm", None)
         if mem_obj is not None:
@@ -349,7 +354,27 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
     elif row["kind"] == "archive":
         from lifecycle.forgetting import ForgettingSystem
 
-        restored = await ForgettingSystem(layer=row["layer"]).restore_entries([int(i) for i in payload.get("ids", [])])
+        fs = ForgettingSystem(layer=row["layer"])
+        # Grouped by the owner and the kind recorded when the proposal was staged,
+        # so the restore names all three fields of the match instead of hunting a
+        # bare `original_id` — a number shared with `episodes.episode_id`. The
+        # kind also routes: an archived episode goes back to `episodes`.
+        #
+        # A payload staged before owners and kinds were recorded falls back to the
+        # proposal's own owner and an unnamed kind, where the restore refuses an id
+        # that names two rows rather than picking one. No such payload exists in the
+        # base measured 2026-10-11 — `kind='archive'` proposals: 0.
+        owners = payload.get("owners") or {}
+        kinds = payload.get("kinds") or {}
+        groups: dict[tuple[str | None, str | None], list[int]] = {}
+        for raw in payload.get("ids", []):
+            key = str(raw)
+            groups.setdefault((owners.get(key), kinds.get(key)), []).append(int(raw))
+        for (owner, kind), group_ids in groups.items():
+            part = await fs.restore_entries(group_ids, user_id=owner or row["user_id"], memory_type=kind)
+            restored += part.restored
+            refused.extend(part.refused)
+            not_found.extend(part.not_found)
     elif row["kind"] == "wiki_write":
         # E17b: remove the wiki page the proposal created (result_ref = wiki:{path}).
         from pathlib import Path
@@ -376,9 +401,11 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
         "proposal_reverted",
         layer=row["layer"],
         target_id=str(proposal_id),
-        details={"kind": row["kind"], "restored": restored},
+        details={"kind": row["kind"], "restored": restored, "refused": len(refused), "not_found": len(not_found)},
     )
-    return {"id": proposal_id, "status": "reverted", "restored": restored}
+    # Always present, never only when non-empty: a key that appears only on a
+    # refusal is a key a caller can forget to read.
+    return {"id": proposal_id, "status": "reverted", "restored": restored, "refused": refused, "not_found": not_found}
 
 
 async def revert_transition(user_id: str, transition_id: int) -> dict[str, Any]:

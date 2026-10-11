@@ -74,7 +74,12 @@ async def forgetting_ritual(ctx: dict[str, Any]) -> dict[str, Any]:
         return staged
     from features.staging import propose
 
-    pid = await propose("forgetting", "archive", "default", "user", {"ids": ids})
+    # Staged with the owner and the kind each id came from. Without them the
+    # revert has to hunt a bare `original_id`, a number shared with
+    # `episodes.episode_id`, and cannot route an episode back to `episodes`.
+    owners = {str(r["entry_id"]): r["user_id"] for r in rows}
+    kinds = {str(r["entry_id"]): (r["memory_kind"] or "fact") for r in rows}
+    pid = await propose("forgetting", "archive", "default", "user", {"ids": ids, "owners": owners, "kinds": kinds})
     staged.update({"staged": True, "proposal_id": pid, "archived": 0})
     return staged
 

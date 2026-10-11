@@ -44,7 +44,7 @@ def test_archived_memories(tmp_path):
         am = ArchivedMemories(cm=cm)
         await am.archive("test_sh", "Old memory", importance=0.2, reason="test")
         archived = await am.get_archived("test_sh")
-        assert len(archived) >= 1
+        assert len(archived["entries"]) >= 1
         await cm.close_all()
 
     asyncio.run(t())

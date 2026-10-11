@@ -127,6 +127,72 @@ async def test_revert_archive_restores_rows(ensure_schema: Path) -> None:
     archived_left = conn.execute("SELECT count(*) FROM archived_memories WHERE original_id=?", (entry_id,)).fetchone()[0]
     conn.close()
     assert restored == 1 and archived_left == 0
+    # A payload staged before owners and kinds were recorded still works, and the
+    # outcome says so in the open rather than by staying silent.
+    assert out["restored"] == 1
+    assert out["refused"] == []
+    assert out["not_found"] == []
+
+
+async def test_revert_archive_uses_the_owner_and_kind_staged_with_it(ensure_schema: Path) -> None:
+    """The proposal now carries what it staged, and the revert uses it.
+
+    Two things are proved at once, and neither is visible from the count alone:
+    the recorded **owner** wins over the proposal's own `user_id` (which the
+    producer writes as a constant, so it is not the row's owner), and the recorded
+    **kind** resolves an id that would otherwise be ambiguous.
+    """
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    conn.execute(
+        "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason)"
+        " VALUES ('u_owner', 5, 'chosen=wrong kind', 'fact', 0.5, 'inactive_90d')"
+    )
+    conn.execute(
+        "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason)"
+        " VALUES ('u_owner', 5, 'chosen=right kind', 'question', 0.5, 'inactive_90d')"
+    )
+    conn.commit()
+    conn.close()
+
+    pid = await staging.propose(
+        "forgetting",
+        "archive",
+        "default",  # deliberately not the owner of the rows
+        "user",
+        {"ids": [5], "owners": {"5": "u_owner"}, "kinds": {"5": "question"}},
+    )
+    await staging.decide(pid, True, mem=_FakeApp())
+    out = await staging.revert(pid, mem=_FakeApp())
+
+    assert out["status"] == "reverted"
+    assert out["restored"] == 1
+    assert out["refused"] == [], "the staged kind did not reach the restore — it was ambiguous again"
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    values = conn.execute("SELECT value FROM core_memory WHERE user_id='u_owner'").fetchall()
+    left = conn.execute("SELECT count(*) FROM archived_memories WHERE original_id=5").fetchone()[0]
+    conn.close()
+    assert values == [("right kind",)]
+    assert left == 1, "the other kind's row was consumed as well"
+
+
+async def test_revert_archive_reports_what_it_could_not_restore(ensure_schema: Path) -> None:
+    """A purged row is refused, and `reverted` says so instead of returning a bare 0
+    that reads like an id which merely names nothing."""
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    conn.execute(
+        "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason)"
+        " VALUES ('u1', 6, 'removed on purpose', 'episode', 0.5, 'foreign_agent_contamination')"
+    )
+    conn.commit()
+    conn.close()
+
+    pid = await staging.propose("forgetting", "archive", "u1", "user", {"ids": [6], "owners": {"6": "u1"}, "kinds": {"6": "episode"}})
+    await staging.decide(pid, True, mem=_FakeApp())
+    out = await staging.revert(pid, mem=_FakeApp())
+
+    assert out["restored"] == 0
+    assert [r["reason"] for r in out["refused"]] == ["purged"]
+    assert out["not_found"] == []
 
 
 async def test_revert_rejects_non_applied(ensure_schema: Path) -> None:
