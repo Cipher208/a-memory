@@ -135,12 +135,14 @@ async def purge_decided_past_window() -> int:
     days = max(_expire_days(), int(config.get("staging", "purge_after_days", default=14)))
     cutoff = time.time() - days * 86400
     conn = await connection_manager.get(DB_NAME)
+    borrowed = conn.in_transaction
     cur = await conn.execute(
         """DELETE FROM mutation_proposals WHERE status IN ('rejected', 'expired') AND
                COALESCE(decided_at, expires_at, proposed_at) < ?""",
         (cutoff,),
     )
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return int(cur.rowcount or 0)
 
 

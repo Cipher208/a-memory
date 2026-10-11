@@ -127,6 +127,7 @@ class DreamBuffer:
                 (max_count,),
             )
         ).fetchall()
+        borrowed = conn.in_transaction
         for row in rows:
             excess = int(row["cnt"]) - max_count
             cursor = await conn.execute(
@@ -134,7 +135,8 @@ class DreamBuffer:
                 (row["user_id"], excess),
             )
             result["by_count"] += int(cursor.rowcount)
-        await conn.commit()
+        if not borrowed:
+            await conn.commit()
         return result
 
     async def count(self, user_id: str = "default") -> int:

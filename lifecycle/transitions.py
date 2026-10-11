@@ -42,6 +42,11 @@ async def record_transition(
         return 0
 
     conn = await cm.get(DB_NAME)
+    # The handle is shared with every other component in the process. If a transaction is already
+    # open on it, that transaction belongs to somebody else and this audit line must not end it —
+    # a stray commit here would flush their half-finished work. Read ownership BEFORE our own DML,
+    # because our insert is what opens a transaction when we are the ones starting one.
+    borrowed = conn.in_transaction
     await conn.execute(
         """CREATE TABLE IF NOT EXISTS memory_transitions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,6 +62,7 @@ async def record_transition(
         "INSERT INTO memory_transitions (user_id, kind, from_ref, to_ref, reason, ts) VALUES (?, ?, ?, ?, ?, ?)",
         (user_id, kind, from_ref, to_ref, reason, time.time()),
     )
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     metrics.inc(f"transition_{kind.replace('->', '_to_')}")
     return 1

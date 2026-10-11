@@ -31,10 +31,12 @@ async def prune_dangling_edges(cm: Any) -> int:
     dust, not debt. Single statement; O(|E|) without a join per row.
     """
     conn = await cm.get(DB_NAME)
+    borrowed = conn.in_transaction
     cur = await conn.execute(
         "DELETE FROM epi_edges WHERE source_id NOT IN (SELECT node_id FROM epi_nodes) OR target_id NOT IN (SELECT node_id FROM epi_nodes)"
     )
-    await conn.commit()
+    if not borrowed:
+        await conn.commit()
     return int(cur.rowcount or 0)
 
 
