@@ -141,3 +141,62 @@ async def test_dry_run_is_the_default_and_writes_nothing(db, tmp_path) -> None:
     archived = (await (await conn.execute("SELECT COUNT(*) FROM archived_memories")).fetchone() or (0,))[0]
     assert n == 1, "dry-run не удаляет"
     assert archived == 0, "dry-run не архивирует"
+
+
+def _cli_env(tmp_path) -> dict:
+    """Env for the out-of-process CLI run (no PYTHONPATH: чужой install-venv)."""
+    import os
+
+    env = dict(os.environ)
+    env["MCP_MEMORY_DATA_DIR"] = str(tmp_path)
+    env.pop("PYTHONPATH", None)
+    return env
+
+
+async def test_apply_writes_one_audit_row_per_removed_record(db, tmp_path) -> None:
+    """Удаление оставляет след по каждой записи, а не одну сводку.
+
+    `features/blame.py` спрашивает `WHERE target_id=?` — «что случилось с этой
+    записью». Сводная строка на такой вопрос не отвечает, поэтому форма повторяет
+    `purge_l3_legacy`: одна строка на запись, с id внутри `target_id`.
+    """
+    from pathlib import Path
+
+    agent_l0 = await _l0("agent", "реплика агента")
+    eid = await _fact("user", "rule:утекло", "моя реплика", agent_l0)
+    ep_id = await _episode("user", "утекший эпизод", agent_l0)
+
+    repo = Path(__file__).resolve().parents[2]
+    proc = _run_cli(repo, _cli_env(tmp_path), "--apply")
+    assert proc.returncode == 0, proc.stderr[-800:]
+
+    conn = await connection_manager.get(DB_NAME)
+    rows = await (await conn.execute("SELECT target_id, layer, action, details FROM audit_log WHERE action='speaker_layer_leak_purge'")).fetchall()
+    audited = {str(r[0]) for r in rows}
+    assert f"core_memory:{eid}" in audited, f"нет следа по удалённой записи: {audited}"
+    assert f"episode:{ep_id}" in audited, f"нет следа по удалённому эпизоду: {audited}"
+    assert all(str(r[1]) == "user" for r in rows), "слой берётся у удаляемой строки"
+    assert all("speaker_layer_leak" in str(r[3]) for r in rows), "причина названа в details"
+
+
+async def test_apply_removes_the_episodes_the_plan_reports(db, tmp_path) -> None:
+    """Регресс: план и отчёт считали эпизоды, а apply их не удалял — молча.
+
+    На живой базе эпизодов 0, поэтому несогласованность не проявлялась. При
+    возвращении класса (replay) скрипт печатал бы успех поверх неудалённых строк.
+    """
+    from pathlib import Path
+
+    agent_l0 = await _l0("agent", "реплика агента")
+    await _fact("user", "rule:утекло", "моя реплика", agent_l0)
+    await _episode("user", "утекший эпизод", agent_l0)
+
+    repo = Path(__file__).resolve().parents[2]
+    proc = _run_cli(repo, _cli_env(tmp_path), "--apply")
+    assert proc.returncode == 0, proc.stderr[-800:]
+
+    conn = await connection_manager.get(DB_NAME)
+    left = (await (await conn.execute("SELECT COUNT(*) FROM episodes")).fetchone() or (0,))[0]
+    assert left == 0, "эпизод из плана обязан быть удалён, а не только показан"
+    archived = await (await conn.execute("SELECT COUNT(*) FROM archived_memories WHERE archive_reason=?", ("speaker_layer_leak",))).fetchone()
+    assert int((archived or (0,))[0]) == 2, "заархивированы и запись, и эпизод"
