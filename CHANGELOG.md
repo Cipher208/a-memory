@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- **The speaker-layer purge left no trail, and its plan counted rows its apply did not remove (2026-10-12).** `scripts/purge_speaker_layer_leaks.py` removed 65 rows and wrote **nothing** to `audit_log` — the table held 2799 rows and not one of them mentioned the pass. The repo's own precedent is the other way: `purge_l3_legacy.py` writes a row per deleted record, and that is the shape the readers need.
+
+  The form follows the readers rather than the precedent as such. **Per record, not a summary line.** `features/blame.py` answers «what happened to this row» with `WHERE user_id=? AND target_id=?`; `lifecycle/importance_scheduler.py` counts `GROUP BY target_id`; `features/quality.py` counts `COUNT(DISTINCT target_id)`; and `idx_audit_lookup` is built on `(action, layer, target_id)`. One summary row would answer none of those questions, and the questions it would fail are exactly the ones a purge has to survive. `action='speaker_layer_leak_purge'`, `target_id` one of `core_memory:<entry_id>` / `episode:<episode_id>` / `epi_node:<node_id>`, and the reason carried in `details`. The `purge_foreign_rows.py` precedent of writing nothing is an omission, not a convention to copy.
+
+  Found while testing that: **the plan and the report counted a class the apply never removed.** `plan()` selects doomed episodes and `report()` prints their count, but `apply()` touched only facts and graph nodes — so with episodes present the script would have printed a success line over rows it left in the database, and they would never be cleaned by any later run either. It is 0 rows on the live base, which is why it never surfaced. Episodes are now archived and deleted like facts.
+
+  Both changes are guarded by tests that fail on the old code for the stated reason: `нет следа по удалённой записи: {'episode:1'}` when the fact audit is disabled, and `эпизод из плана обязан быть удалён, а не только показан` when the episode block is.
+
+  **A third defect, the house's known one, blocked the whole thing:** `--apply` did all its work and then never exited (`subprocess.TimeoutExpired … after 180 seconds`), because `apply()` opens the base through `connection_manager` and aiosqlite's worker threads are non-daemon. `plan()` reads with plain `sqlite3`, so a dry run never showed it — the same defect fixed in `features/typed_export.py` in the same session, and the same `close_all()` in a `finally`. It also explains a five-minute test file: the whole file now runs in 3.3 s.
+
+  Five tests, red-first. `mypy` clean, `ruff` clean.
+
 - **A bulk reclassify could overrule a declared kind, and its preview was silent (2026-10-12).** `features/typed_export.do_reclassify` re-derived `memory_kind` from the text for *every* row of a user, and `--dry-run` built its change list and returned it without printing anything — so the one path in the house that rewrites kinds in bulk had no preview, and rows whose kind is **authored** were re-derived like any other.
 
   Measured on a copy of the live base (914 rows, user `default`): the plan is **100 changes**, and the rows the text heuristic must not touch are **10** — nine written by `scripts/mirror_identity.py`, which passes `--kind` explicitly, and one declared canon written through `think(kind=...)`. Re-deriving those replaces authored truth with a content guess, which is exactly the protection `ImportanceScheduler.CURATED_SOURCES` already gives their *importance* (E1 18.09). That frozenset is **imported, not copied**, so the two lists cannot drift apart; a test seeds both curated sources and asserts they keep their kind through an apply.
