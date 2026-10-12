@@ -61,7 +61,7 @@ def ensure_schema(fresh_dir: Path) -> Path:
     )
     conn.execute(
         "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
-        " VALUES ('new_message', 1, 'default', 0.6, 1, 0, 1, 'seed dispatch preview', ?)",
+        " VALUES ('new_message', 1, 'default', 0.9, 1, 0, 1, 'seed dispatch preview', ?)",
         (now - 120,),
     )
     conn.commit()
