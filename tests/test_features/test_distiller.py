@@ -18,10 +18,12 @@ class FakeL3:
 
 
 class FakeMem:
-    """Ровно то, что distill_and_route трогает на mem: l3.save (+ опц. _cm)."""
+    """Ровно то, что distill_and_route трогает на mem: l3.save (+ опц. _cm, layer_type)."""
 
-    def __init__(self) -> None:
+    def __init__(self, layer_type: str | None = None) -> None:
         self.l3 = FakeL3()
+        if layer_type is not None:
+            self.layer_type = layer_type
 
 
 @pytest.fixture
@@ -212,3 +214,53 @@ def test_canonical_key_counter_signal_does_not_touch_current(monkeypatch) -> Non
     assert _canonical_key("проект Заря закрыт", MemoryKind.FACT) == _canonical_key("проект Заря закрыт", MemoryKind.FACT)
     k_plain = _canonical_key("проект Марс закрыт", MemoryKind.FACT)
     assert "марс" in k_plain, "слова вне таблицы counter_signals не трогаются"
+
+
+@pytest.mark.asyncio
+async def test_agent_speaker_writes_into_agent_layer(cm) -> None:
+    """S10-хвост: слой — свойство ГОВОРЯЩЕГО, а не типа записи.
+
+    Тот же дефект, что волна 04.10 вычистила в трёх других местах (L0-хеш,
+    persona-canon-ветка, log-строка): `distill_and_route` строил L4-хранилище
+    с литералом layer="user" вместо чтения оси говорящего. Реплика агента
+    с kind=rule/decision падала в факты ВЛАДЕЛЬЦА — и там, где kind вечный
+    (rule/instruction/commitment, never_archive=1, decay=0), оставалась навсегда.
+    """
+    from lifecycle.distiller import distill_and_route
+
+    fake_mem, fake_graph = FakeMem(layer_type="agent"), MagicMock()
+    r = await distill_and_route(fake_mem, fake_graph, "u1", "я решила перейти на PostgreSQL", 0.8)
+    assert r["l4_saved"] >= 1, "setup: инвариант должен дойти до L4"
+
+    conn = await cm.get("memory.db")
+    rows = await (await conn.execute("SELECT layer, key FROM core_memory WHERE user_id='u1'")).fetchall()
+    layers = {r[0] for r in rows}
+    assert layers == {"agent"}, f"реплика агента обязана лечь в agent, а легла в {layers!r}: {rows!r}"
+
+
+@pytest.mark.asyncio
+async def test_user_speaker_still_writes_into_user_layer(cm) -> None:
+    """Обратная сторона: владелец пишет по-прежнему в user (правка не переусердствовала)."""
+    from lifecycle.distiller import distill_and_route
+
+    fake_mem, fake_graph = FakeMem(layer_type="user"), MagicMock()
+    r = await distill_and_route(fake_mem, fake_graph, "u1", "я решила перейти на PostgreSQL", 0.8)
+    assert r["l4_saved"] >= 1, "setup: инвариант должен дойти до L4"
+
+    conn = await cm.get("memory.db")
+    rows = await (await conn.execute("SELECT layer FROM core_memory WHERE user_id='u1'")).fetchall()
+    assert {r[0] for r in rows} == {"user"}, f"владелец остаётся в user: {rows!r}"
+
+
+@pytest.mark.asyncio
+async def test_mem_without_layer_type_defaults_to_user(cm) -> None:
+    """FakeMem без layer_type (как старые вызовы) не должен сломаться: дефолт — user."""
+    from lifecycle.distiller import distill_and_route
+
+    fake_mem, fake_graph = FakeMem(), MagicMock()
+    r = await distill_and_route(fake_mem, fake_graph, "u1", "я решила перейти на PostgreSQL", 0.8)
+    assert r["l4_saved"] >= 1
+
+    conn = await cm.get("memory.db")
+    rows = await (await conn.execute("SELECT layer FROM core_memory WHERE user_id='u1'")).fetchall()
+    assert {r[0] for r in rows} == {"user"}, f"отсутствие layer_type → user: {rows!r}"
