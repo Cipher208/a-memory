@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **The gap registry gets the reader it never had (2026-10-12).** S18 named the chain «L3-questions → ночной registry → **proactive acquisition**» and planned only the first two links: `lifecycle/gap_registry.py` filled `memory_gaps` every night, `graph_enrich` reported `{"written": N}`, and **nothing read a row**. The declared surface was `memory_query(source='episodes', tag='question')`, which reads the *episodes* — so the table was an input prepared for a consumer that was never built, and the agent never saw her own open questions.
+
+  Two links are now closed.
+
+  **The registry records observation, not a fabricated closure.** The obvious rule — "the counterpart spoke next, so the question was answered" — was measured before it was written: it closes **100%** of questions on a live base (361/361), because in a conversation every turn is followed by the other party's. A window would have been a magic number with no ground truth behind it. So the table carries what it can actually know: `last_seen` (is the hole fresh) and `seen_count` (how often the nightly pass has re-observed it). The plan's own word for the collection is «свежие», and repetition is the strongest signal available here. Ageing out is honest; a manufactured "closed" flag would not be.
+
+  **A repeat is now counted instead of discarded.** `_insert_gap` returned early on a duplicate hash, so the same hole observed on five nights looked identical to one seen once. It now bumps `seen_count` and refreshes `last_seen`, and `build_registry` reports `bumped` alongside `written`. Verified idempotent on a copy of the live base: three consecutive runs give `written=5/bumped=15`, then `0/20`, then `0/20` — the row count does not move.
+
+  **`open_gaps` / `count_open_gaps` are the read side, and the session brief is their surface.** The brief (`features.continuity.session_recap`, the pending-work axis the agent already reads at session start) now carries `open questions: N — <the most-observed one>`, ranked by `seen_count DESC, last_seen DESC`. Reporting the write count alone is how the registry looked alive while nobody read it, so `graph_enrich` now reports `{"written", "bumped", "open"}`. Reads degrade to empty (and the brief to a missing line) rather than raising: the caller is a session-start path.
+
+  **The lazy schema upgrade is the part that would have failed silently in production.** `CREATE TABLE IF NOT EXISTS` cannot add a column to an existing table, so on every base that already had `memory_gaps` the two new columns would never appear — green on every fresh test base, broken on the live one. `_ensure_table` now applies guarded `ALTER TABLE`s, and backfills `last_seen = ts` for pre-existing rows, which would otherwise read as "infinitely old" and be hidden from day one. Verified against a copy of the live base: the real 141-row table gains both columns and 0 rows are left unbackfilled.
+
+  Six mutations, each killing its own test: removing the lazy ALTER (`no such column: last_seen`), removing the bump, removing the freshness window, removing the ranking, removing the brief line, and making the brief line unconditional. Fourteen new tests (8 registry + 3 brief + the integration ones). 2259 passed, `mypy` clean, `ruff` clean.
+
+  Not changed, and deliberately: two rows that render almost identically (`…внести в ⟨ORG_3⟩?` and `…⟨ORG_2⟩?`) are **not** duplicates to collapse — the entity placeholders carry different entities, so they are different questions. Normalising them out of the hash would quietly merge questions about different things.
+
 ### Fixed
 - **The gap detector measured the L4 expectation against the L3 bar, so 71% of the `diff_gap` backlog was noise (2026-10-12).** `features/diff.compute_session_gaps` decided both branches with one hard-coded `0.5`, but this house declares **two** thresholds for two different tiers — `watch_rules.predicate` ships `{"min_importance": 0.5, "l4_min_importance": 0.8}` (`auto_save_default`), validated by `mcp_server/tools/ops.py::_validate_predicate`. The L4 branch therefore reported every dispatch in the **0.5–0.8 band** as a missing L4, and that band is precisely where no L4 write is expected: L3 takes events, L4 takes invariants.
 

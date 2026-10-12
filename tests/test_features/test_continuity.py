@@ -108,6 +108,70 @@ async def test_recap_counts_staged_proposals(compaction_free, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_recap_pending_surfaces_open_gaps(compaction_free):
+    """Open knowledge holes ride the pending axis — that is the missing third stage.
+
+    S18 planned «L3-questions → registry → proactive acquisition» and built only the
+    first two links, so the registry had a writer and no reader. This is the read side
+    reaching the one place the agent already looks at session start.
+    """
+    import time
+
+    from features.continuity import session_recap
+
+    conn = await connection_manager.get("memory.db")
+    now = time.time()
+    await conn.execute(
+        "CREATE TABLE IF NOT EXISTS memory_gaps ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, layer TEXT NOT NULL DEFAULT 'user',"
+        " user_id TEXT NOT NULL, gap TEXT NOT NULL, origin TEXT NOT NULL DEFAULT 'question',"
+        " gap_hash TEXT NOT NULL, last_seen REAL NOT NULL DEFAULT 0, seen_count INTEGER NOT NULL DEFAULT 1)"
+    )
+    await conn.execute(
+        "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash, last_seen, seen_count)"
+        " VALUES (?, 'user', 'u1', 'почему ночной проход падает дважды?', 'question', 'h1', ?, 2)",
+        (now, now),
+    )
+    await conn.commit()
+
+    blocks = await session_recap(_FakeMem(), "u1")
+    pending = next(b for b in blocks if b["axis"] == "recap_pending")
+    assert "open questions: 1" in pending["content"], pending["content"]
+    assert "почему ночной проход падает" in pending["content"], "сам вопрос должен быть виден, а не только число"
+
+
+@pytest.mark.asyncio
+async def test_recap_pending_silent_when_no_open_gaps(compaction_free):
+    """No holes → no line. A permanent «open questions: 0» is noise in every brief."""
+    from features.continuity import session_recap
+    from features.scratchpad import write_entry
+
+    await write_entry("u1", "user", "hypothesis", "alembic revision before DDL")
+    blocks = await session_recap(_FakeMem(), "u1")
+    pending = next(b for b in blocks if b["axis"] == "recap_pending")
+    assert "open questions" not in pending["content"], pending["content"]
+
+
+@pytest.mark.asyncio
+async def test_recap_pending_survives_a_missing_registry_table(compaction_free):
+    """The brief must not lose its pending axis because the registry table is absent.
+
+    The session axis dies in this fixture (no `sessions` table) and announces itself —
+    that is the fail-loud behaviour from 2026-09-12 and not this change's business. What
+    must hold is that the PENDING axis is not the one that failed.
+    """
+    from features.continuity import session_recap
+    from features.scratchpad import write_entry
+
+    await write_entry("u1", "user", "hypothesis", "alembic revision before DDL")
+    blocks = await session_recap(_FakeMem(), "u1")
+    pending = next(b for b in blocks if b["axis"] == "recap_pending")
+    assert "pad:hypothesis=" in pending["content"], pending["content"]
+    degraded = [b["content"] for b in blocks if b["axis"] == "recap_degraded"]
+    assert not any("pending" in d for d in degraded), f"ось pending умерла: {degraded}"
+
+
+@pytest.mark.asyncio
 async def test_recap_zero_state_tail(compaction_free):
     from features.continuity import session_recap
 

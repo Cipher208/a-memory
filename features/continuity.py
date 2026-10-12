@@ -174,7 +174,7 @@ async def session_recap(
         logger.warning("recap notes axis failed: %s", exc)
         failed.append(f"notes: {exc}")
 
-    # Axis 4: pending work — scratchpad notes, diff gaps, staged proposals.
+    # Axis 4: pending work — scratchpad notes, diff gaps, open holes, staged proposals.
     try:
         pend: list[str] = []
         from features.scratchpad import read_entries
@@ -184,6 +184,20 @@ async def session_recap(
         fresh = [g for g in gaps if float(getattr(g, "created_at", 0) or 0) >= time.time() - _DAY_CUTOFF_S]
         if fresh:
             pend.append(f"diff_gaps: {len(fresh)} unreviewed")
+        # S18 gap-registry: knowledge holes the nightly pass keeps observing. This is the
+        # read side that was never built — the registry had a writer and no reader, so the
+        # agent never saw her own unanswered questions. Nested try: a missing registry
+        # table must cost this line, not the whole axis.
+        try:
+            from lifecycle.gap_registry import count_open_gaps, open_gaps
+
+            holes = await count_open_gaps("user", user_id)
+            if holes:
+                top = await open_gaps("user", user_id, limit=1)
+                text = str(top[0]["gap"])[:70] if top else ""
+                pend.append(f"open questions: {holes} — {text}" if text else f"open questions: {holes}")
+        except Exception as exc:  # pragma: no cover - defensive, the axis must survive
+            logger.debug("open-gaps line skipped: %s", exc)
         props = await _pending_proposals(user_id)
         if props:
             pend.append(f"staged proposals: {len(props)} awaiting review")
