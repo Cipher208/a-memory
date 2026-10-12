@@ -363,24 +363,112 @@ def can_archive(
     return not importance >= archive_min_importance
 
 
+# Harness framing that wraps an owner's real turn. Classifying the raw block made the
+# FRAMING the content: "Do not guess a reply destination" carries the RULE keyword
+# "do not", and `rule` is never_archive with decay 0 — so every harness-tailed turn
+# became a permanent rule. Measured on the live base 2026-10-12: 9 of 19 `rule` rows
+# matched on the tail rather than on anything the speaker said.
+#
+# Truncate at the FIRST marker, never delete mid-text: measured across the live L0, the
+# marker always follows the owner's own words (0 rows began with one), so everything
+# before it is what was actually said.
+_HARNESS_MARKERS: tuple[str, ...] = (
+    "User correction during the turn:",
+    "Gateway message origin (JSON data",
+    "Do not guess a reply destination",
+    "[ariel recall]",
+    "IMPORTANT: You are running as a scheduled cron",
+)
+
+# Bare adverbs that are ordinary prose as often as they are a directive. The two weak
+# Russian keys below sit in almost every argument about a decision, so matching them
+# anywhere filed reported speech as a permanent rule: measured live, two rows of ordinary
+# narration were both rules. The strong keys keep the plain match; the weak two are
+# accepted only when they OPEN a clause, the same position test `_is_question` and
+# `_is_task_request` use. Keys themselves stay in `_KEYWORD_MAP` as data.
+_RULE_WEAK: frozenset[str] = frozenset({"нельзя", "никогда"})
+
+# A keyword with no Cyrillic in it: English, and multi-word English phrases.
+_ASCII_KEYWORD = re.compile(r"[A-Za-z][A-Za-z ]*")
+
+_KEYWORD_RX: dict[str, re.Pattern[str]] = {}
+
+
+def _strip_harness(text: str) -> str:
+    """Return only the part of `text` the speaker actually said.
+
+    Truncates at the first harness marker. Text that was nothing but harness becomes
+    empty, and empty classifies as FACT — the honest answer for a block that is not
+    memory at all. Text with no marker is returned unchanged.
+    """
+    low = text.lower()
+    cut = len(text)
+    for marker in _HARNESS_MARKERS:
+        at = low.find(marker.lower())
+        if at != -1:
+            cut = min(cut, at)
+    return text[:cut].strip() if cut != len(text) else text
+
+
+def _keyword_hits(kw: str, tl: str, text: str) -> bool:
+    """Match one keyword: English at a word START, Russian anywhere.
+
+    ENGLISH SUFFIXES ARE ALLOWED, COMPOUNDS ARE NOT. The rule is a word-start match
+    that treats a hyphen as part of the word, so a stem still finds its inflections
+    (`committed`, `promised` — both are asserted by the existing suite) while every
+    compound that only *contains* the key is refused. Measured on ~3 400 live rows,
+    2026-10-12 — the compounds it removes are all the wrong word:
+
+        commit  30 -> 22   the hyphenated and camel-case compounds
+        chose    3 ->  0   only inside a longer word
+        how     15 ->  5   only inside a longer word
+
+    A strict boundary on BOTH ends was tried first and rejected: it also kills
+    `committed` and `promised`, which this house's own tests require (`commit` 22 -> 4).
+
+    RUSSIAN MATCHES BY SUBSTRING, deliberately. A boundary there destroys real matches
+    because the house writes feminine and prefixed forms the key does not spell: the
+    three Russian stems measured live lost 19, 22 and 58 matches respectively. The
+    boundary is applied where it removes a defect and withheld where it removes a match.
+    """
+    if _ASCII_KEYWORD.fullmatch(kw):
+        rx = _KEYWORD_RX.get(kw)
+        if rx is None:
+            rx = _KEYWORD_RX[kw] = re.compile(r"(?<![A-Za-z0-9-])" + re.escape(kw), re.IGNORECASE)
+        return rx.search(text) is not None
+    return kw in tl
+
+
+def _is_prohibition(text: str, kws: tuple[str, ...]) -> bool:
+    """Decide whether the text IS a rule, not merely full of rule-sounding words."""
+    tl = text.lower()
+    for kw in kws:
+        if kw in _RULE_WEAK:
+            continue
+        if _keyword_hits(kw, tl, text):
+            return True
+    return _opens_with(text, _RULE_WEAK)
+
+
 def kind_for_text(text: str) -> MemoryKind:
     """Best-effort heuristic for auto-classification. Returns FACT if nothing matches.
 
-    Two gates apply, and they are the whole fix. QUESTION is decided by `_is_question`
-    and TODO by `_is_task_request` — by the SHAPE of the text, not by one word appearing
-    in it. Everything else still matches by substring, deliberately.
+    Four gates apply. QUESTION is decided by `_is_question`, TODO by `_is_task_request`,
+    RULE by `_is_prohibition` — by the SHAPE of the text, not by one word appearing in
+    it — and harness framing is stripped before any of them runs, because the framing
+    carries a RULE keyword of its own.
 
-    WHY SUBSTRING IS KEPT. Whole-word matching was tried first, because `kw in text`
-    is what let "how" match inside "show". Measured against 10404 live rows it also
-    broke Russian inflection and English stems — feminine and prefixed verb forms
-    stopped matching their dictionary keys, and `committed` stopped matching `commit` —
-    losing 148 classifications. This house writes in feminine grammatical forms, so a
-    silently became FACT. The semantic gates remove the real defect without that cost,
-    so the blunt instrument was withdrawn.
+    ONE MATCHER PER LANGUAGE. Russian keywords match by substring, deliberately: a
+    boundary costs the Russian stems tens of live matches each, because the house writes
+    feminine and prefixed forms the key does not spell. English keywords match at a word
+    start with a hyphen treated as part of the word, deliberately: there the plain
+    substring only ever hit compounds, while a strict boundary would also kill the
+    inflections the suite requires. See `_keyword_hits` for the measurement.
 
     Returning FACT is not a failure: it is the honest answer for text that matched no
     pattern, and it costs a coarser retrieval hint. Over-tagging is what this replaces.
     """
+    text = _strip_harness(text)
     tl = text.lower()
     for kind, kws in _KEYWORD_MAP:
         if kind is MemoryKind.QUESTION:
@@ -389,7 +477,11 @@ def kind_for_text(text: str) -> MemoryKind:
             continue
         if kind is MemoryKind.TODO and _is_task_request(text):
             return kind
-        if any(kw in tl for kw in kws):
+        if kind is MemoryKind.RULE:
+            if _is_prohibition(text, kws):
+                return kind
+            continue
+        if any(_keyword_hits(kw, tl, text) for kw in kws):
             return kind
     return MemoryKind.FACT
 

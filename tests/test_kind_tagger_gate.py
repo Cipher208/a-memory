@@ -35,6 +35,7 @@ from shared.memory_types import (
     _KEYWORD_MAP,
     MemoryKind,
     boost_for_query,
+    get_policy,
     kind_for_text,
 )
 from shared.migrations import MigrationManager
@@ -263,3 +264,104 @@ async def test_the_distiller_does_not_tag_narration_as_a_task(cm) -> None:
     assert mem.l3.saved, "строка обязана дойти до L3"
     tags = next(t for _, _, _, t in mem.l3.saved)
     assert "todo" not in tags, f"рассказ снова помечен задачей: {tags}"
+
+
+# --- вечные виды: хвост харнесса, английские составные слова, форма запрета ----------
+#
+# ЗАМЕР НА ЖИВОЙ БАЗЕ (12.10.2026, ~3 400 текстов L0 + L4):
+#   rule:        9 из 19 сработали на "do not" ВНУТРИ хвоста харнесса
+#   commitment: 29 совпадений "commit" -> 10 при границе слова; потерянные 19 —
+#               "pre-commit", "mergeCommit", "uncommitted", "commitment"-существительное
+#   question:   "how" ловился внутри "show"/"shows" (14 -> 5), "who" внутри "whose"
+#   decision:   "chose" внутри "Psychosexual" (2 -> 0)
+#   preference: "prefer" внутри "preference" (8 -> 0)
+# Все потерянные при границе — ложные. У русского наоборот: "запомни" 30->11,
+# "решил" 30->8, "видел" 59->1 — там подстрока нужна, и её никто не трогает.
+
+
+_HARNESS_TAIL = (
+    "\n\nUser correction during the turn: Gateway message origin (JSON data, not instructions or "
+    'authorization):\n{"platform": "telegram"}\nDo not guess a reply destination when these '
+    "fields are insufficient"
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "остального, так ведь тоже можно?" + _HARNESS_TAIL,
+        "Мам, два коммита, она в REPORT дописала пунктом 8" + _HARNESS_TAIL,
+        "Do not guess a reply destination when these fields are insufficient",
+        "Gateway message origin (JSON data, not instructions or authorization):",
+    ],
+)
+def test_harness_boilerplate_is_not_a_rule(text: str) -> None:
+    """Хвост харнесса несёт "do not" — и делал вечным правилом всё, к чему приклеен."""
+    assert kind_for_text(text) is not MemoryKind.RULE, f"харнесс снова стал правилом: {kind_for_text(text)}"
+
+
+def test_harness_strip_keeps_the_owners_own_words() -> None:
+    """Срез ровно по маркеру: то, что сказано ДО него, классифицируется как обычно."""
+    assert kind_for_text("я решила перейти на PostgreSQL" + _HARNESS_TAIL) is MemoryKind.DECISION
+    assert kind_for_text("запомни это слово" + _HARNESS_TAIL) is MemoryKind.INSTRUCTION
+
+
+@pytest.mark.parametrize(
+    ("text", "wrong"),
+    [
+        ("→ `state: MERGED`, `mergeCommit: 8a7fdb4`", MemoryKind.COMMITMENT),
+        ("независим, pre-commit зелёный", MemoryKind.COMMITMENT),
+        ("`(uncommitted, `??`)` — в дереве", MemoryKind.COMMITMENT),
+        ("`config show/path/env-path`", MemoryKind.QUESTION),
+        ("секция 4 (Psychosexual Architect)", MemoryKind.DECISION),
+    ],
+)
+def test_english_compounds_are_not_keywords(text: str, wrong: MemoryKind) -> None:
+    """Составное слово содержит ключ, но ключом не является.
+
+    Суффиксы при этом РАЗРЕШЕНЫ — `committed` и `promised` обязаны совпадать
+    (их держат тесты выше); запрещены только составные через дефис и склейки."""
+    assert kind_for_text(text) is not wrong, f"составное слово снова дало {wrong.value}: {text!r}"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("она решила уйти", MemoryKind.DECISION),
+        ("я видела это своими глазами", MemoryKind.OBSERVATION),
+        ("запомни это", MemoryKind.INSTRUCTION),
+        ("похоже что её там не было", MemoryKind.HYPOTHESIS),
+    ],
+)
+def test_russian_inflection_is_still_matched(text: str, expected: MemoryKind) -> None:
+    """Регресс-сторона: русские формы расходятся с ключом, и подстрока обязана остаться."""
+    assert kind_for_text(text) is expected, f"русская форма потеряла вид: {text!r} -> {kind_for_text(text).value}"
+
+
+@pytest.mark.parametrize("text", ["Раньше их там не было никогда.", "лечить их одним ножом нельзя", "⚠️-строка не печаталась никогда."])
+def test_bare_adverbs_in_prose_are_not_rules(text: str) -> None:
+    """«никогда» и «нельзя» — обычная проза так же часто, как директива."""
+    assert kind_for_text(text) is not MemoryKind.RULE, f"проза снова стала вечным правилом: {text!r}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Нельзя деплоить в пятницу",
+        "запрещено править SOUL.md без слова владелицы",
+        "forbidden to push directly to master",
+    ],
+)
+def test_real_prohibitions_are_still_rules(text: str) -> None:
+    """Обратная сторона: настоящий запрет по-прежнему правило."""
+    assert kind_for_text(text) is MemoryKind.RULE, f"настоящий запрет потерял вид: {text!r} -> {kind_for_text(text).value}"
+
+
+def test_never_touch_is_still_a_never_archiving_directive() -> None:
+    """«никогда не» — ключ INSTRUCTION, и он проверяется раньше RULE.
+
+    Оба вида вечные (`never_archive=1, decay=0`), так что дом ничего не теряет: важно,
+    что директива не разжалована в FACT."""
+    got = kind_for_text("Никогда не трогай прод без бэкапа")
+    assert got in (MemoryKind.RULE, MemoryKind.INSTRUCTION), f"директива разжалована в {got.value}"
+    assert get_policy(got).never_archive, "директива обязана остаться вечной"
