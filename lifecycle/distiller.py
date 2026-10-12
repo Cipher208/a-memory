@@ -317,6 +317,12 @@ async def distill_and_route(
         "machine_report": False,
         "refused": "",
     }
+    # The layer is a property of the SPEAKER, not of the record's kind. One local,
+    # read by both branches below: hard-coding it here (and once more in the log
+    # row above) is how the same literal drifted apart in three places before
+    # (70c77d1, 8c9577d) and how an agent's `rule`/`instruction` ends up in the
+    # owner's fact heap — permanent, because those kinds never archive.
+    speaker_layer = getattr(mem, "layer_type", "user") or "user"
     # A tool's own status dump is not a memory: refuse the MESSAGE, not its atoms.
     # Deliberately here rather than at the intake door, because intake already
     # captured these rows and `replay` re-distils them — one guard covers the live
@@ -327,14 +333,14 @@ async def distill_and_route(
         base_stats["refused"] = REASON_MACHINE_REPORT
         await record_rejection(
             REASON_MACHINE_REPORT,
-            layer=getattr(mem, "layer_type", "user"),
+            layer=speaker_layer,
             user_id=user_id,
             event=event,
             text=text,
         )
         return base_stats
 
-    cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer="user")
+    cmem = CoreMemory(cm=getattr(mem, "_cm", None), layer=speaker_layer)
     await cmem._init_db()  # self-healing schema, like ConflictResolver.check — the fixture may lack migrations
     stats = base_stats
     atoms, atom_counts = atomize_counted(text)

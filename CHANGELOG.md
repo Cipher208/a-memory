@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **The layer is the speaker's, not the record's kind (2026-10-12).** `distill_and_route` built its L4 store with a literal `layer="user"`, so an agent-layer turn landed in the owner's fact heap. Only `MemoryKind.PROCEDURAL` was ever routed to `agent`; every other kind — `rule`, `instruction`, `decision`, `fact`, `preference`, `commitment` — went to the owner regardless of who said it. Measured on the live base: 65 rows in `layer='user'` whose L0 source carries `layer='agent'`, none of them `procedural`, which is the signature of the kind-based branch being the only way into `agent`. Three of the affected kinds (`rule`, `instruction`, `commitment`) are `never_archive=1, decay_rate=0`, so those rows were permanent — and still are, until a separate cleanup.
+
+  This is the fourth instance of one mistake, and the three earlier ones are named in `8c9577d`: the L0 content hash, the persona-canon branch, and the `memory_dispatch_log` row. That commit's fix did not reach this function, where the same literal sat two lines below a *correct* `getattr(mem, "layer_type", "user")` in the same branch. Both sites now read one local, `speaker_layer`, so the pair cannot drift apart again.
+
+  Verified red-first: `test_agent_speaker_writes_into_agent_layer` fails on the old code with `{'user'} == {'agent'}`, and reverting the fix kills exactly that test. Two companion tests hold the other side — the owner still writes to `user`, and a `mem` with no `layer_type` (older callers) defaults to `user` rather than raising. Live-checked on a copy of the production data dir: one text, one kind, two speakers → `agent` and `user` respectively; the production file was not touched. Full suite: 2212 passed.
+
 ### Added
 - **A pre-commit check that refuses to commit under a personal identity (2026-10-08).** During the 1.11.0 release the same identity leak appeared three times — in a CHANGELOG entry, in a workflow comment, and in pasted assertion output — and grepping caught it each time, which is discipline rather than a boundary. Commit authorship is the same shape of problem: `.git/config` decides it, not intent, and a fresh `git init` inherits whatever identity the machine has. `scripts/check_commit_identity.py` now fails the commit, with the fix as an explicit opt-in (`A_MEMORY_ALLOW_ANY_COMMIT_IDENTITY=1`) so an override is a decision and not a workaround.
 
