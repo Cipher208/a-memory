@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- **A permanent label was being handed to boilerplate and to prose (2026-10-12).** `kind_for_text` classified by plain substring over `_KEYWORD_MAP`, and three of the kinds it could return — `rule`, `instruction`, `commitment` — carry `never_archive=1, decay_rate=0`. So every false positive was not a wrong hint, it was a **permanent** wrong hint, exempt from the decay that would otherwise have shed it. Two defects fed it.
+
+  The first is the harness's own text. This house appends a boilerplate tail to the text it stores — the gateway origin block ends *"Do not guess a reply destination when these fields are insufficient"* — and `"do not"` sits in `_KEYWORD_MAP` as a rule keyword. Every record carrying that tail was therefore filed as a rule. The live evidence is the defect's own description: a `rule` row was created at 14:39 on 2026-10-12 out of an explanation of this bug, by the same substring.
+
+  The second is the shape of the keyword match. `"commit"` was found inside `pre-commit`, `mergeCommit` and `uncommitted`; `"chose"` inside a single longer word; `"how"` inside `show`. Measured on the live base: `commit` had 30 hits of which 8 were compounds, `chose` 3 of which 3, `how` 15 of which 10. All six `commitment` rows were false, every one of them a compound.
+
+  Three changes, each accepted by the owner before it was written:
+  - the harness tail is stripped before classification, by five markers covering the blocks this house appends. The slice is bounded and the owner's own words are never removed.
+  - English keywords match at a **word start with a hyphen treated as part of the word**. That keeps inflections (`committed`, `promised` — asserted by this suite) and loses every compound.
+  - the two weak Russian keys are accepted only when they **open a clause**, the same position test `_is_question` and `_is_task_request` already use. They sit in almost every argument about a decision, so matching them anywhere filed reported speech as permanent law.
+
+  A strict boundary on **both** ends of an English keyword was drafted first and rejected on evidence: it also kills `committed` and `promised`, dropping `commit` from 22 hits to 4, so it would have traded a known defect for a silent loss. Russian keywords keep the substring match for the same reason read the other way — feminine and prefixed forms the keys do not spell are real matches. The boundary is applied where it removes a defect and withheld where it removes a match; the two matchers are deliberate and the reason is in the docstring.
+
+  Effect, separated by provenance rather than claimed wholesale: **62 live rows** stop being permanent — `rule` 10, `instruction` 49, `commitment` 3 — and every one of them moves into a kind that can decay. Six further `rule` rows are NOT the fix's doing: `scripts/mirror_identity.py` writes its kind explicitly with `--kind rule`, and those rows keep it, which is correct — the identity contract *is* a rule. Nothing is lost in the other direction: two Russian prohibitions and `"forbidden to push"` all still classify as `rule`.
+
+  Verified by mutation, on a gate of nine tests. Disabling the harness strip kills three; returning the English matcher to a substring kills exactly the four compound tests; disabling the clause gate kills the test that asserts a real prohibition survives. Full suite 2236 passed, `mypy` clean.
+
 - **The layer is the speaker's, not the record's kind (2026-10-12).** `distill_and_route` built its L4 store with a literal `layer="user"`, so an agent-layer turn landed in the owner's fact heap. Only `MemoryKind.PROCEDURAL` was ever routed to `agent`; every other kind — `rule`, `instruction`, `decision`, `fact`, `preference`, `commitment` — went to the owner regardless of who said it. Measured on the live base: 65 rows in `layer='user'` whose L0 source carries `layer='agent'`, none of them `procedural`, which is the signature of the kind-based branch being the only way into `agent`. Three of the affected kinds (`rule`, `instruction`, `commitment`) are `never_archive=1, decay_rate=0`, so those rows were permanent — and still are, until a separate cleanup.
 
   This is the fourth instance of one mistake, and the three earlier ones are named in `8c9577d`: the L0 content hash, the persona-canon branch, and the `memory_dispatch_log` row. That commit's fix did not reach this function, where the same literal sat two lines below a *correct* `getattr(mem, "layer_type", "user")` in the same branch. Both sites now read one local, `speaker_layer`, so the pair cannot drift apart again.
