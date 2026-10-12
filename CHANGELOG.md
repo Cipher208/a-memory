@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Fixed
+- **A bulk reclassify could overrule a declared kind, and its preview was silent (2026-10-12).** `features/typed_export.do_reclassify` re-derived `memory_kind` from the text for *every* row of a user, and `--dry-run` built its change list and returned it without printing anything — so the one path in the house that rewrites kinds in bulk had no preview, and rows whose kind is **authored** were re-derived like any other.
+
+  Measured on a copy of the live base (914 rows, user `default`): the plan is **100 changes**, and the rows the text heuristic must not touch are **10** — nine written by `scripts/mirror_identity.py`, which passes `--kind` explicitly, and one declared canon written through `think(kind=...)`. Re-deriving those replaces authored truth with a content guess, which is exactly the protection `ImportanceScheduler.CURATED_SOURCES` already gives their *importance* (E1 18.09). That frozenset is **imported, not copied**, so the two lists cannot drift apart; a test seeds both curated sources and asserts they keep their kind through an apply.
+
+  `dry_run` is now the **default** and prints the plan; `--apply` is the explicit write, matching every purge script in this repo. `--dry-run` is kept as a suppressed no-op so existing callers do not break, and the plan is returned in both modes so a caller can assert on it without parsing stdout. The plan printing is capped at 50 rows with a remainder line.
+
+  Two defects found while verifying the preview, neither of them in the change itself:
+
+  - **The module hung after doing its work.** `python -m features.typed_export reclassify …` printed its plan and then never returned (`exit=124`); the untouched `export` subcommand did the same. The cause is the house's known one — aiosqlite's worker threads are non-daemon and block in `queue.get()`, so a CLI that leaves a connection open hangs at interpreter shutdown — and only `scripts/ariel_cli.py::_with_db` closed them. `main()` now closes its own (`_run`, the same l0_cli pattern). A subprocess test guards it, because the defect is only visible at shutdown: on the old code it fails with `subprocess.TimeoutExpired … after 60 seconds`.
+  - **The live base cannot be previewed while the stack is up.** It answers `sqlite3.OperationalError: database is locked` to a plain connection, so the figures above were taken on a copy of `memory.db` (+ `-wal`, `-shm`), as this house does for live verification. The first attempt read nothing and looked like a silent tool; it was a locked store, and its stdout had been lost to buffering when the timeout killed the process. Use `-u` when probing a command through a pipe.
+
+  Red-first, five tests, all failing on the old code for the stated reason: `assert 'commitment' == 'rule'` (a curated row was overruled) and `assert 'dry run' in ''` (the preview printed nothing). 2242 passed, `mypy` clean, `ruff` clean.
+
 - **A permanent label was being handed to boilerplate and to prose (2026-10-12).** `kind_for_text` classified by plain substring over `_KEYWORD_MAP`, and three of the kinds it could return — `rule`, `instruction`, `commitment` — carry `never_archive=1, decay_rate=0`. So every false positive was not a wrong hint, it was a **permanent** wrong hint, exempt from the decay that would otherwise have shed it. Two defects fed it.
 
   The first is the harness's own text. This house appends a boilerplate tail to the text it stores — the gateway origin block ends *"Do not guess a reply destination when these fields are insufficient"* — and `"do not"` sits in `_KEYWORD_MAP` as a rule keyword. Every record carrying that tail was therefore filed as a rule. The live evidence is the defect's own description: a `rule` row was created at 14:39 on 2026-10-12 out of an explanation of this bug, by the same substring.
