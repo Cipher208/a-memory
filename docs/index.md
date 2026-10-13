@@ -25,7 +25,7 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 
 | Feature | Description |
 |---------|-------------|
-| **6 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project` / `memory_hook`; coherent opt-in tiers via `ARIEL_EXPOSE`: `context` (recall protocol, session recap, steering, compression), `insight` (query DSL, fact blame, quality), `write` (typed saves, rules engine, scratchpad), plus `wiki` / `brief` / `review` — e.g. `primitives,context,insight,write,wiki,brief,review` (46 tools), `all` exposes the full 56-tool surface |
+| **7 universal primitives** | `think` / `dream` / `forget` / `evolve` / `project` / `wake_up` / `memory_hook`; coherent opt-in tiers via `ARIEL_EXPOSE`: `context` (recall protocol, session recap, steering, compression), `insight` (query DSL, fact blame, quality), `write` (typed saves, rules engine, scratchpad), plus `wiki` / `review` — e.g. the `agent` preset `primitives,context,insight,write,wiki,review` (59 tools), `all` exposes the full 66-tool surface |
 | **4-tier memory** | L1 ReflexBuffer → L2 SessionStore → L3 EpisodicMemory → L4 CoreMemory, layer-isolated `(layer, user_id, key)` namespaces |
 | **Typed memory** | 13 categories with per-type retention, decay, and boost |
 | **RAG search** | FTS5 + binary embeddings + hybrid RRF ranking, multi-source merge |
@@ -81,18 +81,18 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 
 | Section | Description |
 |---------|-------------|
-| [Architecture](architecture/overview.md) | Layered model, L1-L4, consolidation, 23 DB tables |
-| [MCP Tools](tools/reference.md) | Tool reference (layer ops; agents normally see only the 5 primitives) |
+| [Architecture](architecture/overview.md) | Layered model, L1-L4, consolidation, 57 DB objects |
+| [MCP Tools](tools/reference.md) | Tool reference (layer ops; agents normally see only the 7 primitives) |
 | [RAG & Search](rag/engine.md) | Unified search, BM25 conflict similarity, type-aware boost |
-| [Hooks](hooks/system.md) | 19 unique hook names (12 user + 13 agent config slots), importance gating |
+| [Hooks](hooks/system.md) | 19 hook slots (12 user + 13 agent, config-gated), importance gating |
 | [Operations](operations/deployment.md) | Transports, health, auth, configuration |
 | [API Reference](api/secrets.md) | Auto-generated from docstrings |
 
 ## Status
 
-- **Version:** 1.8.1
-- **Tests:** 927 passed (including 25 property-based Hypothesis tests + Phase D E2E/chaos suites)
-- **DB tables:** 23 (alembic head `init_v8`)
-- **Tool surface:** 6 primitives by default · 46 with `primitives,context,insight,write,wiki,brief,review` · 56 with `all`
-- **Python:** 3.10–3.13
+- **Version:** 1.12.0
+- **Tests:** 2261 passed (property-based Hypothesis tests + Phase D E2E/chaos suites included)
+- **DB tables:** 57 (alembic head `20261004_2200_g27`)
+- **Tool surface:** 7 primitives by default · 59 with the `agent` preset (`primitives,context,insight,write,wiki,review`) · 66 with `all`
+- **Python:** 3.11–3.13
 - **Platform:** Windows, Linux, macOS, Docker

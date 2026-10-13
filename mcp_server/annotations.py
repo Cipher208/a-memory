@@ -1,6 +1,6 @@
 """Stage 2 Plan B: MCP behavior annotations — readOnlyHint/destructiveHint/idempotentHint.
 
-One static registry for all 65 tools; the server passes `annotations=`
+One static registry for all 66 tools; the server passes `annotations=`
 into mcp.tool() at registration. MCP semantics:
   readOnlyHint      — does not mutate state (degradation is not sanctioned)
   destructive_hint  — may irreversibly delete (default true in MCP!)

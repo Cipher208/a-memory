@@ -93,17 +93,19 @@ uv run ariel-memory
 
 ---
 
-## The five primitives
+## The seven primitives
 
-Agents see exactly six tools — one verb per intent (5 verbs + memory_hook), no tool-choice paralysis:
+Agents see exactly seven tools — one verb per intent, plus the event bridge (6 verbs + `memory_hook`), no tool-choice paralysis:
 
 | Primitive | Intent | What it does |
 |---|---|---|
 | **`think`** | remember | Routes content to the right layer (L4 facts / L3 episodes / wiki / graph) based on importance, emotion, and relations |
 | **`dream`** | recall | Hybrid search across ALL layers (FTS5 + binary embeddings + wiki + graph), returns a token-budgeted digest |
-| **`forget`** | let go | Context-aware deletion with Shadow Bin archival (exact / fuzzy / recent) |
+| **`forget`** | let go | Context-aware deletion with Shadow Bin archival (exact / fuzzy / recent) — plus a dry run that writes nothing and an undo that puts back what the bin kept |
 | **`evolve`** | grow | Records personality/rules evolution for the agent |
-| **project** | continue | Per-project identity, decision log, artifact map, code index |
+| **`project`** | continue | Per-project identity, decision log, artifact map, code index |
+| **`wake_up`** | resume | One-call memory lift for a fresh session — the critical set in one call, instead of walking a recall protocol step by step |
+| **`memory_hook`** | signal | The event bridge: fires one lifecycle event (`session_started`, `new_message`, …) so an external harness can push memory into ariel on its own schedule |
 
 Quick demo — Python MCP client:
 
@@ -116,7 +118,9 @@ res = await session.call_tool("dream", {"query": "dark mode preference"})
 print(res["summary"])
 ```
 
-65 fine-grained operations exist in total, grouped into coherent opt-in tiers: the 6 primitives are exposed by default; add `context` (recall protocol, /new session recap, smart context budget, steering hints, tool-output compression), `insight` (Memory Query DSL, provenance fact-blame, quality loop, reflections, stats), `write` (typed memory schemas, declarative rules engine, scratchpad, counterfactuals, episodes), plus `wiki`, `brief`, and `review` (staged mutations) — e.g. `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` (57 tools; the remaining 8 are admin-tier, exposed only via `ARIEL_EXPOSE=all`).
+66 fine-grained operations exist in total, grouped into coherent opt-in tiers: the 7 primitives are exposed by default; add `context` (recall protocol, /new session recap, smart context budget, steering hints, tool-output compression), `insight` (Memory Query DSL, provenance fact-blame, quality loop, reflections, stats), `write` (typed memory schemas, declarative rules engine, scratchpad, counterfactuals, episodes), plus `wiki` and `review` (staged mutations, `memory_report_card`, `daily_brief`). The usual live-agent surface is one preset — `ARIEL_EXPOSE=agent` (59 tools), equivalent to `primitives,context,insight,write,wiki,review`. The remaining 7 are admin-tier: `ARIEL_EXPOSE=operator` (66) or `all`.
+
+> **Tier history, because older guides still name a `brief` tier:** it was dissolved on 2026-09-07 — `daily_brief` now rides `review`. If a doc tells you to pass `brief`, it is pre-1.10 and the token is simply ignored.
 
 > **⚠️ Env sanitization gotcha (stdio):** MCP clients pass a *sanitized* environment to stdio servers — setting `ARIEL_EXPOSE` in your shell profile does nothing. Define the tier set in your **MCP client config** (the `env` block of the server entry — see [configuration guide](docs/getting-started/configuration.md)). The server logs its resolved surface at startup (`tool exposure: N/M tools`) — if your agent reports seeing only the primitives, check that line first, then restart the client session (tool lists are cached per session).
 
@@ -126,9 +130,9 @@ print(res["summary"])
 
 | Category | What's inside |
 |----------|--------------|
-| 🧠 **Memory** | L1 Reflex (atomic persistence) → L2 Sessions → L3 Episodic → L4 Core, importance scoring, typed memory kinds with TTL policies, layer isolation; **bi-temporal fact history** (is_current view hides superseded rows globally, `changed_since` delta-polling, drill-down to raw source surviving cold archival), hash-chained L0 journal with hot/warm/cold tiers; **65 tools** (tiered exposure; 57 on the common combo, 6 primitives by default) including `/recall` protocol (multi-axis + disclosure triggers), session continuity recap (/new recovery pack), steering hints, tool-output compression + recall verification, provenance fact-blame, Memory Query DSL (faceted tags), typed memory schemas, a declarative rules engine, smart context budget (weighted token floors), reflections, counterfactuals, was_useful quality loop, operator diagnose/heal + integrity score |
+| 🧠 **Memory** | L1 Reflex (atomic persistence) → L2 Sessions → L3 Episodic → L4 Core, importance scoring, typed memory kinds with TTL policies, layer isolation; **bi-temporal fact history** (is_current view hides superseded rows globally, `changed_since` delta-polling, drill-down to raw source surviving cold archival), hash-chained L0 journal with hot/warm/cold tiers; **66 tools** (tiered exposure; 59 on the agent preset, 7 primitives by default) including `/recall` protocol (multi-axis + disclosure triggers), session continuity recap (/new recovery pack), one-call `wake_up`, open-question registry surfaced in the session brief, steering hints, tool-output compression + recall verification, provenance fact-blame, Memory Query DSL (faceted tags), typed memory schemas, a declarative rules engine, smart context budget (weighted token floors), reflections, counterfactuals, was_useful quality loop, operator diagnose/heal + integrity score |
 | 🔍 **Search** | FTS5 + MIB binary embeddings + hybrid RRF ranking, multi-source merge (RAG + Wiki + Episodic + Core + Graph), **EDM/ITS dual-route rerank** (information-gain scoring, №11-eval winner), semantic dedup gate (cosine, opt-in), RU-lemma key normalization (pymorphy3), counter-signal pessimisation, ACT-R activation with per-query min-max multipliers and memory-kind weights, embedding-path circuit breaker (graceful hash-fallback), deterministic retrieval mode, dream digest |
-| 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal, 1-hop GraphRAG expansion (provenance-aware edge filter), **12 self-maintaining miners** (degree-capped anti-hub, wiki↔fact provenance bridges with metadata backlinks, co-retrieval, zero-result gaps), orphan-anchor GC, nightly gap-registry, opt-in HDBSCAN embedding clusters with louvain agreement |
+| 🕸️ **Graph** | Epistemic knowledge graph + temporal timeline, typed nodes and edges, BFS traversal, 1-hop GraphRAG expansion (provenance-aware edge filter), **12 self-maintaining miners** (degree-capped anti-hub, wiki↔fact provenance bridges with metadata backlinks, co-retrieval, zero-result gaps), orphan-anchor GC, nightly gap-registry — **and a reader for it**: the registry now records how often each hole is re-observed (`seen_count`) and surfaces the most persistent ones in the session brief, so an agent sees her own unanswered questions instead of a table nobody reads. Opt-in HDBSCAN embedding clusters with louvain agreement |
 | 📁 **Projects** | Decision log (what/why/outcome), artifact map, graphify code index — survives between sessions |
 | ⚡ **Auto-Hooks** | Push-model memory: a per-agent daemon tails the conversation and ariel saves what matters on its own — importance thresholds (EMA-adaptive), staged mutations (proposal → review → apply → revert), `DREAM:` markers, session-start inject, gap reports, **compaction-aware rehydrate** (drift log + salvage + one-shot rehydrate blocks), ru-NER privacy gate (cyrillic PERSON/ORG/LOC masking). **Native integrations**: Hermes runs ariel as an in-process `MemoryProvider` plugin, MiMoCode via a fork-hooks plugin, CowAgent via code-level hooks. [Wiring guide →](docs/hooks/autohooks-platforms.md) |
 | 🎯 **Skills** | Skill = Memory: agent-read Markdown pages (first-class `skill` wiki type), progressive disclosure (`wiki_list → wiki_search → wiki_read` with related-facts hydration), 4KB lint cap, promotion from `DREAM: skill:` episodes, shared SSOT sync across agents, usage-driven reinforcement — [skills guide →](docs/features/skills.md) |
@@ -177,13 +181,13 @@ graph TD
 
 | | a-memory | mem0 | letta (memgpt) | chroma |
 |---|---|---|---|---|
-| **MCP native** | ✅ 6 primitives | ❌ no MCP server | ❌ | ❌ |
+| **MCP native** | ✅ 7 primitives | ❌ no MCP server | ❌ | ❌ |
 | **Layer isolation** | ✅ User vs Agent namespaces | ❌ | ❌ | ❌ |
 | **Local-only (no cloud)** | ✅ **SQLite — 0 infra** | ⚠️ API or self-host Docker | ❌ needs LLM API | ✅ local OSS + Cloud option |
 | **Own semantic search (no API)** | ✅ FTS5 + MIB binary hybrid | ⚠️ BM25+entity (LLM-dependent) | ❌ LLM-only | ⚠️ hybrid on Cloud only |
 | **Knowledge graph** | ✅ Typed nodes + edges + temporal timeline | ⚠️ entities only | ❌ | ❌ |
 | **Envelope encryption (secrets)** | ✅ NaCl SecretBox (auth/saga secrets; memory data is plaintext SQLite) | ❌ | ❌ | ❌ |
-| **Lifecycle hooks** | ✅ 19 names, per-layer, config-gated | limited | limited | none |
+| **Lifecycle hooks** | ✅ 19 names (12 user + 13 agent slots), per-layer, config-gated | limited | limited | none |
 | **Self-maintenance** | ✅ Hourly consolidation + auto-VACUUM | ❌ | ❌ | ❌ |
 | **Backup / restore** | ✅ Auto-cron + saga rollback | ❌ | ❌ | ❌ |
 
@@ -214,6 +218,7 @@ Notes (Sep 2026): mem0 now ships a self-hosted Docker image and a managed cloud 
 - [x] **S17 Stage-1 tail** — deterministic retrieval mode, ENGRAM procedural kind, AdaptiveRAG pre-gate (27 LLM-free query features), EMA importance gate, counter-signal aliases, SHA-256 L0 dedup, zero-result miner, ru-NER privacy gate
 - [x] **S18-19 wave** (15 items) — global is_current view + `changed_since` delta mode, per-query ACT-R min-max, per-block max_chars, semantic dedup gate, channel-granular sources, 3-option conflict contract (supersede/retain/annotate), orphan-anchor GC, nightly gap-registry, per-agent harness breaker, provenance edge filter, wiki↔fact metadata backlinks, `wiki_read` related-facts hydration, RU lemma keys (pymorphy3), 2-class textcat pilot (flag-gated), S17 supplements 8-11 (cold-archive drill-down, confirming layer, junk-vector detector, HDBSCAN clusters), B6 anti-hub degree cap
 - [x] **S20 eval** — №11 ablation on MINI + LongMemEval-S (50-question stride): full dual-route arm wins on both datasets, published-baseline comparison (GPT-4o long-context league, above ChatGPT-memory); dense e5-small run 3: no parity gain over hash on this split — hash stays prod
+- [x] **Hardening wave (1.12.0)** — the speaker-layer defect fixed **at the writer** (`distill_and_route` read a kind where it needed the speaker) plus a provenance-based purge of the 65 rows it had already mislabelled; a kind classifier that no longer hands a *permanent* label to harness boilerplate or to compound words (`pre-commit`, `mergeCommit`); the gap registry getting the reader S18 planned but never built; the L4 expectation measured against the L4 bar instead of the L3 one (71% of the `diff_gap` backlog was that one wrong number); and a `quality` gate that could not fail now failing correctly — an unpinned scanner had silently moved its JSON schema out from under it
 - [ ] **Screenshot / asciinema demo** in README
 - [ ] **LLM-assisted consolidation** on top of the deterministic sweep
 - [ ] **Stage 2 — tool-surface redesign** (slot system, URI keys, inject/key consolidation — planned with the A-remainder)

@@ -29,7 +29,7 @@
 └─────────────────────────────────────────────┘
 ```
 
-Agents see the six primitives (`think` / `dream` / `forget` / `evolve` / `project` / `memory_hook`) by default; coherent opt-in tiers via `ARIEL_EXPOSE` add the rest — `context` (recall protocol, recap, smart context, steering, compression), `insight` (query DSL, fact blame, quality, reflections, stats, raw searches), `write` (remember, typed saves, rules engine, scratchpad, counterfactuals, episodes, sessions), plus `wiki` / `brief` / `review`. Recommended live value: `ARIEL_EXPOSE=primitives,context,insight,write,wiki,brief,review` (46 tools); `ARIEL_EXPOSE=all` restores the full 56-tool surface incl. admin ops.
+Agents see the seven primitives (`think` / `dream` / `forget` / `evolve` / `project` / `wake_up` / `memory_hook`) by default; coherent opt-in tiers via `ARIEL_EXPOSE` add the rest — `context` (recall protocol, recap, smart context, steering, compression), `insight` (query DSL, fact blame, quality, reflections, stats, raw searches), `write` (remember, typed saves, rules engine, scratchpad, counterfactuals, episodes, sessions), plus `wiki` / `review`. Recommended live value: the `agent` preset (`ARIEL_EXPOSE=agent`, i.e. `primitives,context,insight,write,wiki,review`) at 59 tools; `ARIEL_EXPOSE=all` restores the full 66-tool surface incl. admin ops.
 
 ## Memory Layers
 
@@ -51,20 +51,32 @@ User and agent layers are isolated: separate `(layer, user_id, key)` namespaces 
 
 ## Database
 
-Single SQLite file (WAL mode) with 23 domain tables:
+Single SQLite file (WAL mode) with **41 tables** on a freshly migrated base — 57 objects once the 16 internal FTS5 shadows are counted:
 
 - `core_memory`, `episodes`, `sessions`, `staging_memories` — memory layers + consolidation staging
-- `rag_chunks`, `rag_pages`, `rag_relations` — RAG search index
-- `user_wiki` / `agent_wiki` (+ FTS5 shadows) — Wiki pages per layer
+- `core_memory_history`, `core_memory_snapshots`, `core_memory_temporal` — bi-temporal fact intervals, snapshots, temporal edges
+- `preferences`, `reflections` — per-user preferences and deterministic reflections
+- `rag_chunks`, `rag_pages`, `rag_relations`, `rag_fts` — RAG search index
+- `user_wiki` / `agent_wiki` / `wiki_index` / `wiki_links` (+ `wiki_fts`, `user_wiki_fts`, `agent_wiki_fts`) — Wiki pages per layer, links, FTS5 shadows
 - `epi_nodes`, `epi_edges`, `epi_tags` — epistemic knowledge graph
 - `temporal_events`, `temporal_links` — timeline graph (layer-scoped); records thought / personality-shift / project-decision events from the primitives, surfaced by `dream(intent="recent")` as a Timeline digest
 - `archived_memories` — Shadow Bin for soft-deleted content
-- `audit_log`, `importance_audit`, `memory_conflicts` — observability
+- `l0_journal`, `l0_cold_archive` — hash-chained L0 journal and its cold tier
+- `audit_log`, `importance_audit`, `memory_conflicts`, `memory_dispatch_log`, `memory_dispatch_rejections`, `compaction_events` — observability
+- `mutation_proposals`, `watch_rules` — staged mutations and declarative trigger rules
 - `rate_limits`, `embedding_cache`, `saga_step_log`, `memory_kind_registry` — infrastructure
+- `alembic_version` — migration bookkeeping
 - `ner_cache` — entity-extraction cache, created on demand by `graph_miners._ensure_ner_cache()`
   (like `co_pairs_cache`, not a migration). Keyed by `(text_hash, tag)` where the tag fingerprints
   the synonym dictionary and the NER backend, so a dictionary edit or model upgrade invalidates it
   instead of serving stale entities.
+
+> **Not every table is in the migration chain.** `memory_gaps`, `memory_transitions`,
+> `disclosure_rules`, `agent_scratchpad` and the `recall_*` ledgers are created lazily by the
+> reader or writer that needs them — there is no alembic revision for them, by design, so a
+> deploy never needs a manual upgrade step (see `features/scratchpad.py::_ensure_table`).
+> They appear on a base once something has used them, which is why a live base can carry more
+> tables than the count above. `ner_cache` and `co_pairs_cache` belong to that same lazy family.
 
 Both content-hash caches start empty, and the nightly enrich of a layer has a per-layer budget
 (`NIGHTLY_LAYER_BUDGET_S`, 180 s since 06.10; 120 s before), so a base whose layer has never been
