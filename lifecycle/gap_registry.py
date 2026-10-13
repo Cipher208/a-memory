@@ -40,6 +40,14 @@ _OBSERVATION_COLUMNS = (
 
 
 async def _ensure_table(cm: Any) -> None:
+    """Create or upgrade the table. Cheap on the steady state, so readers may call it.
+
+    This is the house pattern for a lazy table: `features/scratchpad.py::read_entries`
+    calls its own `_ensure_table()` on the READ path, and this table has no alembic
+    revision either (`features/disclosure.py` names the same family). The readers here do
+    the same, which is what removes any need for a manual upgrade step: the first brief
+    after a deploy upgrades the schema instead of reporting nothing until the nightly run.
+    """
     await cm.execute_script(
         DB_NAME,
         """
@@ -59,13 +67,21 @@ async def _ensure_table(cm: Any) -> None:
     )
     conn = await cm.get(DB_NAME)
     cols = {str(r[1]) for r in await (await conn.execute("PRAGMA table_info(memory_gaps)")).fetchall()}
+    added: list[str] = []
     for name, ddl in _OBSERVATION_COLUMNS:
         if name not in cols:
             await conn.execute(f"ALTER TABLE memory_gaps ADD COLUMN {name} {ddl}")
+            added.append(name)
+    if not added:
+        # Nothing changed, so there is nothing to backfill and nothing to commit. Keeping
+        # this branch silent is what makes a reader-side call free on the steady state —
+        # no UPDATE scan and no write on a session-start path.
+        return
     # A row that predates the columns has last_seen=0, which the freshness window would
     # read as "infinitely old" and hide immediately. Its own `ts` is the honest answer:
     # the hole has been observed once, when it was written.
-    await conn.execute("UPDATE memory_gaps SET last_seen = ts WHERE last_seen = 0")
+    if "last_seen" in added:
+        await conn.execute("UPDATE memory_gaps SET last_seen = ts WHERE last_seen = 0")
     await conn.commit()
 
 
@@ -166,7 +182,16 @@ async def open_gaps(
 
     `max_age_days` is a window over `last_seen`, not a claim that older rows were
     answered — see the module docstring for why closure is not inferable here.
+
+    Calls `_ensure_table` first, as every entry point does in this family of lazy tables:
+    that is what upgrades a pre-existing table instead of leaving the brief silent until
+    the nightly build happens to run.
     """
+    try:
+        await _ensure_table(connection_manager)
+    except Exception:  # pragma: no cover - a broken schema must cost the line, not the brief
+        logger.debug("gap registry ensure failed", exc_info=True)
+        return []
     conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - max_age_days * 86400
     sql = "SELECT id, ts, layer, user_id, gap, origin, last_seen, seen_count FROM memory_gaps WHERE layer=? AND last_seen >= ?"
@@ -189,6 +214,11 @@ async def count_open_gaps(
     max_age_days: int = _GAP_MAX_AGE_DAYS,
 ) -> int:
     """How many fresh holes there are — `open_gaps` is capped, so the count needs its own."""
+    try:
+        await _ensure_table(connection_manager)
+    except Exception:  # pragma: no cover - a broken schema must cost the line, not the brief
+        logger.debug("gap registry ensure failed", exc_info=True)
+        return 0
     conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - max_age_days * 86400
     sql = "SELECT COUNT(*) FROM memory_gaps WHERE layer=? AND last_seen >= ?"
