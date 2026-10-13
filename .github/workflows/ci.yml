@@ -52,11 +52,17 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-      - run: pip install skylos
+      # Pinned deliberately. 4.48.0 replaced the `grade` block with an `assessment`
+      # object that carries no single letter (coverage / dead_code / maintainability /
+      # risk), so the check below cannot read a grade from it at all — and an unpinned
+      # `pip install` took that release silently, turning this required check red on
+      # master and on every open branch. Pin until the gate is migrated on purpose;
+      # a release must not be able to change what this check means.
+      - run: pip install "skylos==4.47.2"
       - run: skylos . --json --no-provenance
       - name: Check grade
         run: |
-          GRADE=$(skylos . --json | python -c "import sys,json; print(json.load(sys.stdin)['grade'])")
+          GRADE=$(skylos . --json --no-provenance | python -c "import json,sys; d=json.load(sys.stdin); g=d.get('grade') or sys.exit('skylos JSON carries no grade block (keys: ' + ','.join(sorted(d)) + ')'); print(g['overall']['letter'])")
           echo "Skylos grade: $GRADE"
           if [ "$GRADE" = "F" ] || [ "$GRADE" = "D" ] || [ "$GRADE" = "D+" ]; then
             echo "Grade too low: $GRADE"
