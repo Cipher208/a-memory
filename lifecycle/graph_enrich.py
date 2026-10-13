@@ -405,11 +405,19 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
 
     # S18 item 9 gap-registry: question episodes + zero-result tails (best-effort).
     gap_written = 0
+    gap_bumped = 0
+    gap_open = 0
     try:
-        from lifecycle.gap_registry import build_registry
+        from lifecycle.gap_registry import build_registry, count_open_gaps
 
         with _timed_phase(layer, "gap_registry"):
-            gap_written = int((await build_registry(layer))["written"])
+            stats = await build_registry(layer)
+            gap_written = int(stats["written"])
+            gap_bumped = int(stats.get("bumped", 0))
+        # `open` is the number a reader acts on; `written` is only what this pass added.
+        # Reporting the write count alone is how the registry looked alive while nothing
+        # ever read it.
+        gap_open = await count_open_gaps(layer)
     except Exception as exc:
         logger.debug("gap registry skipped: %s", exc)
 
@@ -443,7 +451,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     return {
         "nodes_cleaned": cleaned,
         "orphan_gc": orphaned,
-        "gap_registry": {"written": gap_written},
+        "gap_registry": {"written": gap_written, "bumped": gap_bumped, "open": gap_open},
         "miners": miners,
         "sanitation": {"expired": expired, "valence_tagged": valence_tagged, "centrality_top": centrality_top},
         "behavior": behavior,
