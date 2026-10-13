@@ -48,6 +48,42 @@ jobs:
           PY
           test -s RELEASE_BODY.md
 
+      # A second release object for the same tag is not harmless, and v1.12.0 is
+      # the proof: the publish step picks the release by tag, two existed (a stale
+      # draft from an earlier release-drafter run and a fresh one), and the object
+      # it adopted carried the drafter's generated notes instead of the
+      # RELEASE_BODY.md this workflow just wrote. The release page then contradicted
+      # the changelog it is supposed to quote.
+      #
+      # This runs BEFORE the PyPI upload on purpose. A tag that is already released
+      # must fail while nothing irreversible has happened — failing after the upload
+      # would leave a package on PyPI that no re-run can publish again, since the
+      # version would already exist.
+      - name: Refuse a tag that is already released, and clear stale drafts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          # `gh release list --json` has no id field on the runner's gh version, and
+          # asking for one returns an empty result rather than an error — which would
+          # make this guard report "clean start" on a tag that is already released.
+          # Measured, not assumed: that is how the first version of this step behaved.
+          # The REST API carries both id and draft, so the guard reads it directly.
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate \
+            -q ".[] | select(.tag_name == \"$TAG\") | \"\(.id) \(.draft)\"")
+          if [ -z "$existing" ]; then
+            echo "no existing release for $TAG: clean start"
+            exit 0
+          fi
+          if printf '%s\n' "$existing" | grep -q ' false$'; then
+            echo "::error::release $TAG is already published — bump the version instead of re-tagging"
+            exit 1
+          fi
+          printf '%s\n' "$existing" | while read -r id _; do
+            echo "deleting stale draft for $TAG (id $id) so the publish step cannot adopt it"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$id"
+          done
+
       # Publish to PyPI BEFORE announcing the release, on purpose.
       #
       # 1.11.0 taught this the hard way: the order was release-then-upload, the
