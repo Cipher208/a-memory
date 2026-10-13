@@ -1,8 +1,17 @@
 name: Release Drafter
 
+# Pull requests only, deliberately.
+#
+# This workflow used to also run on every push to master, which is exactly when a
+# release is being published. It then created a release object for the tag being
+# released, and the Release workflow — which publishes the body from CHANGELOG.md —
+# was left choosing between two objects for one tag. On v1.12.0 it picked the
+# drafter's, and the published body was generated notes while the workflow that
+# wrote it documents that it comes from the changelog. Two writers for one
+# artifact; this removes the second one. The draft itself is described as "a
+# working aid only" in its own template below, and PR activity is where the
+# information for it comes from anyway.
 on:
-  push:
-    branches: [main, master]
   pull_request:
     types: [opened, reopened, synchronize]
 
