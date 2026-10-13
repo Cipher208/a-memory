@@ -23,6 +23,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Not changed, and deliberately: two rows that render almost identically (`…внести в ⟨ORG_3⟩?` and `…⟨ORG_2⟩?`) are **not** duplicates to collapse — the entity placeholders carry different entities, so they are different questions. Normalising them out of the hash would quietly merge questions about different things.
 
 ### Fixed
+- **The `quality` gate could not fail, and an unpinned tool broke it for every branch at once (2026-10-13).** Two defects in one job, both of the "silently not a gate" kind.
+
+  The check read the grade with `print(json.load(sys.stdin)['grade'])` — the whole grade **dict** — and then compared that string to a letter (`if [ "$GRADE" = "F" ]`). A dict repr never equals `F`, `D` or `D+`, so the threshold had **never** fired: a repository graded `F` would have passed the required check on every run since the gate was written. It now reads `grade.overall.letter`, verified against a module that really grades `F`.
+
+  The install was `pip install skylos`, unpinned. `skylos` 4.48.0 shipped at 2026-10-12T23:54Z and replaced the `grade` block with an `assessment` object that carries **no single letter** (`coverage`, `dead_code`, `maintainability`, `risk`), so the check raised `KeyError: 'grade'` — on `master` and on every open branch simultaneously, with a green master at 17:59Z the same day. Pinned to `4.47.2`, the last release whose schema this gate understands, because migrating to the new shape is a decision about what the check *means*, not a rename.
+
+  The extraction now also fails **loudly** when the block is absent, naming the keys it did find, so the next schema change produces a comprehensible error instead of a bare `KeyError` from a `-c` one-liner — and cannot quietly disable the gate the way this one had been disabled.
+
+  Reproduced in isolated virtualenvs: `4.47.2` → `F`, `4.48.0` → the explicit message listing `assessment` among the keys.
+
 - **The gap detector measured the L4 expectation against the L3 bar, so 71% of the `diff_gap` backlog was noise (2026-10-12).** `features/diff.compute_session_gaps` decided both branches with one hard-coded `0.5`, but this house declares **two** thresholds for two different tiers — `watch_rules.predicate` ships `{"min_importance": 0.5, "l4_min_importance": 0.8}` (`auto_save_default`), validated by `mcp_server/tools/ops.py::_validate_predicate`. The L4 branch therefore reported every dispatch in the **0.5–0.8 band** as a missing L4, and that band is precisely where no L4 write is expected: L3 takes events, L4 takes invariants.
 
   Measured on one live base: **313 of 439** accumulated `diff_gap` episodes came from the band, and the owner was reading them as an open review backlog. Over the whole log the difference is 1391 reported gaps → **132**, of which 128 name a real L4 expectation and 4 a real L3 one.
