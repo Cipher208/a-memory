@@ -194,6 +194,78 @@ async def test_open_gaps_drops_rows_outside_the_window(migrated_cm) -> None:
     assert "старая дыра" not in texts, f"окно не соблюдено: {texts}"
 
 
+async def test_reader_upgrades_a_pre_existing_table_by_itself(migrated_cm) -> None:
+    """THE ONE THAT WOULD HAVE NEEDED A MANUAL STEP: a reader must fix the schema itself.
+
+    On the live base `memory_gaps` already exists WITHOUT the observation columns, and
+    `CREATE TABLE IF NOT EXISTS` cannot add them. A reader that only selects would return
+    an empty list forever (its OperationalError guard swallows `no such column`) and the
+    brief would stay silent until the nightly build happened to run — a deploy-order trap
+    with a manual upgrade step as the workaround. Every entry point in this family of lazy
+    tables calls `_ensure_table` (`features/scratchpad.py::read_entries` does), so these do
+    too, and no manual step exists.
+    """
+    import sqlite3
+    import time
+
+    from lifecycle.gap_registry import open_gaps
+
+    old = migrated_cm / "memory.db"
+    now = time.time()
+    with sqlite3.connect(str(old)) as conn:
+        conn.execute(
+            "CREATE TABLE memory_gaps ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL,"
+            " layer TEXT NOT NULL DEFAULT 'user', user_id TEXT NOT NULL, gap TEXT NOT NULL,"
+            " origin TEXT NOT NULL DEFAULT 'question', gap_hash TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash)"
+            " VALUES (?, 'user', 'u1', 'старая дыра без колонок', 'question', 'h_old')",
+            (now,),
+        )
+        conn.commit()
+
+    gaps = await open_gaps("user")
+
+    assert [g["gap"] for g in gaps] == ["старая дыра без колонок"], f"читатель не починил схему: {gaps}"
+    assert gaps[0]["seen_count"] == 1, "существующая строка получает видимость 1"
+    with sqlite3.connect(f"file:{old}?mode=ro", uri=True) as conn:
+        left = conn.execute("SELECT COUNT(*) FROM memory_gaps WHERE last_seen = 0").fetchone()[0]
+    assert left == 0, "last_seen забэкфиллен из ts, иначе строка скрыта с первого дня"
+
+
+async def test_reader_does_not_write_on_the_steady_state(migrated_cm) -> None:
+    """After the upgrade a reader is a no-op — no UPDATE scan on a session-start path."""
+    import sqlite3
+    import time
+
+    from lifecycle.gap_registry import open_gaps
+
+    old = migrated_cm / "memory.db"
+    now = time.time()
+    with sqlite3.connect(str(old)) as conn:
+        conn.execute(
+            "CREATE TABLE memory_gaps ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL,"
+            " layer TEXT NOT NULL DEFAULT 'user', user_id TEXT NOT NULL, gap TEXT NOT NULL,"
+            " origin TEXT NOT NULL DEFAULT 'question', gap_hash TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash) VALUES (?, 'user', 'u1', 'дыра', 'question', 'h1')",
+            (now,),
+        )
+        conn.commit()
+
+    await open_gaps("user")  # first call upgrades
+    with sqlite3.connect(f"file:{old}?mode=ro", uri=True) as conn:
+        stamp = conn.execute("SELECT last_seen FROM memory_gaps WHERE gap_hash='h1'").fetchone()[0]
+    await open_gaps("user")  # steady state
+    with sqlite3.connect(f"file:{old}?mode=ro", uri=True) as conn:
+        again = conn.execute("SELECT last_seen FROM memory_gaps WHERE gap_hash='h1'").fetchone()[0]
+    assert stamp == again, "повторный вызов читателя не трогает строки"
+
+
 async def test_open_gaps_returns_empty_on_a_base_without_the_table(tmp_path) -> None:
     """Reading must degrade to empty, never raise: the caller is a session-start path."""
     original = connection_manager.base_dir
