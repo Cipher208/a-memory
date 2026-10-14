@@ -22,6 +22,7 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.importance import ImportanceScorer
+from shared import maintenance_lock
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,26 @@ class ImportanceScheduler:
             self._stop_event.wait(timeout=self.cfg.interval_seconds)
 
     async def run_once(self) -> dict[str, int]:
-        """Single async iteration. Returns counters."""
+        """Single async iteration, under this base's maintenance lock.
+
+        Every process serving a base started its own sweep and they all wrote
+        the same SQLite file: `database is locked` on one side, a WAL that grew
+        to 35 MB without checkpointing on the other (measured 14.10.2026). One
+        sweep at a time per base. A sweep that cannot claim the lock reports
+        zero instead of waiting — the leader is already doing this work, and
+        waiting would add a second kind of stall to the one this removes.
+        """
+        fd = maintenance_lock.acquire(connection_manager.base_dir)
+        if fd is None:
+            logger.debug("importance sweep skipped: another process is the maintenance leader")
+            return {"rescored": 0, "skipped": 0, "errors": 0}
+        try:
+            return await self._rescore_pass()
+        finally:
+            maintenance_lock.release(fd)
+
+    async def _rescore_pass(self) -> dict[str, int]:
+        """Run one sweep. Callers hold the maintenance lock."""
         stats = {"rescored": 0, "skipped": 0, "errors": 0}
 
         cm = connection_manager

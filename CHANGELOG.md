@@ -5,6 +5,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+- **Every process served as its own maintenance writer, and the collision surfaced as a failed connection (2026-10-14).** `lifespan` starts housekeeping on every start — `migrate()`, `backup_cron`, `importance_scheduler`, and a 15-minute `forgetting_system.cleanup()` — and nothing coordinated the processes doing it. Only `backup_cron` held a lock (`.backup_cron.lock`); the rest ran in every instance.
+
+  The cost was measured on the live hermes base: the MCP server came up **eleven times in one day**, `backup_cron` logged **twice in one minute**, and `Decay failed` with `sqlite3.OperationalError: database is locked` went 2-4/day in September to **14 on 12.10, 65 on 13.10, 34 by midday on 14.10**. The WAL reached **35 MB** without ever checkpointing, and `wal_autocheckpoint=1000` cannot fire while another process always holds a read snapshot.
+
+  Worse than the wasted work: `migrate()` called `alembic_command.upgrade(cfg, "head")` **unconditionally**, so every start opened a write transaction just to learn the version was already current — and `lifespan` runs it *before* the server answers anything. Queued behind another writer, it outlasted the client's `connect_timeout` and four sessions came up with no memory tools at all:
+
+  ```
+  12.10 16:03 · 13.10 09:02 · 14.10 07:02 · 14.10 08:02
+  Failed to connect to MCP server 'ariel-memory': CancelledError
+  ```
+
+  The server was healthy throughout — it logged its own start five seconds in. The client had already given up.
+
+  Two changes. `shared.maintenance_lock` gives the housekeeping the discipline `backup_cron` already had: a non-blocking `flock` on `<base_dir>/.maintenance.lock`, taken around the *work* rather than the process, so `importance_scheduler` and the 15-minute cleanup take turns instead of colliding, and a process that cannot claim it waits for its next turn rather than queueing behind the leader. And `migrate()` now compares the current version against the Alembic script heads first — a comparison that needs no database connection — so the steady state does no write at all and cannot block a startup.
+
 ## [1.12.0] - 2026-10-13
 
 ### Added
