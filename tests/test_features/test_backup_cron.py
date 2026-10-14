@@ -283,3 +283,83 @@ def test_failed_layer_does_not_record_the_cycle_as_done(tmp_path, monkeypatch) -
 
     assert cron._fire_nightly_hooks(state) == "failed"
     assert _json.loads(state.read_text())["last_nightly"] == due, "упавший проход не должен закрывать цикл"
+
+
+def test_expired_budget_with_live_work_is_not_a_failure(tmp_path, monkeypatch) -> None:
+    """Таймаут ожидания — не провал, когда работа продолжается на main loop.
+
+    `_await_on_main_loop(...).result(timeout=)` бросает, но НЕ отменяет корутину
+    (см. комментарий у NIGHTLY_INFLIGHT_GRACE_S). Считать это провалом замерено
+    на живой базе 14.10.2026:
+
+        14:37:41 layer=user starting
+        14:40:41 finished in 180.0 s     <- бюджет истёк
+        14:44:46 graph_enrich 425773 ms  <- работа ТЯНУЛАСЬ дальше
+        14:57:41 layer=user starting     <- ВТОРОЙ проход, т.к. цикл не закрыт
+        15:00:41 finished in 180.0 s     <- и снова бюджет истёк
+
+    Двойная работа поверх одной базы — это и есть источник `database is locked`,
+    от которого страдает в том числе `migrate()` при старте сессии.
+    """
+    import json as _json
+    import time as _time
+    import concurrent.futures
+
+    import features.backup_cron as bc
+
+    due = _time.time() - 48 * 3600
+    state = tmp_path / "cycles_state.json"
+    state.write_text(_json.dumps({"last_nightly": due, "calls": []}), encoding="utf-8")
+
+    cron = bc.BackupCron(base_dir=str(tmp_path))
+
+    def _expire(coro, **kwargs):
+        coro.close()
+        # Работа осталась на main loop: именно это отличает таймаут от падения.
+        cron._pending_futures.append(concurrent.futures.Future())
+        raise TimeoutError("бюджет слоя истёк")
+
+    cron._await_on_main_loop = _expire
+
+    assert cron._fire_nightly_hooks(state) == "running", (
+        "истёкшее ожидание при живой работе — это 'running', не 'failed': провал заставил бы повторить уже идущий проход"
+    )
+
+
+def test_timed_out_pass_charges_no_backoff(tmp_path, monkeypatch) -> None:
+    """За 'running' не начисляется бэкофф: повтор не нужен, работа и так идёт.
+
+    Пока проход жив, `_nightly_busy` и так откажет в новом запуске. Бэкофф вдобавок
+    к этому лишь откладывает следующий нормальный проход на 15/60/240 минут.
+    """
+    import time as _time
+
+    cron = _cron(tmp_path, last_nightly_age_h=48)
+    monkeypatch.setattr(cron, "_fire_nightly_hooks", lambda *a, **k: "running")
+    cron._check_nightly(_time.time())
+
+    assert cron._nightly_failures == 0, "идущий проход — не сбой"
+    assert cron._nightly_retry_at == 0.0, "повтор не нужен: работа уже идёт"
+
+
+def test_budget_covers_the_measured_nightly_layer() -> None:
+    """Бюджет слоя выведен из замера, а не подобран 'побольше'.
+
+    `user graph_enrich` по 12 замерам живой базы hermes (14.10.2026):
+    p50 151 с · p90 236 с · p95 324 с · max 426 с. При 180 с не укладывалось
+    4 прохода из 12 — и каждый такой провал порождал ВТОРОЙ проход поверх
+    первого (см. `test_expired_budget_with_live_work_is_not_a_failure`).
+
+    Бюджет обязан покрывать наблюдавшийся максимум с запасом: следующий замер,
+    превысивший бюджет, снова запустит двойную работу.
+    """
+    import features.backup_cron as bc
+
+    assert bc.NIGHTLY_LAYER_BUDGET_S >= 480, (
+        f"бюджет {bc.NIGHTLY_LAYER_BUDGET_S} с не покрывает замеренный максимум 426 с с запасом — истёкшее ожидание порождает повторный проход"
+    )
+    # Общий дефолт шага обслуживания не трогаем: его делят бэкап, вики-синк и прочее.
+    import inspect
+
+    default = inspect.signature(bc.BackupCron._await_on_main_loop).parameters["timeout"].default
+    assert default == 120, "общий дефолт обслуживания остаётся 120 с"

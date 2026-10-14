@@ -21,6 +21,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
   Two changes. `shared.maintenance_lock` gives the housekeeping the discipline `backup_cron` already had: a non-blocking `flock` on `<base_dir>/.maintenance.lock`, taken around the *work* rather than the process, so `importance_scheduler` and the 15-minute cleanup take turns instead of colliding, and a process that cannot claim it waits for its next turn rather than queueing behind the leader. And `migrate()` now compares the current version against the Alembic script heads first — a comparison that needs no database connection — so the steady state does no write at all and cannot block a startup.
 
+- **An expired nightly budget started a second full pass on top of the first (2026-10-14).** `NIGHTLY_LAYER_BUDGET_S` was 180 s. Measured over 12 runs of `user graph_enrich` on the live hermes base: p50 **151 s**, p90 236 s, p95 324 s, max **426 s** — so **four runs of twelve** did not fit.
+
+  The timeout is not what it looks like: `_await_on_main_loop(...).result(timeout=)` **abandons** the coroutine rather than cancelling it, so a pass that outran its budget is still running. But the pass was reported `"failed"`, and because the cycle is recorded only after both layers finish it was never recorded — so the scheduler came back **15 minutes later and started the whole pass again**. Measured in one evening:
+
+  ```
+  14:37:41  Nightly pass: layer=user starting
+  14:40:41  finished in 180.0 s      <- budget expired
+  14:44:46  graph_enrich 425773 ms   <- the work was STILL GOING
+  14:57:41  Nightly pass: layer=user starting   <- a second pass, because the cycle stayed open
+  15:00:41  finished in 180.0 s      <- and it expired again
+  ```
+
+  Two passes over one graph is what the observed `database is locked` was made of — measured live at 14:44:46, when the periodic maintenance task tried to write while that pass still held the base. The same lock, held by a long-running writer, is the mechanism behind the `migrate()` timeouts that left four sessions without memory tools on 12.10–14.10; those four are a separate claim, and the nightly rework is not offered as their proof.
+
+  Two changes. The budget becomes **600 s**, covering the measured maximum by ~1.4x and written down as a measurement rather than a number that gets raised whenever it trips. And the pass gains a fourth verdict: a **`TimeoutError` with live futures in `_pending_futures` is `"running"`, not `"failed"`** — the same test `_nightly_busy` already uses to tell "still going" from "died". `"running"` charges no backoff (a retry would stack a second pass on the first) and resets no failure counter (the outcome is not known yet); the existing `_nightly_busy` guard is what prevents the overlap.
+
+  A real failure still reports `"failed"`: the hook raising with no live futures has no work to wait for, and `test_failed_layer_does_not_record_the_cycle_as_done` keeps that path pinned. Verified by mutation — restoring 180 s, ignoring live futures, and charging `"running"` a backoff each kill the test that covers them. Suite 2273 passed.
+
 ## [1.12.0] - 2026-10-13
 
 ### Added
