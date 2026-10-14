@@ -22,15 +22,6 @@ from shared.path_safety import safe_resolve
 
 logger = logging.getLogger(__name__)
 
-# Per-layer budget for the nightly maintenance pass. Raised from 120 s after
-# measuring the real cost on snapshots of the live bases: hermes spends 138 s in
-# the `user` layer alone with every content-hash cache warm, so at 120 s the pass
-# was cut mid-layer and the `agent` layer was skipped entirely.
-# NOT raised for the other maintenance steps, which keep the 120 s default: they
-# are separate jobs with their own cost, and widening them would change their
-# behaviour too.
-NIGHTLY_LAYER_BUDGET_S = 180
-
 # Retry policy for the nightly pass, deliberately decoupled from the 24 h backup
 # window. The pass used to be reachable only from inside `_check_backup`, which
 # returns early until a full day has passed since the last backup, while
@@ -43,6 +34,24 @@ NIGHTLY_LAYER_BUDGET_S = 180
 # had 10 on 06.10 alone), so a retry must not wait for the next backup at all.
 # It backs off instead: 15 min -> 1 h -> 4 h, then 4 h for every further failure.
 NIGHTLY_BACKOFF_S = (900.0, 3600.0, 14400.0)
+
+# Budget for ONE layer's nightly hook, which is `graph_enrich` and the miners
+# inside it. Raised twice now, each time from a measurement rather than a guess:
+# 120 s -> 180 s ("138 s with warm caches"), and 180 s -> 600 s.
+#
+# The 14.10.2026 measurement, 12 runs of `user graph_enrich` on the live hermes
+# base: p50 151 s · p90 236 s · p95 324 s · max 426 s. At 180 s **four runs of
+# twelve** did not fit, and each of those was worse than a late alarm — see
+# `_fire_nightly_hooks`: an expired budget leaves the coroutine running, the pass
+# was still reported "failed", and because the cycle was never recorded the
+# scheduler started a SECOND full pass 15 minutes later, on top of the first.
+# Two passes over one graph is what the observed `database is locked` was made of.
+#
+# 600 s covers the measured maximum by ~1.4x. This is a ceiling on *waiting*, not
+# on the work: the hook keeps running past it regardless (`timed_step` records the
+# real cost after the fact), so the number's only job is to be far enough out that
+# a normal pass never trips it.
+NIGHTLY_LAYER_BUDGET_S = 600
 
 # A pass whose `_await_on_main_loop(...).result(timeout=)` expired leaves its
 # coroutine RUNNING on the main loop — the timeout abandons, it does not cancel
@@ -291,6 +300,12 @@ class BackupCron:
                 self._nightly_failures,
                 delay / 60.0,
             )
+        elif verdict == "running":
+            # The budget expired but the work is still on the main loop. No backoff (a
+            # retry would stack a second pass on the first) and no counter reset either:
+            # the outcome is not known yet. `_nightly_busy` refuses a new start while
+            # those jobs are alive, which is the only guard this needs.
+            logger.info("Nightly pass outran its budget and is still running; leaving it to finish")
         else:
             if self._nightly_failures:
                 logger.info("Nightly pass recovered after %d failed attempt(s)", self._nightly_failures)
@@ -327,7 +342,13 @@ class BackupCron:
             self._sync_wiki()
 
     def _fire_nightly_hooks(self, state_path: Path | None = None, *, gate_checked: bool = False) -> str:
-        """Run the nightly maintenance pass. Returns 'ok', 'failed' or 'skipped'.
+        """Run the nightly maintenance pass. Returns 'ok', 'failed', 'running' or 'skipped'.
+
+        'running' is the fourth outcome, and it exists because 'failed' was being
+        used for two different things. An expired layer budget leaves the hook
+        running on the main loop (`_await_on_main_loop` abandons, it does not
+        cancel), so the pass is neither finished nor dead — and calling it failed
+        made the scheduler start a second full pass on top of the first.
 
         The verdict is new and is the point of the change: a pass that died used
         to return normally, so the caller could not tell it apart from a pass
@@ -378,6 +399,34 @@ class BackupCron:
                 from features.cycles import record_nightly_done
 
                 record_nightly_done(state_path)  # record the successful pass
+        except TimeoutError:
+            # The wait expired; the WORK did not. `_await_on_main_loop` abandons the
+            # coroutine rather than cancelling it, so a pass that outran its budget is
+            # still running on the main loop right now.
+            #
+            # Calling that "failed" cost more than a wrong log line: the cycle is never
+            # recorded, so the scheduler started a SECOND full pass 15 minutes later on
+            # top of the first. Measured on the live base, 14.10.2026 — 14:37:41 start,
+            # 14:40:41 budget expired, 14:44:46 the hook still going (425773 ms),
+            # 14:57:41 a second start. Two passes over one graph is what the observed
+            # `database is locked` was made of, and that lock is what made `migrate()`
+            # time out at session start.
+            #
+            # The test is the same one `_nightly_busy` uses, so "still running" and
+            # "died" cannot be confused: live futures mean the wait expired, no live
+            # futures mean the hook itself raised and the pass really did die.
+            live = [f for f in self._pending_futures if not f.done()]
+            if live:
+                logger.warning(
+                    "Nightly layer budget (%.0f s) expired while %d job(s) were still running "
+                    "on the main loop — reporting 'running', not a failure; the cycle stays open",
+                    NIGHTLY_LAYER_BUDGET_S,
+                    len(live),
+                )
+                verdict = "running"
+            else:
+                logger.exception("Nightly hook error")
+                verdict = "failed"
         except Exception:
             logger.exception("Nightly hook error")
             verdict = "failed"
