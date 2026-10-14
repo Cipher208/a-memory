@@ -35,11 +35,29 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
         from lifecycle.consolidation import ConsolidationEngine
         from lifecycle.forgetting import forgetting_system
 
+        from shared import maintenance_lock
+        from shared.connection import connection_manager
+
         last_compaction: float = 0.0
         last_consolidation: float = 0.0
         while True:
+            holder = None
             try:
                 await asyncio.sleep(900)  # 15 minutes
+
+                # One writer per base. Every process serving this base used to
+                # run this loop, and they all wrote the same SQLite file:
+                # `Decay failed` with `database is locked` went 2-4/day in
+                # September -> 14 -> 65 -> 34, and the WAL reached 35 MB without
+                # ever checkpointing (measured 14.10.2026). The scheduler holds
+                # the same lock, so the two kinds of housekeeping take turns
+                # instead of colliding, and a process that cannot claim it
+                # simply waits for its next turn.
+                holder = maintenance_lock.acquire(connection_manager.base_dir)
+                if holder is None:
+                    logging.getLogger(__name__).debug("periodic housekeeping skipped: not the maintenance leader")
+                    continue
+
                 await forgetting_system.cleanup()
 
                 # 2026-09-16: central liveness sweep (see autohooks/daemon.py) —
@@ -131,6 +149,10 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                 break
             except Exception:
                 logging.getLogger(__name__).exception("Periodic task error")
+            finally:
+                # Hand the base back whatever happened: a leaked lock would
+                # silently stop housekeeping for every other process.
+                maintenance_lock.release(holder)
 
     periodic_task = asyncio.create_task(_periodic_tasks())
     try:

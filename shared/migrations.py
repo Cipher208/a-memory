@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 
 import alembic.command as alembic_command
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -59,13 +60,34 @@ class MigrationManager:
             return None
 
     async def migrate(self) -> dict[str, Any]:
-        """Run all pending migrations using Alembic."""
+        """Run pending migrations using Alembic.
+
+        Alembic is invoked only when the base is actually behind.
+
+        Calling `upgrade(cfg, "head")` unconditionally meant every process start
+        opened a write transaction just to discover there was nothing to apply —
+        and `lifespan` runs this **before** the server answers anything, on every
+        one of the day's eleven starts (measured 14.10.2026). With several
+        processes writing one SQLite file, that transaction could not get the
+        write lock, the client's `connect_timeout` expired first, and the
+        session came up without memory tools:
+
+            Failed to connect to MCP server 'ariel-memory': CancelledError
+
+        Reading the version and comparing it against the script heads needs no
+        database connection, so the steady state now costs nothing and cannot
+        queue behind another writer.
+        """
         current = await self.get_current_version()
 
         # Run Alembic upgrade in a thread to avoid blocking async loop
         # (Alembic/SQLAlchemy sync nature)
         def run_upgrade() -> None:
             cfg = self._get_alembic_config()
+            heads = set(ScriptDirectory.from_config(cfg).get_heads())
+            if current and current in heads:
+                logger.info("Migrations: already at %s, nothing to apply", current)
+                return
             alembic_command.upgrade(cfg, "head")
 
         logger.info("Starting DB migration via Alembic...")
