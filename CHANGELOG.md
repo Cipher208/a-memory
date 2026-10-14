@@ -56,6 +56,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Documentation promised three settings that do nothing (2026-10-14).** `config.yaml` documents that `l2_session_limit`, `l3_episodic_limit` and `l4_core_limit` are read by no code — but `docs/getting-started/configuration.md` presented all three with comments describing what they hold ("SessionStore sessions", "EpisodicMemory episodes", "CoreMemory facts"), and `openwiki/quickstart.md` listed them as tier limits without qualification. An operator could set them, watch nothing happen, and have no way to find out.
 
   The docs now say the same thing the config comment says, and `tests/test_config_declared_vs_read.py` keeps the two **in agreement in both directions**: a key the comment calls inert must have no reader, and a key it calls live must have one. Either side going stale fails the test, so the claim cannot drift back into being wrong — which is how it was wrong the first time.
+- **The base had two locks, so two writers could hold it at once (2026-10-14).** `.backup_cron.lock` guards the nightly pass and the backup; `.maintenance.lock` guards the 15-minute cleanup and the importance sweep. Neither sees the other as taken, so a nightly pass and a cleanup could write the same SQLite file simultaneously.
+
+  Measured, not inferred — 14.10.2026, 14:44:46:
+
+  ```
+  14:37:41  Nightly pass: layer=user starting
+  14:40:41  finished in 180.0 s     <- layer budget expired; the work was abandoned, NOT cancelled
+  14:44:46  graph_enrich 425773 ms  <- that abandoned work was still writing
+  14:44:46  mcp_server.lifespan: Periodic task error -> consolidate_episodes -> database is locked
+  ```
+
+  The nightly pass now takes the maintenance lock as well, around the **whole** pass rather than only the layer hooks: the compact, sweep, replay, expiry, tiering, enrich and bridge steps that follow all write too.
+
+  Two details that are the difference between fixing this and appearing to:
+
+  *The lock outlives the pass when work was abandoned.* A `TimeoutError` means the layer budget expired while the hook kept running, so releasing the lock at that point would put the cleanup straight back into the collision it exists to prevent. The lock is held and handed back by the abandoned work's own completion callback. And if `_nightly_busy` later gives up on work that never finished, the lock goes back with it — a lock held for work nobody is waiting for would keep housekeeping out until the process restarted.
+
+  *A skipped pass is not a success.* If the maintenance lock cannot be taken within `NIGHTLY_MAINTENANCE_WAIT_S` (120 s), the pass reports `"skipped"` and leaves the failure ladder as it was. Resetting the counter there would make a pass failing behind a busy base retry every 15 minutes forever instead of backing off — and the base is busy precisely when retrying is least welcome.
+
+  `maintenance_lock.acquire` gains a bounded `timeout` (default stays non-blocking, and the default is what the scheduler relies on). It polls rather than blocking in `flock`, because a blocking acquire is uninterruptible and the caller's own budget should decide when to give up. The wait exists because skipping has a cost: a pass that does not run leaves the cycle unrecorded, which is how the scheduler came to start a second full pass on top of the first.
+
+  RED first: six tests failed on the old code, each for its stated reason — no `timeout` parameter, no lock held during the work, and the lock released while abandoned work was still writing. Mutation-checked: dropping the lock (M1), releasing it during abandoned work (M2), not releasing it on grace expiry (M3), ignoring the wait (M4), waiting forever (M5) and treating `"skipped"` as success (M6) each kill the test that covers them. Suite 2284 passed.
 
 ## [1.12.0] - 2026-10-13
 
