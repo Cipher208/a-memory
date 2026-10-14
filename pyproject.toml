@@ -211,7 +211,6 @@ ignore = [
     "PTH",      # pathlib-recommendations (legacy)
     "W291",     # trailing-whitespace (noisy in docs/tests)
     "PT",       # pytest-recommendations (noisy)
-    "F811",     # redefinition-of-unused (common in tests)
     "N817",     # camelcase-as-acronym (standard for MM)
     "NPY002",   # legacy-numpy-random (standard here)
     "B023",     # loop-variable-non-binding (standard pattern)

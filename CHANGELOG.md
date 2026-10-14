@@ -39,6 +39,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
   A real failure still reports `"failed"`: the hook raising with no live futures has no work to wait for, and `test_failed_layer_does_not_record_the_cycle_as_done` keeps that path pinned. Verified by mutation — restoring 180 s, ignoring live futures, and charging `"running"` a backoff each kill the test that covers them. Suite 2273 passed.
 
+- **Lint was hiding a shadowed test class, and the ignore that hid it was justified by a claim that was no longer true (2026-10-14).** `F811` (redefinition-of-unused) sat in the global ignore list, commented "common in tests". Enabling it finds **five** redefinitions, and **four are in production code**:
+
+  ```
+  features/staging.py:164        logging             <- `import logging` twice, two lines apart
+  lifecycle/graph_enrich.py:242  time                <- re-imported mid-file, already at :14
+  mcp_server/tools/ops.py:650    connection_manager  <- re-imported mid-file, already at :44
+  alembic/versions/e5b7d2f8a1c3  Sequence            <- duplicate import in the revision header
+  tests/test_hypothesis.py:440   TestSecretsProperties
+  ```
+
+  The test one is the expensive one. The file carried the **same banner and the same class twice** — 37 lines, a verbatim copy. The second definition shadowed the first, so the first never ran, and because no test failed nobody ever looked. The duplicate had no import of its own: it worked only because the original's `from features.secrets import …` sits at module level, which is what a merge artefact looks like.
+
+  Removed, and the removal is checked by collection count: **79 tests before, 79 after** — the duplicate was dead weight, so coverage cannot move. `F811` is now enabled repo-wide, and the mutation check proves the rule actually fires rather than merely being un-ignored.
+
+- **Documentation promised three settings that do nothing (2026-10-14).** `config.yaml` documents that `l2_session_limit`, `l3_episodic_limit` and `l4_core_limit` are read by no code — but `docs/getting-started/configuration.md` presented all three with comments describing what they hold ("SessionStore sessions", "EpisodicMemory episodes", "CoreMemory facts"), and `openwiki/quickstart.md` listed them as tier limits without qualification. An operator could set them, watch nothing happen, and have no way to find out.
+
+  The docs now say the same thing the config comment says, and `tests/test_config_declared_vs_read.py` keeps the two **in agreement in both directions**: a key the comment calls inert must have no reader, and a key it calls live must have one. Either side going stale fails the test, so the claim cannot drift back into being wrong — which is how it was wrong the first time.
+
 ## [1.12.0] - 2026-10-13
 
 ### Added
