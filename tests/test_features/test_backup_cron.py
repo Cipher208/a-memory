@@ -363,3 +363,197 @@ def test_budget_covers_the_measured_nightly_layer() -> None:
 
     default = inspect.signature(bc.BackupCron._await_on_main_loop).parameters["timeout"].default
     assert default == 120, "общий дефолт обслуживания остаётся 120 с"
+
+
+def _hold_maintenance(base_dir):
+    """Другой держатель того же замка обслуживания, как отдельный процесс."""
+    import fcntl
+
+    from shared.maintenance_lock import LOCK_NAME
+
+    fh = open(base_dir / LOCK_NAME, "w")  # noqa: SIM115 — закрытие снимет flock
+    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    return fh
+
+
+def _free_maintenance(base_dir) -> bool:
+    """Свободен ли замок обслуживания прямо сейчас."""
+    from shared import maintenance_lock
+
+    fd = maintenance_lock.acquire(base_dir)
+    if fd is None:
+        return False
+    maintenance_lock.release(fd)
+    return True
+
+
+def test_nightly_takes_the_maintenance_lock_around_its_work(tmp_path, monkeypatch) -> None:
+    """Между ночным проходом и 15-минутной уборкой должно быть взаимное исключение.
+
+    Замерено на живой базе 14.10.2026: два РАЗНЫХ замка на одну базу означали,
+    что они не видят друг друга как занятые:
+
+        .backup_cron.lock   ← ночной проход и бэкап
+        .maintenance.lock   ← 15-минутная уборка и планировщик
+
+    В 14:44:46 `graph_enrich` ещё писал в базу, а `consolidate_episodes` полез
+    туда же и получил `database is locked`. Один писатель на базу — а между
+    разными видами работы сериализации не было.
+    """
+    import json as _json
+    import time as _time
+
+    import features.backup_cron as bc
+
+    due = _time.time() - 48 * 3600
+    state = tmp_path / "cycles_state.json"
+    state.write_text(_json.dumps({"last_nightly": due, "calls": []}), encoding="utf-8")
+
+    held_during: list[bool] = []
+
+    async def _noop() -> None:
+        return None
+
+    class _Reg:
+        @staticmethod
+        def fire(name, layer, ctx, mem=None, graph=None):
+            # Пока идёт работа, замок обслуживания обязан быть занят.
+            held_during.append(not _free_maintenance(tmp_path))
+            return _noop()
+
+    monkeypatch.setattr("hooks.registry.hook_registry", _Reg())
+
+    cron = bc.BackupCron(base_dir=str(tmp_path))
+    cron._await_on_main_loop = lambda coro, **kwargs: (coro.close(), {})[1]
+
+    assert cron._fire_nightly_hooks(state) == "ok"
+    assert held_during, "хуки не вызвались — тест ничего не проверил"
+    assert all(held_during), "во время ночной работы замок обслуживания был свободен"
+    assert _free_maintenance(tmp_path), "после прохода замок обязан быть отдан"
+
+
+def test_nightly_does_not_write_while_housekeeping_holds_the_base(tmp_path, monkeypatch) -> None:
+    """Занято чужим держателем → ночной проход не пишет в базу вообще.
+
+    Это и есть та половина, ради которой правка делалась: уборка держит базу
+    секунды, и ночной проход обязан подождать её, а не полезть писать поверх.
+    """
+    import json as _json
+    import time as _time
+
+    import features.backup_cron as bc
+
+    due = _time.time() - 48 * 3600
+    state = tmp_path / "cycles_state.json"
+    state.write_text(_json.dumps({"last_nightly": due, "calls": []}), encoding="utf-8")
+
+    fired: list[int] = []
+
+    async def _noop() -> None:
+        return None
+
+    class _Reg:
+        @staticmethod
+        def fire(name, layer, ctx, mem=None, graph=None):
+            fired.append(1)
+            return _noop()
+
+    monkeypatch.setattr("hooks.registry.hook_registry", _Reg())
+    # Ждать нечего: держатель не отдаст замок в пределах окна ожидания.
+    monkeypatch.setattr(bc, "NIGHTLY_MAINTENANCE_WAIT_S", 0.2)
+
+    cron = bc.BackupCron(base_dir=str(tmp_path))
+    cron._await_on_main_loop = lambda coro, **kwargs: (coro.close(), {})[1]
+
+    held = _hold_maintenance(tmp_path)
+    try:
+        verdict = cron._fire_nightly_hooks(state)
+    finally:
+        import fcntl
+
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+
+    assert fired == [], "ночная работа пошла, пока базу держал другой писатель"
+    assert verdict == "skipped", f"вердикт должен быть 'skipped', а не {verdict!r}"
+    assert _json.loads(state.read_text())["last_nightly"] == due, "цикл не должен закрыться"
+
+
+def test_nightly_keeps_the_lock_while_abandoned_work_finishes(tmp_path, monkeypatch) -> None:
+    """Истёкший бюджет не отдаёт замок: работа ещё идёт, и уборке тут не место.
+
+    Именно это столкновение и замерено — в 14:44:46 проход уже вышел за бюджет
+    (`'running'`), но продолжал писать, а уборка в тот же момент лезла в базу.
+    Отдать замок вместе с ожиданием — значит не починить ничего.
+    """
+    import concurrent.futures
+    import json as _json
+    import time as _time
+
+    import features.backup_cron as bc
+
+    due = _time.time() - 48 * 3600
+    state = tmp_path / "cycles_state.json"
+    state.write_text(_json.dumps({"last_nightly": due, "calls": []}), encoding="utf-8")
+
+    cron = bc.BackupCron(base_dir=str(tmp_path))
+    live = concurrent.futures.Future()
+
+    def _expire(coro, **kwargs):
+        coro.close()
+        cron._pending_futures.append(live)
+        raise TimeoutError("бюджет слоя истёк")
+
+    cron._await_on_main_loop = _expire
+
+    assert cron._fire_nightly_hooks(state) == "running"
+    assert not _free_maintenance(tmp_path), "замок отдан, пока брошенная работа ещё пишет — ровно то столкновение, которое чиним"
+
+    live.set_result(None)  # работа завершилась
+    assert _free_maintenance(tmp_path), "после завершения работы замок обязан вернуться"
+
+
+def test_stuck_work_does_not_hold_the_lock_forever(tmp_path, monkeypatch) -> None:
+    """Отказ от потерянной работы отдаёт и замок.
+
+    `_nightly_busy` по грейс-периоду признаёт работу потерянной и чистит список.
+    Замок обязан уйти вместе с ней, иначе уборка не пройдёт до перезапуска.
+    """
+    import concurrent.futures
+    import time as _time
+
+    import features.backup_cron as bc
+
+    cron = _cron(tmp_path, last_nightly_age_h=48)
+    cron._pending_futures.append(concurrent.futures.Future())  # никогда не завершится
+    cron._nightly_started_at = _time.time() - bc.NIGHTLY_INFLIGHT_GRACE_S - 60
+
+    # Замок в руках у прохода, который мы сейчас признаем потерянным.
+    from shared import maintenance_lock
+
+    fd = maintenance_lock.acquire(tmp_path)
+    assert fd is not None
+    cron._nightly_lock_fd = fd
+
+    assert cron._nightly_busy(_time.time()) is False, "потерянная работа должна перестать блокировать"
+    assert _free_maintenance(tmp_path), "замок не отдан вместе с потерянной работой"
+
+
+def test_a_skipped_pass_does_not_clear_the_failure_ladder(tmp_path, monkeypatch) -> None:
+    """Пропуск из-за занятого замка — не успех, и не повод обнулить бэкофф.
+
+    Иначе проход, падающий за спиной занятой базы, повторялся бы каждые 15 минут
+    вечно вместо отступления на 1 ч / 4 ч — а база занята как раз тогда, когда
+    повтор меньше всего нужен.
+    """
+    import time as _time
+
+    cron = _cron(tmp_path, last_nightly_age_h=48)
+    cron._nightly_failures = 2
+    cron._nightly_retry_at = 0.0
+    monkeypatch.setattr(cron, "_fire_nightly_hooks", lambda *a, **k: "skipped")
+
+    cron._check_nightly(_time.time())
+
+    assert cron._nightly_failures == 2, "пропуск обнулил лестницу сбоев"
+    assert cron._nightly_retry_at == 0.0, "за пропуск бэкофф не начисляется"

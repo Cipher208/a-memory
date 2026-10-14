@@ -27,9 +27,15 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import os
+import time
 from pathlib import Path
 
 LOCK_NAME = ".maintenance.lock"
+
+# How often a waiting caller retries. Short enough that a cleanup finishing in
+# milliseconds is not waited on for a whole second, long enough that waiting does
+# not spin a core.
+_POLL_INTERVAL_S = 0.05
 
 
 def _lock_dir(base_dir: str | Path | None) -> Path:
@@ -45,21 +51,35 @@ def _lock_dir(base_dir: str | Path | None) -> Path:
     return Path(connection_manager.base_dir)
 
 
-def acquire(base_dir: str | Path | None = None) -> int | None:
+def acquire(base_dir: str | Path | None = None, timeout: float = 0.0) -> int | None:
     """Take the maintenance lock for this base. A file descriptor, or None.
 
-    Non-blocking on purpose: losing the race is the normal outcome for every
-    process but the leader, and waiting would only add a second kind of stall to
-    the one this exists to remove.
+    Non-blocking by default on purpose: losing the race is the normal outcome for
+    every process but the leader, and waiting would only add a second kind of stall
+    to the one this exists to remove.
+
+    `timeout` is for the one caller that cannot simply skip: the nightly pass shares
+    the base with a cleanup that holds this lock for seconds, and a pass that skipped
+    every time it lost that race would leave its cycle unrecorded — which is how the
+    scheduler came to start a second full pass on top of the first. Waiting is
+    bounded, and the holder it waits for is short.
+
+    Polling rather than a blocking `flock`: a blocking acquire would be uninterruptible,
+    and the caller's own budget is what should decide when to give up.
     """
     path = _lock_dir(base_dir) / LOCK_NAME
-    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(fd)
-        return None
-    return fd
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(_POLL_INTERVAL_S)
+            continue
+        return fd
 
 
 def release(fd: int | None) -> None:

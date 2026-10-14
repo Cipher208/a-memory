@@ -107,3 +107,68 @@ def test_scheduler_runs_when_it_is_the_leader(tmp_path, monkeypatch) -> None:
     # And the lock is handed back: a released lock is what lets the next process
     # — or a later process after a crash — take over.
     assert acquire(tmp_path) is not None
+
+
+def test_acquire_can_wait_out_a_short_holder(tmp_path) -> None:
+    """A caller may wait, briefly, for a holder that is about to finish.
+
+    The nightly pass needs this: the 15-minute cleanup holds the same lock for a
+    matter of seconds, and a nightly pass that simply skipped every time it lost
+    that race would leave its cycle unrecorded — which is the stacking defect the
+    budget fix removed. Waiting is bounded and the holder is short; skipping is
+    what made a second full pass start on top of the first.
+    """
+    import threading
+    import time as _time
+
+    held = _hold_for_another_process(tmp_path)
+
+    def _release_soon() -> None:
+        _time.sleep(0.4)
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+
+    thread = threading.Thread(target=_release_soon)
+    thread.start()
+    try:
+        start = _time.monotonic()
+        fd = acquire(tmp_path, timeout=5.0)
+        waited = _time.monotonic() - start
+        assert fd is not None, "the wait should have picked the lock up once it was free"
+        assert waited >= 0.3, f"returned before the holder released ({waited:.2f}s) — was it really waiting?"
+        release(fd)
+    finally:
+        thread.join(timeout=5)
+
+
+def test_acquire_returns_none_when_the_wait_runs_out(tmp_path) -> None:
+    """The wait is bounded: a holder that never lets go must not hang the caller."""
+    import time as _time
+
+    held = _hold_for_another_process(tmp_path)
+    try:
+        start = _time.monotonic()
+        fd = acquire(tmp_path, timeout=0.5)
+        waited = _time.monotonic() - start
+        assert fd is None, "a lock held for longer than the timeout must be reported, not waited out"
+        assert waited >= 0.4, f"gave up too early ({waited:.2f}s)"
+        assert waited < 3.0, f"waited far past its timeout ({waited:.2f}s)"
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()
+
+
+def test_acquire_without_timeout_does_not_wait(tmp_path) -> None:
+    """The default stays non-blocking — the scheduler depends on that."""
+    import time as _time
+
+    held = _hold_for_another_process(tmp_path)
+    try:
+        start = _time.monotonic()
+        fd = acquire(tmp_path)
+        waited = _time.monotonic() - start
+        assert fd is None
+        assert waited < 0.2, f"the default acquire blocked for {waited:.2f}s"
+    finally:
+        fcntl.flock(held.fileno(), fcntl.LOCK_UN)
+        held.close()

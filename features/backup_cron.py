@@ -18,6 +18,7 @@ from typing import Any
 
 from config import config
 from features.backup import snapshot_sqlite
+from shared import maintenance_lock
 from shared.path_safety import safe_resolve
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,26 @@ logger = logging.getLogger(__name__)
 # had 10 on 06.10 alone), so a retry must not wait for the next backup at all.
 # It backs off instead: 15 min -> 1 h -> 4 h, then 4 h for every further failure.
 NIGHTLY_BACKOFF_S = (900.0, 3600.0, 14400.0)
+
+# How long the nightly pass will wait for the per-base maintenance lock before
+# giving up its turn.
+#
+# The base has TWO locks, and that was the defect:
+#
+#     .backup_cron.lock    the nightly pass and the backup
+#     .maintenance.lock    the 15-minute cleanup and the importance sweep
+#
+# Neither sees the other as taken, so a pass and a cleanup could write the same
+# SQLite file at the same time — measured at 14:44:46 on 14.10.2026, when
+# `graph_enrich` was still writing and `consolidate_episodes` got
+# `database is locked`. The pass now takes the maintenance lock too.
+#
+# It waits rather than skips because skipping has a cost of its own: a pass that
+# does not run leaves the cycle unrecorded, and the scheduler then starts the whole
+# pass again 15 minutes later (see `test_expired_budget_with_live_work_is_not_a_failure`).
+# The holder it waits for is the cleanup, which holds it for seconds; the wait is
+# bounded so a genuinely stuck holder costs one turn, not the daemon.
+NIGHTLY_MAINTENANCE_WAIT_S = 120.0
 
 # Budget for ONE layer's nightly hook, which is `graph_enrich` and the miners
 # inside it. Raised twice now, each time from a measurement rather than a guess:
@@ -94,6 +115,9 @@ class BackupCron:
         self._nightly_failures = 0
         self._nightly_retry_at = 0.0
         self._nightly_started_at = 0.0
+        # The nightly pass holds the maintenance lock for its whole duration; in the
+        # 'running' case the fd is kept here until the abandoned work finishes.
+        self._nightly_lock_fd: int | None = None
         # Coroutines handed to the main loop that have not finished yet.
         self._pending_futures: list[Any] = []
         self._state_file = self.base_dir / ".backup_cron_state.json"
@@ -224,6 +248,47 @@ class BackupCron:
             except Exception:
                 logger.exception("Backup cron step %s failed", step.__name__)
 
+    def _finish_nightly_lock(self, holder: int, verdict: str) -> None:
+        """Hand the base back — unless work this pass abandoned is still using it.
+
+        The `'running'` verdict means the layer budget expired while the hook kept
+        going: `_await_on_main_loop` abandons the coroutine instead of cancelling it.
+        That work is still writing, so releasing here would put the cleanup straight
+        back into the collision this lock exists to prevent — and that collision is
+        not hypothetical: at 14:44:46 on 14.10.2026 the abandoned `graph_enrich` was
+        still writing when the periodic cleanup tried the same file.
+
+        So the lock outlives the pass in that one case and is handed back by the
+        abandoned work's own completion callback.
+        """
+        live = [f for f in self._pending_futures if not f.done()]
+        if verdict == "running" and live:
+            self._nightly_lock_fd = holder
+            logger.info(
+                "Holding the maintenance lock until %d abandoned job(s) finish, so housekeeping does not write alongside them",
+                len(live),
+            )
+            for fut in live:
+                fut.add_done_callback(self._release_nightly_lock_if_idle)
+            return
+        maintenance_lock.release(holder)
+        self._nightly_lock_fd = None
+
+    def _release_nightly_lock_if_idle(self, _future: Any = None) -> None:
+        """Release the carried-over nightly lock once no abandoned work is left.
+
+        Called as a completion callback on each abandoned job, and again from
+        `_nightly_busy` when it gives up on work that never finished — a lock held
+        for work nobody is waiting for any more would keep housekeeping out until
+        the process restarted.
+        """
+        if any(not f.done() for f in self._pending_futures):
+            return
+        fd = self._nightly_lock_fd
+        self._nightly_lock_fd = None
+        if fd is not None:
+            maintenance_lock.release(fd)
+
     def _cycles_state_path(self) -> Path:
         # This base's own cycle state, not the connection manager's: they are the
         # same base in production (the singleton defaults to it), and keeping it
@@ -247,6 +312,10 @@ class BackupCron:
             )
             self._pending_futures.clear()
             self._nightly_started_at = 0.0
+            # And the base goes back with it. A lock held for work we have just given
+            # up on would keep the 15-minute cleanup out until the process restarted,
+            # which is a worse outcome than the overlap it was avoiding.
+            self._release_nightly_lock_if_idle()
             return False
         return True
 
@@ -300,12 +369,19 @@ class BackupCron:
                 self._nightly_failures,
                 delay / 60.0,
             )
-        elif verdict == "running":
-            # The budget expired but the work is still on the main loop. No backoff (a
-            # retry would stack a second pass on the first) and no counter reset either:
-            # the outcome is not known yet. `_nightly_busy` refuses a new start while
-            # those jobs are alive, which is the only guard this needs.
-            logger.info("Nightly pass outran its budget and is still running; leaving it to finish")
+        elif verdict in ("running", "skipped"):
+            # Neither outcome is a failure and neither is a success, so the counter
+            # stays where it is.
+            #
+            # 'running': the budget expired but the work is still on the main loop. No
+            # backoff (a retry would stack a second pass on the first); `_nightly_busy`
+            # refuses a new start while those jobs are alive.
+            #
+            # 'skipped': the maintenance lock was held for the whole wait. Treating
+            # that as success would reset the failure ladder, so a pass failing behind
+            # a busy base would retry every 15 minutes forever instead of backing off
+            # — and the base is busy precisely when retrying is least welcome.
+            logger.info("Nightly pass did not run its work (%s); failure ladder left as it was", verdict)
         else:
             if self._nightly_failures:
                 logger.info("Nightly pass recovered after %d failed attempt(s)", self._nightly_failures)
@@ -376,114 +452,138 @@ class BackupCron:
             except Exception:
                 logger.exception("Cycles gate error — running nightly unguarded")
         verdict = "ok"
+        # The base has two locks and this pass needs both. `.backup_cron.lock`
+        # (above) keeps two nightly passes apart; this one keeps the pass apart from
+        # the 15-minute cleanup and the importance sweep, which take the maintenance
+        # lock. Without it neither saw the other as taken and both wrote the same
+        # SQLite file — measured 14.10.2026, 14:44:46.
+        #
+        # Taken around the WHOLE pass, not just the layer hooks: the compact, sweep,
+        # replay, expiry, tiering, enrich and bridge steps below all write too.
+        #
+        # Waiting rather than skipping, because a skipped pass leaves the cycle
+        # unrecorded and the scheduler then starts the whole thing again 15 minutes
+        # later. The holder being waited for is the cleanup, which holds it for
+        # seconds; the wait is bounded so a stuck holder costs one turn.
+        holder = maintenance_lock.acquire(self.base_dir, timeout=NIGHTLY_MAINTENANCE_WAIT_S)
+        if holder is None:
+            logger.warning(
+                "Nightly pass skipped: the maintenance lock was held for the whole %.0f s wait "
+                "(another writer is using this base) — the cycle stays open and will be retried",
+                NIGHTLY_MAINTENANCE_WAIT_S,
+            )
+            return "skipped"
         try:
-            from hooks.registry import hook_registry
+            try:
+                from hooks.registry import hook_registry
 
-            for layer in ["user", "agent"]:
-                # Timing only. The `finally` re-raises, so a timeout still skips
-                # the remaining layers exactly as it did before: this logs which
-                # layer was in flight and what it really cost, without changing
-                # what runs. The bare "Nightly hook error" that used to be the
-                # only trace did not say which layer died or how close the other
-                # came to the nightly layer budget.
-                started = time.monotonic()
-                logger.info("Nightly pass: layer=%s starting", layer)
-                try:
-                    self._await_on_main_loop(
-                        hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}),
-                        timeout=NIGHTLY_LAYER_BUDGET_S,
+                for layer in ["user", "agent"]:
+                    # Timing only. The `finally` re-raises, so a timeout still skips
+                    # the remaining layers exactly as it did before: this logs which
+                    # layer was in flight and what it really cost, without changing
+                    # what runs. The bare "Nightly hook error" that used to be the
+                    # only trace did not say which layer died or how close the other
+                    # came to the nightly layer budget.
+                    started = time.monotonic()
+                    logger.info("Nightly pass: layer=%s starting", layer)
+                    try:
+                        self._await_on_main_loop(
+                            hook_registry.fire("nightly", layer, {"trigger": "backup_cron"}),
+                            timeout=NIGHTLY_LAYER_BUDGET_S,
+                        )
+                    finally:
+                        logger.info("Nightly pass: layer=%s finished in %.1f s", layer, time.monotonic() - started)
+                with contextlib.suppress(Exception):
+                    from features.cycles import record_nightly_done
+
+                    record_nightly_done(state_path)  # record the successful pass
+            except TimeoutError:
+                # The wait expired; the WORK did not. `_await_on_main_loop` abandons the
+                # coroutine rather than cancelling it, so a pass that outran its budget is
+                # still running on the main loop right now.
+                #
+                # Calling that "failed" cost more than a wrong log line: the cycle is never
+                # recorded, so the scheduler started a SECOND full pass 15 minutes later on
+                # top of the first. Measured on the live base, 14.10.2026 — 14:37:41 start,
+                # 14:40:41 budget expired, 14:44:46 the hook still going (425773 ms),
+                # 14:57:41 a second start. Two passes over one graph is what the observed
+                # `database is locked` was made of, and that lock is what made `migrate()`
+                # time out at session start.
+                #
+                # The test is the same one `_nightly_busy` uses, so "still running" and
+                # "died" cannot be confused: live futures mean the wait expired, no live
+                # futures mean the hook itself raised and the pass really did die.
+                live = [f for f in self._pending_futures if not f.done()]
+                if live:
+                    logger.warning(
+                        "Nightly layer budget (%.0f s) expired while %d job(s) were still running "
+                        "on the main loop — reporting 'running', not a failure; the cycle stays open",
+                        NIGHTLY_LAYER_BUDGET_S,
+                        len(live),
                     )
-                finally:
-                    logger.info("Nightly pass: layer=%s finished in %.1f s", layer, time.monotonic() - started)
-            with contextlib.suppress(Exception):
-                from features.cycles import record_nightly_done
-
-                record_nightly_done(state_path)  # record the successful pass
-        except TimeoutError:
-            # The wait expired; the WORK did not. `_await_on_main_loop` abandons the
-            # coroutine rather than cancelling it, so a pass that outran its budget is
-            # still running on the main loop right now.
-            #
-            # Calling that "failed" cost more than a wrong log line: the cycle is never
-            # recorded, so the scheduler started a SECOND full pass 15 minutes later on
-            # top of the first. Measured on the live base, 14.10.2026 — 14:37:41 start,
-            # 14:40:41 budget expired, 14:44:46 the hook still going (425773 ms),
-            # 14:57:41 a second start. Two passes over one graph is what the observed
-            # `database is locked` was made of, and that lock is what made `migrate()`
-            # time out at session start.
-            #
-            # The test is the same one `_nightly_busy` uses, so "still running" and
-            # "died" cannot be confused: live futures mean the wait expired, no live
-            # futures mean the hook itself raised and the pass really did die.
-            live = [f for f in self._pending_futures if not f.done()]
-            if live:
-                logger.warning(
-                    "Nightly layer budget (%.0f s) expired while %d job(s) were still running "
-                    "on the main loop — reporting 'running', not a failure; the cycle stays open",
-                    NIGHTLY_LAYER_BUDGET_S,
-                    len(live),
-                )
-                verdict = "running"
-            else:
+                    verdict = "running"
+                else:
+                    logger.exception("Nightly hook error")
+                    verdict = "failed"
+            except Exception:
                 logger.exception("Nightly hook error")
                 verdict = "failed"
-        except Exception:
-            logger.exception("Nightly hook error")
-            verdict = "failed"
-        # Compact-to-budget after nightly builds (graph_build runs inside the
-        # "nightly" hook above): evict lowest-activation L4 facts to archive.
-        with contextlib.suppress(Exception):
-            from lifecycle.compact import compact_under_budget
+            # Compact-to-budget after nightly builds (graph_build runs inside the
+            # "nightly" hook above): evict lowest-activation L4 facts to archive.
+            with contextlib.suppress(Exception):
+                from lifecycle.compact import compact_under_budget
 
-            for layer in ["user", "agent"]:
-                self._await_on_main_loop(compact_under_budget("default", layer))
-        # B5: TTL-expiry sweep with mass-delete guards (after compact).
-        with contextlib.suppress(Exception):
-            from lifecycle.l0_sweep import sweep_expired
+                for layer in ["user", "agent"]:
+                    self._await_on_main_loop(compact_under_budget("default", layer))
+            # B5: TTL-expiry sweep with mass-delete guards (after compact).
+            with contextlib.suppress(Exception):
+                from lifecycle.l0_sweep import sweep_expired
 
-            self._await_on_main_loop(sweep_expired())
-        # L0 replay: wake rows that were never processed. This is the reader that
-        # `received` never had — the status was written by every message and read by
-        # nothing automatic, so a row could sit unprocessed indefinitely. Bounded by
-        # `l0.replay_max_rows` and gated by the importance gate (see features/replay),
-        # so a backlog drains over successive nights instead of landing in one burst.
-        # Ordered BEFORE the expiry and the tiering: a row that qualifies for replay
-        # should get its chance to be distilled before anything closes or compresses it.
-        with contextlib.suppress(Exception):
-            from features.replay import replay
+                self._await_on_main_loop(sweep_expired())
+            # L0 replay: wake rows that were never processed. This is the reader that
+            # `received` never had — the status was written by every message and read by
+            # nothing automatic, so a row could sit unprocessed indefinitely. Bounded by
+            # `l0.replay_max_rows` and gated by the importance gate (see features/replay),
+            # so a backlog drains over successive nights instead of landing in one burst.
+            # Ordered BEFORE the expiry and the tiering: a row that qualifies for replay
+            # should get its chance to be distilled before anything closes or compresses it.
+            with contextlib.suppress(Exception):
+                from features.replay import replay
 
-            replayed = self._await_on_main_loop(replay())
-            if any(replayed.get(k) for k in ("processed", "gated", "conflicts")):
-                logger.info("L0 replay: %s", replayed)
-        # L0 expiry: `received` older than `l0.received_ttl_days` is a strand, not a
-        # wait forever. Closed as `gated_out` / `never_processed` — which is also the
-        # status that makes it eligible for the tiers below, where the text is kept.
-        # Parked rows (deliberate "wake later" imports) are untouched.
-        with contextlib.suppress(Exception):
-            from lifecycle.l0_tiers import close_overdue_received
+                replayed = self._await_on_main_loop(replay())
+                if any(replayed.get(k) for k in ("processed", "gated", "conflicts")):
+                    logger.info("L0 replay: %s", replayed)
+            # L0 expiry: `received` older than `l0.received_ttl_days` is a strand, not a
+            # wait forever. Closed as `gated_out` / `never_processed` — which is also the
+            # status that makes it eligible for the tiers below, where the text is kept.
+            # Parked rows (deliberate "wake later" imports) are untouched.
+            with contextlib.suppress(Exception):
+                from lifecycle.l0_tiers import close_overdue_received
 
-            expired = self._await_on_main_loop(close_overdue_received())
-            if expired.get("closed"):
-                logger.info("L0 received expiry: %s", expired)
-        # S6: L0 tiering — warm (preview+zlib) / cold (CLACK archive). After the
-        # sweep so freshly processed rows age through tiers in a stable order.
-        with contextlib.suppress(Exception):
-            from lifecycle.l0_tiers import tier_l0
+                expired = self._await_on_main_loop(close_overdue_received())
+                if expired.get("closed"):
+                    logger.info("L0 received expiry: %s", expired)
+            # S6: L0 tiering — warm (preview+zlib) / cold (CLACK archive). After the
+            # sweep so freshly processed rows age through tiers in a stable order.
+            with contextlib.suppress(Exception):
+                from lifecycle.l0_tiers import tier_l0
 
-            tiers = self._await_on_main_loop(tier_l0())
-            logger.info("L0 tiering: %s", tiers)
-        # F-T7 (S3): rebuild session summaries from L0 texts (was dead code).
-        with contextlib.suppress(Exception):
-            from features.l2_enrich import enrich_sessions
+                tiers = self._await_on_main_loop(tier_l0())
+                logger.info("L0 tiering: %s", tiers)
+            # F-T7 (S3): rebuild session summaries from L0 texts (was dead code).
+            with contextlib.suppress(Exception):
+                from features.l2_enrich import enrich_sessions
 
-            self._await_on_main_loop(enrich_sessions(days=1))
-        # A8: MEMORY.md bridge — refresh top-facts file, then drain user notes.
-        with contextlib.suppress(Exception):
-            from features.bridge import ingest_drain, regenerate_bridge
+                self._await_on_main_loop(enrich_sessions(days=1))
+            # A8: MEMORY.md bridge — refresh top-facts file, then drain user notes.
+            with contextlib.suppress(Exception):
+                from features.bridge import ingest_drain, regenerate_bridge
 
-            self._await_on_main_loop(regenerate_bridge("default", "agent"))
-            self._await_on_main_loop(ingest_drain("default", "agent"))
-        return verdict
+                self._await_on_main_loop(regenerate_bridge("default", "agent"))
+                self._await_on_main_loop(ingest_drain("default", "agent"))
+            return verdict
+        finally:
+            self._finish_nightly_lock(holder, verdict)
 
     def _do_backup(self) -> str:
         import shutil
