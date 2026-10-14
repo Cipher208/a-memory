@@ -55,8 +55,12 @@ layers:
 ```
 
 Per-agent override: copy the file and point the agent's MCP environment at
-it via `MCP_CONFIG_PATH`. Tier limits (`l1_buffer_size`, `l2_session_limit`,
-`l3_episodic_limit`, `l4_core_limit`) live under `limits:`.
+it via `MCP_CONFIG_PATH`. Tier limits live under `limits:` — and of those,
+only `l1_buffer_size` and `l3_atom_limit` are read by code.
+`l2_session_limit`, `l3_episodic_limit` and `l4_core_limit` are kept as a
+record of intent: setting them has no effect. The comment in `config.yaml`
+says the same thing, and `tests/test_config_declared_vs_read.py` keeps the
+two in agreement.
 
 ## First round-trip
 

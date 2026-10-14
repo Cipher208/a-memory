@@ -11,7 +11,6 @@ Used for supervised threshold training; search runs on binary embeddings.
 from collections.abc import Sequence
 
 import contextlib
-from collections.abc import Sequence
 
 import sqlalchemy
 from alembic import op

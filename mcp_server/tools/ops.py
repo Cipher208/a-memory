@@ -647,8 +647,6 @@ import json as _json
 import sqlite3 as _sqlite3
 import time as _time
 
-from shared.connection import connection_manager
-
 _ALLOWED_PREDICATE_KEYS = frozenset({"min_importance", "l4_min_importance", "keywords", "sender"})
 
 

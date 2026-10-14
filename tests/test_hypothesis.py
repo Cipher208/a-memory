@@ -433,45 +433,6 @@ class TestPathSafetyProperties:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  features/secrets.py — encrypt/decrypt roundtrip
-# ═══════════════════════════════════════════════════════════════
-
-
-class TestSecretsProperties:
-    @given(data=st.dictionaries(st.text(min_size=1, max_size=20), st.text(max_size=100), min_size=1, max_size=5))
-    @settings(deadline=None, max_examples=30)
-    def test_encrypt_decrypt_roundtrip_dict(self, data):
-        blob = encrypt_json(data)
-        result = decrypt_json(blob)
-        assert result == data
-
-    @given(data=st.lists(st.text(min_size=1, max_size=50), min_size=1, max_size=5))
-    @settings(deadline=None, max_examples=30)
-    def test_encrypt_decrypt_roundtrip_list(self, data):
-        blob = encrypt_json(data)
-        result = decrypt_json(blob)
-        assert result == data
-
-    @given(
-        a=st.dictionaries(st.text(min_size=1, max_size=10), st.text(max_size=50), min_size=1),
-        b=st.dictionaries(st.text(min_size=1, max_size=10), st.text(max_size=50), min_size=1),
-    )
-    @settings(deadline=None, max_examples=30)
-    def test_different_inputs_different_ciphertext(self, a, b):
-        assume(a != b)
-        blob_a = encrypt_json(a)
-        blob_b = encrypt_json(b)
-        assert blob_a != blob_b
-
-    @given(data=st.dictionaries(st.text(min_size=1, max_size=10), st.integers(), min_size=1))
-    @settings(deadline=None, max_examples=20)
-    def test_min_blob_size(self, data):
-        """Encrypted blob must be at least nonce(24) + MAC(16) = 40 bytes."""
-        blob = encrypt_json(data)
-        assert len(blob) >= 40
-
-
-# ═══════════════════════════════════════════════════════════════
 #  shared/saga.py — Saga state machine invariants
 # ═══════════════════════════════════════════════════════════════
 

@@ -239,9 +239,6 @@ async def _dream_insight(conn: Any, layer: str) -> int:
     return created
 
 
-import time
-
-
 async def _dream(conn: Any, layer: str) -> dict[str, int]:
     """Run the three-phase sleep: NREM → REM → Insight.
 

@@ -161,8 +161,6 @@ async def auto_apply_pending(mem: Any) -> int:
     """
     import logging
 
-    import logging
-
     logger = logging.getLogger(__name__)
     from lifecycle.consolidation import passes_promotion_gate
 

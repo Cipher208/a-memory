@@ -5,12 +5,17 @@
 Location: `config.yaml` (project root or `~/.mcp-ariel-memory/config.yaml`)
 
 ```yaml
-# Layer limits
+# Layer limits. Only `l1_buffer_size` and `l3_atom_limit` are read by code:
+# `l2_session_limit`, `l3_episodic_limit` and `l4_core_limit` are kept as a
+# record of intent, and setting them has no effect. See the comment in
+# `config.yaml`, which is checked against the code by
+# `tests/test_config_declared_vs_read.py`.
 limits:
   l1_buffer_size: 50       # ReflexBuffer ring buffer
-  l2_session_limit: 100    # SessionStore sessions
-  l3_episodic_limit: 1000  # EpisodicMemory episodes
-  l4_core_limit: 5000      # CoreMemory facts
+  l3_atom_limit: 10        # atoms kept per message (see lifecycle/distiller)
+  l2_session_limit: 100    # NOT WIRED
+  l3_episodic_limit: 1000  # NOT WIRED
+  l4_core_limit: 5000      # NOT WIRED
 
 # RAG settings
 rag:
