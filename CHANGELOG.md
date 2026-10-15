@@ -112,6 +112,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   RED first: `WAL was 12.6 MB before and 12.6 MB after maintenance; with no dead pages the checkpoint is unreachable, so the file never shrinks`. Mutation-checked, four mutations, zero survivors — no call from maintenance (M1), PASSIVE instead of TRUNCATE (M2), swallowed exception removed (M3), and the ownership gate dropped so foreign databases are touched (M4).
 
   M2 survived its first run for the reason this session keeps re-learning: the anchor `'PRAGMA wal_checkpoint(TRUNCATE)'` appears twice in the file — once inside `_vacuum_if_fragmented`, once in the new function — and `replace(..., 1)` hit the first. The mutation never reached the code under test. Aim each mutation at the exact occurrence it means to change.
+- **A stale connection was dropped without being closed, and kept its locks for the life of the process (2026-10-15).** `AsyncConnectionManager.get()` treats a connection as stale when `SELECT 1` fails on it, and then did only `self._conns.pop(db_name, None)`. The connection object left the dict and nothing else happened to it.
+
+  That is not enough, because `_get_aiosqlite_conn` appends every connection to `_tracked_aiosqlite_conns` — a **strong** list, deliberately, as its own comment records ("a WeakSet would lose it", since the aiosqlite worker thread keeps only the tx queue alive). A dropped connection is therefore not collected. If it was mid-transaction when it went stale, it goes on holding that transaction's locks, and nothing can reach it any more to release them: the manager no longer references it, so no `close_all()` will ever touch it. Killing the process is the only way out.
+
+  Measured on the live hermes base: decay ran clean from 09:00 to 16:02, then failed `sqlite3.OperationalError: database is locked` **ten times in a row over two hours** (16:17 → 18:33, zero successes) while the WAL grew 2 → 14.5 MB. Probing `BEGIN IMMEDIATE` from **outside** the process returned free eight times out of eight, at 0.3 ms — the lock was held inside, which is what a leaked connection looks like from anywhere else. A daemon restart cleared it immediately, consistent with the connection being unreachable.
+
+  The stale entry is now closed, best-effort (`contextlib.suppress`, because a manager that raises here would break every caller). The `pop` keeps its original intent: the entry is only touched if it is still the object that was judged stale, so a replacement installed by a concurrent getter is neither evicted nor closed.
+
+  RED first, and this time the failing test reproduced production's own error message: `a fresh connection could not write while the dropped one held a transaction: database is locked`.
+
+  Mutation-checked, three mutations, zero survivors — drop without closing (M1), remove the identity guard (M2), and stop suppressing a failing `close()` (M3). M2 is worth recording: it survived the first run because two earlier versions of its test asserted the wrong thing — `not replacement.closed` passes even with the guard gone (the code closes `conn`, never the replacement), and asserting the dict still holds the replacement fails on correct code because `get()` installs a fresh connection over it. The real property is that the replacement is not **evicted**, and the test now records `pop` calls to check exactly that. A third version had to be fixed too: `dict.pop` cannot be assigned on an instance (`AttributeError: 'dict' object attribute 'pop' is read-only`), and the test was erroring rather than asserting, which made the mutation run look green for the wrong reason.
+
+  Suite 2301 passed (was 2297). `ruff check`, `ruff format --check` and `mypy` over the CI's directory list are clean.
 
 ## [1.12.0] - 2026-10-13
 
