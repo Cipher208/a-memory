@@ -63,6 +63,48 @@ async def _vacuum_if_fragmented(manager: Any, db_path: Path, min_mb: float, rati
     return max(0.0, _mb(size_before - size_after)), True
 
 
+async def checkpoint_wal(manager: Any, db_path: Path, conn: Any | None = None) -> float:
+    """Truncate the WAL of one of this process's databases. Returns MB reclaimed.
+
+    Separate from VACUUM on purpose. The only `wal_checkpoint(TRUNCATE)` in this
+    codebase used to live inside `_vacuum_if_fragmented`, behind a
+    `freelist / page_count >= 0.25` gate — and a base with no dead pages therefore
+    never truncated its WAL at all. Measured on the live hermes base 15.10.2026:
+    61 MB of WAL, `freelist_count = 0`, unchanged across two restarts.
+
+    Truncating is not "moving pages to the database". A PASSIVE checkpoint does that
+    and leaves the file exactly as large (probe: 806 journal pages moved, WAL file
+    unchanged). Only TRUNCATE returns the space to the filesystem.
+
+    Best-effort by design: TRUNCATE needs every reader out, and reports `busy=1`
+    rather than raising when one is inside. Returning 0 for that is honest, and
+    raising would cost the whole maintenance pass — including the size report that
+    comes after it on the same path.
+    """
+    wal = db_path.with_name(db_path.name + "-wal")
+    if not wal.exists():
+        return 0.0
+    size_before = wal.stat().st_size
+    if size_before == 0:
+        return 0.0
+
+    try:
+        if conn is None:
+            conn = await manager.get(db_path.name)
+        rows = await (await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")).fetchall()
+        # (busy, log, checkpointed). A busy result means the WAL was NOT truncated
+        # even though the call succeeded — logged so the reason is visible, while the
+        # file size below stays the single source of truth for what was reclaimed.
+        if rows and rows[0][0]:
+            logger.debug("WAL checkpoint busy for %s: %r", db_path.name, rows[0])
+    except Exception:
+        logger.debug("WAL checkpoint failed for %s", db_path.name, exc_info=True)
+        return 0.0
+
+    size_after = wal.stat().st_size if wal.exists() else 0
+    return max(0.0, _mb(size_before - size_after))
+
+
 async def run_db_maintenance(
     cm: Any | None = None,
     warn_mb: float | None = None,
@@ -98,15 +140,29 @@ async def run_db_maintenance(
         size_mb = _mb(size)
 
         freed_mb, did_vacuum = 0.0, False
-        # Only maintenance-scope DBs are safe to VACUUM here; memory.db belongs
-        # to this process, projects.db likewise. Skip foreign files defensively
-        # by checking we can open them through our own manager.
-        if size_mb >= vacuum_min_mb and db_file.name in {DB_NAME, "projects.db"}:
+        # Only maintenance-scope DBs are safe to touch here; memory.db belongs to
+        # this process, projects.db likewise. Skip foreign files defensively.
+        if db_file.name in {DB_NAME, "projects.db"}:
+            if size_mb >= vacuum_min_mb:
+                try:
+                    freed_mb, did_vacuum = await _vacuum_if_fragmented(manager, db_file, vacuum_min_mb, vacuum_freelist_ratio)
+                except Exception:
+                    logger.exception("VACUUM failed for %s", db_file.name)
+
+            # Truncate the WAL on its own terms, NOT behind the VACUUM gate above.
+            # That gate only opens on fragmentation, so a base with no dead pages
+            # never truncated — measured 15.10.2026 with 61 MB of WAL and
+            # `freelist_count = 0`, unchanged across two restarts. Truncating is the
+            # only thing that returns those pages to the filesystem; a PASSIVE
+            # checkpoint moves them into the DB and leaves the file size alone.
             try:
-                freed_mb, did_vacuum = await _vacuum_if_fragmented(manager, db_file, vacuum_min_mb, vacuum_freelist_ratio)
-                size_mb = _mb(db_file.stat().st_size + (wal.stat().st_size if wal.exists() else 0))
+                wal_mb = await checkpoint_wal(manager, db_file)
+                if wal_mb:
+                    logger.info("WAL checkpoint: %s reclaimed %.1f MB", db_file.name, wal_mb)
             except Exception:
-                logger.exception("VACUUM failed for %s", db_file.name)
+                logger.exception("WAL checkpoint failed for %s", db_file.name)
+
+            size_mb = _mb(db_file.stat().st_size + (wal.stat().st_size if wal.exists() else 0))
 
         if size_gauge is not None:
             with contextlib.suppress(Exception):

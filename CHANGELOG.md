@@ -87,6 +87,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   RED first: two tests failed on the old code with `the plain cleanup ran while another writer held the base`. Mutation-checked — five mutations, zero survivors: no lock (M1), never released (M2), silent skip (M3), wait instead of skip (M4), and skip declared after the work (M5).
 
   The first mutation run was itself wrong, and that is worth recording: M2 and M4 "survived" because they were aimed at tests that could not observe them. The never-release mutation was run against the *holder* test, where the lock is refused and the code returns **before** the `try/finally`, so the release never executes; only the *leader* test can see it. The wait mutation was run against a holder that never lets go, where a timeout and no timeout both return `None`. A surviving mutation is a hypothesis about the test, not a verdict on it — check that the mutated line is reachable in the test you aimed at before concluding a guard is toothless.
+- **The WAL was never truncated, because the only TRUNCATE sat behind a VACUUM (2026-10-15).** `features/db_maintenance.py` held the codebase's only `PRAGMA wal_checkpoint(TRUNCATE)`, and it ran inside `_vacuum_if_fragmented` — which returns before reaching it unless `freelist / page_count >= 0.25`. A base with no dead pages therefore never truncated its WAL at all. The live hermes base has `freelist_count = 0` over 26 730 pages, and VACUUM has fired **once in the entire log history** (19.09, 136 MB → 16 MB) — so the checkpoint almost never ran.
+
+  Measured: `memory.db` 103.93 MB with a **61.04 MB** WAL, unchanged across two restarts. Not runaway growth — `journal_size_limit` caps it at 64 MiB, which is why it sat at its ceiling looking stable. What it cost was 61 MB of disk held for nothing and a crash-recovery step that would have to replay it.
+
+  A PASSIVE checkpoint is not the answer, and measuring that is part of the fix: with a lone connection it moved all frames into the database and left the WAL file at **12.61 MB, unchanged**. Moving pages is not returning space. Only TRUNCATE does that.
+
+  `checkpoint_wal` is now its own step in `run_db_maintenance` (hourly), outside the fragmentation gate, scoped to the same two databases the VACUUM already restricted itself to. It reports what it reclaimed, is best-effort by design — TRUNCATE needs every reader out and reports `busy=1` rather than raising, and raising here would cost the whole pass including the size report that follows — and takes the file size, not the PRAGMA's return value, as the truth about what came back.
+
+  Proven on a **copy of the live base**, real WAL and all:
+
+  ```
+  copy of the live base   db 104.41 MB   wal 61.04 MB
+  checkpoint_wal     ->   reclaimed 61.04 MB
+  after                   db 104.41 MB   wal  0.00 MB
+  ```
+
+  RED first: `WAL was 12.6 MB before and 12.6 MB after maintenance; with no dead pages the checkpoint is unreachable, so the file never shrinks`. Mutation-checked, four mutations, zero survivors — no call from maintenance (M1), PASSIVE instead of TRUNCATE (M2), swallowed exception removed (M3), and the ownership gate dropped so foreign databases are touched (M4).
+
+  M2 survived its first run for the reason this session keeps re-learning: the anchor `'PRAGMA wal_checkpoint(TRUNCATE)'` appears twice in the file — once inside `_vacuum_if_fragmented`, once in the new function — and `replace(..., 1)` hit the first. The mutation never reached the code under test. Aim each mutation at the exact occurrence it means to change.
 
 ## [1.12.0] - 2026-10-13
 
