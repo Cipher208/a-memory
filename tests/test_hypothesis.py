@@ -11,6 +11,40 @@ import pytest
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
+# ── Schema for the tests that touch real storage ──
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _schema_present():
+    """Ensure the session database is migrated before this module runs.
+
+    Two tests in this file go through real storage — `core.memory_manager` and
+    `CoreMemory()` — and both read tables that only exist after the migrations
+    have run. The session fixture in `conftest.py` points the connection manager
+    at a shared temp dir but does not create a schema, so these tests passed only
+    because some EARLIER test module in the same session had already migrated that
+    directory.
+
+    Measured: `pytest tests/test_hypothesis.py` alone — 2 failed, 77 passed, both
+    failures `sqlite3.OperationalError: no such table: core_memory`. In the full
+    suite they passed. A test whose result depends on whether another test ran
+    first reports the order, not the code.
+
+    Module-scoped and autouse: migration runs once for the whole file (measured
+    well under a second on an empty base), and the ~77 tests that touch nothing but
+    pure functions pay for it once.
+    """
+    import asyncio
+
+    from shared.connection import connection_manager
+    from shared.migrations import migration_manager
+
+    connection_manager._conns.clear()
+    asyncio.run(migration_manager.migrate())
+    yield
+    connection_manager._conns.clear()
+
+
 # ── Fixed-dimension strategies (avoid assume() filtering) ──
 
 DIM = 32  # small dimension for fast tests
