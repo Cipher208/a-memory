@@ -20,6 +20,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install commitizen
+      # Pinned, matching .pre-commit-config.yaml. The unpinned install is the same
+      # shape as the skylos defect that reddened master on 12.10: a tool that
+      # changes its own rules overnight turns a passing gate into a broken one with
+      # no change on our side. If the version is ever bumped, bump both together.
+      - run: pip install "commitizen==4.19.2"
       - name: Lint commits
         run: cz check --rev-range origin/master..HEAD
