@@ -212,8 +212,17 @@ wiki:
     external_dirs: []
 
 # === Storage ===
+# Thresholds are measured against db + wal together, and they are a growth alarm,
+# not a capacity limit: WARN is meant to speak, ALERT is meant to mean it.
+#
+# `db_warn_mb` was 50 while the hermes base sat at 104 MB + 61 MB of WAL, so WARN
+# fired every 15 minutes for weeks and stopped carrying information — an alarm that
+# is always on is an alarm nobody reads. Raised to 150 (2026-10-15). With the WAL
+# now truncated on its own schedule (features/db_maintenance.checkpoint_wal) the
+# base settles near 104 MB and this threshold goes quiet on its own; if it speaks
+# again, the growth is real.
 storage:
-  db_warn_mb: 50              # WARN log when a *.db exceeds this
+  db_warn_mb: 150             # WARN log when a *.db (incl. WAL) exceeds this
   db_alert_mb: 200            # ERROR log threshold
   vacuum_min_mb: 10           # only auto-VACUUM files at least this big
   vacuum_freelist_ratio: 0.25 # and with at least this share of free pages

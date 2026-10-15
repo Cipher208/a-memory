@@ -28,9 +28,14 @@ binary:
   mode: naive
   dim: 384
 
-# DB self-maintenance thresholds (checked by the hourly sweep)
+# DB self-maintenance thresholds (checked by the hourly sweep).
+# Measured against db + wal together. WARN is a growth alarm and ALERT is a real
+# ceiling: if WARN speaks every hour it stops being read, which is how 50 came to
+# sit under a 165 MB base. The WAL is truncated on its own schedule since
+# 2026-10-15 (features/db_maintenance.checkpoint_wal), so the size here excludes
+# a permanently parked journal.
 storage:
-  db_warn_mb: 50
+  db_warn_mb: 150
   db_alert_mb: 200
   vacuum_min_mb: 10
   vacuum_freelist_ratio: 0.25
