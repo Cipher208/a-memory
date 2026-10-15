@@ -255,8 +255,30 @@ class AsyncConnectionManager:
                 return conn
             except Exception:
                 logger.warning(f"connection {db_name} stale, reopening")
-                # pop, not del: a concurrent getter may have already replaced it
-                self._conns.pop(db_name, None)
+                # Only touch the entry if it is still the object we judged stale: a
+                # concurrent getter may already have installed a replacement, and
+                # that replacement is not ours to close.
+                same_entry = self._conns.get(db_name)
+                if same_entry is conn and same_entry is not None:
+                    self._conns.pop(db_name, None)
+                    # CLOSE it, do not merely forget it.
+                    #
+                    # `_get_aiosqlite_conn` appends every connection to
+                    # `_tracked_aiosqlite_conns`, a strong list — deliberately, since
+                    # the aiosqlite worker thread keeps only the tx queue alive and a
+                    # WeakSet would lose the object. So a dropped connection is not
+                    # collected: if it was mid-transaction it keeps that transaction's
+                    # locks for the life of the process, and nothing can reach it any
+                    # more to release them. Killing the process is the only way out.
+                    #
+                    # Measured on the live hermes base 15.10.2026: decay ran clean for
+                    # seven hours, then failed `database is locked` ten times in a row
+                    # over two hours while the WAL grew 2 -> 14.5 MB. Probing from
+                    # OUTSIDE returned the write lock free eight times out of eight —
+                    # the lock was inside the process, which is what a leaked
+                    # connection looks like from anywhere else.
+                    with contextlib.suppress(Exception):
+                        await same_entry.close()
 
         db_path = str(self.base_dir / db_name)
 
