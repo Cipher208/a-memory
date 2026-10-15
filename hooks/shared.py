@@ -58,8 +58,40 @@ def timed_step(layer: str, step: str) -> Iterator[None]:
 
 
 async def forgetting_ritual(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Decay and compress, under the per-base maintenance lock.
+
+    Every other piece of housekeeping in this house already serialises on
+    `maintenance_lock`; this one did not, and it is reachable from a SECOND process.
+    `hooks/agent_hooks.py:170` and `hooks/user_hooks.py:139` register it on the
+    `forgetting_ritual` hook for both layers, so the autohooks daemon runs it while
+    the MCP server runs the same two operations from its own 15-minute
+    `_periodic_tasks`. Only the server took the lock.
+
+    The cost was measured on the live hermes base, night of 14-15.10.2026: **106
+    `database is locked` tracebacks**, one every fifteen minutes, all of them from
+    `decay_importance`'s `executemany`. Not an occasional race — every attempt
+    failed, interval after interval, because another writer was always inside.
+
+    Losing the race skips rather than waits: both operations are idempotent, so the
+    next round catches what this one missed, and waiting would hold a connection
+    open while another process is trying to write.
+    """
     from config import config
 
+    from shared import maintenance_lock
+
+    fd = maintenance_lock.acquire()
+    if fd is None:
+        logger.debug("forgetting ritual skipped: another writer holds the maintenance lock")
+        return {"skipped": "maintenance_lock", "decayed": 0, "compressed": 0}
+    try:
+        return await _forgetting_ritual_locked(config)
+    finally:
+        maintenance_lock.release(fd)
+
+
+async def _forgetting_ritual_locked(config: Any) -> dict[str, Any]:
+    """Run the ritual itself. The caller holds the maintenance lock."""
     fs = ForgettingSystem()
     if not config.get("staging", "enabled", default=True):
         return await fs.cleanup()
