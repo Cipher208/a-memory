@@ -7,6 +7,9 @@ Runs inside the hourly housekeeping sweep. For every *.db in the data dir:
   (freelist), which is the only case where vacuum actually reclaims space.
 """
 
+from __future__ import annotations
+
+import asyncio
 import contextlib
 import logging
 from typing import Any
@@ -17,6 +20,17 @@ from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
 logger = logging.getLogger(__name__)
+
+# How the WAL truncation behaves when it loses a race.
+#
+# Read snapshots here are brief, so a couple of retries win where one attempt does
+# not; the delay is short enough not to matter to an hourly pass.
+_CHECKPOINT_ATTEMPTS = 4
+_CHECKPOINT_RETRY_S = 0.5
+
+# Below this the journal is simply small and normal. Warning about it every hour
+# would rebuild the "always-on alarm" that was just removed from `db_warn_mb`.
+_CHECKPOINT_WARN_MB = 5.0
 
 
 @dataclass
@@ -76,10 +90,22 @@ async def checkpoint_wal(manager: Any, db_path: Path, conn: Any | None = None) -
     and leaves the file exactly as large (probe: 806 journal pages moved, WAL file
     unchanged). Only TRUNCATE returns the space to the filesystem.
 
-    Best-effort by design: TRUNCATE needs every reader out, and reports `busy=1`
-    rather than raising when one is inside. Returning 0 for that is honest, and
-    raising would cost the whole maintenance pass — including the size report that
-    comes after it on the same path.
+    Retried, and loud, because the first version of this was neither — and that is
+    measured, not stylistic. After the hourly pass had run twice on the live base,
+    `run_db_maintenance` still reported 166.7 MB (105 MB database plus the untouched
+    61 MB journal) and the log said nothing at all. Reproducing it on a copy showed
+    why: with another connection holding a read snapshot the PRAGMA does not return
+    `busy=1`, it RAISES
+
+        sqlite3.OperationalError: database table is locked
+
+    The previous version caught that, logged it at DEBUG and returned 0.0 — while the
+    live config is INFO. So the failure was invisible, and a base whose WAL never
+    shrank looked exactly like one with nothing to shrink. One attempt also loses to
+    any brief reader, and readers here are brief, which is what the retries are for.
+
+    Raising is still not an option: this runs on a maintenance path where an
+    exception would cost the whole pass, including the size report that follows.
     """
     wal = db_path.with_name(db_path.name + "-wal")
     if not wal.exists():
@@ -88,21 +114,37 @@ async def checkpoint_wal(manager: Any, db_path: Path, conn: Any | None = None) -
     if size_before == 0:
         return 0.0
 
-    try:
-        if conn is None:
-            conn = await manager.get(db_path.name)
-        rows = await (await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")).fetchall()
-        # (busy, log, checkpointed). A busy result means the WAL was NOT truncated
-        # even though the call succeeded — logged so the reason is visible, while the
-        # file size below stays the single source of truth for what was reclaimed.
-        if rows and rows[0][0]:
-            logger.debug("WAL checkpoint busy for %s: %r", db_path.name, rows[0])
-    except Exception:
-        logger.debug("WAL checkpoint failed for %s", db_path.name, exc_info=True)
-        return 0.0
+    if conn is None:
+        conn = await manager.get(db_path.name)
 
-    size_after = wal.stat().st_size if wal.exists() else 0
-    return max(0.0, _mb(size_before - size_after))
+    last_reason = "not attempted"
+    for attempt in range(1, _CHECKPOINT_ATTEMPTS + 1):
+        try:
+            rows = await (await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")).fetchall()
+        except Exception as exc:
+            last_reason = f"{type(exc).__name__}: {exc}"
+        else:
+            # (busy, log, checkpointed). `busy` means SQLite declined; the file size
+            # afterwards is what actually says whether space came back, so it decides.
+            busy = rows[0][0] if rows else 0
+            size_now = wal.stat().st_size if wal.exists() else 0
+            if not busy and size_now < size_before:
+                return max(0.0, _mb(size_before - size_now))
+            last_reason = f"busy={busy}" if busy else "no shrink"
+
+        if attempt < _CHECKPOINT_ATTEMPTS:
+            await asyncio.sleep(_CHECKPOINT_RETRY_S)
+
+    size_now = wal.stat().st_size if wal.exists() else 0
+    if _mb(size_before) >= _CHECKPOINT_WARN_MB:
+        logger.warning(
+            "WAL checkpoint for %s reclaimed nothing after %d attempts (%s); still %.1f MB",
+            db_path.name,
+            _CHECKPOINT_ATTEMPTS,
+            last_reason,
+            _mb(size_now),
+        )
+    return 0.0
 
 
 async def run_db_maintenance(

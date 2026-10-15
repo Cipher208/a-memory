@@ -150,6 +150,96 @@ async def test_checkpoint_swallows_a_raising_call(cm, tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_checkpoint_retries_past_a_transient_lock(cm, tmp_path):
+    """A lock held for a moment must not cost the whole truncation.
+
+    The live pass ran twice with no effect and no log line. Reproduced on a copy:
+    with another connection holding a read snapshot the PRAGMA does not report
+    `busy=1`, it RAISES `sqlite3.OperationalError: database table is locked`. One
+    attempt therefore loses to any brief reader — and readers here are brief.
+    """
+    import asyncio
+
+    await _big_wal_no_fragmentation(cm)
+    reader = await cm.get("memory.db")
+    await reader.execute("BEGIN")
+    await (await reader.execute("SELECT COUNT(*) FROM t")).fetchall()  # open snapshot
+
+    before = _wal_bytes(tmp_path)
+    assert before > 5 * 1024 * 1024
+
+    async def _release_soon() -> None:
+        await asyncio.sleep(0.3)
+        await reader.execute("ROLLBACK")
+
+    task = asyncio.create_task(_release_soon())
+    try:
+        reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db")
+    finally:
+        await task
+
+    assert reclaimed > 5.0, (
+        f"the reader released after 0.3 s and the WAL was {before / 1048576:.1f} MB, "
+        f"but only {reclaimed:.2f} MB came back — one attempt is not enough"
+    )
+    assert _wal_bytes(tmp_path) < 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_says_so_when_it_cannot_truncate(cm, tmp_path, caplog):
+    """Failing to truncate must be visible.
+
+    The previous version logged the failure at DEBUG while the live config is INFO,
+    so a base whose WAL never shrank looked exactly like one with nothing to shrink.
+    A silent no-op is the defect this whole file exists to catch.
+    """
+    import logging
+
+    await _big_wal_no_fragmentation(cm)
+    size = _wal_bytes(tmp_path)
+
+    class _Locked:
+        async def execute(self, _sql):
+            raise sqlite3.OperationalError("database table is locked")
+
+    with caplog.at_level(logging.WARNING):
+        reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db", _Locked())
+
+    assert reclaimed == 0.0
+    assert _wal_bytes(tmp_path) == size, "nothing should have been written"
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("checkpoint" in r.getMessage().lower() for r in warnings), (
+        f"a failed truncation of a {size / 1048576:.1f} MB WAL produced no warning: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_keeps_quiet_about_a_small_wal(cm, tmp_path, caplog):
+    """A small journal is normal and must not warn.
+
+    An alarm that fires every hour regardless is the defect just removed from
+    `db_warn_mb`; this guard must not reintroduce it at a smaller scale.
+    """
+    import logging
+
+    conn = await cm.get("memory.db")
+    await conn.execute("CREATE TABLE t (v TEXT)")
+    await conn.execute("INSERT INTO t VALUES ('x')")
+    await conn.commit()
+    assert 0 < _wal_bytes(tmp_path) < 1024 * 1024, "fixture must leave a SMALL, non-empty WAL"
+
+    class _Locked:
+        async def execute(self, _sql):
+            raise sqlite3.OperationalError("database table is locked")
+
+    with caplog.at_level(logging.WARNING):
+        await checkpoint_wal(cm, tmp_path / "memory.db", _Locked())
+
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert not warnings, f"a small WAL should pass without a word, got: {[r.getMessage() for r in warnings]}"
+
+
+@pytest.mark.asyncio
 async def test_maintenance_leaves_foreign_databases_alone(cm, tmp_path):
     """Only this process's own DBs are checkpointed.
 

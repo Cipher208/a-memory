@@ -93,15 +93,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
   A PASSIVE checkpoint is not the answer, and measuring that is part of the fix: with a lone connection it moved all frames into the database and left the WAL file at **12.61 MB, unchanged**. Moving pages is not returning space. Only TRUNCATE does that.
 
-  `checkpoint_wal` is now its own step in `run_db_maintenance` (hourly), outside the fragmentation gate, scoped to the same two databases the VACUUM already restricted itself to. It reports what it reclaimed, is best-effort by design — TRUNCATE needs every reader out and reports `busy=1` rather than raising, and raising here would cost the whole pass including the size report that follows — and takes the file size, not the PRAGMA's return value, as the truth about what came back.
+  `checkpoint_wal` is now its own step in `run_db_maintenance` (hourly), outside the fragmentation gate, scoped to the same two databases the VACUUM already restricted itself to. It takes the file size, not the PRAGMA's return value, as the truth about what came back.
 
-  Proven on a **copy of the live base**, real WAL and all:
+  The first version of it stopped there, and the hourly pass proved it wrong on the live base: after two runs the WAL was still 61 MB and the log said nothing. Reproducing it on a copy showed why — with another connection holding a read snapshot the PRAGMA does not return `busy=1`, it **raises** `sqlite3.OperationalError: database table is locked`, which the first version caught, logged at DEBUG and turned into a 0.0. The live config is INFO, so a base whose WAL never shrank looked exactly like one with nothing to shrink — the same silent no-op this whole entry is about, one level down.
+
+  So it retries (4 attempts, 0.5 s apart — the readers here are brief, which is what the retries are for) and it **speaks**: a WAL of 5 MB or more that survives every attempt produces a warning naming the reason and the size left behind. Smaller journals stay silent, because an alarm that fires every hour regardless is the defect just removed from `db_warn_mb`.
+
+  Proven on the **live base** with other processes running, and on a copy of it:
 
   ```
-  copy of the live base   db 104.41 MB   wal 61.04 MB
-  checkpoint_wal     ->   reclaimed 61.04 MB
-  after                   db 104.41 MB   wal  0.00 MB
+  live base, other processes up        copy of the live base, real WAL
+    before   db 105.81 MB  wal  4.25 MB    before   db 104.41 MB  wal 61.04 MB
+    after    db 105.82 MB  wal  0.00 MB    after    db 104.41 MB  wal  0.00 MB
   ```
+
+  RED first for this part: `a failed truncation of a 12.6 MB WAL produced no warning`, and a reader releasing after 0.3 s still cost the whole truncation. Mutation-checked, four mutations, zero survivors — one attempt instead of four, silence on failure, a warning threshold of zero, and a retry loop that never retries.
 
   RED first: `WAL was 12.6 MB before and 12.6 MB after maintenance; with no dead pages the checkpoint is unreachable, so the file never shrinks`. Mutation-checked, four mutations, zero survivors — no call from maintenance (M1), PASSIVE instead of TRUNCATE (M2), swallowed exception removed (M3), and the ownership gate dropped so foreign databases are touched (M4).
 
