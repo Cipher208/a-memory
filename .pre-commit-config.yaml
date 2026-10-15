@@ -17,6 +17,24 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  # Commit message shape, checked HERE rather than only in CI.
+  #
+  # `.github/workflows/commit-lint.yml` runs `cz check --rev-range
+  # origin/master..HEAD`, and nothing ran it locally — so a message that CI would
+  # reject passed every local gate and only surfaced after the push. Verified on
+  # 2026-10-15: `config(storage): ...` was written for a config change, and
+  # `config` is not a type commitizen knows. Nine gates passed, then commit-lint
+  # failed on the PR.
+  #
+  # The types are `build|bump|chore|ci|docs|feat|fix|perf|refactor|revert|style|test`
+  # — a config change is `chore`. Pinned to the same version the CI installs, so a
+  # message cannot be valid in one place and invalid in the other.
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.19.2
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
   # House layer: secret scanning catches credentials, and infrastructure
   # disclosure has no credential shape in it. Verified against the 2026-09-13
   # leak commit: the default ruleset was silent, .gitleaks.toml fires on it
