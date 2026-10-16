@@ -393,5 +393,78 @@ class AsyncConnectionManager:
         await conn.commit()
 
 
+# Where this process's open file descriptors are listed on Linux. Kept as a module
+# attribute so a test can point the scan somewhere unreadable and assert the sentinel.
+_proc_self_fd: str | None = "/proc/self/fd"
+
+
+async def connection_health(base_dir: str | Path | None = None) -> dict[str, Any]:
+    """Report this process's connection health, counted two independent ways.
+
+    `connections` and `leaked_workers` come from the async manager: what it knows it
+    owns, and what it knows it dropped. Both are useful and both are blind to
+    synchronous handles — `with sqlite3.connect(...)` is a TRANSACTION context
+    manager and does not close, so those handles are invisible to the manager and
+    live until garbage collection. The pattern appears 42 times in this repository.
+
+    `open_db_fds` is therefore counted from /proc/self/fd: how many descriptors this
+    process actually holds on database files. `unmanaged_fds` is the difference. When
+    those two disagree, the disagreement IS the finding — measured on 16.10.2026, the
+    hermes daemon held 41 descriptors on one file while running 9 threads, and a
+    manager-only reading would have called that `connections=1 leaked_workers=0`.
+
+    Returns -1 for any field it could not read rather than zero: a failed reading and
+    a clean bill of health must not look the same. Never raises — callers run inside a
+    maintenance loop, where an exception would cost the whole pass.
+    """
+    health: dict[str, Any] = {
+        "connections": -1,
+        "dbs": [],
+        "leaked_workers": -1,
+        "open_db_fds": -1,
+        "unmanaged_fds": -1,
+    }
+
+    try:
+        root = Path(base_dir) if base_dir is not None else connection_manager.base_dir
+        stats = connection_manager.stats()
+        health["connections"] = int(stats.get("connections", -1))
+        health["dbs"] = list(stats.get("dbs", []))
+        health["leaked_workers"] = len(leaked_connection_workers())
+        health["open_db_fds"] = _count_open_db_fds(root)
+        if health["open_db_fds"] >= 0 and health["connections"] >= 0:
+            # Only connections this manager owns count as managed; the rest are the
+            # handles nobody is tracking.
+            health["unmanaged_fds"] = max(0, health["open_db_fds"] - health["connections"])
+    except Exception:
+        logger.debug("connection health could not be read", exc_info=True)
+
+    return health
+
+
+def _count_open_db_fds(base_dir: Path) -> int:
+    """How many descriptors this process holds on db files under `base_dir`.
+
+    -1 when the descriptor table cannot be read at all, so an unreadable scan is
+    distinguishable from a genuinely quiet process.
+    """
+    if _proc_self_fd is None:  # pragma: no cover - exercised via monkeypatch
+        return -1
+    fd_dir = Path(_proc_self_fd)
+    if not fd_dir.is_dir():
+        return -1
+    prefix = str(base_dir)
+    count = 0
+    try:
+        for entry in fd_dir.iterdir():
+            with contextlib.suppress(OSError):
+                target = os.readlink(entry)
+                if target.startswith(prefix) and ".db" in target:
+                    count += 1
+    except OSError:
+        return -1
+    return count
+
+
 # Global instance — used by default
 connection_manager = AsyncConnectionManager()

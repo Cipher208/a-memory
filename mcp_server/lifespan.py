@@ -14,31 +14,25 @@ from lifecycle.importance_scheduler import importance_scheduler
 async def _connection_health() -> dict[str, Any]:
     """Report this process's connection health. Never raises.
 
-    Returns ``{"connections": int, "dbs": list, "leaked_workers": int}``; any field
-    that could not be read is reported as a sentinel rather than swallowed, because a
-    diagnostic that fails silently is the same silence it was added to remove.
+    Delegates to `shared.connection.connection_health`, which counts the manager's own
+    bookkeeping and the process's real descriptor table separately. Both are needed:
+    the manager cannot see synchronous `with sqlite3.connect(...)` handles, and a
+    reading built only from it would call a process holding 41 open files
+    `connections=1 leaked_workers=0`.
 
-    Diagnostics run inside the maintenance loop, so they must not be able to break
-    it: an exception here would cost the whole pass, including the work that follows.
+    Kept as a name here because the maintenance loop's tests import it from this
+    module; the logic lives in shared/ so the autohooks daemon can use the same one.
     """
-    log = logging.getLogger(__name__)
-    health: dict[str, Any] = {"connections": -1, "dbs": [], "leaked_workers": -1}
+    from shared.connection import connection_health
 
-    try:
-        from shared.connection import connection_manager, leaked_connection_workers
-
-        stats = connection_manager.stats()
-        health["connections"] = int(stats.get("connections", -1))
-        health["dbs"] = list(stats.get("dbs", []))
-        health["leaked_workers"] = len(leaked_connection_workers())
-    except Exception:
-        log.debug("connection health could not be read", exc_info=True)
-
-    log.info(
-        "connection health: connections=%s dbs=%s leaked_workers=%s",
+    health = await connection_health()
+    logging.getLogger(__name__).info(
+        "connection health: connections=%s dbs=%s leaked_workers=%s open_db_fds=%s unmanaged_fds=%s",
         health["connections"],
         ",".join(health["dbs"]) or "-",
         health["leaked_workers"],
+        health["open_db_fds"],
+        health["unmanaged_fds"],
     )
     return health
 

@@ -24,6 +24,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
   Suite 2306 passed (was 2301).
 
+- **The health reading counts descriptors, and the daemon reads it too (2026-10-16).** The first version was built from manager bookkeeping alone, and that is not enough. `connection_manager.stats()` and `leaked_connection_workers()` both report what the ASYNC manager owns; they are blind to synchronous handles, and `with sqlite3.connect(...)` — which appears **42 times** in this repository — is a TRANSACTION context manager that does **not** close. Measured directly: five such blocks left five open descriptors, alive until garbage collection.
+
+  So a manager-only reading would print `connections=1 leaked_workers=0` while the process held 41 open files on one database. That is precisely what the hermes daemon was doing — **41 descriptors on one file while running only 9 threads**, against 1 descriptor for an identical daemon on another base. Nine threads cannot back 41 aiosqlite connections, so the manager was never the whole story.
+
+  `connection_health()` now counts two ways and reports both: manager bookkeeping, plus the process's own descriptor table read from `/proc/self/fd`, with `unmanaged_fds` as the difference. **The disagreement between them is the finding** — that is the number that was missing while this was diagnosed from outside for two days.
+
+  The autohooks daemon reads it every 600 s from its poll loop, best-effort, so a broken diagnostic cannot stop delivery. The server keeps reading it in the maintenance pass. Both call the same function in `shared/`, so the two processes cannot drift apart in what they measure.
+
+  An unreadable descriptor scan reports `-1`, not `0` — the same sentinel rule as before: a failed reading must not look like a clean bill of health.
+
+  `test_daemon_logs_connection_health` drives `run_daemon` rather than the helper, because M4 had already shown what a test that calls the helper directly misses.
+
+  Mutation-checked, five mutations, zero survivors: reading removed from the daemon loop (M1), descriptors not counted (M2), unreadable scan reported as zero (M3), `unmanaged_fds` not computed (M4), and the call left unguarded so a failure kills the poll loop (M5).
+
+  Suite 2311 passed (was 2306).
+
 ### Fixed
 - **Every process served as its own maintenance writer, and the collision surfaced as a failed connection (2026-10-14).** `lifespan` starts housekeeping on every start — `migrate()`, `backup_cron`, `importance_scheduler`, and a 15-minute `forgetting_system.cleanup()` — and nothing coordinated the processes doing it. Only `backup_cron` held a lock (`.backup_cron.lock`); the rest ran in every instance.
 
