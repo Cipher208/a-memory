@@ -41,6 +41,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **The dispatch log held one database descriptor per event (2026-10-16).** Every dispatched event writes a `memory_dispatch_log` row, and it did so through
+
+  ```python
+  with sqlite3.connect(str(db_path)) as _conn:
+      ...
+      _conn.commit()
+  ```
+
+  which is a TRANSACTION context manager: it commits, it does **not** close. Measured with the collector disabled, that shape leaves exactly one descriptor on the database file per call — three hundred blocks left three hundred descriptors, 1:1 — and the connection object is only freed by a collection, so with the collector enabled the count drifts upward instead of returning to zero.
+
+  The shape appears **37 times in production code** (30 in `features/`, 5 in `shared/`, 1 in this hook), and the temptation is to convert all of them. The measurement says otherwise:
+
+  ```
+  MCP server, 21 hours up      -> 3 descriptors = one healthy WAL connection. Not leaking.
+  autohooks daemon, 3h39m up   -> 46 descriptors on one database, against 9 threads.
+  ```
+
+  Same code, different exposure: the daemon runs the dispatch path once per event, the server does not. The sites in `features/` accumulated nothing in 21 hours, so they are left alone — converting 34 things that measurably do not leak is work by resemblance, not by evidence.
+
+  `_write_dispatch_row` writes the row on a connection closed in a `finally`, and the lazy `text_preview` migration now does the same.
+
+  The test needs `gc.disable()`, and that is the part worth recording: with the collector running it cannot see this defect at all — the connections are freed between the two readings, so the counts match with the bug present. The first mutation run said so twice over, since the migration's own close survived because the test collected *before* the reading.
+
+  Mutation-checked, three mutations, zero survivors: the writer never closes (M1), the migration never closes (M2), the row is never committed (M3).
+
+  Suite 2320 passed.
+
 - **The WAL checkpoint ran on the shared connection, so it failed exactly when the process was busy (2026-10-16).** `wal_checkpoint(TRUNCATE)` executed on the connection every MCP tool handler shares, and every `await` in a handler is a yield point:
 
   ```

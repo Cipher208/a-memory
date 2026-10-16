@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import sqlite3
 from typing import TYPE_CHECKING
 
@@ -230,3 +231,54 @@ async def test_log_row_still_says_user_for_the_owner(ensure_schema: Path) -> Non
     layer = conn.execute("SELECT layer FROM memory_dispatch_log WHERE source_msg_id = 8").fetchone()[0]
     conn.close()
     assert layer == "user"
+
+
+def test_the_log_writer_does_not_hold_a_descriptor_per_row(ensure_schema: Path) -> None:
+    """The dispatch path runs once per event; it must not cost a descriptor per event.
+
+    `with sqlite3.connect(...)` is a TRANSACTION context manager: it commits, it does
+    NOT close. Measured with the collector disabled, that shape leaves exactly one
+    descriptor per call (300 blocks -> 300 descriptors, 1:1), so a long-lived daemon
+    accumulates them for as long as it runs — the hermes daemon held 46 descriptors on
+    one database after 3h39m against 9 threads, while the identical daemon on the other
+    base, which handles no events, held 1.
+
+    Without `gc.disable()` this test cannot see the defect at all: the collector frees
+    the connections between the two readings, so the counts match even with the bug
+    present. That is how the shape survived review — it reads as if it closed.
+    """
+    from hooks.external import _ensure_preview_column, _write_dispatch_row
+    from shared.connection import _count_open_db_fds
+
+    db_path = ensure_schema / "memory.db"
+
+    gc.collect()
+    gc.disable()
+    try:
+        # Exactly what the real callers do first: the column is added lazily at
+        # dispatch time, and the INSERT below carries it. Called INSIDE the disabled
+        # window on purpose — a collection before the reading would hide this close,
+        # which is how the first mutation run let it survive.
+        _ensure_preview_column(db_path)
+        before = _count_open_db_fds(ensure_schema)
+        assert before == 0, f"the lazy column migration must close what it opened: {before} descriptor(s) held"
+
+        for i in range(30):
+            _write_dispatch_row(
+                db_path,
+                ("new_message", i, "agent", "default", 0.9, 0, 1, 0, "preview", 0.0),
+            )
+
+        after = _count_open_db_fds(ensure_schema)
+    finally:
+        gc.enable()
+
+    assert after <= before, f"thirty writes must not leave descriptors behind: before={before} after={after}"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        rows = conn.execute("SELECT count(*) FROM memory_dispatch_log").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert rows == 30, f"every row must still be written: {rows}"
