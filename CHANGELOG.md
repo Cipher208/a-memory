@@ -24,7 +24,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
   Suite 2306 passed (was 2301).
 
+- **The health reading counts descriptors, and the daemon reads it too (2026-10-16).** The first version was built from manager bookkeeping alone, and that is not enough. `connection_manager.stats()` and `leaked_connection_workers()` both report what the ASYNC manager owns; they are blind to synchronous handles, and `with sqlite3.connect(...)` — which appears **42 times** in this repository — is a TRANSACTION context manager that does **not** close. Measured directly: five such blocks left five open descriptors, alive until garbage collection.
+
+  So a manager-only reading would print `connections=1 leaked_workers=0` while the process held 41 open files on one database. That is precisely what the hermes daemon was doing — **41 descriptors on one file while running only 9 threads**, against 1 descriptor for an identical daemon on another base. Nine threads cannot back 41 aiosqlite connections, so the manager was never the whole story.
+
+  `connection_health()` now counts two ways and reports both: manager bookkeeping, plus the process's own descriptor table read from `/proc/self/fd`, with `unmanaged_fds` as the difference. **The disagreement between them is the finding** — that is the number that was missing while this was diagnosed from outside for two days.
+
+  The autohooks daemon reads it every 600 s from its poll loop, best-effort, so a broken diagnostic cannot stop delivery. The server keeps reading it in the maintenance pass. Both call the same function in `shared/`, so the two processes cannot drift apart in what they measure.
+
+  An unreadable descriptor scan reports `-1`, not `0` — the same sentinel rule as before: a failed reading must not look like a clean bill of health.
+
+  `test_daemon_logs_connection_health` drives `run_daemon` rather than the helper, because M4 had already shown what a test that calls the helper directly misses.
+
+  Mutation-checked, five mutations, zero survivors: reading removed from the daemon loop (M1), descriptors not counted (M2), unreadable scan reported as zero (M3), `unmanaged_fds` not computed (M4), and the call left unguarded so a failure kills the poll loop (M5).
+
+  Suite 2311 passed (was 2306).
+
 ### Fixed
+- **The descriptor count charged two per healthy connection, so the reading it was built to produce could never be zero (2026-10-16).** The count was `".db" in target`, which a WAL-mode connection satisfies three times: it holds `memory.db`, `memory.db-wal` and `memory.db-shm`. Measured on one managed connection doing nothing wrong:
+
+  ```
+  connections=1 dbs=['memory.db'] open_db_fds=3 unmanaged_fds=2
+  ```
+
+  `unmanaged_fds` was therefore never 0 on a healthy base — the finding this reading exists to surface was buried under a constant that says nothing. Worse, the test written against the live defect **asserted it**: `unmanaged_fds >= 3` was described as "the finding", when three of those descriptors were the journal the connection is supposed to hold.
+
+  The rule now counts the database file itself: the basename must end in `.db` after a `(deleted)` suffix is stripped. Measured on the same connection: 3 descriptors under the old rule, 1 under this one, `unmanaged_fds=0`. The report that prompted this — 41 descriptors on one file, `unmanaged_fds=40` — is unchanged, because those are descriptors on `memory.db`; `-wal` and `-shm` were counted separately (10 and 1). So the noise is gone and the signal is intact.
+
+  The `(deleted)` suffix is not decoration: a rotated database keeps its descriptor and reads `<path> (deleted)`, and it is still a database this process holds open.
+
+  Mutation-checked, four mutations, zero survivors: the old rule restored (M1), a deleted database not counted (M2), the `base_dir` guard dropped so every `.db` in the process counts (M3), and an unreadable table reported as 0 instead of the `-1` sentinel (M4). M3 survived the first run and a test was added for it — without that guard the reading moves with other houses' bases and any scratch file left open anywhere on the machine.
+
 - **Every process served as its own maintenance writer, and the collision surfaced as a failed connection (2026-10-14).** `lifespan` starts housekeeping on every start — `migrate()`, `backup_cron`, `importance_scheduler`, and a 15-minute `forgetting_system.cleanup()` — and nothing coordinated the processes doing it. Only `backup_cron` held a lock (`.backup_cron.lock`); the rest ran in every instance.
 
   The cost was measured on the live hermes base: the MCP server came up **eleven times in one day**, `backup_cron` logged **twice in one minute**, and `Decay failed` with `sqlite3.OperationalError: database is locked` went 2-4/day in September to **14 on 12.10, 65 on 13.10, 34 by midday on 14.10**. The WAL reached **35 MB** without ever checkpointing, and `wal_autocheckpoint=1000` cannot fire while another process always holds a read snapshot.
