@@ -13,8 +13,10 @@ Algorithm:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -25,6 +27,38 @@ from shared.importance import ImportanceScorer
 from shared import maintenance_lock
 
 logger = logging.getLogger(__name__)
+
+# A write that loses the race is retried. `busy_timeout` is not enough on its own:
+# when a read snapshot has to be upgraded and another connection has committed since,
+# SQLite answers BUSY *without* consulting the handler, so the only remedy inside that
+# window is to try again. Measured on the live base 16.10.2026 — the sweep failed on
+# `UPDATE core_memory` in ~0.1 ms with a 15 s timeout configured.
+_BUSY_RETRIES = 3
+_BUSY_RETRY_SLEEP_S = 0.25
+
+
+def _is_lock_error(exc: Exception) -> bool:
+    """Report whether an exception is one of the two lock errors.
+
+    `database is locked` is another writer on the file; `database table is locked` is a
+    statement still in flight on this very connection. Both are worth retrying, and
+    conflating them is how a same-connection defect was mistaken for a writer storm
+    once already (see the WAL checkpoint fix).
+    """
+    text = str(exc).lower()
+    return isinstance(exc, sqlite3.OperationalError) and ("locked" in text or "busy" in text)
+
+
+async def _execute_with_retry(conn: Any, sql: str, params: tuple[Any, ...]) -> None:
+    """One write, retried while a competing writer holds the file."""
+    for attempt in range(_BUSY_RETRIES + 1):
+        try:
+            await conn.execute(sql, params)
+            return
+        except sqlite3.OperationalError as exc:
+            if not _is_lock_error(exc) or attempt == _BUSY_RETRIES:
+                raise
+            await asyncio.sleep(_BUSY_RETRY_SLEEP_S * (attempt + 1))
 
 
 @dataclass
@@ -110,24 +144,51 @@ class ImportanceScheduler:
         cm = connection_manager
         conn = await cm.get("memory.db")
 
-        # Batched user processing
-        cursor = await conn.execute(
-            "SELECT DISTINCT user_id FROM core_memory WHERE updated_at > ?",
-            (time.time() - self.cfg.only_recent_days * 86400,),
-        )
-        while True:
-            batch = await cursor.fetchmany(self.cfg.user_batch_size)
-            if not batch:
-                break
-            for u in batch:
-                uid = u["user_id"]
+        # The user list is materialised, not iterated. A cursor left mid-`fetchmany`
+        # keeps a read statement in flight for the whole pass, and SQLite cannot
+        # upgrade that read snapshot to a write once another connection has committed
+        # — it answers BUSY immediately and does NOT consult `busy_timeout`. Measured
+        # on the live base: the sweep failed on `UPDATE core_memory`
+        # (`OperationalError: database is locked`) on nearly every pass for four days,
+        # every 30 minutes, while a second process served the same base — and that is
+        # the shape this loop had. One extra small query removes the window.
+        users = [
+            r["user_id"]
+            for r in await (
+                await conn.execute(
+                    "SELECT DISTINCT user_id FROM core_memory WHERE updated_at > ?",
+                    (time.time() - self.cfg.only_recent_days * 86400,),
+                )
+            ).fetchall()
+        ]
+
+        # Still processed in batches, but the list is already in memory: batching now
+        # only decides how often we commit, not how long a statement stays open.
+        for start in range(0, len(users), self.cfg.user_batch_size):
+            for uid in users[start : start + self.cfg.user_batch_size]:
                 try:
                     await self._rescore_user(uid, conn, stats)
+                    # Committed per user. One commit for the whole pass means a single
+                    # collision discards every row the pass had already rescored, and
+                    # holds a write transaction across hundreds of statements, which is
+                    # what makes the collision likely in the first place.
+                    await conn.commit()
                 except Exception:
                     logger.exception("rescore for user=%s failed", uid)
                     stats["errors"] += 1
+                    with contextlib.suppress(Exception):
+                        await conn.rollback()
 
-        await conn.commit()
+        # Logged, because it was not: a pass that rescored nothing and a pass that
+        # failed on every user looked identical from the outside, and the only trace
+        # of the failure was a traceback per pass.
+        logger.info(
+            "importance sweep: rescored=%d skipped=%d errors=%d users=%d",
+            stats["rescored"],
+            stats["skipped"],
+            stats["errors"],
+            len(users),
+        )
         return stats
 
     async def _rescore_user(self, user_id: str, conn: Any, stats: dict[str, int]) -> None:
@@ -183,11 +244,13 @@ class ImportanceScheduler:
                 stats["skipped"] += 1
                 continue
             now = time.time()
-            await conn.execute(
+            await _execute_with_retry(
+                conn,
                 "UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?",
                 (new_score, now, int(r["entry_id"])),
             )
-            await conn.execute(
+            await _execute_with_retry(
+                conn,
                 """INSERT INTO importance_audit
                    (user_id, chunk_id, source, old_importance, new_importance,
                     signal_breakdown, reason, rescored_at)

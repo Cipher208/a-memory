@@ -41,6 +41,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **The rescore sweep failed on a competing writer, and one collision cost the whole pass (2026-10-16).** Every 30 minutes the sweep logged `rescore for user=default failed` — **106 occurrences over four days, at :16 and :46, without missing a beat** — and each one was
+
+  ```
+  lifecycle/importance_scheduler.py:186 in _rescore_user
+  aiosqlite/core.py:223 in execute
+  OperationalError: database is locked
+  ```
+
+  Line 186 is `UPDATE core_memory`. Three shapes made it fatal:
+
+  * the user list was read with `fetchmany` and **the cursor stayed open across every write**. SQLite cannot upgrade a read snapshot to a write once another connection has committed, and it answers BUSY **without consulting `busy_timeout`** — which is why the error arrived in a tenth of a millisecond with a 15-second timeout configured, and why the timeout never helped;
+  * **one `commit()` for the entire pass**, covering hundreds of statements: a single collision discarded every row the pass had already rescored, and holding a write transaction that long is what makes the collision likely;
+  * **no retry**, and **no result line** — a pass that rescued twelve rows and one that failed on every user produced identical silence, so the only trace was a traceback.
+
+  The user list is now materialised before any write, each user is committed on its own, a lock error is retried with backoff, and every pass logs `importance sweep: rescored=N skipped=N errors=N users=N`.
+
+  What the measurement established, and what it did not, matters here. Established: the failing statement and both of its stack frames; the cadence (106 failures, gaps of exactly 1800 s); that it stopped completely once a single process was left serving the base; that **twelve passes against a copy of the live base produce zero errors**; and that `VACUUM` is ~1 s and not the trigger. **Not established: which competing writer holds the file.** Four candidates were tested and refuted — an undrained cursor, an open snapshot being upgraded, a second process's VACUUM, and plain concurrent writes while the pass ran — so the fix removes the class of failure (open snapshot + one long transaction + no retry) rather than naming the culprit. Saying that plainly is the point: a plausible story is not a measurement.
+
+  Red-first, four tests, each failing on the previous code and passing on this one:
+
+  * a write must not be issued while a read cursor is open;
+  * a BUSY write must be retried rather than losing the user;
+  * the pass must report what it did;
+  * an interrupted pass must keep what it already committed.
+
+  Two of those tests **passed against the defect when first written** and had to be rewritten — one tracked the last cursor instead of the open ones, the other read its assertion through the same connection that held the uncommitted work. Both are noted in the tests, because a test that cannot fail is the defect it was meant to catch.
+
+  Suite 2324 passed (was 2320).
+
 - **The dispatch log held one database descriptor per event (2026-10-16).** Every dispatched event writes a `memory_dispatch_log` row, and it did so through
 
   ```python
