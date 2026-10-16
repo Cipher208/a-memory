@@ -153,14 +153,49 @@ def _ensure_preview_column(db_path: Any) -> None:
     if key in _preview_column_ensured:
         return
     try:
-        with sqlite3.connect(key) as conn:
+        conn = sqlite3.connect(key)
+        try:
             cols = {r[1] for r in conn.execute("PRAGMA table_info(memory_dispatch_log)")}
             if cols and "text_preview" not in cols:
                 conn.execute("ALTER TABLE memory_dispatch_log ADD COLUMN text_preview TEXT NOT NULL DEFAULT ''")
                 conn.commit()
+        finally:
+            # Same reason as `_write_dispatch_row`: `with sqlite3.connect(...)` commits,
+            # it does not close, and the descriptor is then held until a collection.
+            conn.close()
         _preview_column_ensured.add(key)
     except Exception as _e:
         logger.debug("text_preview column migration failed: %s", _e)
+
+
+def _write_dispatch_row(db_path: Any, params: tuple[Any, ...]) -> None:
+    """Write one memory_dispatch_log row on a connection that is really closed.
+
+    `with sqlite3.connect(...)` is a TRANSACTION context manager: it commits, it does
+    NOT close. Measured with the collector disabled, one such block leaves exactly one
+    descriptor on the database file (300 blocks -> 300 descriptors, 1:1); with the
+    collector enabled the count drifts upward instead of returning to zero, because the
+    connection object is only freed by a collection. This path runs once per dispatched
+    event, so the daemon accumulated descriptors on one database for the whole life of
+    the process — 46 after 3h39m against 9 threads, while the identical daemon on the
+    other base, which handles no events, held 1.
+
+    Closing explicitly in a `finally` is the point of this function, and the reason it
+    is a function rather than three blocks: the shape is easy to write and reads as if
+    it closed.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params,
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 async def _close_unaccounted(tracker: dict[str, Any]) -> None:
@@ -274,7 +309,6 @@ async def _auto_save_text_body(
     so the live path is unchanged.
     """
     import time as _time
-    import sqlite3 as _sqlite3
 
     from features.importance import evaluate_importance
     from shared.connection import connection_manager
@@ -399,13 +433,7 @@ async def _auto_save_text_body(
             try:
                 db_path = connection_manager.base_dir / "memory.db"
                 _ensure_preview_column(db_path)
-                with _sqlite3.connect(str(db_path)) as _conn:
-                    _conn.execute(
-                        "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (event, source_msg_id, "agent", user_id, float(max(score, 0.8)), 0, 1, 0, text[:200], _time.time()),
-                    )
-                    _conn.commit()
+                _write_dispatch_row(db_path, (event, source_msg_id, "agent", user_id, float(max(score, 0.8)), 0, 1, 0, text[:200], _time.time()))
             except Exception as _e:
                 logger.debug("memory_dispatch_log insert failed (persona): %s", _e)
             return result
@@ -445,13 +473,7 @@ async def _auto_save_text_body(
         try:
             db_path = connection_manager.base_dir / "memory.db"
             _ensure_preview_column(db_path)
-            with _sqlite3.connect(str(db_path)) as _conn:
-                _conn.execute(
-                    "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (event, source_msg_id, "user", user_id, 0.95, 0, 0, 0, text[:200], _time.time()),
-                )
-                _conn.commit()
+            _write_dispatch_row(db_path, (event, source_msg_id, "user", user_id, 0.95, 0, 0, 0, text[:200], _time.time()))
         except Exception as _e:
             logger.debug("memory_dispatch_log insert failed: %s", _e)
         # Second early return, same defect class as the gate above: the marker was
@@ -546,24 +568,21 @@ async def _auto_save_text_body(
     try:
         db_path = connection_manager.base_dir / "memory.db"
         _ensure_preview_column(db_path)
-        with _sqlite3.connect(str(db_path)) as _conn:
-            _conn.execute(
-                "INSERT INTO memory_dispatch_log (event, source_msg_id, layer, user_id, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    event,
-                    source_msg_id,
-                    l0_layer,
-                    user_id,
-                    score,
-                    int(result["saved_l3"]),
-                    int(result["saved_l4"]),
-                    int(result["saved_graph"]),
-                    text[:200],
-                    _time.time(),
-                ),
-            )
-            _conn.commit()
+        _write_dispatch_row(
+            db_path,
+            (
+                event,
+                source_msg_id,
+                l0_layer,
+                user_id,
+                score,
+                int(result["saved_l3"]),
+                int(result["saved_l4"]),
+                int(result["saved_graph"]),
+                text[:200],
+                _time.time(),
+            ),
+        )
     except Exception as _e:
         logger.debug("memory_dispatch_log insert failed: %s", _e)
 
