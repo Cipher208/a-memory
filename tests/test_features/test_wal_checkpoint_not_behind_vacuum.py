@@ -98,16 +98,15 @@ async def test_maintenance_truncates_the_wal_without_fragmentation(cm, tmp_path)
 async def test_checkpoint_reports_what_it_reclaimed(cm, tmp_path):
     """The guard must be visible: a caller learns how much came back."""
     await _big_wal_no_fragmentation(cm)
-    conn = await cm.get("memory.db")
 
-    reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db", conn)
+    reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db")
 
     assert reclaimed > 5.0, f"expected the WAL's megabytes back, got {reclaimed:.2f}"
     assert _wal_bytes(tmp_path) < 1024 * 1024
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_is_best_effort(cm, tmp_path):
+async def test_checkpoint_is_best_effort(cm, tmp_path, monkeypatch):
     """A checkpoint that cannot complete must report zero, not raise.
 
     TRUNCATE needs every reader out of the way and reports `busy=1` rather than
@@ -116,21 +115,15 @@ async def test_checkpoint_is_best_effort(cm, tmp_path):
     """
     await _big_wal_no_fragmentation(cm)
 
-    class _Busy:
-        async def execute(self, _sql):
-            class _Cur:
-                async def fetchall(self):
-                    return [(1, 806, 806)]  # busy=1: could not truncate
+    monkeypatch.setattr("features.db_maintenance._run_checkpoint", lambda _p: (1, 806, 806))
 
-            return _Cur()
-
-    reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db", _Busy())
+    reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db")
 
     assert reclaimed == 0.0, "a busy checkpoint reclaimed nothing and must say so"
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_swallows_a_raising_call(cm, tmp_path):
+async def test_checkpoint_swallows_a_raising_call(cm, tmp_path, monkeypatch):
     """If the PRAGMA itself blows up, the pass must survive it.
 
     Kept separate from the busy case: `busy` is SQLite declining, an exception is
@@ -139,11 +132,12 @@ async def test_checkpoint_swallows_a_raising_call(cm, tmp_path):
     await _big_wal_no_fragmentation(cm)
     before = _wal_bytes(tmp_path)
 
-    class _Exploding:
-        async def execute(self, _sql):
-            raise sqlite3.OperationalError("disk I/O error")
+    def _exploding(_path):
+        raise sqlite3.OperationalError("disk I/O error")
 
-    reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db", _Exploding())
+    monkeypatch.setattr("features.db_maintenance._run_checkpoint", _exploding)
+
+    reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db")
 
     assert reclaimed == 0.0, "a failed checkpoint must report zero, not raise"
     assert _wal_bytes(tmp_path) == before, "nothing should have been written"
@@ -186,7 +180,7 @@ async def test_checkpoint_retries_past_a_transient_lock(cm, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_says_so_when_it_cannot_truncate(cm, tmp_path, caplog):
+async def test_checkpoint_says_so_when_it_cannot_truncate(cm, tmp_path, caplog, monkeypatch):
     """Failing to truncate must be visible.
 
     The previous version logged the failure at DEBUG while the live config is INFO,
@@ -198,12 +192,13 @@ async def test_checkpoint_says_so_when_it_cannot_truncate(cm, tmp_path, caplog):
     await _big_wal_no_fragmentation(cm)
     size = _wal_bytes(tmp_path)
 
-    class _Locked:
-        async def execute(self, _sql):
-            raise sqlite3.OperationalError("database table is locked")
+    def _locked(_path):
+        raise sqlite3.OperationalError("database table is locked")
+
+    monkeypatch.setattr("features.db_maintenance._run_checkpoint", _locked)
 
     with caplog.at_level(logging.WARNING):
-        reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db", _Locked())
+        reclaimed = await checkpoint_wal(cm, tmp_path / "memory.db")
 
     assert reclaimed == 0.0
     assert _wal_bytes(tmp_path) == size, "nothing should have been written"
@@ -214,7 +209,7 @@ async def test_checkpoint_says_so_when_it_cannot_truncate(cm, tmp_path, caplog):
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_keeps_quiet_about_a_small_wal(cm, tmp_path, caplog):
+async def test_checkpoint_keeps_quiet_about_a_small_wal(cm, tmp_path, caplog, monkeypatch):
     """A small journal is normal and must not warn.
 
     An alarm that fires every hour regardless is the defect just removed from
@@ -228,12 +223,13 @@ async def test_checkpoint_keeps_quiet_about_a_small_wal(cm, tmp_path, caplog):
     await conn.commit()
     assert 0 < _wal_bytes(tmp_path) < 1024 * 1024, "fixture must leave a SMALL, non-empty WAL"
 
-    class _Locked:
-        async def execute(self, _sql):
-            raise sqlite3.OperationalError("database table is locked")
+    def _locked(_path):
+        raise sqlite3.OperationalError("database table is locked")
+
+    monkeypatch.setattr("features.db_maintenance._run_checkpoint", _locked)
 
     with caplog.at_level(logging.WARNING):
-        await checkpoint_wal(cm, tmp_path / "memory.db", _Locked())
+        await checkpoint_wal(cm, tmp_path / "memory.db")
 
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert not warnings, f"a small WAL should pass without a word, got: {[r.getMessage() for r in warnings]}"

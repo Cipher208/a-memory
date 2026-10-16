@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sqlite3
 from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,11 @@ _CHECKPOINT_RETRY_S = 0.5
 # Below this the journal is simply small and normal. Warning about it every hour
 # would rebuild the "always-on alarm" that was just removed from `db_warn_mb`.
 _CHECKPOINT_WARN_MB = 5.0
+
+# How long the dedicated checkpoint connection waits for a lock. Short: this runs on a
+# maintenance path, and a reader holding the WAL should be reported (busy=1) rather
+# than waited out — the retry loop is what handles a brief reader.
+_CHECKPOINT_TIMEOUT_S = 5.0
 
 
 @dataclass
@@ -77,7 +83,41 @@ async def _vacuum_if_fragmented(manager: Any, db_path: Path, min_mb: float, rati
     return max(0.0, _mb(size_before - size_after)), True
 
 
-async def checkpoint_wal(manager: Any, db_path: Path, conn: Any | None = None) -> float:
+def _run_checkpoint(db_path: Path) -> tuple[int, int, int]:
+    """Run TRUNCATE on a SHORT-LIVED DEDICATED connection. Returns (busy, log, done).
+
+    Its own connection, not the shared one — and that is the whole point.
+
+    The shared connection is used by every MCP tool handler, and every `await` is a
+    yield point. A handler between its `execute()` and its `fetch()` has a statement
+    actively stepping, and a checkpoint landing in that gap, on the same connection,
+    fails with this:
+
+        sqlite3.OperationalError: database table is locked
+
+    That is not `database is locked` (another writer) — it is a same-connection error,
+    and it is why the live checkpoint failed 7 times out of 29 while reporting nothing
+    usable. Measured, same base, statement in flight:
+
+        same connection      -> OperationalError: database table is locked
+        separate connection  -> ok, busy=1 log=59 done=59
+
+    On its own connection the answer is `busy=1`: SQLite's normal "a reader holds the
+    WAL, ask again later". That is precisely what the retry loop was written for, and
+    it could never handle anything while every attempt raised instead.
+
+    Synchronous by design: it is called through `asyncio.to_thread`, so the event loop
+    is not blocked, and a short-lived connection has no place in the async manager.
+    """
+    other = sqlite3.connect(str(db_path), timeout=_CHECKPOINT_TIMEOUT_S)
+    try:
+        row = other.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        return (int(row[0]), int(row[1]), int(row[2])) if row else (0, 0, 0)
+    finally:
+        other.close()
+
+
+async def checkpoint_wal(manager: Any, db_path: Path) -> float:
     """Truncate the WAL of one of this process's databases. Returns MB reclaimed.
 
     Separate from VACUUM on purpose. The only `wal_checkpoint(TRUNCATE)` in this
@@ -90,19 +130,11 @@ async def checkpoint_wal(manager: Any, db_path: Path, conn: Any | None = None) -
     and leaves the file exactly as large (probe: 806 journal pages moved, WAL file
     unchanged). Only TRUNCATE returns the space to the filesystem.
 
-    Retried, and loud, because the first version of this was neither — and that is
-    measured, not stylistic. After the hourly pass had run twice on the live base,
+    Runs on its OWN connection (see `_run_checkpoint`), retries, and is loud — the
+    first version was none of the three, and each part of that is measured rather than
+    stylistic. After the hourly pass had run twice on the live base,
     `run_db_maintenance` still reported 166.7 MB (105 MB database plus the untouched
-    61 MB journal) and the log said nothing at all. Reproducing it on a copy showed
-    why: with another connection holding a read snapshot the PRAGMA does not return
-    `busy=1`, it RAISES
-
-        sqlite3.OperationalError: database table is locked
-
-    The previous version caught that, logged it at DEBUG and returned 0.0 — while the
-    live config is INFO. So the failure was invisible, and a base whose WAL never
-    shrank looked exactly like one with nothing to shrink. One attempt also loses to
-    any brief reader, and readers here are brief, which is what the retries are for.
+    61 MB journal) and the log said nothing at all.
 
     Raising is still not an option: this runs on a maintenance path where an
     exception would cost the whole pass, including the size report that follows.
@@ -114,19 +146,15 @@ async def checkpoint_wal(manager: Any, db_path: Path, conn: Any | None = None) -
     if size_before == 0:
         return 0.0
 
-    if conn is None:
-        conn = await manager.get(db_path.name)
-
     last_reason = "not attempted"
     for attempt in range(1, _CHECKPOINT_ATTEMPTS + 1):
         try:
-            rows = await (await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")).fetchall()
+            busy, _log, _done = await asyncio.to_thread(_run_checkpoint, db_path)
         except Exception as exc:
             last_reason = f"{type(exc).__name__}: {exc}"
         else:
-            # (busy, log, checkpointed). `busy` means SQLite declined; the file size
-            # afterwards is what actually says whether space came back, so it decides.
-            busy = rows[0][0] if rows else 0
+            # `busy` means SQLite declined, usually because a reader holds the WAL.
+            # The file size afterwards is what actually says whether space came back.
             size_now = wal.stat().st_size if wal.exists() else 0
             if not busy and size_now < size_before:
                 return max(0.0, _mb(size_before - size_now))
