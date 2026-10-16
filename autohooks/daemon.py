@@ -21,6 +21,13 @@ from typing import TYPE_CHECKING, Any
 # (seconds) from the daemon loop. See lifecycle.graph_sanitation.prune_dangling_edges.
 _EDGE_PRUNE_SECONDS = 600.0
 
+# Connection-health gate (seconds). The daemon holds descriptors on the memory base
+# that the async manager does not know about; this is how that number is watched.
+# Measured 16.10.2026: 41 descriptors on one file while running only 9 threads, where
+# an identical daemon for another base held 1. A manager-only reading cannot see that
+# difference, so the reading counts /proc/self/fd as well.
+_HEALTH_LOG_SECONDS = 600.0
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
@@ -156,6 +163,7 @@ async def run_daemon(
         # boot), so a 0.0 baseline made the first sweep fire only when the host
         # had been up ≥10 min — it passed on long-lived VPS, failed on fresh CI.
         last_prune: float | None = None
+        last_health: float | None = None
         while not stop.is_set():
             # A source can be replaced or renumbered under a running daemon (see
             # `source_went_backwards`). Left unnoticed, `WHERE id > cursor` then
@@ -273,6 +281,25 @@ async def run_daemon(
                     pruned = await prune_dangling_edges(graph._cm)
                     if pruned:
                         logger.info("dangling-edge sweep: pruned %d", pruned)
+
+            # Connection health. The daemon runs on its own base and opens
+            # synchronous handles the async manager never sees, so a reading built
+            # only from manager bookkeeping would report one connection while the
+            # process holds dozens of descriptors — the exact shape that hid this
+            # for two days. Best-effort: a diagnostic must not stop the poll loop.
+            if last_health is None or now_mono - last_health >= _HEALTH_LOG_SECONDS:
+                last_health = now_mono
+                with contextlib.suppress(Exception):
+                    from shared.connection import connection_health
+
+                    health = await connection_health()
+                    logger.info(
+                        "connection health: connections=%s leaked_workers=%s open_db_fds=%s unmanaged_fds=%s",
+                        health["connections"],
+                        health["leaked_workers"],
+                        health["open_db_fds"],
+                        health["unmanaged_fds"],
+                    )
             iterations += 1
             if max_iterations is not None and iterations >= max_iterations:
                 return

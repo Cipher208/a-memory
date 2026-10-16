@@ -90,6 +90,64 @@ async def test_daemon_sweeps_dangling_edges(tmp_path: Path, monkeypatch: pytest.
     assert calls == ["stub-cm"]
 
 
+async def test_daemon_logs_connection_health(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """The daemon loop reads connection health — the wiring, not just the function.
+
+    Written after M4 taught the lesson on the server side: a test that calls the
+    helper directly stays green when the call is deleted from the loop, which is how
+    a diagnostic ends up written and forgotten. This drives `run_daemon` itself.
+    """
+    import logging
+
+    calls: list[int] = []
+
+    async def fake_health() -> dict[str, Any]:
+        calls.append(1)
+        return {"connections": 1, "dbs": ["memory.db"], "leaked_workers": 0, "open_db_fds": 41, "unmanaged_fds": 40}
+
+    monkeypatch.setattr("shared.connection.connection_health", fake_health)
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        return {"results": [], "handler_count": 0}
+
+    src = _FakeSource(batches=[], max_id=1)
+    with caplog.at_level(logging.INFO):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+    assert calls, "the daemon loop never read connection health — nothing will be logged"
+    line = next((r.getMessage() for r in caplog.records if "connection health" in r.getMessage()), None)
+    assert line is not None, [r.getMessage() for r in caplog.records]
+    # The two counts must both be in the line: they disagreeing is the finding.
+    assert "open_db_fds=41" in line and "unmanaged_fds=40" in line, line
+
+
+async def test_health_failure_does_not_stop_the_poll_loop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A broken diagnostic must not take the daemon down with it."""
+
+    async def exploding_health() -> dict[str, Any]:
+        raise RuntimeError("health blew up")
+
+    monkeypatch.setattr("shared.connection.connection_health", exploding_health)
+
+    disposed: list[int] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        disposed.append(1)
+        return {"results": [], "handler_count": 0}
+
+    src = _FakeSource(
+        batches=[
+            Batch(
+                messages=[Message(sender="user", text="решение по architecture", ts=1.5, source_id=7)],
+                cursor=7,
+            )
+        ]
+    )
+    await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+    assert disposed, "the loop stopped early because the health reading raised"
+
+
 async def test_dispatch_payload_and_cursor_advance(tmp_path: Path) -> None:
     dispatched: list[dict[str, Any]] = []
 
