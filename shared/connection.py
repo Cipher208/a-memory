@@ -408,10 +408,16 @@ async def connection_health(base_dir: str | Path | None = None) -> dict[str, Any
     live until garbage collection. The pattern appears 42 times in this repository.
 
     `open_db_fds` is therefore counted from /proc/self/fd: how many descriptors this
-    process actually holds on database files. `unmanaged_fds` is the difference. When
-    those two disagree, the disagreement IS the finding — measured on 16.10.2026, the
-    hermes daemon held 41 descriptors on one file while running 9 threads, and a
-    manager-only reading would have called that `connections=1 leaked_workers=0`.
+    process actually holds on database FILES. The `-wal` and `-shm` handles a WAL
+    connection legitimately holds are not counted — they belong to a database, they are
+    not one, and counting them charged two per healthy connection. `unmanaged_fds` is
+    the difference. When those two disagree, the disagreement IS the finding —
+    measured on 16.10.2026, the hermes daemon held 41 descriptors on one file while
+    running 9 threads, and a manager-only reading would have called that
+    `connections=1 leaked_workers=0`. Note that SQLite may keep one descriptor per file
+    alive after a second connection to the same file closes, released only when the
+    last connection does; a transient `unmanaged_fds` of 1 after a maintenance pass is
+    that, not a leak.
 
     Returns -1 for any field it could not read rather than zero: a failed reading and
     a clean bill of health must not look the same. Never raises — callers run inside a
@@ -443,7 +449,17 @@ async def connection_health(base_dir: str | Path | None = None) -> dict[str, Any
 
 
 def _count_open_db_fds(base_dir: Path) -> int:
-    """How many descriptors this process holds on db files under `base_dir`.
+    """How many descriptors this process holds on database files under `base_dir`.
+
+    The database file itself, not its journal: a WAL-mode connection legitimately
+    holds three descriptors (`db`, `-wal`, `-shm`), so counting every name containing
+    `.db` charged two extra per healthy connection and made `unmanaged_fds` read 2 on
+    a process holding one connection and one database. Measured on one healthy WAL
+    connection: 3 descriptors under the old rule, 1 under this one. The journal
+    describes the database; it is not a second database.
+
+    A `(deleted)` suffix is stripped before the test, since a replaced database file
+    keeps its descriptor and is still a database this process holds open.
 
     -1 when the descriptor table cannot be read at all, so an unreadable scan is
     distinguishable from a genuinely quiet process.
@@ -459,7 +475,10 @@ def _count_open_db_fds(base_dir: Path) -> int:
         for entry in fd_dir.iterdir():
             with contextlib.suppress(OSError):
                 target = os.readlink(entry)
-                if target.startswith(prefix) and ".db" in target:
+                if not target.startswith(prefix):
+                    continue
+                name = target.rsplit("/", 1)[-1].removesuffix("(deleted)").rstrip()
+                if name.endswith(".db"):
                     count += 1
     except OSError:
         return -1

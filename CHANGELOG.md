@@ -41,6 +41,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **The descriptor count charged two per healthy connection, so the reading it was built to produce could never be zero (2026-10-16).** The count was `".db" in target`, which a WAL-mode connection satisfies three times: it holds `memory.db`, `memory.db-wal` and `memory.db-shm`. Measured on one managed connection doing nothing wrong:
+
+  ```
+  connections=1 dbs=['memory.db'] open_db_fds=3 unmanaged_fds=2
+  ```
+
+  `unmanaged_fds` was therefore never 0 on a healthy base — the finding this reading exists to surface was buried under a constant that says nothing. Worse, the test written against the live defect **asserted it**: `unmanaged_fds >= 3` was described as "the finding", when three of those descriptors were the journal the connection is supposed to hold.
+
+  The rule now counts the database file itself: the basename must end in `.db` after a `(deleted)` suffix is stripped. Measured on the same connection: 3 descriptors under the old rule, 1 under this one, `unmanaged_fds=0`. The report that prompted this — 41 descriptors on one file, `unmanaged_fds=40` — is unchanged, because those are descriptors on `memory.db`; `-wal` and `-shm` were counted separately (10 and 1). So the noise is gone and the signal is intact.
+
+  The `(deleted)` suffix is not decoration: a rotated database keeps its descriptor and reads `<path> (deleted)`, and it is still a database this process holds open.
+
+  Mutation-checked, four mutations, zero survivors: the old rule restored (M1), a deleted database not counted (M2), the `base_dir` guard dropped so every `.db` in the process counts (M3), and an unreadable table reported as 0 instead of the `-1` sentinel (M4). M3 survived the first run and a test was added for it — without that guard the reading moves with other houses' bases and any scratch file left open anywhere on the machine.
+
 - **Every process served as its own maintenance writer, and the collision surfaced as a failed connection (2026-10-14).** `lifespan` starts housekeeping on every start — `migrate()`, `backup_cron`, `importance_scheduler`, and a 15-minute `forgetting_system.cleanup()` — and nothing coordinated the processes doing it. Only `backup_cron` held a lock (`.backup_cron.lock`); the rest ran in every instance.
 
   The cost was measured on the live hermes base: the MCP server came up **eleven times in one day**, `backup_cron` logged **twice in one minute**, and `Decay failed` with `sqlite3.OperationalError: database is locked` went 2-4/day in September to **14 on 12.10, 65 on 13.10, 34 by midday on 14.10**. The WAL reached **35 MB** without ever checkpointing, and `wal_autocheckpoint=1000` cannot fire while another process always holds a read snapshot.

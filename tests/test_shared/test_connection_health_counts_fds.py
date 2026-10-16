@@ -11,8 +11,8 @@ one owns a worker thread. Those handles come from elsewhere.
 The elsewhere is `with sqlite3.connect(...)`, which appears **42 times** in the
 repository (disclosure 6, procedures 6, stash 5, scratchpad 4, door_log 3, ...). For
 a `sqlite3.Connection`, `with` is a TRANSACTION context manager — it commits or rolls
-back, and does NOT close. Measured directly: five such blocks left five open
-descriptors, which survive until garbage collection.
+back, and does NOT close. Measured directly: fifty such blocks left **fifty-four** open
+descriptors on one file, and holding a reference to each one left 117.
 
 So a health line built only from the manager would print `connections=1
 leaked_workers=0` while the process holds 41 open files — the same shape as every
@@ -24,6 +24,7 @@ compared. They disagreeing IS the finding.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 
 import pytest
@@ -73,6 +74,80 @@ async def test_health_counts_open_descriptors_not_only_manager_state(base):
     finally:
         for h in leaked_handles:
             h.close()
+
+
+async def test_wal_and_shm_handles_are_not_counted_as_database_descriptors(base):
+    """A healthy WAL connection must not read as a leak.
+
+    Measured on this base before the rule was narrowed: one managed connection, whose
+    WAL mode legitimately holds three descriptors (`db`, `-wal`, `-shm`), counted as
+    three open databases against one managed connection, so `unmanaged_fds` read 2 on a
+    process that was behaving perfectly — and it can never read 0 that way, which makes
+    the finding it exists to surface unusable. The journal describes the database; it is
+    not a second database.
+    """
+    from shared.connection import connection_manager
+
+    managed = await connection_manager.get("memory.db")
+    await managed.execute("CREATE TABLE IF NOT EXISTS t (v TEXT)")
+    await managed.execute("INSERT INTO t VALUES ('x')")
+    await managed.commit()
+
+    health = await connection_health()
+
+    assert health["connections"] == 1, health
+    assert health["open_db_fds"] == 1, f"one database file is open; -wal and -shm are not databases: {health}"
+    assert health["unmanaged_fds"] == 0, f"a healthy connection must not read as unmanaged handles: {health}"
+
+
+async def test_a_deleted_database_file_is_still_counted_while_open(base):
+    """A replaced database keeps its descriptor, and is still a database held open.
+
+    Rotating a database is done by writing a new file and unlinking the old one; the
+    open descriptor then reads `<path> (deleted)`. Counting it is the honest answer —
+    the process does hold a database file open — so the suffix must not disqualify it.
+    """
+    path = base / "rotated.db"
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE IF NOT EXISTS t (v TEXT)")
+    conn.commit()
+    os.unlink(path)
+
+    try:
+        targets = []
+        for entry in os.listdir("/proc/self/fd"):
+            try:
+                targets.append(os.readlink(f"/proc/self/fd/{entry}"))
+            except OSError:
+                continue
+        assert any(t.endswith("(deleted)") for t in targets), f"the fixture must really show a deleted file: {targets}"
+
+        health = await connection_health()
+
+        assert health["open_db_fds"] == 1, f"a deleted-but-open database is still open: {health}"
+    finally:
+        conn.close()
+
+
+async def test_databases_outside_the_base_directory_are_not_counted(base, tmp_path_factory):
+    """The reading is for THIS base, not for every database the process happens to hold.
+
+    Without the guard the count would include other houses' bases, the context plugin's
+    database and any scratch file left open anywhere on the machine — a number that
+    moves for reasons this base cannot explain.
+    """
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    conn = sqlite3.connect(str(elsewhere / "foreign.db"))
+    conn.execute("CREATE TABLE IF NOT EXISTS t (v TEXT)")
+    conn.commit()
+
+    try:
+        health = await connection_health()
+
+        assert health["open_db_fds"] == 0, f"a database outside the base is not this base's reading: {health}"
+        assert health["unmanaged_fds"] == 0, health
+    finally:
+        conn.close()
 
 
 async def test_health_is_zero_with_nothing_open(base):
