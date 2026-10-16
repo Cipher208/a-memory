@@ -41,6 +41,41 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **The WAL checkpoint ran on the shared connection, so it failed exactly when the process was busy (2026-10-16).** `wal_checkpoint(TRUNCATE)` executed on the connection every MCP tool handler shares, and every `await` in a handler is a yield point:
+
+  ```
+  cur = await conn.execute("SELECT ... FROM some_table")
+  rows = await cur.fetchall()      # <-- the maintenance pass can run in this gap
+  ```
+
+  A checkpoint landing in that gap finds a statement actively stepping and fails with
+
+  ```
+  sqlite3.OperationalError: database table is locked
+  ```
+
+  That is **not** `database is locked` (another writer) — it is a same-connection error, and it is why the live checkpoint failed 7 times out of 29 while reporting nothing usable, and why 11–61 MB of WAL sat unclaimed on a base whose readers are all brief.
+
+  Established by measurement, having first refuted two plausible candidates: an undrained cursor is fine (`DELETE` + `fetchall` + `commit` → checkpoint ok), and no maintenance step leaves a transaction open (an instrumented pass on a copy reported `in_transaction=False` after every step). What breaks it is an in-flight statement in another task on the same connection:
+
+  ```
+  same connection, statement in flight      -> OperationalError: database table is locked
+  its own connection, same moment           -> ok, busy=1 log=59 done=59
+  ```
+
+  On its own connection the same call answers `busy=1` — SQLite's ordinary "a reader holds the WAL, ask again later". That is precisely what the retry loop was written to handle, and it could never handle anything while every attempt raised instead. So this does not add a feature; it makes an existing one reachable.
+
+  `_run_checkpoint` opens a short-lived dedicated connection through `asyncio.to_thread` and closes it in a `finally`. The `busy` flag stays authoritative: a smaller file is not proof that *this* call reclaimed it.
+
+  Two mutation findings worth recording, both about tests rather than code:
+
+  * an earlier version of the descriptor test compared counts after 5 and after 20 calls and stayed green with `finally: close()` removed, because CPython's automatic cycle collection had run in between. Measured: an unclosed sqlite3 connection holds its descriptor until a GC pass (`+1` right after the call, `0` after `gc.collect()`) — refcounting alone does not free it. The test now runs with `gc.disable()`, where a missing close leaks one per call;
+  * the `busy` guard survived every test until one simulated the single state it exists for — a journal that shrank while SQLite reported BUSY — by truncating the file directly. Before that it read as dead code.
+
+  Mutation-checked, four mutations, zero survivors: back on the shared connection (M1), the dedicated connection never closed (M2), the exception no longer caught (M3), and `busy` ignored (M4).
+
+  Suite 2311 passed.
+
 - **The descriptor count charged two per healthy connection, so the reading it was built to produce could never be zero (2026-10-16).** The count was `".db" in target`, which a WAL-mode connection satisfies three times: it holds `memory.db`, `memory.db-wal` and `memory.db-shm`. Measured on one managed connection doing nothing wrong:
 
   ```
