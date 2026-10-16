@@ -11,6 +11,75 @@ from features.backup_cron import backup_cron
 from lifecycle.importance_scheduler import importance_scheduler
 
 
+async def _connection_health() -> dict[str, Any]:
+    """Report this process's connection health. Never raises.
+
+    Returns ``{"connections": int, "dbs": list, "leaked_workers": int}``; any field
+    that could not be read is reported as a sentinel rather than swallowed, because a
+    diagnostic that fails silently is the same silence it was added to remove.
+
+    Diagnostics run inside the maintenance loop, so they must not be able to break
+    it: an exception here would cost the whole pass, including the work that follows.
+    """
+    log = logging.getLogger(__name__)
+    health: dict[str, Any] = {"connections": -1, "dbs": [], "leaked_workers": -1}
+
+    try:
+        from shared.connection import connection_manager, leaked_connection_workers
+
+        stats = connection_manager.stats()
+        health["connections"] = int(stats.get("connections", -1))
+        health["dbs"] = list(stats.get("dbs", []))
+        health["leaked_workers"] = len(leaked_connection_workers())
+    except Exception:
+        log.debug("connection health could not be read", exc_info=True)
+
+    log.info(
+        "connection health: connections=%s dbs=%s leaked_workers=%s",
+        health["connections"],
+        ",".join(health["dbs"]) or "-",
+        health["leaked_workers"],
+    )
+    return health
+
+
+async def _storage_pass() -> None:
+    """Size monitoring, auto-VACUUM and the connection-health reading.
+
+    Extracted from the periodic loop so the wiring is testable: `_connection_health`
+    is useful only if the loop actually calls it, and a test that calls it directly
+    cannot tell the difference between "wired" and "written and forgotten". The first
+    mutation run proved that — deleting the call from the loop left every test green.
+
+    Both halves are best-effort by construction: this runs inside the maintenance
+    loop, and an exception here would cost the whole pass.
+    """
+    log = logging.getLogger(__name__)
+
+    # DB size monitoring + auto-VACUUM.
+    try:
+        from features.db_maintenance import run_db_maintenance
+
+        reports = await run_db_maintenance()
+        for r in reports:
+            if r.vacuumed_mb:
+                log.info("DB maintenance: %s vacuumed %.1f MB -> %.1f MB", r.name, r.vacuumed_mb, r.size_mb)
+    except Exception:
+        log.exception("DB maintenance failed")
+
+    # Connection health, read from INSIDE the process.
+    #
+    # Every diagnosis of the 15–16.10 lock storms had to be made from outside, poking
+    # at /proc: descriptor counts that oscillated between 49 and 57 and could not be
+    # read as a trend, and no way to ask the process how many connections it believed
+    # it had. The numbers that answer that have existed all along — `stats()` and
+    # `leaked_connection_workers()` — and nothing called them in production.
+    #
+    # Logged in the same pass the failures come from, so the next storm has a reading
+    # taken moments before it rather than after the fact.
+    await _connection_health()
+
+
 @asynccontextmanager
 async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
     from shared.migrations import migration_manager
@@ -135,16 +204,7 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                     if n_auto or n_purged:
                         logging.getLogger(__name__).info("Staging housekeeping: auto_applied=%d purged=%d", n_auto, n_purged)
 
-                # DB size monitoring + auto-VACUUM (same hourly cadence)
-                try:
-                    from features.db_maintenance import run_db_maintenance
-
-                    reports = await run_db_maintenance()
-                    for r in reports:
-                        if r.vacuumed_mb:
-                            logging.getLogger(__name__).info("DB maintenance: %s vacuumed %.1f MB -> %.1f MB", r.name, r.vacuumed_mb, r.size_mb)
-                except Exception:
-                    logging.getLogger(__name__).exception("DB maintenance failed")
+                await _storage_pass()
             except asyncio.CancelledError:
                 break
             except Exception:

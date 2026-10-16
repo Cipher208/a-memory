@@ -5,6 +5,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- **The maintenance loop now reports its own connection health (2026-10-16).** Every diagnosis of the 15–16.10 lock storms had to be made from outside, by poking at `/proc`: descriptor counts that oscillated between 49 and 57 and could not be read as a trend, and no way at all to ask the process how many connections it believed it had, or how many aiosqlite workers were running with no owner.
+
+  The numbers that answer that existed all along — `connection_manager.stats()` and `leaked_connection_workers()` — but nothing called them in production; they were built for the test suite. `_storage_pass()` now reads both in the same 15-minute pass the failures come from and logs
+
+  ```
+  connection health: connections=N dbs=... leaked_workers=N
+  ```
+
+  so the next storm has a reading taken moments before it rather than after the fact.
+
+  `_storage_pass` is extracted from the periodic loop for a reason worth recording: the first mutation run left every test green after deleting the call from the loop, because the tests called `_connection_health()` directly. A test that calls the function cannot tell "wired" from "written and forgotten" — the same defect this whole line of work keeps finding in the codebase, and this time in the diagnostic written to find it. `test_the_storage_pass_actually_reads_health` drives the pass instead.
+
+  Both halves are best-effort: a failing size/VACUUM step must not swallow the health line, because a storm is exactly when the numbers are wanted. A reading that fails reports `-1` rather than zeroes — a sentinel, so a broken diagnostic cannot be mistaken for a clean bill of health.
+
+  Mutation-checked, four mutations, zero survivors: leak count not read (M1), health logged at DEBUG instead of INFO (M2), failures reported as zeroes (M3), and the call removed from the pass (M4, which is the one that failed the first run and prompted the extraction).
+
+  Suite 2306 passed (was 2301).
+
 ### Fixed
 - **Every process served as its own maintenance writer, and the collision surfaced as a failed connection (2026-10-14).** `lifespan` starts housekeeping on every start — `migrate()`, `backup_cron`, `importance_scheduler`, and a 15-minute `forgetting_system.cleanup()` — and nothing coordinated the processes doing it. Only `backup_cron` held a lock (`.backup_cron.lock`); the rest ran in every instance.
 
