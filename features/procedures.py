@@ -23,6 +23,7 @@ import time
 from typing import Any
 
 from shared.connection import connection_manager
+from shared.sync_db import open_db
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ def _db_path() -> Any:
 
 
 def _ensure_table() -> None:
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS procedural_memory (
                 proc_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,7 +65,7 @@ def _rate(used: int, ok: int) -> float:
 
 
 def _fetch(user_id: str, layer: str, name: str) -> dict[str, Any] | None:
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM procedural_memory WHERE user_id=? AND layer=? AND name=?", (user_id, layer, name)).fetchone()
         return dict(row) if row else None
@@ -79,7 +80,7 @@ def proc_save(user_id: str, layer: str, name: str, steps: list[str], notes: str 
     if _fetch(user_id, layer, name):
         raise ValueError(f"procedure already exists: {name!r}")
     now = time.time()
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.execute(
             "INSERT INTO procedural_memory (user_id, layer, name, steps_json, notes, times_used, times_succeeded, created_at, updated_at)"
             " VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)",
@@ -91,7 +92,7 @@ def proc_save(user_id: str, layer: str, name: str, steps: list[str], notes: str 
 
 def proc_list(user_id: str, layer: str) -> list[dict[str, Any]]:
     _ensure_table()
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """SELECT name, notes, times_used, times_succeeded, updated_at FROM procedural_memory
@@ -127,7 +128,7 @@ def proc_use(user_id: str, layer: str, name: str, success: bool, learned: str = 
     notes = row["notes"]
     if learned:
         notes = f"{notes}; learned: {learned}" if notes else f"learned: {learned}"
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.execute(
             """UPDATE procedural_memory
                SET times_used = times_used + 1,
@@ -146,7 +147,7 @@ def proc_use(user_id: str, layer: str, name: str, success: bool, learned: str = 
 def proc_delete(user_id: str, layer: str, name: str) -> dict[str, Any]:
     _validate_name(name)
     _ensure_table()
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         cur = conn.execute("DELETE FROM procedural_memory WHERE user_id=? AND layer=? AND name=?", (user_id, layer, name))
         conn.commit()
         return {"name": name, "deleted": cur.rowcount > 0}

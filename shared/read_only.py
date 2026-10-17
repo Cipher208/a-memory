@@ -12,6 +12,8 @@ import threading
 import time
 from pathlib import Path
 
+from shared.sync_db import open_db
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ class ReadOnlyReplica:
     def _backup_db(self, src: Path, dst: Path) -> bool:
         """Perform internal helper for SQLite online backup."""
         try:
-            with sqlite3.connect(str(src)) as src_conn, sqlite3.connect(str(dst)) as dst_conn:
+            with open_db(src) as src_conn, open_db(dst) as dst_conn:
                 src_conn.backup(dst_conn)
             return True
         except Exception:

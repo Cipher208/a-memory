@@ -15,6 +15,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
+from shared.sync_db import open_db
 
 HEAL_ACTIONS = ("remigrate", "reset_breakers", "purge_invalid_l1")
 
@@ -371,7 +372,7 @@ def _check_db(check: Any) -> None:
         import sqlite3
 
         try:
-            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            with open_db(f"file:{db_path}?mode=ro", uri=True) as conn:
                 row = conn.execute("PRAGMA quick_check").fetchone()
                 check("db_integrity", row is not None and row[0] == "ok", str(row[0] if row else "?"))
                 try:

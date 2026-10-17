@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from shared.connection import connection_manager
+from shared.sync_db import open_db
 
 _GAP_EVENTS = ("new_message", "auto_save_candidate")
 
@@ -88,7 +89,7 @@ def compute_session_gaps(mem: Any, since: float, until: float) -> list[dict[str,
     )
     gaps: list[dict[str, Any]] = []
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with open_db(db_path) as conn:
             thresholds = _declared_thresholds(conn)
             rows = conn.execute(sql, (*_GAP_EVENTS, since, until)).fetchall()
     except sqlite3.OperationalError:

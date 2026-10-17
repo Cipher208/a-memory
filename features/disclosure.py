@@ -15,6 +15,7 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.sync_db import open_db
 
 _TABLE = "disclosure_rules"
 
@@ -26,7 +27,7 @@ def _ensure_table() -> None:
     db_path = Path(str(base)) / DB_NAME
     if not db_path.exists():
         return  # no schema yet — evaluation callers treat this as "no rules"
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_db(db_path) as conn:
         conn.execute(
             f"""CREATE TABLE IF NOT EXISTS {_TABLE} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +50,7 @@ def add_rule(user_id: str, name: str, trigger_keywords: list[str], content: str)
         raise ValueError("at least one trigger keyword is required")
     _ensure_table()
     db_path = Path(str(connection_manager.base_dir)) / DB_NAME
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_db(db_path) as conn:
         cur = conn.execute(
             f"INSERT INTO {_TABLE} (user_id, name, trigger_keywords, content, enabled, created_at) VALUES (?, ?, ?, ?, 1, ?)",
             (user_id, name.strip(), json.dumps(keywords), content.strip(), time.time()),
@@ -63,7 +64,7 @@ def list_rules(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
     db_path = Path(str(connection_manager.base_dir)) / DB_NAME
     if not db_path.exists():
         return []
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_db(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             f"SELECT id, name, trigger_keywords, content, enabled, created_at FROM {_TABLE} WHERE user_id=? ORDER BY id DESC LIMIT ?",
@@ -88,7 +89,7 @@ def set_enabled(user_id: str, rule_id: int, enabled: bool) -> bool:
     """Toggle one rule. Returns False if not found."""
     _ensure_table()
     db_path = Path(str(connection_manager.base_dir)) / DB_NAME
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_db(db_path) as conn:
         cur = conn.execute(
             f"UPDATE {_TABLE} SET enabled=? WHERE user_id=? AND id=?",
             (1 if enabled else 0, user_id, int(rule_id)),
@@ -100,7 +101,7 @@ def set_enabled(user_id: str, rule_id: int, enabled: bool) -> bool:
 def delete_rule(user_id: str, rule_id: int) -> bool:
     _ensure_table()
     db_path = Path(str(connection_manager.base_dir)) / DB_NAME
-    with sqlite3.connect(str(db_path)) as conn:
+    with open_db(db_path) as conn:
         cur = conn.execute(f"DELETE FROM {_TABLE} WHERE user_id=? AND id=?", (user_id, int(rule_id)))
         conn.commit()
         return bool(cur.rowcount)
@@ -120,7 +121,7 @@ def evaluate_disclosures(user_id: str, text: str, limit: int = 3) -> list[dict[s
     if not db_path.exists():
         return []
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        with open_db(f"file:{db_path}?mode=ro", uri=True) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 f"SELECT name, content, trigger_keywords FROM {_TABLE} WHERE user_id=? AND enabled=1 ORDER BY id DESC LIMIT 100",

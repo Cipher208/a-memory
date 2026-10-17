@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from shared.sync_db import open_db
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ async def run_semantic_audit(user_id: str, compaction_ts: float, window_hours: f
 
     since = compaction_ts - window_hours * 3600
     try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        with open_db(f"file:{db_path}?mode=ro", uri=True) as conn:
             ep_rows = conn.execute(
                 "SELECT summary FROM episodes WHERE user_id=? AND layer='user' AND created_at >= ? AND created_at < ? ORDER BY created_at DESC LIMIT 20",
                 (user_id, since, compaction_ts),
