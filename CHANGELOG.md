@@ -41,6 +41,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **A connection can be created while another writer holds the file (2026-10-17).** `_get_aiosqlite_conn` ran its PRAGMAs unconditionally, and two of them need a write lock:
+
+  ```
+  faithful copy, another connection holds a write transaction
+    PRAGMA auto_vacuum=INCREMENTAL   waits the full budget, then fails
+    PRAGMA journal_mode=WAL          fails INSTANTLY (no timeout can help)
+    the other eight                  ok, under 0.2 ms
+  ```
+
+  `auto_vacuum` was the worse of the two: it rewrites the header **even when the value is already INCREMENTAL**, so every single connect asked for a lock it did not need. Measured against a locked base, a new connection failed after **5006 ms** — `sqlite3.connect`'s own 5 s default, because `busy_timeout` was applied after the statement that blocked. At startup that is the `Failed to connect` line. Moving `busy_timeout` first does not fix it: it only makes the same failure take 15 s.
+
+  Now the one-time settings read first and write only on a mismatch, run under a 250 ms budget so a blocked attempt costs a fraction of a second, and a lock is treated as "not now" rather than "cannot connect" — the value is permanent once written and retried on the next connect. The operating `busy_timeout` (15 s) is restored immediately afterwards.
+
+  Red-first: the three tests fail on the previous code with `database is locked` after 15.9 s. Three mutations (no tolerance, no timeout restore, unconditional `auto_vacuum`) all turn the suite red. Suite 2344 passed.
+
 - **The rescore sweep runs on its own connection (2026-10-17).** It used to borrow `connection_manager.get("memory.db")` — the one connection every tool handler shares. Two consequences, both measured:
 
   ```
