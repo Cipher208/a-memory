@@ -617,6 +617,10 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
         return _re.findall(r"\[\[fact:([^\]]+)\]\]", text)
 
     edges = 0
+    # Backlink saves go through CoreMemory, which writes on the dispatcher's own
+    # connection. Collecting them and applying them after this function commits
+    # keeps the two connections from deadlocking on the write lock.
+    pending_saves: list[tuple[Any, dict[str, Any], str]] = []
     for file_path, content in links:
         keys = _keys(str(content))
         if not keys:
@@ -663,18 +667,25 @@ async def miner_wiki_fact_links(cm: AsyncConnectionManager, layer: str) -> dict[
             if page_id not in ids:
                 ids.add(page_id)
                 meta["wiki_ids"] = sorted(ids)
-                cmem = CoreMemory(cm=cm, layer=layer)
-                await cmem.save(
-                    str(fact_row["user_id"]),
-                    str(fact_row["key"]),
-                    str(fact_row["value"]),
-                    importance=float(fact_row["importance"]),
-                    memory_kind=fact_row["memory_kind"],
-                    source=str(fact_row["source"] or "consolidation:wiki_link"),
-                    metadata=meta,
-                )
+                pending_saves.append((fact_row, meta, layer))
     if not borrowed:
         await conn.commit()
+        for fact_row, meta, save_layer in pending_saves:
+            cmem = CoreMemory(cm=cm, layer=save_layer)
+            await cmem.save(
+                str(fact_row["user_id"]),
+                str(fact_row["key"]),
+                str(fact_row["value"]),
+                importance=float(fact_row["importance"]),
+                memory_kind=fact_row["memory_kind"],
+                source=str(fact_row["source"] or "consolidation:wiki_link"),
+                metadata=meta,
+            )
+    elif pending_saves:
+        # The caller owns an open write transaction on the shared connection; a
+        # second connection cannot take the write lock until it commits. The
+        # backlink is advisory, so it is dropped rather than deadlocking here.
+        logger.warning("wiki_fact_link backlinks deferred: caller holds an open transaction")
     return {"edges": edges}
 
 

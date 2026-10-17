@@ -18,6 +18,7 @@ from typing import Any
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.memory_types import MemoryKind, default_importance, get_policy, kind_for_text, validate_kind
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,13 @@ class CoreMemory:
         self._cm = cm or connection_manager
         self.layer = layer
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        """Resolved on every access so a repointed ``_cm`` is honoured."""
+        return get_write_dispatch(self._cm)
+
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             f"""
             CREATE TABLE IF NOT EXISTS core_memory (
@@ -73,9 +79,7 @@ class CoreMemory:
         )
         # C8 self-healing: add visibility column to live DBs (g21 migration).
         with contextlib.suppress(Exception):
-            conn = await self._cm.get(DB_NAME)
-            await conn.execute("ALTER TABLE core_memory ADD COLUMN visibility TEXT NOT NULL DEFAULT 'visible'")
-            await conn.commit()
+            await self._dispatch.write(DB_NAME, "ALTER TABLE core_memory ADD COLUMN visibility TEXT NOT NULL DEFAULT 'visible'")
 
     async def save(
         self,
@@ -100,37 +104,38 @@ class CoreMemory:
             raise ValueError(f"invalid visibility: {visibility!r}")
         vis = visibility or "visible"
 
-        conn = await self._cm.get(DB_NAME)
-        existing_id = await self._find_existing_id(conn, layer, user_id, key)
+        async def _txn(conn: Any) -> int:
+            row_vis = vis
+            existing_id = await self._find_existing_id(conn, layer, user_id, key)
 
-        if existing_id is not None:
-            old = await self._fetch_row_by_id(conn, existing_id)
-            if visibility is None and old is not None:
-                # Preserve the stored flag: an auto-save re-upsert under the
-                # same canonical key must silently NOT undo operator-level
-                # visibility changes (a 'hidden' row re-saved with the same
-                # canonical key would otherwise be back to 'visible' — F1
-                # sanitation, 2026-09-12). _fetch_row_by_id uses a fixed
-                # column list, so visibility is read directly.
-                vrow = await (await conn.execute("SELECT visibility FROM core_memory WHERE entry_id=?", (existing_id,))).fetchone()
-                if vrow and vrow[0]:
-                    vis = str(vrow[0])
-            await self._update_entry(conn, existing_id, value, importance, memory_kind, expires_at, source, metadata_json, now, vis)
-            entry_id = existing_id
-            new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)
-            await self._record_history(conn, layer, user_id, key, old, new_row, triggered_by or source, now)
-            # A2.1: close the old interval, open the new one (bi-temporal chain)
-            await self._record_temporal(conn, layer, user_id, key, value, importance, memory_kind, now)
-        else:
-            entry_id = await self._insert_entry(
-                conn, layer, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now, vis, created_at
-            )
-            new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)
-            await self._record_history(conn, layer, user_id, key, None, new_row, triggered_by or source, now)
-            await self._record_temporal(conn, layer, user_id, key, value, importance, memory_kind, now)
+            if existing_id is not None:
+                old = await self._fetch_row_by_id(conn, existing_id)
+                if visibility is None and old is not None:
+                    # Preserve the stored flag: an auto-save re-upsert under the
+                    # same canonical key must silently NOT undo operator-level
+                    # visibility changes (a 'hidden' row re-saved with the same
+                    # canonical key would otherwise be back to 'visible' — F1
+                    # sanitation, 2026-09-12). _fetch_row_by_id uses a fixed
+                    # column list, so visibility is read directly.
+                    vrow = await (await conn.execute("SELECT visibility FROM core_memory WHERE entry_id=?", (existing_id,))).fetchone()
+                    if vrow and vrow[0]:
+                        row_vis = str(vrow[0])
+                await self._update_entry(conn, existing_id, value, importance, memory_kind, expires_at, source, metadata_json, now, row_vis)
+                entry_id = existing_id
+                new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)
+                await self._record_history(conn, layer, user_id, key, old, new_row, triggered_by or source, now)
+                # A2.1: close the old interval, open the new one (bi-temporal chain)
+                await self._record_temporal(conn, layer, user_id, key, value, importance, memory_kind, now)
+            else:
+                entry_id = await self._insert_entry(
+                    conn, layer, user_id, key, value, importance, memory_kind, expires_at, source, metadata_json, now, row_vis, created_at
+                )
+                new_row = self._row_snapshot(key, value, importance, memory_kind, expires_at, source, metadata_json)
+                await self._record_history(conn, layer, user_id, key, None, new_row, triggered_by or source, now)
+                await self._record_temporal(conn, layer, user_id, key, value, importance, memory_kind, now)
+            return entry_id
 
-        await conn.commit()
-        return entry_id
+        return int(await self._dispatch.atomic(DB_NAME, _txn))
 
     def _prepare_save_params(
         self, value: str, kind_str: str | None, imp: float | None, exp: float | None, now: float
@@ -262,9 +267,7 @@ class CoreMemory:
 
     async def get(self, user_id: str, key: str) -> CoreEntry | None:
         """Get a fact by key. Returns None if not found."""
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("SELECT * FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
-        row = await cursor.fetchone()
+        row = await self._dispatch.select_one(DB_NAME, "SELECT * FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
         return self._row_to_entry(row) if row else None
 
     async def _record_temporal(
@@ -298,14 +301,13 @@ class CoreMemory:
 
     async def get_at_time(self, user_id: str, key: str, at: float) -> dict[str, Any] | None:
         """A2.1: the value of `key` that was true at time `at` (None if never)."""
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        row = await self._dispatch.select_one(
+            DB_NAME,
             "SELECT value, importance, memory_kind, valid_from, valid_to FROM core_memory_temporal"
             " WHERE layer=? AND user_id=? AND key=? AND valid_from <= ? AND (valid_to IS NULL OR valid_to > ?)"
             " ORDER BY valid_from DESC LIMIT 1",
             (self.layer, user_id, key, at, at),
         )
-        row = await cursor.fetchone()
         return dict(row) if row else None
 
     async def get_intervals(self, user_id: str, key: str, changed_since: float | None = None) -> list[dict[str, Any]]:
@@ -314,16 +316,13 @@ class CoreMemory:
         S18 (Memanto): changed_since returns only intervals with valid_from >= the threshold
         (delta polling of "what has changed since X"); None returns the whole chain as before.
         """
-        conn = await self._cm.get(DB_NAME)
         sql = "SELECT value, importance, memory_kind, valid_from, valid_to FROM core_memory_temporal WHERE layer=? AND user_id=? AND key=?"
         params: list[Any] = [self.layer, user_id, key]
         if changed_since is not None:
             sql += " AND valid_from >= ?"
             params.append(float(changed_since))
         sql += " ORDER BY valid_from"
-        cursor = await conn.execute(sql, tuple(params))
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        return await self._dispatch.query(DB_NAME, sql, tuple(params))
 
     async def get_or_default(self, user_id: str, key: str, default: str = "") -> str:
         """Get value or return default (never returns None)."""
@@ -331,13 +330,12 @@ class CoreMemory:
         return entry.value if entry else default
 
     async def get_all(self, user_id: str, limit: int = 50) -> list[CoreEntry]:
-        conn = await self._cm.get(DB_NAME)
         now = time.time()
-        cursor = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT * FROM core_memory WHERE layer=? AND user_id=? ORDER BY importance DESC LIMIT ?",
             (self.layer, user_id, limit),
         )
-        rows = await cursor.fetchall()
         entries = [self._row_to_entry(r, now=now) for r in rows]
         # S5 (Memanto): soft expiry — expired entries stay recallable with an
         # [EXPIRED] prefix (DB value untouched, expired flag still reads exactly).
@@ -348,41 +346,47 @@ class CoreMemory:
 
     async def get_pinned(self, user_id: str, limit: int = 10) -> list[CoreEntry]:
         """C8: pinned facts are always injected, regardless of importance/budget competition."""
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT * FROM core_memory WHERE layer=? AND user_id=? AND visibility='pinned' ORDER BY updated_at DESC LIMIT ?",
             (self.layer, user_id, limit),
         )
-        rows = await cursor.fetchall()
         return [self._row_to_entry(r) for r in rows]
 
     async def delete(self, user_id: str, key: str, triggered_by: str | None = None) -> bool:
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
-            "SELECT key, value, importance, memory_kind, expires_at, source, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
-            (self.layer, user_id, key),
-        )
-        row = await cursor.fetchone()
-        if not row:
-            return False
-        await self._record_history(conn, self.layer, user_id, key, dict(row), None, triggered_by or "delete", time.time())
-        # A2.1: deletion closes the interval (the fact stopped being true)
-        await self._record_temporal_close(conn, self.layer, user_id, key, time.time())
-        cursor = await conn.execute("DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
-        await conn.commit()
-        return cursor.rowcount > 0
+        async def _txn(conn: Any) -> bool:
+            cursor = await conn.execute(
+                "SELECT key, value, importance, memory_kind, expires_at, source, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+                (self.layer, user_id, key),
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return False
+            await self._record_history(conn, self.layer, user_id, key, dict(row), None, triggered_by or "delete", time.time())
+            # A2.1: deletion closes the interval (the fact stopped being true)
+            await self._record_temporal_close(conn, self.layer, user_id, key, time.time())
+            cursor = await conn.execute("DELETE FROM core_memory WHERE layer=? AND user_id=? AND key=?", (self.layer, user_id, key))
+            return int(cursor.rowcount or 0) > 0
+
+        return bool(await self._dispatch.atomic(DB_NAME, _txn))
 
     async def delete_older_than(self, user_id: str, cutoff: float) -> int:
         """Delete this layer's rows with created_at > cutoff (recent purge)."""
-        conn = await self._cm.get(DB_NAME)
-        borrowed = conn.in_transaction
-        cursor = await conn.execute(
-            "DELETE FROM core_memory WHERE layer=? AND user_id=? AND created_at > ?",
-            (self.layer, user_id, cutoff),
+        shared = await self._cm.get(DB_NAME)
+        if shared.in_transaction:
+            # Another component owns an open transaction on the shared connection.
+            # A best-effort purge neither rides it nor blocks on its write lock:
+            # the next tick retries, and the caller's rollback must not take our
+            # rows with it either way.
+            logger.warning("delete_older_than skipped: shared connection holds a transaction")
+            return 0
+        return int(
+            await self._dispatch.write(
+                DB_NAME,
+                "DELETE FROM core_memory WHERE layer=? AND user_id=? AND created_at > ?",
+                (self.layer, user_id, cutoff),
+            )
         )
-        if not borrowed:
-            await conn.commit()
-        return int(cursor.rowcount)
 
     async def search(
         self, user_id: str, query: str, limit: int = 10, layer: str | None = None, *, include_superseded: bool = False
@@ -400,7 +404,6 @@ class CoreMemory:
         every item carries is_current.
         """
         layer = layer or self.layer
-        conn = await self._cm.get(DB_NAME)
         tokens = [t for t in query.split() if t]
         if not tokens:
             return []
@@ -412,8 +415,7 @@ class CoreMemory:
         # Overfetch so Python-side ranking can prefer more-matching rows.
         # C8: private facts never leave the store via recall (the inject pinned block does not read them).
         sql = f"SELECT * FROM core_memory WHERE layer=? AND user_id=? AND visibility NOT IN ('private','hidden') AND ({like_conds}) ORDER BY importance DESC LIMIT ?"
-        cursor = await conn.execute(sql, (layer, user_id, *like_params, max(limit * 10, 50)))
-        rows = await cursor.fetchall()
+        rows = await self._dispatch.query(DB_NAME, sql, (layer, user_id, *like_params, max(limit * 10, 50)))
 
         q_tokens = {t.lower() for t in tokens}
         scored: list[tuple[int, float, Any]] = []
@@ -452,12 +454,11 @@ class CoreMemory:
                 continue
             ref = meta.get("contradicts")
             ref_key = str(ref) if ref is not None else key
-            later_rows = await (
-                await conn.execute(
-                    "SELECT key, metadata FROM core_memory WHERE layer=? AND user_id=? AND visibility NOT IN ('private','hidden') AND (key=? OR key LIKE ?) LIMIT 2",
-                    (layer, user_id, ref_key, ref_key + "::v%"),
-                )
-            ).fetchall()
+            later_rows = await self._dispatch.query(
+                DB_NAME,
+                "SELECT key, metadata FROM core_memory WHERE layer=? AND user_id=? AND visibility NOT IN ('private','hidden') AND (key=? OR key LIKE ?) LIMIT 2",
+                (layer, user_id, ref_key, ref_key + "::v%"),
+            )
             if any(str(r["key"]) != ref_key or _load_meta(r["metadata"]).get("scope") == "later" for r in later_rows):
                 superseded_keys.add(key)
         out: list[dict[str, Any]] = []
@@ -487,13 +488,11 @@ class CoreMemory:
         return out
 
     async def count(self, user_id: str | None = None) -> int:
-        conn = await self._cm.get(DB_NAME)
         if user_id:
-            cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id))
+            value = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id))
         else:
-            cursor = await conn.execute("SELECT COUNT(*) FROM core_memory")
-        row = await cursor.fetchone()
-        return int(row[0]) if row and row[0] is not None else 0
+            value = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory")
+        return int(value) if value is not None else 0
 
     def _row_to_entry(self, row: dict[str, Any] | Any, now: float | None = None) -> CoreEntry:
         exp = row["expires_at"]
@@ -517,16 +516,13 @@ class CoreMemory:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         """List memories filtered by type."""
-        conn = await self._cm.get(DB_NAME)
-        rows = await (
-            await conn.execute(
-                """SELECT key, value, importance, memory_kind, expires_at,
+        return await self._dispatch.query(
+            DB_NAME,
+            """SELECT key, value, importance, memory_kind, expires_at,
                       created_at, updated_at
                FROM core_memory
                WHERE layer=? AND user_id=? AND memory_kind=? AND importance >= ?
                ORDER BY importance DESC, updated_at DESC
                LIMIT ?""",
-                (self.layer, user_id, memory_kind, min_importance, limit),
-            )
-        ).fetchall()
-        return [dict(r) for r in rows]
+            (self.layer, user_id, memory_kind, min_importance, limit),
+        )

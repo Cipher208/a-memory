@@ -7,7 +7,7 @@ from weakref import WeakKeyDictionary
 from shared.connection import AsyncConnectionManager, connection_manager
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 
 
 class WriteDispatch:
@@ -49,14 +49,14 @@ class WriteDispatch:
             self._lock_loop = loop
         return self._lock
 
-    async def query(self, db: str, sql: str, params: Sequence[Any] = ()) -> list[Mapping[str, Any]]:
+    async def query(self, db: str, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         async with self._get_lock():
             conn: Any = await self._cm.get(db)
             async with conn.execute(sql, params) as cur:
                 rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def select_one(self, db: str, sql: str, params: Sequence[Any] = ()) -> Mapping[str, Any] | None:
+    async def select_one(self, db: str, sql: str, params: Sequence[Any] = ()) -> dict[str, Any] | None:
         async with self._get_lock():
             conn: Any = await self._cm.get(db)
             async with conn.execute(sql, params) as cur:
@@ -92,6 +92,13 @@ class WriteDispatch:
                 lastrowid = cur.lastrowid
             await conn.commit()
         return int(lastrowid or 0)
+
+    async def execute_script(self, db: str, script: str) -> None:
+        """Run a multi-statement DDL script (schema creation) and commit."""
+        async with self._get_lock():
+            conn: Any = await self._cm.get(db)
+            await conn.executescript(script)
+            await conn.commit()
 
     async def write_many(self, db: str, ops: Sequence[tuple[str, Sequence[Any]]]) -> None:
         """Execute all ops in one transaction; roll back on any failure."""
@@ -132,7 +139,7 @@ class WriteDispatch:
         sql: str,
         params: Sequence[Any] = (),
         chunk: int = 1000,
-    ) -> AsyncIterator[list[Mapping[str, Any]]]:
+    ) -> AsyncIterator[list[dict[str, Any]]]:
         conn: Any = await self._cm.get(db)
         async with conn.execute(sql, params) as cur:
             while True:
