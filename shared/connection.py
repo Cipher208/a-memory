@@ -298,11 +298,47 @@ class AsyncConnectionManager:
         conn = await aiosqlite.connect(db_path)
         _tracked_aiosqlite_conns.append(conn)
         conn.row_factory = aiosqlite.Row
+        # A short wait for the two one-time settings below. They are optional for this
+        # connection, so being stuck behind another writer must cost a fraction of a
+        # second, not the full operating timeout — the setting is retried next time.
+        await conn.execute("PRAGMA busy_timeout=250")
         # page_size/auto_vacuum must precede journal_mode=WAL (WAL seals page size)
         await conn.execute("PRAGMA page_size=16384")  # 16KB pages, new DBs only (no-op on existing)
-        await conn.execute("PRAGMA auto_vacuum=INCREMENTAL")  # new DBs only
+        # Only the two statements below can collide with another writer, and each does so
+        # differently — measured with a handler holding a write transaction:
+        #
+        #   PRAGMA auto_vacuum=INCREMENTAL   waits the whole busy_timeout, then fails
+        #   PRAGMA journal_mode=WAL          fails INSTANTLY, no wait is possible
+        #
+        # Both are properties of the DATABASE, not of this connection, so on a base that
+        # already has them there is nothing to write; writing them unconditionally made
+        # every connection need a lock it did not need, and startup behind a handler's
+        # write failed for 5 s (the pre-busy_timeout default) with "Failed to connect".
+        #
+        # So: read first, write only on a mismatch, and treat a lock as "not now" rather
+        # than "cannot connect". A connection that works in the journal mode the base
+        # already has is worth more than no connection at all — the setting is retried on
+        # the next connect, and both values are permanent once written.
+        cur = await conn.execute("PRAGMA auto_vacuum")
+        row = await cur.fetchone()
+        await cur.close()
+        if not row or int(row[0]) != 2:  # 2 = INCREMENTAL
+            try:
+                await conn.execute("PRAGMA auto_vacuum=INCREMENTAL")  # new DBs only
+            except Exception as exc:
+                logger.warning("auto_vacuum=INCREMENTAL deferred on %s: %s", db_path, exc)
         if _wal_enabled():
-            await conn.execute("PRAGMA journal_mode=WAL")
+            # No read-check here on purpose: on a base already in WAL this statement is a
+            # no-op (measured: succeeds under another writer's lock), and on a base in
+            # rollback-journal mode it fails instantly, which the tolerance below absorbs.
+            # A guard would be a second statement that changes nothing — a mutation that
+            # removed it survived the whole suite, which is what settled it.
+            try:
+                await conn.execute("PRAGMA journal_mode=WAL")
+            except Exception as exc:
+                logger.warning("journal_mode=WAL deferred on %s: %s", db_path, exc)
+        # Now the operating wait: from here on every statement may legitimately block on
+        # another writer, and 15 s is the intended budget for that.
         await conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
         await conn.execute("PRAGMA synchronous=NORMAL")
         # Cap WAL size: a starved auto-checkpoint must not grow a multi-GB WAL
