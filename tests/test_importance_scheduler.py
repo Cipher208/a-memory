@@ -1,6 +1,5 @@
 """Tests for importance scheduler."""
 
-import asyncio
 import logging
 import sqlite3
 import time
@@ -214,27 +213,6 @@ class _TrackingCursor:
         return rows
 
 
-class _BusyOnceThenFine:
-    """The first write of each kind raises BUSY, as a competing writer would."""
-
-    def __init__(self, conn, busy_writes=1):
-        self._conn = conn
-        self._left = busy_writes
-
-    async def execute(self, sql, params=()):
-        head = sql.lstrip().split(None, 1)[0].upper()
-        if head in ("UPDATE", "INSERT") and self._left > 0:
-            self._left -= 1
-            raise sqlite3.OperationalError("database is locked")
-        return await self._conn.execute(sql, params)
-
-    async def commit(self):
-        return await self._conn.commit()
-
-    async def rollback(self):
-        return await self._conn.rollback()
-
-
 async def _seed_one_rescorable(cm):
     conn = await cm.get("memory.db")
     await conn.execute(
@@ -273,32 +251,6 @@ async def test_a_write_is_not_issued_while_a_read_cursor_is_open(cm, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_busy_write_is_retried_instead_of_losing_the_user(cm, monkeypatch):
-    """A writer that holds the file for a moment must cost a retry, not the user.
-
-    `busy_timeout` is already 15 s on this connection and did not help on the live base
-    — the error came back in a tenth of a millisecond — because SQLite skips the handler
-    when a read snapshot has to be upgraded. An explicit retry is the remedy that works
-    in that window.
-    """
-    await _seed_one_rescorable(cm)
-    conn = await cm.get("memory.db")
-    flaky = _BusyOnceThenFine(conn)
-
-    async def get(_name):
-        return flaky
-
-    monkeypatch.setattr(cm, "get", get)
-    monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
-
-    s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
-    stats = await s.run_once()
-
-    assert stats["errors"] == 0, f"one BUSY must not fail the user: {stats}"
-    assert stats["rescored"] >= 1, stats
-
-
-@pytest.mark.asyncio
 async def test_the_sweep_reports_what_it_did(cm, monkeypatch, caplog):
     """A pass must say what it did, so a partial one is visible from outside.
 
@@ -317,56 +269,105 @@ async def test_the_sweep_reports_what_it_did(cm, monkeypatch, caplog):
     assert f"rescored={stats['rescored']}" in caplog.text, caplog.text
 
 
-@pytest.mark.asyncio
-async def test_an_interrupted_pass_keeps_what_it_already_committed(cm, monkeypatch):
-    """Commits are per user, so an interruption keeps what already landed.
+# --- the pass must not reach outside its own transaction ---------------------------
+#
+# #129 added a commit per user and a rollback in the error path, both on the connection
+# every tool handler shares. Measured on a throwaway base: a handler's uncommitted row
+# was published by the per-user commit, and another one vanished on the rollback. The
+# pass runs on a borrowed connection, so it owns no transaction boundary — these two
+# tests pin that, because losing a handler's row is worse than a failed sweep.
 
-    With a single commit at the end of the pass, one collision discarded every row the
-    pass had rescued — and the pass holds hundreds.
+
+@pytest.mark.asyncio
+async def test_the_pass_does_not_roll_back_foreign_work(cm, monkeypatch):
+    """A failure inside the pass must not discard a handler's uncommitted row.
+
+    The pass borrows the shared connection; a rollback there reaches every task that
+    has written on it and not yet committed.
     """
     conn = await cm.get("memory.db")
-    for uid, key in (("alice", "a"), ("bob", "b")):
-        await conn.execute(
-            """INSERT INTO core_memory
-               (user_id, "key", value, importance, updated_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (uid, key, "redis cluster pipelining", 0.4, time.time(), time.time()),
-        )
+    await conn.execute(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, updated_at, created_at)
+           VALUES ('alice', 'k', 'redis cluster pipelining', 0.4, ?, ?)""",
+        (time.time(), time.time()),
+    )
     await conn.commit()
 
-    monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
+    # A handler's write that has NOT been committed when the sweep fails.
+    await conn.execute(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, updated_at, created_at)
+           VALUES ('handler', 'pending', 'work in progress', 0.5, ?, ?)""",
+        (time.time(), time.time()),
+    )
+
+    async def boom(uid, c, stats):
+        raise sqlite3.OperationalError("database is locked")
 
     s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
+    monkeypatch.setattr(s, "_rescore_user", boom)
+    monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
 
-    # The pass is interrupted after the first user's work is done. `CancelledError` is
-    # not an `Exception`, so the per-user handler does not swallow it — the pass really
-    # stops here, exactly as it does when the process is restarted mid-sweep.
-    original = s._rescore_user
-    seen = []
+    stats = await s.run_once()
 
-    async def flaky(uid, conn, stats):
-        seen.append(uid)
-        if len(seen) == 2:
-            raise asyncio.CancelledError("the pass was interrupted")
-        return await original(uid, conn, stats)
+    assert stats["errors"] >= 1, stats
+    row = await (await conn.execute("SELECT count(*) c FROM core_memory WHERE \"key\"='pending'")).fetchone()
+    assert row is not None
+    assert row["c"] == 1, "the sweep's error path must not discard a handler's uncommitted row"
 
-    monkeypatch.setattr(s, "_rescore_user", flaky)
 
-    with pytest.raises(asyncio.CancelledError):
-        await s.run_once()
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "KNOWN DEFECT, not introduced by #129: the pass still commits once at the end, "
+        "on the shared connection, which publishes whatever a handler had written and not "
+        "committed. Measured: a pending row became visible to a second connection after a "
+        "pass that failed on every user. The fix is a connection of the pass's own (the "
+        "shape #127 used for the WAL checkpoint); this marker comes off with it."
+    ),
+)
+@pytest.mark.asyncio
+async def test_the_pass_does_not_publish_foreign_work_early(cm, monkeypatch):
+    """Rows must become visible to other readers only at the pass's single commit.
 
-    assert len(seen) == 2, f"the pass must have reached the second user: {seen}"
+    With a commit per user, everything a handler had written and not committed went out
+    with the first user's commit — work published before its owner decided to.
+    """
+    from shared.connection import AsyncConnectionManager
 
-    # Read the FILE, not the connection that still holds the pass's uncommitted
-    # transaction: a connection sees its own uncommitted writes, which is what made the
-    # first version of this test happy against the defect. Closing the manager first is
-    # what an interruption does to anything not yet committed.
-    await cm.close_all()
-    check = AsyncConnectionManager(base_dir=str(cm.base_dir))
-    conn2 = await check.get("memory.db")
-    row = await (await conn2.execute("SELECT count(*) c FROM importance_audit")).fetchone()
-    await check.close_all()
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, updated_at, created_at)
+           VALUES ('alice', 'k', 'redis cluster pipelining', 0.4, ?, ?)""",
+        (time.time(), time.time()),
+    )
+    await conn.commit()
 
+    await conn.execute(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, updated_at, created_at)
+           VALUES ('handler', 'pending', 'work in progress', 0.5, ?, ?)""",
+        (time.time(), time.time()),
+    )
+
+    # Fail the FIRST user, so the pass never reaches its final commit.
+    async def boom(uid, c, stats):
+        raise sqlite3.OperationalError("database is locked")
+
+    s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
+    monkeypatch.setattr(s, "_rescore_user", boom)
+    monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
+
+    await s.run_once()
+
+    # Ask from a different connection: the handler's row must still be invisible.
+    observer = AsyncConnectionManager(base_dir=str(cm.base_dir))
+    oc = await observer.get("memory.db")
+    row = await (await oc.execute("SELECT count(*) c FROM core_memory WHERE \"key\"='pending'")).fetchone()
     assert row is not None
     n = row["c"]
-    assert n >= 1, "an interrupted pass must keep what it already committed"
+    await observer.close_all()
+
+    assert n == 0, "a failing pass must not publish a handler's uncommitted row"

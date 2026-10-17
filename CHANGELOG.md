@@ -41,6 +41,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **Reverted the parts of #129 that could touch another component's transaction (2026-10-17).** #129 added a `commit()` per user and a `rollback()` in the error path to `_rescore_pass`. Both run on the connection every tool handler shares, so both reach outside the pass:
+
+  ```
+  handler wrote, not committed  ->  the pass's commit()    -> published to other readers
+  handler wrote, not committed  ->  the pass's rollback()  -> the handler's row is gone
+  ```
+
+  Measured on a throwaway base: a row a handler had written and not committed appeared to a second connection after the pass's commit, and a `core_memory` row vanished on the pass's rollback. A pass on a borrowed connection owns no transaction boundary; moving that boundary is not the fix, and losing a handler's row is worse than losing a sweep.
+
+  Also reverted: the retry around the write. When the connection holds a stale read snapshot, SQLite answers BUSY in well under a millisecond and never consults `busy_timeout`, so repeating the statement cannot succeed — the transaction has to be abandoned. All the retry did was turn one 15 s wait into four, holding the single aiosqlite worker and stalling tool handlers for the duration.
+
+  Kept, because neither reaches outside the pass and both were measured to help: the user list is materialised instead of iterated (a cursor held across the writes is what makes the write upgrade a stale snapshot), and the pass logs `importance sweep: rescored=N skipped=N errors=N users=N` — before it, twelve rescued rows and total failure looked identical.
+
+  **What this does not do: it does not fix the failure.** #129 claimed to remove a class of failure; that claim did not survive the evidence — a process on the merged code logged `errors=1` on ten consecutive passes, and only a restart cleared it. The remaining evidence points inside the process (fresh process clean, aged process failing every pass), not at a rival writer. Recorded as an xfail test rather than a comment, so the next change has to face it:
+
+  ```
+  xfail  test_the_pass_does_not_publish_foreign_work_early
+  ```
+
+  Suite 2323 passed, 1 xfailed.
+
 - **The rescore sweep failed on a competing writer, and one collision cost the whole pass (2026-10-16).** Every 30 minutes the sweep logged `rescore for user=default failed` — **106 occurrences over four days, at :16 and :46, without missing a beat** — and each one was
 
   ```
@@ -57,7 +78,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
   The user list is now materialised before any write, each user is committed on its own, a lock error is retried with backoff, and every pass logs `importance sweep: rescored=N skipped=N errors=N users=N`.
 
-  What the measurement established, and what it did not, matters here. Established: the failing statement and both of its stack frames; the cadence (106 failures, gaps of exactly 1800 s); that it stopped completely once a single process was left serving the base; that **twelve passes against a copy of the live base produce zero errors**; and that `VACUUM` is ~1 s and not the trigger. **Not established: which competing writer holds the file.** Four candidates were tested and refuted — an undrained cursor, an open snapshot being upgraded, a second process's VACUUM, and plain concurrent writes while the pass ran — so the fix removes the class of failure (open snapshot + one long transaction + no retry) rather than naming the culprit. Saying that plainly is the point: a plausible story is not a measurement.
+  What the measurement established, and what it did not, matters here. Established: the failing statement and both of its stack frames; the cadence (106 failures, gaps of exactly 1800 s); and that `VACUUM` is ~1 s and not the trigger. **Not established: which competing writer holds the file.** Four candidates were tested and refuted — an undrained cursor, an open snapshot being upgraded, a second process's VACUUM, and plain concurrent writes while the pass ran.
+
+  **Corrected on 17.10: this entry first said the change "removes the class of failure". It does not.** A process on the merged code logged `errors=1` on ten consecutive passes, and only a restart cleared it; a fresh process is clean, an aged one fails every pass. The claim was withdrawn and the entry above records the revert and the remaining evidence. A plausible mechanism is not a fix.
 
   Red-first, four tests, each failing on the previous code and passing on this one:
 
