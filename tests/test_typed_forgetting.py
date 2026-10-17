@@ -110,20 +110,76 @@ async def test_decay_commits_in_chunks(cm):
     )
     await conn.commit()
 
-    commits: list[int] = []
-    real_commit = conn.commit
-
-    async def counting_commit():
-        commits.append(1)
-        return await real_commit()
-
-    conn.commit = counting_commit
-
     fs = ForgettingSystem(cm=cm)
+
+    # Decay writes through the dispatch's private connection, so count the
+    # dispatch's write_many calls: it commits once per call, and more than one
+    # call means the write lock is released between batches.
+    batches: list[int] = []
+    real_write_many = fs._dispatch.write_many
+
+    async def counting_write_many(db: str, ops: object) -> None:
+        batches.append(1)  # type: ignore[arg-type]
+        await real_write_many(db, ops)  # type: ignore[arg-type]
+
+    fs._dispatch.write_many = counting_write_many  # type: ignore[method-assign]
+
     n = await fs.decay_importance()
     assert n == N, f"every row should decay, got {n}"
-    assert len(commits) > 1, (
+    assert len(batches) > 1, (
         "decay must commit in chunks so the SQLite write lock is released "
         "between batches — one long transaction is what made tool writes fail "
         "with 'database is locked'"
     )
+
+
+@pytest.mark.asyncio
+async def test_decay_survives_stale_read_snapshot_on_shared_conn(cm):
+    """decay must not fail `database is locked` when the shared conn holds a stale read txn.
+
+    A read cursor retained on the shared connection keeps a read transaction (and
+    with it a snapshot) open on the handle every component borrows. Once a foreign
+    writer — here another manager on the same file — commits, that snapshot is
+    stale, and the next write on the *same* connection fails instantly with
+    `SQLITE_BUSY_SNAPSHOT` (517); SQLite does not consult the busy handler for it.
+    Measured on the hermes base 17.10: decay/compress/prune all failed for hours
+    with the shm read-lock byte held by the MCP process while the autohooks daemon
+    kept committing. Maintenance writes must therefore not ride the shared
+    connection: they get their own, fresh one, whose snapshot cannot be stale.
+    """
+    # Two rows, not one. With a single row the table fits in one b-tree page, and
+    # SQLite can keep the write off the page the retained read snapshot touched, so
+    # the BUSY_SNAPSHOT never fires and the test would pass even on the buggy code.
+    # Two rows spread across pages, and the foreign write then touches a page the
+    # stale snapshot already read — the exact production shape. Verified: one row
+    # returns n>=1 (green, useless); two rows return 0 with `database is locked`.
+    await _insert(cm, "u", "f1", "любит синий", 0.5, "fact", days_ago=120)
+    await _insert(cm, "u", "f2", "любит зелёный", 0.4, "fact", days_ago=120)
+    fs = ForgettingSystem(cm=cm)
+
+    # Retain a read cursor on the SHARED conn: fetch one row, exhaust neither the
+    # cursor nor the statement. While it lives, the read txn and its snapshot are open.
+    shared = await cm.get("memory.db")
+    cur = await shared.execute("SELECT entry_id, importance FROM core_memory")
+    await cur.fetchone()
+
+    # Foreign writer commits on a different connection -> the shared snapshot is stale.
+    # It must UPDATE the same column decay writes (`importance`) of a row the retained
+    # cursor already read: SQLITE_BUSY_SNAPSHOT (517) fires when the stale connection
+    # writes a page whose content it read under the stale snapshot — an INSERT
+    # appending to a fresh page does not touch what was read.
+    foreign = AsyncConnectionManager(base_dir=str(cm.base_dir))
+    try:
+        fconn = await foreign.get("memory.db")
+        await fconn.execute("UPDATE core_memory SET importance=0.1 WHERE \"key\"='f1'")
+        await fconn.commit()
+    finally:
+        await foreign.close_all()
+
+    try:
+        n = await fs.decay_importance()
+        assert n >= 1, (
+            "decay must not be wedged by a stale read snapshot on the shared connection — BUSY_SNAPSHOT is instant and unhandled by busy_timeout"
+        )
+    finally:
+        await cur.close()

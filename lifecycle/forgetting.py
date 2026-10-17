@@ -16,6 +16,7 @@ from typing import Any
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch
 from shared.memory_types import (
     MemoryKind,
     apply_decay,
@@ -156,6 +157,9 @@ async def _core_key_taken(conn: Any, layer: str, user_id: str, key: str) -> bool
 class ForgettingSystem:
     def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
+        # Dedicated write path: its own connector, so a stale read snapshot on the
+        # shared connection cannot wedge maintenance writes (BUSY_SNAPSHOT 517).
+        self._dispatch = WriteDispatch(self._cm)
         self.layer = layer
         self.decay_rate = config.get_forgetting("decay_rate") or 0.01
         self.archive_days = config.get_forgetting("archive_threshold_days") or 90
@@ -187,14 +191,20 @@ class ForgettingSystem:
             if not updates:
                 return 0
 
-            # Chunked commits: see `_DECAY_CHUNK`. A single transaction for the
-            # whole batch is what made a concurrent tool write fail.
+            # Writes go through the dedicated dispatch built in __init__: its own
+            # connection holds a fresh snapshot, immune to a stale read txn on the
+            # shared conn. The SELECT above runs to completion first.
             for start in range(0, len(updates), _DECAY_CHUNK):
-                await conn.executemany(
-                    "UPDATE core_memory SET importance = ? WHERE entry_id = ?",
-                    updates[start : start + _DECAY_CHUNK],
+                await self._dispatch.write_many(
+                    DB_NAME,
+                    [
+                        (
+                            "UPDATE core_memory SET importance = ? WHERE entry_id = ?",
+                            (imp, eid),
+                        )
+                        for imp, eid in updates[start : start + _DECAY_CHUNK]
+                    ],
                 )
-                await conn.commit()
             logger.info("Decayed %d entries", len(updates))
             return len(updates)
         except Exception:
