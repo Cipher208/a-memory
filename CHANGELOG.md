@@ -41,6 +41,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **The nightly pass reads its gate only under the single-writer lock (2026-10-17).** `_check_nightly` read the cycles gate first and took `.backup_cron.lock` second:
+
+  ```
+  gate = nightly_gate(state_path)      # unguarded read
+  if gate["action"] != "run": return
+  fd = self._acquire_backup_lock()     # only now
+  ```
+
+  Two processes on one base — gateway and dashboard twins — each read the gate, each saw "due", and each entered. The loser only found out after it had already touched the database, which is exactly the window in which the nightly pass writes `core_memory` through the forgetting path.
+
+  Live shape: the cowagent base runs two MCP processes and logged **566 double `backup_cron` lines within two seconds** of each other (1644 lines over 662 distinct minutes); hermes and mimocode run one process each and logged **zero** doubles. That matches the base where `Decay failed` did not stop after the earlier fixes.
+
+  The lock now comes first, and the decision moved into `_check_nightly_locked`. A second instance returns without reading the gate at all.
+
+  Two test lessons are recorded in the file, because both cost a wrong result first:
+
+  * **Sequential calls do not model a race.** Two `_check_nightly` calls in a row pass on the broken code — the first pass has already released the lock when the second asks. The overlap has to be modelled: the second instance asks *from inside* the first one's hook.
+  * **A test that fails for the wrong reason proves nothing.** The first red run died on `AttributeError` (no seam to patch, `tmp_path` missing from a fixture), and the second "red" was `assert ['a','b'] == ['a']` on a test whose premise could not occur in production.
+
+  Red-first: on master the gate is read twice and the second instance enters; on the branch, once and never. Five tests, suite 2353 passed.
+
 - **The cleanup and purge tools take the maintenance lock (2026-10-17).** `maintenance_lock` exists so one writer at a time touches a base; `lifespan`, `importance_scheduler`, `forgetting_ritual` and `backup_cron` all take it. The two tool paths did not — and they are the heaviest writers in the house: `memory_cleanup` dispatches six operations concurrently by `asyncio.gather`, one of them writing `core_memory` through the forgetting path; `memory_lucidity_purge` writes five tables in parallel.
 
   So the tool was the only writer that could land on top of a background pass, and nothing about its timing was under anyone's control.
