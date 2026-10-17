@@ -41,6 +41,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **The cleanup and purge tools take the maintenance lock (2026-10-17).** `maintenance_lock` exists so one writer at a time touches a base; `lifespan`, `importance_scheduler`, `forgetting_ritual` and `backup_cron` all take it. The two tool paths did not — and they are the heaviest writers in the house: `memory_cleanup` dispatches six operations concurrently by `asyncio.gather`, one of them writing `core_memory` through the forgetting path; `memory_lucidity_purge` writes five tables in parallel.
+
+  So the tool was the only writer that could land on top of a background pass, and nothing about its timing was under anyone's control.
+
+  Both now acquire the lock with a bounded wait (`TOOL_MAINTENANCE_WAIT_S`, 30 s) and return an explicit `status: "busy"` instead of doing the work anyway. The background callers can skip — they run again next cycle; a tool cannot, because the owner asked for this now. It waits, but not forever, and it says so rather than reporting a clean result that never happened.
+
+  Red-first, and the first attempt was not red for the right reason: with no seam to patch the tests died on `AttributeError`, which proves nothing. The write dispatch was split into `_run_cleanup_writes` / `_run_purge_writes` first, and only then did the red become `AssertionError: purge wrote while another pass held the maintenance lock`.
+
+  Three mutations (cleanup ignores the lock, no release on the error path, purge ignores the lock) all turn the suite red. Suite 2348 passed.
+
 - **A connection can be created while another writer holds the file (2026-10-17).** `_get_aiosqlite_conn` ran its PRAGMAs unconditionally, and two of them need a write lock:
 
   ```
