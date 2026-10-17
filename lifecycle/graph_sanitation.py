@@ -14,10 +14,21 @@
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 import statistics
 from typing import Any
 
-from shared.constants import DB_NAME
+from repositories.graph_repo import GraphRepo
+from shared.write_dispatch import WriteDispatch
+
+logger = logging.getLogger(__name__)
+
+#: SQLite outcomes meaning "another connection holds the write lock right now". The
+#: dedicated dispatch cannot ride a foreign transaction, so it waits out the busy
+#: timeout and then raises; for a sweep that only removes dust the next tick is the
+#: retry, and failing the caller is not.
+_BUSY_ERRORS = frozenset({"SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_LOCKED"})
 
 
 async def prune_dangling_edges(cm: Any) -> int:
@@ -30,14 +41,18 @@ async def prune_dangling_edges(cm: Any) -> int:
     + autohooks daemon) sweep here: while the sweep ticks, dangling rows are
     dust, not debt. Single statement; O(|E|) without a join per row.
     """
-    conn = await cm.get(DB_NAME)
-    borrowed = conn.in_transaction
-    cur = await conn.execute(
-        "DELETE FROM epi_edges WHERE source_id NOT IN (SELECT node_id FROM epi_nodes) OR target_id NOT IN (SELECT node_id FROM epi_nodes)"
-    )
-    if not borrowed:
-        await conn.commit()
-    return int(cur.rowcount or 0)
+    # Route through a dedicated dispatch: the shared connection may hold a stale
+    # read snapshot (BUSY_SNAPSHOT 517), and a maintenance DELETE must not ride it.
+    dispatch = WriteDispatch(cm)
+    try:
+        return await GraphRepo(dispatch).prune_dangling_edges()
+    except sqlite3.OperationalError as exc:
+        if getattr(exc, "sqlite_errorname", "") not in _BUSY_ERRORS:
+            raise
+        logger.warning("prune_dangling_edges skipped, database busy: %s", exc)
+        return 0
+    finally:
+        await dispatch.close()
 
 
 # --- (a) lateral inhibition (SYNAPSE) ---
