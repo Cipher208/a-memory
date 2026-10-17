@@ -29,7 +29,6 @@ have it. `PRAGMA auto_vacuum` reads it without a lock.
 import asyncio
 import sqlite3
 import time
-from pathlib import Path
 
 import pytest
 
@@ -185,7 +184,7 @@ def test_a_deferred_setting_is_reported_not_silent(tmp_path, caplog):
     assert "deferred" in caplog.text.lower(), f"deferral must be logged: {caplog.text!r}"
 
 
-def test_a_healthy_base_is_not_touched(caplog):
+def test_a_healthy_base_is_not_touched(caplog, tmp_path):
     """A base that already has the settings must not be written at all.
 
     This is what makes a locked base survivable: no write, no lock, no delay. If the code
@@ -196,10 +195,7 @@ def test_a_healthy_base_is_not_touched(caplog):
 
     from shared.connection import AsyncConnectionManager
 
-    import tempfile
-
-    work = Path(tempfile.mkdtemp(prefix="healthy-", dir="/home/murat/.hermes/cache/scratch"))
-    path = _build(work, auto_vacuum=1)
+    path = _build(tmp_path, auto_vacuum=1)
     setup = sqlite3.connect(str(path))
     setup.execute("PRAGMA auto_vacuum=INCREMENTAL")
     setup.commit()
@@ -213,7 +209,7 @@ def test_a_healthy_base_is_not_touched(caplog):
     try:
 
         async def t():
-            cm = AsyncConnectionManager(base_dir=str(work))
+            cm = AsyncConnectionManager(base_dir=str(tmp_path))
             try:
                 with caplog.at_level(logging.WARNING):
                     await cm.get("memory.db")
