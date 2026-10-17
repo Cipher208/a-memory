@@ -41,13 +41,7 @@ from .base import (
     DEFAULT_TOKEN_BUDGET,
 )
 from rag.ablation import retrieval_mode
-from shared import maintenance_lock
 from shared.connection import connection_manager
-
-# How long a tool-initiated pass waits for the maintenance lock before reporting that the
-# base is busy. The other callers can skip: a background pass simply runs next cycle. A
-# tool cannot — the owner asked for this work now — so it waits, but not forever.
-TOOL_MAINTENANCE_WAIT_S = 30.0
 
 
 async def memory_stats(
@@ -418,31 +412,6 @@ async def memory_cleanup(
     metrics.inc("tool_calls")
     metrics.inc("tool_cleanup")
 
-    archive_dir = str(Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives")
-
-    # The one writer in the house that skipped this lock. `lifespan`, the scheduler, the
-    # forgetting ritual and backup_cron all take it; the tool did not, and it dispatches
-    # six operations at once, one of them writing `core_memory` through the forgetting
-    # path. A tool cannot skip the way a background pass can — the owner asked for this
-    # now — so it waits, bounded, and says plainly when the base is busy.
-    holder = maintenance_lock.acquire(connection_manager.base_dir, timeout=TOOL_MAINTENANCE_WAIT_S)
-    if holder is None:
-        return {
-            "status": "busy",
-            "detail": (f"another maintenance pass holds this base; nothing was cleaned. Waited {TOOL_MAINTENANCE_WAIT_S:.0f}s — retry shortly."),
-        }
-    try:
-        results = await _run_cleanup_writes(user_id, retention_days, archive_dir)
-    finally:
-        maintenance_lock.release(holder)
-
-    for layer in ("user", "agent"):
-        _invalidate_cache(layer, user_id)
-    return results
-
-
-async def _run_cleanup_writes(user_id: str, retention_days: int, archive_dir: str) -> dict[str, Any]:
-    """Dispatch the six cleanup operations. Split out so the lock has one boundary."""
     from features.audit_trail import AuditTrail
     from features.backup_cron import backup_cron
     from features.compression import MemoryCompressor
@@ -453,6 +422,7 @@ async def _run_cleanup_writes(user_id: str, retention_days: int, archive_dir: st
     mc = MemoryCompressor()
     at = AuditTrail()
     dream_buf = DreamBuffer()
+    archive_dir = str(Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives")
 
     # Parallel dispatch
     results = await asyncio.gather(
@@ -464,6 +434,8 @@ async def _run_cleanup_writes(user_id: str, retention_days: int, archive_dir: st
         forgetting_system.run_cleanup(user_id),
     )
 
+    for layer in ("user", "agent"):
+        _invalidate_cache(layer, user_id)
     return CleanupResult(
         dedup_core=results[0],
         compress_episodes=results[1],
@@ -486,26 +458,6 @@ async def memory_lucidity_purge(
     app = _get_ctx(ctx)
     cutoff = time.time() - (hours * 3600)
 
-    # Same serialisation as `memory_cleanup`: five tables written in parallel, and until
-    # now nothing kept them from landing on top of a background pass.
-    holder = maintenance_lock.acquire(connection_manager.base_dir, timeout=TOOL_MAINTENANCE_WAIT_S)
-    if holder is None:
-        return {
-            "status": "busy",
-            "detail": (f"another maintenance pass holds this base; nothing was purged. Waited {TOOL_MAINTENANCE_WAIT_S:.0f}s — retry shortly."),
-        }
-    try:
-        results = await _run_purge_writes(app, user_id, cutoff)
-    finally:
-        maintenance_lock.release(holder)
-
-    for layer in ("user", "agent"):
-        _invalidate_cache(layer, user_id)
-    return results
-
-
-async def _run_purge_writes(app: Any, user_id: str, cutoff: float) -> dict[str, Any]:
-    """Dispatch the five purge operations. Split out so the lock has one boundary."""
     # Parallel execution using consolidated purge helper
     results = await asyncio.gather(
         _purge_table(app.mm.user_memory(user_id).l4._cm, "core_memory", user_id, cutoff),
@@ -515,6 +467,8 @@ async def _run_purge_writes(app: Any, user_id: str, cutoff: float) -> dict[str, 
         _purge_staging(user_id),
     )
 
+    for layer in ("user", "agent"):
+        _invalidate_cache(layer, user_id)
     return PurgeResult(
         core_memory=results[0],
         episodes=results[1],

@@ -334,36 +334,6 @@ class BackupCron:
         if now < self._nightly_retry_at:
             return
 
-        # Take the single-writer lock FIRST, before reading anything.
-        #
-        # It used to be taken after the gate, and that ordering was the whole race: two
-        # processes on one base (gateway + dashboard twins) each read the gate, each saw
-        # "due", and each proceeded — the loser only discovered it had lost after it had
-        # already touched the database, and its read transaction is what made the winner's
-        # write fail. Measured on two instances sharing one base with the gate forced to
-        # "run": `gate reads: 2, nightly fired by: [1, 2]`.
-        #
-        # Live shape: the cowagent base had two MCP processes and 566 double log lines
-        # within two seconds of each other; hermes and mimocode had one process each and
-        # zero doubles.
-        #
-        # A second instance now returns without reading the gate at all — which is the
-        # point, because reading is where the collision begins.
-        #
-        # NOTE the two locks are different on purpose. This one (`.backup_cron.lock`) keeps
-        # two nightly passes apart; `_fire_nightly_hooks` separately takes the maintenance
-        # lock so the pass is also apart from the 15-minute cleanup and the importance
-        # sweep. Taking only the first is not enough — measured 14.10.2026, 14:44:46.
-        fd = self._acquire_backup_lock()
-        if fd is None:
-            return
-        try:
-            self._check_nightly_locked(now)
-        finally:
-            self._release_backup_lock(fd)
-
-    def _check_nightly_locked(self, now: float) -> None:
-        """Decide and run the nightly pass. The caller holds the single-writer lock."""
         state_path = self._cycles_state_path()
         try:
             from features.cycles import nightly_gate
@@ -376,8 +346,18 @@ class BackupCron:
             logger.info("Nightly skipped by cycles gate: %s", gate)
             return
 
+        # Same single-writer lock as the backup, so gateway/dashboard MCP twins
+        # cannot both run the pass. Not being the leader is NOT a failure: the
+        # leader is doing the work, so no backoff is recorded.
+        fd = self._acquire_backup_lock()
+        if fd is None:
+            logger.info("Nightly skipped: another writer holds the lock")
+            return
         self._nightly_started_at = now
-        verdict = self._fire_nightly_hooks(state_path, gate_checked=True)
+        try:
+            verdict = self._fire_nightly_hooks(state_path, gate_checked=True)
+        finally:
+            self._release_backup_lock(fd)
 
         if verdict == "failed":
             self._nightly_failures += 1
