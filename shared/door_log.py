@@ -48,12 +48,12 @@ every row carries its reason and the reader groups by it.
 from __future__ import annotations
 
 import logging
-import sqlite3
 import time
 from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.sync_db import open_db
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ async def record_rejection(
     this guard a new source of the exact silent loss it exists to expose.
     """
     try:
-        with sqlite3.connect(_db_path(), timeout=1.0) as conn:
+        with open_db(_db_path(), timeout=1.0) as conn:
             conn.execute(
                 "INSERT INTO memory_dispatch_rejections "
                 "(event, source_msg_id, layer, user_id, reason, text_preview, created_at) "
@@ -149,7 +149,7 @@ async def record_rejection(
 async def rejection_summary(*, user_id: str | None = None, since: float | None = None) -> dict[str, Any]:
     """Count refusals per reason, newest window first. Never raises; empty on failure."""
     try:
-        with sqlite3.connect(_db_path(), timeout=1.0) as conn:
+        with open_db(_db_path(), timeout=1.0) as conn:
             where: list[str] = []
             params: list[Any] = []
             if user_id:
@@ -185,7 +185,7 @@ async def recent_rejections(*, limit: int = 20, user_id: str | None = None) -> l
     wrong).
     """
     try:
-        with sqlite3.connect(_db_path(), timeout=1.0) as conn:
+        with open_db(_db_path(), timeout=1.0) as conn:
             sql = "SELECT reason, layer, event, source_msg_id, text_preview, created_at FROM memory_dispatch_rejections"
             params: list[Any] = []
             if user_id:

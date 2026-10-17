@@ -14,6 +14,7 @@ import logging
 import sqlite3
 import time
 from typing import Any
+from shared.sync_db import open_db
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def _db_path() -> Any:
 
 
 def _ensure_table() -> None:
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS agent_scratchpad ("
             " id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,"
@@ -43,7 +44,7 @@ async def write_entry(user_id: str, layer: str, key: str, content: str) -> bool:
     now = time.time()
     try:
         _ensure_table()
-        with sqlite3.connect(str(_db_path())) as conn:
+        with open_db(_db_path()) as conn:
             conn.execute(
                 "INSERT INTO agent_scratchpad (user_id, layer, key, content, created_at, updated_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)"
@@ -68,7 +69,7 @@ def read_entries(user_id: str, layer: str, key: str = "") -> list[dict[str, Any]
     """Scratchpad entries, newest-first; one key when given."""
     try:
         _ensure_table()
-        with sqlite3.connect(str(_db_path())) as conn:
+        with open_db(_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             if key:
                 rows = conn.execute(
@@ -90,7 +91,7 @@ def clear_entries(user_id: str, layer: str, key: str = "") -> int:
     """Clear one entry (key given) or the whole pad. Returns rows removed."""
     try:
         _ensure_table()
-        with sqlite3.connect(str(_db_path())) as conn:
+        with open_db(_db_path()) as conn:
             if key:
                 cur = conn.execute(
                     "DELETE FROM agent_scratchpad WHERE user_id=? AND layer=? AND key=?",

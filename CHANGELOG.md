@@ -41,6 +41,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **Every synchronous connection in `features/` and `shared/` now closes (2026-10-17).** `with sqlite3.connect(...)` is a *transaction* context manager: `__exit__` commits or rolls back and leaves the connection **open**. In a script the garbage collector hides that; in the autohooks daemon, which serves every event for hours, it is one descriptor per call, forever.
+
+  Measured, not inferred:
+
+  ```
+  with sqlite3.connect(...)  x 50   ->  +50 descriptors still open (gc disabled)
+  disclosure.list_rules()    x 20   ->  +40 descriptors (db + wal per call)
+  live daemon, 10 min after start   ->   29 descriptors on memory.db, growing
+  ```
+
+  Those unclosed connections are also what makes `database is locked` reach other writers: a connection left mid-transaction holds the write lock, and the next writer waits out `busy_timeout` and fails. The same shape was proven on the live base — a killed orphan holding `memory.db` made `BEGIN IMMEDIATE` fail for 2 s from outside while `CHECKPOINT` stayed free; after it was killed the identical probe returned in 0.1 ms.
+
+  33 call sites across `features/{semantic_audit,disclosure,rehydrate,counterfactual,reflection,diagnostics,diff,scratchpad,stash,procedures}.py`, `shared/door_log.py` and `shared/read_only.py` now use `shared/sync_db.py::open_db`, which preserves the transaction semantics (commit on a clean exit) and adds the missing `close()`.
+
+  No explicit `rollback()` in the error path: closing a connection with an open transaction rolls it back, and a mutation that removed the explicit rollback survived the whole suite — there was nothing left for it to change. The comment in the helper records that, so it is not "fixed" back in.
+
+  Red-first: reverting one call site makes the new tests report `assert 40 == 0`. Three mutations (no close, no commit, site reverted) all turn the suite red. Suite 2335 passed, 1 xfailed.
+
 - **Reverted the parts of #129 that could touch another component's transaction (2026-10-17).** #129 added a `commit()` per user and a `rollback()` in the error path to `_rescore_pass`. Both run on the connection every tool handler shares, so both reach outside the pass:
 
   ```

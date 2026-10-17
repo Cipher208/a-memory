@@ -13,6 +13,7 @@ import logging
 import sqlite3
 import time
 from typing import Any
+from shared.sync_db import open_db
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ def _db_path() -> Any:
 def save_cf(user_id: str, anchor: str, premise: str, projection: str, layer: str = "user") -> int:
     """Insert one counterfactual row. Returns the row id (0 on failure)."""
     try:
-        with sqlite3.connect(str(_db_path())) as conn:
+        with open_db(_db_path()) as conn:
             cursor = conn.execute(
                 "INSERT INTO counterfactuals (user_id, layer, anchor, premise, projection, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (user_id, layer, anchor, premise, projection, time.time()),
@@ -41,7 +42,7 @@ def save_cf(user_id: str, anchor: str, premise: str, projection: str, layer: str
 def list_cfs(user_id: str, anchor: str = "", limit: int = 10) -> list[dict[str, Any]]:
     """Counterfactuals newest-first; filtered by anchor when given."""
     try:
-        with sqlite3.connect(str(_db_path())) as conn:
+        with open_db(_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             if anchor:
                 rows = conn.execute(

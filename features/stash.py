@@ -24,6 +24,7 @@ import time
 from typing import Any
 
 from features.scratchpad import _db_path, clear_entries, read_entries, write_entry
+from shared.sync_db import open_db
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
 
 def _ensure_table() -> None:
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS memory_stash (
                 stash_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +54,7 @@ def _validate_name(name: str) -> str:
 
 
 def _fetch_row(user_id: str, layer: str, name: str) -> dict[str, Any] | None:
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM memory_stash WHERE user_id=? AND layer=? AND name=?", (user_id, layer, name)).fetchone()
         return dict(row) if row else None
@@ -70,7 +71,7 @@ async def stash_save(mem: Any, user_id: str, layer: str, name: str) -> dict[str,
     if not l1_items and not pad_items:
         raise ValueError("nothing to stash: L1 and scratchpad are empty")
 
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.execute(
             "INSERT INTO memory_stash (user_id, layer, name, l1_json, scratchpad_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, layer, name, json.dumps(l1_items, ensure_ascii=False), json.dumps(pad_items, ensure_ascii=False), time.time()),
@@ -85,7 +86,7 @@ async def stash_save(mem: Any, user_id: str, layer: str, name: str) -> dict[str,
 
 def stash_list(user_id: str, layer: str) -> list[dict[str, Any]]:
     _ensure_table()
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """SELECT stash_id, user_id, layer, name, created_at,
@@ -122,7 +123,7 @@ async def stash_pop(mem: Any, user_id: str, layer: str, name: str) -> dict[str, 
 def stash_drop(user_id: str, layer: str, name: str) -> dict[str, Any]:
     _validate_name(name)
     _ensure_table()
-    with sqlite3.connect(str(_db_path())) as conn:
+    with open_db(_db_path()) as conn:
         cur = conn.execute("DELETE FROM memory_stash WHERE user_id=? AND layer=? AND name=?", (user_id, layer, name))
         conn.commit()
         return {"name": name, "dropped": cur.rowcount > 0}

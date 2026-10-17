@@ -16,6 +16,7 @@ import sqlite3
 import time
 from collections import Counter
 from typing import Any
+from shared.sync_db import open_db
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ def build_reflection(mem: Any, user_id: str, period_hours: int = 24) -> dict[str
 def save_reflection(user_id: str, topic: str, insight: str, stats: dict[str, Any]) -> int:
     """Insert one reflection row. Returns the row id (0 on failure)."""
     try:
-        with sqlite3.connect(str(_db_path())) as conn:
+        with open_db(_db_path()) as conn:
             cursor = conn.execute(
                 "INSERT INTO reflections (user_id, layer, topic, insight, stats_json, created_at) VALUES (?, 'user', ?, ?, ?, ?)",
                 (user_id, topic, insight, json.dumps(stats, ensure_ascii=False), time.time()),
@@ -129,7 +130,7 @@ def save_reflection(user_id: str, topic: str, insight: str, stats: dict[str, Any
 def list_reflections(user_id: str, topic: str = "", limit: int = 10) -> list[dict[str, Any]]:
     """Recent reflections, newest first; topic filter via LIKE when given."""
     try:
-        with sqlite3.connect(str(_db_path())) as conn:
+        with open_db(_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             if topic:
                 rows = conn.execute(
