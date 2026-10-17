@@ -408,26 +408,35 @@ async def run_diagnose(user_id: str = "default") -> dict[str, Any]:
     def check(name: str, ok: bool, detail: str = "", warn: bool = False) -> None:
         checks.append({"name": name, "status": "ok" if ok else ("warn" if warn else "fail"), "detail": detail})
 
+    db_path = Path(str(connection_manager.base_dir)) / DB_NAME
+    db_present = db_path.exists()
     _check_db(check)
     await _check_l1_files(check)
 
-    # staged proposals backlog
-    try:
-        from features.staging import list_pending
+    # Checks below read the database. On a base with no database yet they cannot
+    # answer, and creating one just to look at it would turn a diagnostic into a
+    # writer: report them as skipped warnings instead of failures.
+    if db_present:
+        # staged proposals backlog
+        try:
+            from features.staging import list_pending
 
-        pending = await list_pending(user_id, 100)
-        check("pending_proposals", len(pending) <= 20, f"{len(pending)} pending", warn=len(pending) > 20)
-    except Exception as exc:
-        check("pending_proposals", False, str(exc))
+            pending = await list_pending(user_id, 100)
+            check("pending_proposals", len(pending) <= 20, f"{len(pending)} pending", warn=len(pending) > 20)
+        except Exception as exc:
+            check("pending_proposals", False, str(exc))
 
-    # S1 tamper-evidence: L0 hash-chain recheck (verify_chain; v1/v2 formats).
-    try:
-        from shared.l0 import verify_chain
+        # S1 tamper-evidence: L0 hash-chain recheck (verify_chain; v1/v2 formats).
+        try:
+            from shared.l0 import verify_chain
 
-        broken = await verify_chain()
-        check("l0_hash_chain", not broken, f"{len(broken)} broken" if broken else "chain intact", warn=False)
-    except Exception as exc:
-        check("l0_hash_chain", False, str(exc))
+            broken = await verify_chain()
+            check("l0_hash_chain", not broken, f"{len(broken)} broken" if broken else "chain intact", warn=False)
+        except Exception as exc:
+            check("l0_hash_chain", False, str(exc))
+    else:
+        check("pending_proposals", False, "skipped: no database", warn=True)
+        check("l0_hash_chain", False, "skipped: no database", warn=True)
 
     # circuit breakers (E2)
     try:
@@ -446,8 +455,7 @@ async def run_diagnose(user_id: str = "default") -> dict[str, Any]:
 
     # H2 memory_audit: content-level checks (separate from infra status)
     content_checks: list[dict[str, Any]] = []
-    db_path = Path(str(connection_manager.base_dir)) / DB_NAME
-    if db_path.exists():
+    if db_present:
         try:
             content_checks = await audit_content(user_id)
         except Exception as exc:  # missing tables on unmigrated DB — audit is advisory

@@ -14,12 +14,15 @@ from typing import Any
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 from shared.fractional_index import midpoint
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 # Serializes capture() across asyncio tasks AND processes: the hash-chain
 # read-head + insert + chain-write must be atomic, or concurrent writers
 # fork the chain (chaos-probe finding: two writers chained from the same
 # head → verify_chain reported a broken link).
 _capture_lock = asyncio.Lock()
+
+logger = logging.getLogger(__name__)
 
 # `received` means "arrived, awaiting processing" and is given an expiry by the
 # nightly pass. `parked` means "deliberately sleeping, wake on request" — an
@@ -30,6 +33,11 @@ _capture_lock = asyncio.Lock()
 # wakes them by name.
 STATUS_RECEIVED = "received"
 STATUS_PARKED = "parked"
+
+
+def _dispatch() -> WriteDispatch:
+    """Return the process-wide dispatcher; L0 never writes on the shared connection."""
+    return get_write_dispatch(connection_manager)
 
 
 def _content_hash(layer: str, user_id: str, text: str) -> str:
@@ -49,13 +57,11 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
     None (dedup inactive, write as is).
     """
     try:
-        conn = await connection_manager.get(DB_NAME)
-        prior = await (
-            await conn.execute(
-                "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
-                (_content_hash(layer, user_id, text),),
-            )
-        ).fetchone()
+        prior = await _dispatch().select_one(
+            DB_NAME,
+            "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
+            (_content_hash(layer, user_id, text),),
+        )
     except Exception:
         return None
     return int(prior["id"]) if prior is not None else None
@@ -89,13 +95,19 @@ async def capture(
         # In-process serialization; cross-process safety comes from
         # BEGIN IMMEDIATE below (SQLite single-writer) plus the CAS-style
         # chain write (UPDATE only applies if the chain head is unchanged).
+        # atomic() owns the commit and rolls back if anything raises.
         async with _capture_lock:
-            return await _capture_inner(event, layer, user_id, text, source_msg_id, raw_type, decisions, ts_override, park)
+            captured = await _dispatch().atomic(
+                DB_NAME,
+                lambda conn: _capture_inner(conn, event, layer, user_id, text, source_msg_id, raw_type, decisions, ts_override, park),
+            )
+        return int(captured) if captured is not None else None
     except Exception:
         return None
 
 
 async def _capture_inner(
+    conn: Any,
     event: str,
     layer: str,
     user_id: str,
@@ -107,16 +119,23 @@ async def _capture_inner(
     park: bool = False,
 ) -> int | None:
     try:
-        conn = await connection_manager.get(DB_NAME)
         ts = ts_override or time.time()
         rt = raw_type or classify_raw(text)
         content_hash = _content_hash(layer, user_id, text)
         # S17 #5: dedup of an already-stored block — a repeat does not create a row;
         # the rid of the original record is returned (link to the first entry). No
         # content_hash column (pre-g23-migration DB) → dedup inactive, we write as is.
-        prior_id = await find_block(layer, user_id, text)
-        if prior_id is not None:
-            return prior_id
+        try:
+            prior = await (
+                await conn.execute(
+                    "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
+                    (_content_hash(layer, user_id, text),),
+                )
+            ).fetchone()
+        except Exception:  # pre-migration DB without content_hash
+            prior = None
+        if prior is not None:
+            return int(prior["id"])
         # S1 order_key: fractional index after the last row. The column may be absent
         # in live pre-migration DBs — then we write without order_key.
         # BEGIN IMMEDIATE: take the write lock BEFORE reading the chain head so
@@ -160,12 +179,10 @@ async def _capture_inner(
         hash_prev = (prev[0] if prev is not None else "") or ""
         digest = hashlib.sha256(f"{hash_prev}|{rt}|{ts}|{text}".encode()).hexdigest()[:16]
         await conn.execute("UPDATE l0_journal SET hash_prev=?, hash_self=? WHERE id=?", (hash_prev, digest, rid))
-        await conn.commit()
         return rid
-    except Exception:
-        with contextlib.suppress(Exception):
-            await conn.execute("ROLLBACK")  # release the IMMEDIATE lock on any failure
-        return None
+    except Exception as exc:
+        logger.debug("l0 capture failed, transaction will roll back: %s", exc)
+        raise
 
 
 def _chain_digest(hash_prev: str, rt: str, ts: float, text: str) -> str:
@@ -194,7 +211,7 @@ def _captured_text(text: Any, text_z: Any) -> str:
         return text or ""
 
 
-async def _archived_chain_rows(conn: Any) -> list[tuple[Any, ...]]:
+async def _archived_chain_rows(dispatch: WriteDispatch) -> list[tuple[Any, ...]]:
     """Chain rows from l0_cold_archive in id order, or [] when they cannot be trusted.
 
     Tiering DELETES a row from the journal once it is archived, and the chain was
@@ -207,13 +224,13 @@ async def _archived_chain_rows(conn: Any) -> list[tuple[Any, ...]]:
     rather than reported as tampering.
     """
     try:
-        cols = {r[1] for r in await (await conn.execute("PRAGMA table_info(l0_cold_archive)")).fetchall()}
+        cols = {r["name"] for r in await dispatch.query(DB_NAME, "PRAGMA table_info(l0_cold_archive)")}
         if not {"hash_prev", "hash_self"} <= cols:
             return []
-        rows = await (await conn.execute("SELECT id, hash_prev, hash_self, raw_type, ts, text FROM l0_cold_archive ORDER BY id")).fetchall()
+        rows = await dispatch.query(DB_NAME, "SELECT id, hash_prev, hash_self, raw_type, ts, text FROM l0_cold_archive ORDER BY id")
     except Exception:
         return []
-    return [(int(r[0]), r[1] or "", r[2] or "", r[3], r[4], r[5] or "") for r in rows]
+    return [(int(r["id"]), r["hash_prev"] or "", r["hash_self"] or "", r["raw_type"], r["ts"], r["text"] or "") for r in rows]
 
 
 async def verify_chain() -> list[dict[str, Any]]:
@@ -233,17 +250,25 @@ async def verify_chain() -> list[dict[str, Any]]:
     ([:200] truncation, records predating the removal of the crypto weakness).
     """
     try:
-        conn = await connection_manager.get(DB_NAME)
-        jcols = {r[1] for r in await (await conn.execute("PRAGMA table_info(l0_journal)")).fetchall()}
+        dispatch = _dispatch()
+        jcols = {r["name"] for r in await dispatch.query(DB_NAME, "PRAGMA table_info(l0_journal)")}
         if not jcols:
             return [{"id": -1, "error": "verify failed"}]
         has_z = "text_z" in jcols
         cols = "id, hash_prev, hash_self, raw_type, ts, text" + (", text_z" if has_z else "")
-        jrows = list(await (await conn.execute(f"SELECT {cols} FROM l0_journal ORDER BY id")).fetchall())
+        jrows = await dispatch.query(DB_NAME, f"SELECT {cols} FROM l0_journal ORDER BY id")
         combined: list[tuple[Any, ...]] = [
-            (int(r[0]), r[1] or "", r[2] or "", r[3], r[4], _captured_text(r[5], r[6] if has_z else None)) for r in jrows
+            (
+                int(r["id"]),
+                r["hash_prev"] or "",
+                r["hash_self"] or "",
+                r["raw_type"],
+                r["ts"],
+                _captured_text(r["text"], r["text_z"] if has_z else None),
+            )
+            for r in jrows
         ]
-        combined.extend(await _archived_chain_rows(conn))
+        combined.extend(await _archived_chain_rows(dispatch))
         combined.sort(key=lambda r: r[0])
     except Exception:
         return [{"id": -1, "error": "verify failed"}]
@@ -290,30 +315,30 @@ async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> No
     and adding a decision entry would make an unchanged config treat a legitimate
     save as skippable.
     """
-    from shared.connection import connection_manager
-
     try:
-        conn = await connection_manager.get(DB_NAME)
         now = time.time()
         if reason is None:
-            await conn.execute(
+            await _dispatch().write(
+                DB_NAME,
                 "UPDATE l0_journal SET status=?, processed_at=? WHERE id=?",
                 (status, now, l0_id),
             )
         else:
             from features.replay import config_hash
 
-            row = await (await conn.execute("SELECT decisions FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
-            try:
-                decisions = json.loads((row["decisions"] if row else None) or "[]")
-            except (json.JSONDecodeError, TypeError):
-                decisions = []
-            decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
-            await conn.execute(
-                "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
-                (status, now, json.dumps(decisions, ensure_ascii=False), l0_id),
-            )
-        await conn.commit()
+            async def _txn(conn: Any) -> None:
+                row = await (await conn.execute("SELECT decisions FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
+                try:
+                    decisions = json.loads((row["decisions"] if row else None) or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    decisions = []
+                decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
+                await conn.execute(
+                    "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
+                    (status, now, json.dumps(decisions, ensure_ascii=False), l0_id),
+                )
+
+            await _dispatch().atomic(DB_NAME, _txn)
     except Exception as exc:
         # Best-effort, like `capture`: a watermark failure must not break the write
         # path that already succeeded. Logged at debug because the caller's flow is
