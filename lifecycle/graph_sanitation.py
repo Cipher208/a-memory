@@ -20,7 +20,7 @@ import statistics
 from typing import Any
 
 from repositories.graph_repo import GraphRepo
-from shared.write_dispatch import WriteDispatch
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +41,11 @@ async def prune_dangling_edges(cm: Any) -> int:
     + autohooks daemon) sweep here: while the sweep ticks, dangling rows are
     dust, not debt. Single statement; O(|E|) without a join per row.
     """
-    # Route through a dedicated dispatch: the shared connection may hold a stale
-    # read snapshot (BUSY_SNAPSHOT 517), and a maintenance DELETE must not ride it.
-    dispatch = WriteDispatch(cm)
+    # Route through the dedicated dispatch: the shared connection may hold a
+    # stale read snapshot (BUSY_SNAPSHOT 517), and a maintenance DELETE must not
+    # ride it. The dispatcher is process-wide and must outlive this call, so it
+    # is never closed here.
+    dispatch = get_write_dispatch(cm)
     try:
         return await GraphRepo(dispatch).prune_dangling_edges()
     except sqlite3.OperationalError as exc:
@@ -51,8 +53,6 @@ async def prune_dangling_edges(cm: Any) -> int:
             raise
         logger.warning("prune_dangling_edges skipped, database busy: %s", exc)
         return 0
-    finally:
-        await dispatch.close()
 
 
 # --- (a) lateral inhibition (SYNAPSE) ---

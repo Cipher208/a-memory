@@ -16,7 +16,7 @@ from typing import Any
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
-from shared.write_dispatch import WriteDispatch
+from shared.write_dispatch import get_write_dispatch
 from repositories.memory_repo import MemoryRepo
 from shared.memory_types import (
     MemoryKind,
@@ -158,9 +158,10 @@ async def _core_key_taken(conn: Any, layer: str, user_id: str, key: str) -> bool
 class ForgettingSystem:
     def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
-        # Dedicated write path: its own connector, so a stale read snapshot on the
-        # shared connection cannot wedge maintenance writes (BUSY_SNAPSHOT 517).
-        self._dispatch = WriteDispatch(self._cm)
+        # Dedicated write path: a connection of its own, so a stale read snapshot
+        # on the shared connection cannot wedge maintenance writes (BUSY_SNAPSHOT
+        # 517). Shared process-wide with the other writers via the manager key.
+        self._dispatch = get_write_dispatch(self._cm)
         self._memory = MemoryRepo(self._dispatch)
         self.layer = layer
         self.decay_rate = config.get_forgetting("decay_rate") or 0.01

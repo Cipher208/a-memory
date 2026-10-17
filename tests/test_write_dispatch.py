@@ -77,3 +77,65 @@ async def test_write_after_foreign_commit_succeeds(cm):
     # Dispatch write must still succeed (its own conn's snapshot is fresh).
     n = await d.write(DB_NAME, 'UPDATE core_memory SET importance = 0.9 WHERE "key" = ?', ("p2",))
     assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_insert_returns_lastrowid(cm):
+    d = WriteDispatch(cm)
+    first = await d.insert(
+        DB_NAME,
+        'INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)',
+        ("u", "a", "1"),
+    )
+    second = await d.insert(
+        DB_NAME,
+        'INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)',
+        ("u", "b", "2"),
+    )
+    assert first == 1
+    assert second == 2, "insert must report the id the database assigned"
+
+
+@pytest.mark.asyncio
+async def test_atomic_read_then_write_commits(cm):
+    d = WriteDispatch(cm)
+    await d.write(DB_NAME, 'INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)', ("u", "head", "v"))
+
+    async def chain(conn):
+        row = await (await conn.execute("SELECT MAX(entry_id) FROM core_memory")).fetchone()
+        parent = int(row[0])
+        cur = await conn.execute('INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)', ("u", "child", str(parent)))
+        return (parent, cur.lastrowid)
+
+    parent, child = await d.atomic(DB_NAME, chain)
+    assert parent == 1
+    assert child == 2
+    rows = await d.query(DB_NAME, 'SELECT value FROM core_memory WHERE "key" = ?', ("child",))
+    assert rows[0]["value"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_atomic_read_then_write_rolls_back(cm):
+    d = WriteDispatch(cm)
+
+    async def fail_after_write(conn):
+        await conn.execute('INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)', ("u", "ghost", "x"))
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        await d.atomic(DB_NAME, fail_after_write)
+    rows = await d.query(DB_NAME, 'SELECT "key" FROM core_memory WHERE "key" = ?', ("ghost",))
+    assert rows == [], "atomic must roll back everything written before the failure"
+
+
+@pytest.mark.asyncio
+async def test_get_write_dispatch_is_shared_per_manager(cm):
+    from shared.write_dispatch import get_write_dispatch
+
+    assert get_write_dispatch(cm) is get_write_dispatch(cm)
+
+    other = AsyncConnectionManager(base_dir=str(cm.base_dir))
+    try:
+        assert get_write_dispatch(cm) is not get_write_dispatch(other)
+    finally:
+        await other.close_all()
