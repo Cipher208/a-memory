@@ -13,8 +13,10 @@ Algorithm:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -25,6 +27,11 @@ from shared.importance import ImportanceScorer
 from shared import maintenance_lock
 
 logger = logging.getLogger(__name__)
+
+# How long the sweep's own connection waits for another writer before giving up. The
+# same 15 s the shared connection uses (`shared/connection.py: BUSY_TIMEOUT_MS`), but
+# applied to a connection nobody else can queue behind.
+_SWEEP_TIMEOUT_S = 15.0
 
 # REVERTED — a retry around the write. It was added on the theory that a momentary BUSY
 # would clear if the statement were repeated. Measured since: when the connection holds a
@@ -112,56 +119,65 @@ class ImportanceScheduler:
             maintenance_lock.release(fd)
 
     async def _rescore_pass(self) -> dict[str, int]:
-        """Run one sweep. Callers hold the maintenance lock."""
+        """Run one sweep on a connection of its own, off the event loop.
+
+        The pass used to borrow `connection_manager.get("memory.db")` — the one connection
+        every tool handler shares. Two measured consequences, both fixed by not borrowing:
+
+        * it could not own a transaction boundary. A `commit()` there publishes a handler's
+          uncommitted row; a `rollback()` there discards it (a borrowed row was published
+          and another vanished, measured on a throwaway base);
+        * while its `UPDATE` waited out `busy_timeout`, aiosqlite held its single worker, so
+          a handler's `SELECT count(*)` on the same connection waited 11.75 s behind it.
+
+        Now the sweep opens a short-lived `sqlite3` connection and runs in
+        `asyncio.to_thread`, exactly the shape #127 gave the WAL checkpoint: it inherits
+        nobody's transaction, `busy_timeout` applies to it alone, and a commit or rollback
+        reaches nothing but its own work.
+
+        Per-user commit is safe here and is what #129 was reaching for: on this connection
+        one collision no longer costs the rows already rescored.
+        """
+        db_path = connection_manager.base_dir / "memory.db"
+        return await asyncio.to_thread(self._rescore_sync, db_path)
+
+    def _rescore_sync(self, db_path: Any) -> dict[str, int]:
+        """Run the sweep itself, synchronously, through `to_thread`."""
         stats = {"rescored": 0, "skipped": 0, "errors": 0}
 
-        cm = connection_manager
-        conn = await cm.get("memory.db")
+        conn = sqlite3.connect(str(db_path), timeout=_SWEEP_TIMEOUT_S)
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute(f"PRAGMA busy_timeout={int(_SWEEP_TIMEOUT_S * 1000)}")
 
-        # The user list is materialised, not iterated. A cursor left mid-`fetchmany`
-        # keeps a read statement in flight for the whole pass, and SQLite cannot
-        # upgrade that read snapshot to a write once another connection has committed
-        # — it answers BUSY immediately and does NOT consult `busy_timeout`. Measured
-        # on the live base: the sweep failed on `UPDATE core_memory`
-        # (`OperationalError: database is locked`) on nearly every pass for four days,
-        # every 30 minutes, while a second process served the same base — and that is
-        # the shape this loop had. One extra small query removes the window.
-        users = [
-            r["user_id"]
-            for r in await (
-                await conn.execute(
+            # Materialised, not iterated: a cursor left mid-`fetchmany` keeps a read
+            # statement in flight, and SQLite refuses to upgrade that snapshot to a write
+            # once another connection has committed — BUSY in well under a millisecond,
+            # without consulting `busy_timeout`. That was this loop's shape for four days.
+            users = [
+                r["user_id"]
+                for r in conn.execute(
                     "SELECT DISTINCT user_id FROM core_memory WHERE updated_at > ?",
                     (time.time() - self.cfg.only_recent_days * 86400,),
-                )
-            ).fetchall()
-        ]
+                ).fetchall()
+            ]
 
-        # Batching has no effect on when a statement is held open — the list is already
-        # in memory — and it does not decide commits either: the pass commits once, at
-        # the end, on the connection it was given.
-        for start in range(0, len(users), self.cfg.user_batch_size):
-            for uid in users[start : start + self.cfg.user_batch_size]:
-                try:
-                    await self._rescore_user(uid, conn, stats)
-                except Exception:
-                    logger.exception("rescore for user=%s failed", uid)
-                    stats["errors"] += 1
+            for start in range(0, len(users), self.cfg.user_batch_size):
+                for uid in users[start : start + self.cfg.user_batch_size]:
+                    try:
+                        self._rescore_user(uid, conn, stats)
+                        conn.commit()
+                    except Exception:
+                        logger.exception("rescore for user=%s failed", uid)
+                        stats["errors"] += 1
+                        with contextlib.suppress(sqlite3.Error):
+                            conn.rollback()
+        finally:
+            conn.close()
 
-        # REVERTED — commit-per-user and rollback. Both act on the connection every tool
-        # handler shares, and both reach outside this pass:
-        #
-        #   handler wrote, not committed -> this commit()   -> published to other readers
-        #   handler wrote, not committed -> this rollback() -> the handler's row is gone
-        #
-        # Measured on a throwaway base: a borrowed row was published by the per-user
-        # commit, and an uncommitted `core_memory` row vanished on the rollback. A pass
-        # that runs on a shared connection cannot own a transaction boundary; giving it
-        # its own connection is the fix, not moving the boundary.
-        await conn.commit()
-
-        # Logged, because it was not: a pass that rescored nothing and a pass that
-        # failed on every user looked identical from the outside, and the only trace
-        # of the failure was a traceback per pass.
+        # Logged, because it was not: a pass that rescued twelve rows and a pass that
+        # failed on every user looked identical from the outside, and the failure's only
+        # trace was a traceback per pass.
         logger.info(
             "importance sweep: rescored=%d skipped=%d errors=%d users=%d",
             stats["rescored"],
@@ -171,40 +187,34 @@ class ImportanceScheduler:
         )
         return stats
 
-    async def _rescore_user(self, user_id: str, conn: Any, stats: dict[str, int]) -> None:
+    def _rescore_user(self, user_id: str, conn: Any, stats: dict[str, int]) -> None:
         # Retrieval counts batched once per user instead of one COUNT query
         # per row (the audit_log table is scanned for every fact otherwise).
         rc_map: dict[int, int] = {
             int(r["target_id"]): int(r["c"])
-            for r in await (
-                await conn.execute(
-                    """SELECT target_id, COUNT(*) c FROM audit_log
-                       WHERE action='recall_useful' AND layer='core_memory'
-                         AND target_id IN (
-                             SELECT entry_id FROM core_memory
-                             WHERE user_id=? AND updated_at > ?
-                         )
-                       GROUP BY target_id""",
-                    (user_id, time.time() - self.cfg.only_recent_days * 86400),
-                )
+            for r in conn.execute(
+                """SELECT target_id, COUNT(*) c FROM audit_log
+                   WHERE action='recall_useful' AND layer='core_memory'
+                     AND target_id IN (
+                         SELECT entry_id FROM core_memory
+                         WHERE user_id=? AND updated_at > ?
+                     )
+                   GROUP BY target_id""",
+                (user_id, time.time() - self.cfg.only_recent_days * 86400),
             ).fetchall()
         }
-        rows = await (
-            await conn.execute(
-                """SELECT entry_id, "key", value, importance, memory_kind
-                   FROM core_memory
-                   WHERE user_id=? AND updated_at > ?""",
-                (user_id, time.time() - self.cfg.only_recent_days * 86400),
-            )
+        rows = conn.execute(
+            """SELECT entry_id, "key", value, importance, memory_kind
+               FROM core_memory
+               WHERE user_id=? AND updated_at > ?""",
+            (user_id, time.time() - self.cfg.only_recent_days * 86400),
         ).fetchall()
         sources: dict[int, str] = {}
-        cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(core_memory)")).fetchall()]
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(core_memory)").fetchall()]
         if "source" in cols:
-            for srow in await (
-                await conn.execute(
-                    "SELECT entry_id, source FROM core_memory WHERE user_id=?",
-                    (user_id,),
-                )
+            for srow in conn.execute(
+                "SELECT entry_id, source FROM core_memory WHERE user_id=?",
+                (user_id,),
             ).fetchall():
                 sources[int(srow["entry_id"])] = str(srow["source"] or "")
 
@@ -224,11 +234,11 @@ class ImportanceScheduler:
                 stats["skipped"] += 1
                 continue
             now = time.time()
-            await conn.execute(
+            conn.execute(
                 "UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?",
                 (new_score, now, int(r["entry_id"])),
             )
-            await conn.execute(
+            conn.execute(
                 """INSERT INTO importance_audit
                    (user_id, chunk_id, source, old_importance, new_importance,
                     signal_breakdown, reason, rescored_at)

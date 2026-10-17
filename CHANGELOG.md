@@ -41,6 +41,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **The rescore sweep runs on its own connection (2026-10-17).** It used to borrow `connection_manager.get("memory.db")` — the one connection every tool handler shares. Two consequences, both measured:
+
+  ```
+  handler wrote, not committed -> the pass's commit()   -> published to other readers
+  handler wrote, not committed -> the pass's retry path  -> could not own a boundary at all
+  a handler's SELECT waited 11.75 s behind the pass's UPDATE on the same connection
+  ```
+
+  Now `_rescore_pass` opens a short-lived `sqlite3` connection in `asyncio.to_thread`, the same shape #127 gave the WAL checkpoint: it inherits nobody's transaction, `busy_timeout` applies to it alone, and commit or rollback reaches nothing but its own work. Per-user commit is back — and is now safe, which is what #129 was reaching for.
+
+  Measured against a live-shaped base with a real competing writer holding the write transaction for 3 s:
+
+  ```
+  sweep finished in 3.17 s   rescored=417 skipped=489 errors=0
+  ```
+
+  It waits the writer out instead of failing at the first collision, which is what `busy_timeout` was always supposed to do.
+
+  The `xfail` that pinned the old defect is gone: `test_the_pass_does_not_publish_foreign_work_early` passes, because a pass that never touches the shared connection cannot publish or discard anyone else's work. Three mutations (no close, no commit, shared connection) all turn the suite red. Suite 2336 passed.
+
 - **Every synchronous connection in `features/` and `shared/` now closes (2026-10-17).** `with sqlite3.connect(...)` is a *transaction* context manager: `__exit__` commits or rolls back and leaves the connection **open**. In a script the garbage collector hides that; in the autohooks daemon, which serves every event for hours, it is one descriptor per call, forever.
 
   Measured, not inferred:

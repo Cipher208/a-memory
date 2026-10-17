@@ -160,59 +160,6 @@ async def test_scheduler_spares_curated_sources(cm, monkeypatch):
 # when a write loses the race.
 
 
-class _WriteBlockedWhileACursorIsOpen:
-    """Models the live window: a write during an open read statement gets BUSY.
-
-    On a WAL database SQLite cannot upgrade a read snapshot to a write once another
-    connection has committed, and it answers BUSY *without* consulting `busy_timeout`.
-    A cursor still returning rows is exactly that state, so this wrapper raises the
-    same error the live base logged — and stops as soon as the read is exhausted.
-    """
-
-    def __init__(self, conn):
-        self._conn = conn
-        # A SET, not a flag: `_rescore_user` opens and closes cursors of its own, and a
-        # single flag measured the last cursor instead of the open one — which is why the
-        # first version of this test passed against the very defect it was written for.
-        self.open_cursors: set[int] = set()
-
-    async def execute(self, sql, params=()):
-        head = sql.lstrip().split(None, 1)[0].upper()
-        if head == "SELECT":
-            cursor = _TrackingCursor(await self._conn.execute(sql, params), self)
-            self.open_cursors.add(id(cursor))
-            return cursor
-        if self.open_cursors:
-            raise sqlite3.OperationalError("database is locked")
-        return await self._conn.execute(sql, params)
-
-    async def commit(self):
-        return await self._conn.commit()
-
-    async def rollback(self):
-        return await self._conn.rollback()
-
-
-class _TrackingCursor:
-    def __init__(self, raw, owner):
-        self._raw = raw
-        self._owner = owner
-
-    def _done(self):
-        self._owner.open_cursors.discard(id(self))
-
-    async def fetchall(self):
-        rows = await self._raw.fetchall()
-        self._done()
-        return rows
-
-    async def fetchmany(self, n):
-        rows = await self._raw.fetchmany(n)
-        if not rows:
-            self._done()
-        return rows
-
-
 async def _seed_one_rescorable(cm):
     conn = await cm.get("memory.db")
     await conn.execute(
@@ -226,19 +173,23 @@ async def _seed_one_rescorable(cm):
 
 
 @pytest.mark.asyncio
-async def test_a_write_is_not_issued_while_a_read_cursor_is_open(cm, monkeypatch):
-    """The user list must be read out before any write, not iterated across them.
+async def test_the_pass_never_touches_the_shared_connection(cm, monkeypatch):
+    """The sweep must open its own connection, not borrow the handlers'.
 
-    This is the defect exactly: the loop held `cursor.fetchmany()` open for the whole
-    pass, so the first UPDATE had to upgrade a read snapshot — the state SQLite refuses
-    with BUSY no matter how long `busy_timeout` is.
+    Measured consequence of borrowing (a borrowed row was published by the pass's commit
+    and another vanished on its rollback), and the reason `_rescore_pass` moved to
+    `sqlite3.connect` + `asyncio.to_thread`. Asserting on `get` rather than on a proxy is
+    the point: a pass that never asks cannot publish or discard anyone else's work, and a
+    proxy test would pass for a pass that quietly opened the shared file some other way.
     """
     await _seed_one_rescorable(cm)
-    conn = await cm.get("memory.db")
-    tracker = _WriteBlockedWhileACursorIsOpen(conn)
 
-    async def get(_name):
-        return tracker
+    calls: list[str] = []
+    real_get = cm.get
+
+    async def get(name):
+        calls.append(name)
+        return await real_get(name)
 
     monkeypatch.setattr(cm, "get", get)
     monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
@@ -246,7 +197,8 @@ async def test_a_write_is_not_issued_while_a_read_cursor_is_open(cm, monkeypatch
     s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
     stats = await s.run_once()
 
-    assert stats["errors"] == 0, f"a write must not be issued into an open read cursor: {stats}"
+    assert calls == [], f"the sweep borrowed the shared connection: {calls}"
+    assert stats["errors"] == 0, stats
     assert stats["rescored"] >= 1, stats
 
 
@@ -302,7 +254,7 @@ async def test_the_pass_does_not_roll_back_foreign_work(cm, monkeypatch):
         (time.time(), time.time()),
     )
 
-    async def boom(uid, c, stats):
+    def boom(uid, c, stats):
         raise sqlite3.OperationalError("database is locked")
 
     s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
@@ -317,16 +269,6 @@ async def test_the_pass_does_not_roll_back_foreign_work(cm, monkeypatch):
     assert row["c"] == 1, "the sweep's error path must not discard a handler's uncommitted row"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN DEFECT, not introduced by #129: the pass still commits once at the end, "
-        "on the shared connection, which publishes whatever a handler had written and not "
-        "committed. Measured: a pending row became visible to a second connection after a "
-        "pass that failed on every user. The fix is a connection of the pass's own (the "
-        "shape #127 used for the WAL checkpoint); this marker comes off with it."
-    ),
-)
 @pytest.mark.asyncio
 async def test_the_pass_does_not_publish_foreign_work_early(cm, monkeypatch):
     """Rows must become visible to other readers only at the pass's single commit.
@@ -334,7 +276,6 @@ async def test_the_pass_does_not_publish_foreign_work_early(cm, monkeypatch):
     With a commit per user, everything a handler had written and not committed went out
     with the first user's commit — work published before its owner decided to.
     """
-    from shared.connection import AsyncConnectionManager
 
     conn = await cm.get("memory.db")
     await conn.execute(
@@ -353,7 +294,7 @@ async def test_the_pass_does_not_publish_foreign_work_early(cm, monkeypatch):
     )
 
     # Fail the FIRST user, so the pass never reaches its final commit.
-    async def boom(uid, c, stats):
+    def boom(uid, c, stats):
         raise sqlite3.OperationalError("database is locked")
 
     s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
@@ -363,11 +304,57 @@ async def test_the_pass_does_not_publish_foreign_work_early(cm, monkeypatch):
     await s.run_once()
 
     # Ask from a different connection: the handler's row must still be invisible.
-    observer = AsyncConnectionManager(base_dir=str(cm.base_dir))
-    oc = await observer.get("memory.db")
-    row = await (await oc.execute("SELECT count(*) c FROM core_memory WHERE \"key\"='pending'")).fetchone()
-    assert row is not None
-    n = row["c"]
-    await observer.close_all()
+    #
+    # A plain read-only handle, not another AsyncConnectionManager: creating a managed
+    # connection runs `PRAGMA journal_mode=WAL`, which needs a write lock — and the
+    # handler's open transaction holds one. That is a separate defect (see the note at the
+    # end of this file), and it must not be what this test measures.
+    import asyncio as _asyncio
+
+    def _read_pending() -> int:
+        ro = sqlite3.connect(f"file:{cm.base_dir / 'memory.db'}?mode=ro", uri=True)
+        try:
+            return int(ro.execute("SELECT count(*) FROM core_memory WHERE \"key\"='pending'").fetchone()[0])
+        finally:
+            ro.close()
+
+    n = await _asyncio.to_thread(_read_pending)
 
     assert n == 0, "a failing pass must not publish a handler's uncommitted row"
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_closes_its_own_connection(cm, monkeypatch):
+    """A pass must not leave a descriptor behind, and must not leave a lock behind.
+
+    The sweep now opens a short-lived `sqlite3` connection. If it leaked that handle the
+    cause of this whole change would be reintroduced in a new place — one descriptor per
+    pass, every thirty minutes, for the life of the daemon.
+    """
+    import gc
+    import os
+
+    await _seed_one_rescorable(cm)
+    monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
+
+    def fds() -> int:
+        target = str(cm.base_dir / "memory.db")
+        n = 0
+        for fd in os.listdir("/proc/self/fd"):
+            try:
+                if os.readlink(f"/proc/self/fd/{fd}") == target:
+                    n += 1
+            except OSError:
+                continue
+        return n
+
+    gc.disable()
+    try:
+        s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
+        await s.run_once()  # warm: migrations, first-run branches
+        before = fds()
+        for _ in range(5):
+            await s.run_once()
+        assert fds() == before, "the sweep left its connection open"
+    finally:
+        gc.enable()
