@@ -26,6 +26,13 @@ logger = logging.getLogger(__name__)
 
 ARCHIVE_DIR = Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives"
 
+#: Rows per decay transaction. One transaction for the whole batch held the
+#: SQLite write lock for its full duration, so a tool write arriving mid-batch
+#: waited out `busy_timeout` (250 ms) and failed with `database is locked` —
+#: measured on the hermes base, 106 tracebacks in one night. Each chunk commits
+#: on its own, releasing the write lock between batches.
+_DECAY_CHUNK = 500
+
 #: Which archived kinds a restore may route used to be decided **here**, by an
 #: allowlist built from `MemoryKind`.
 #:
@@ -180,11 +187,14 @@ class ForgettingSystem:
             if not updates:
                 return 0
 
-            await conn.executemany(
-                "UPDATE core_memory SET importance = ? WHERE entry_id = ?",
-                updates,
-            )
-            await conn.commit()
+            # Chunked commits: see `_DECAY_CHUNK`. A single transaction for the
+            # whole batch is what made a concurrent tool write fail.
+            for start in range(0, len(updates), _DECAY_CHUNK):
+                await conn.executemany(
+                    "UPDATE core_memory SET importance = ? WHERE entry_id = ?",
+                    updates[start : start + _DECAY_CHUNK],
+                )
+                await conn.commit()
             logger.info("Decayed %d entries", len(updates))
             return len(updates)
         except Exception:

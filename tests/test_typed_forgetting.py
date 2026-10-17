@@ -85,3 +85,45 @@ async def test_archive_old_low_importance_fact(cm):
     fs = ForgettingSystem(cm=cm)
     n = await fs.archive_old_entries()
     assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_decay_commits_in_chunks(cm):
+    """decay must release the write lock between batches, not hold it for all.
+
+    It used to `executemany` every row in one transaction and commit once, so the
+    SQLite write lock was held for the whole batch. A tool write arriving
+    mid-batch waited out `busy_timeout` (250 ms) and failed with
+    `database is locked` — measured on the hermes base, 106 tracebacks in one
+    night, one every fifteen minutes. Chunked commits release the write lock
+    between batches, so a tool write can interleave instead of failing.
+    """
+    N = 2500
+    now = time.time()
+    conn = await cm.get("memory.db")
+    await conn.executemany(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, memory_kind,
+            expires_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
+        [("u", f"k{i}", f"v{i}", 0.5, "fact", now - 120 * 86400, now - 120 * 86400) for i in range(N)],
+    )
+    await conn.commit()
+
+    commits: list[int] = []
+    real_commit = conn.commit
+
+    async def counting_commit():
+        commits.append(1)
+        return await real_commit()
+
+    conn.commit = counting_commit
+
+    fs = ForgettingSystem(cm=cm)
+    n = await fs.decay_importance()
+    assert n == N, f"every row should decay, got {n}"
+    assert len(commits) > 1, (
+        "decay must commit in chunks so the SQLite write lock is released "
+        "between batches — one long transaction is what made tool writes fail "
+        "with 'database is locked'"
+    )
