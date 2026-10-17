@@ -48,12 +48,15 @@ async def test_decay_batch_writes_via_dispatch(bundle):
 @pytest.mark.asyncio
 async def test_prune_dangling_edges(bundle):
     d, repos = bundle
-    await d.write(DB_NAME, "INSERT INTO epi_nodes (node_id, title, kind) VALUES (1, 'a', 'x')")
     await d.write(
         DB_NAME,
-        "INSERT INTO epi_edges (source_id, target_id, label) VALUES (1, 999, 'keep'), (999, 1, 'drop')",
+        "INSERT INTO epi_nodes (node_id, title, kind) VALUES (1, 'a', 'x'), (2, 'b', 'y')",
+    )
+    await d.write(
+        DB_NAME,
+        "INSERT INTO epi_edges (source_id, target_id, label) VALUES (1, 2, 'keep'), (1, 999, 'drop-target'), (999, 1, 'drop-source')",
     )
     removed = await repos.graph.prune_dangling_edges()
-    assert removed == 1
+    assert removed == 2
     rows = await d.query(DB_NAME, "SELECT source_id, target_id FROM epi_edges")
-    assert [(r["source_id"], r["target_id"]) for r in rows] == [(1, 999)]
+    assert [(r["source_id"], r["target_id"]) for r in rows] == [(1, 2)]
