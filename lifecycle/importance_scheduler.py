@@ -13,10 +13,8 @@ Algorithm:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
-import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -28,37 +26,13 @@ from shared import maintenance_lock
 
 logger = logging.getLogger(__name__)
 
-# A write that loses the race is retried. `busy_timeout` is not enough on its own:
-# when a read snapshot has to be upgraded and another connection has committed since,
-# SQLite answers BUSY *without* consulting the handler, so the only remedy inside that
-# window is to try again. Measured on the live base 16.10.2026 — the sweep failed on
-# `UPDATE core_memory` in ~0.1 ms with a 15 s timeout configured.
-_BUSY_RETRIES = 3
-_BUSY_RETRY_SLEEP_S = 0.25
-
-
-def _is_lock_error(exc: Exception) -> bool:
-    """Report whether an exception is one of the two lock errors.
-
-    `database is locked` is another writer on the file; `database table is locked` is a
-    statement still in flight on this very connection. Both are worth retrying, and
-    conflating them is how a same-connection defect was mistaken for a writer storm
-    once already (see the WAL checkpoint fix).
-    """
-    text = str(exc).lower()
-    return isinstance(exc, sqlite3.OperationalError) and ("locked" in text or "busy" in text)
-
-
-async def _execute_with_retry(conn: Any, sql: str, params: tuple[Any, ...]) -> None:
-    """One write, retried while a competing writer holds the file."""
-    for attempt in range(_BUSY_RETRIES + 1):
-        try:
-            await conn.execute(sql, params)
-            return
-        except sqlite3.OperationalError as exc:
-            if not _is_lock_error(exc) or attempt == _BUSY_RETRIES:
-                raise
-            await asyncio.sleep(_BUSY_RETRY_SLEEP_S * (attempt + 1))
+# REVERTED — a retry around the write. It was added on the theory that a momentary BUSY
+# would clear if the statement were repeated. Measured since: when the connection holds a
+# stale read snapshot, SQLite answers BUSY in well under a millisecond and **never
+# consults `busy_timeout`**, so repeating the statement cannot succeed — the transaction
+# has to be abandoned, and on a shared connection abandoning it is not this pass's right.
+# All the retry did was turn one 15 s wait into four, holding the single aiosqlite worker
+# and stalling every tool handler for the duration.
 
 
 @dataclass
@@ -162,22 +136,28 @@ class ImportanceScheduler:
             ).fetchall()
         ]
 
-        # Still processed in batches, but the list is already in memory: batching now
-        # only decides how often we commit, not how long a statement stays open.
+        # Batching has no effect on when a statement is held open — the list is already
+        # in memory — and it does not decide commits either: the pass commits once, at
+        # the end, on the connection it was given.
         for start in range(0, len(users), self.cfg.user_batch_size):
             for uid in users[start : start + self.cfg.user_batch_size]:
                 try:
                     await self._rescore_user(uid, conn, stats)
-                    # Committed per user. One commit for the whole pass means a single
-                    # collision discards every row the pass had already rescored, and
-                    # holds a write transaction across hundreds of statements, which is
-                    # what makes the collision likely in the first place.
-                    await conn.commit()
                 except Exception:
                     logger.exception("rescore for user=%s failed", uid)
                     stats["errors"] += 1
-                    with contextlib.suppress(Exception):
-                        await conn.rollback()
+
+        # REVERTED — commit-per-user and rollback. Both act on the connection every tool
+        # handler shares, and both reach outside this pass:
+        #
+        #   handler wrote, not committed -> this commit()   -> published to other readers
+        #   handler wrote, not committed -> this rollback() -> the handler's row is gone
+        #
+        # Measured on a throwaway base: a borrowed row was published by the per-user
+        # commit, and an uncommitted `core_memory` row vanished on the rollback. A pass
+        # that runs on a shared connection cannot own a transaction boundary; giving it
+        # its own connection is the fix, not moving the boundary.
+        await conn.commit()
 
         # Logged, because it was not: a pass that rescored nothing and a pass that
         # failed on every user looked identical from the outside, and the only trace
@@ -244,13 +224,11 @@ class ImportanceScheduler:
                 stats["skipped"] += 1
                 continue
             now = time.time()
-            await _execute_with_retry(
-                conn,
+            await conn.execute(
                 "UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?",
                 (new_score, now, int(r["entry_id"])),
             )
-            await _execute_with_retry(
-                conn,
+            await conn.execute(
                 """INSERT INTO importance_audit
                    (user_id, chunk_id, source, old_importance, new_importance,
                     signal_breakdown, reason, rescored_at)
