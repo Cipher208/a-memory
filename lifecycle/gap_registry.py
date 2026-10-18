@@ -25,6 +25,7 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,8 @@ async def _ensure_table(cm: Any) -> None:
     the same, which is what removes any need for a manual upgrade step: the first brief
     after a deploy upgrades the schema instead of reporting nothing until the nightly run.
     """
-    await cm.execute_script(
+    dispatch = get_write_dispatch(cm)
+    await dispatch.execute_script(
         DB_NAME,
         """
         CREATE TABLE IF NOT EXISTS memory_gaps (
@@ -65,12 +67,11 @@ async def _ensure_table(cm: Any) -> None:
         CREATE INDEX IF NOT EXISTS idx_gaps_hash ON memory_gaps(gap_hash);
         """,
     )
-    conn = await cm.get(DB_NAME)
-    cols = {str(r[1]) for r in await (await conn.execute("PRAGMA table_info(memory_gaps)")).fetchall()}
+    cols = {str(r["name"]) for r in await dispatch.query(DB_NAME, "PRAGMA table_info(memory_gaps)")}
     added: list[str] = []
     for name, ddl in _OBSERVATION_COLUMNS:
         if name not in cols:
-            await conn.execute(f"ALTER TABLE memory_gaps ADD COLUMN {name} {ddl}")
+            await dispatch.write(DB_NAME, f"ALTER TABLE memory_gaps ADD COLUMN {name} {ddl}", ())
             added.append(name)
     if not added:
         # Nothing changed, so there is nothing to backfill and nothing to commit. Keeping
@@ -81,8 +82,7 @@ async def _ensure_table(cm: Any) -> None:
     # read as "infinitely old" and hide immediately. Its own `ts` is the honest answer:
     # the hole has been observed once, when it was written.
     if "last_seen" in added:
-        await conn.execute("UPDATE memory_gaps SET last_seen = ts WHERE last_seen = 0")
-    await conn.commit()
+        await dispatch.write(DB_NAME, "UPDATE memory_gaps SET last_seen = ts WHERE last_seen = 0", ())
 
 
 def _gap_hash(text: str) -> str:
@@ -100,70 +100,72 @@ async def build_registry(layer: str = "user", limit: int = 20) -> dict[str, Any]
     """
     cm = connection_manager
     await _ensure_table(cm)
-    conn = await cm.get(DB_NAME)
-    written = 0
-    bumped = 0
     cutoff = time.time() - _GAP_MAX_AGE_DAYS * 86400
 
-    async def _insert_gap(user_id: str, text: str, origin: str) -> None:
-        """Idempotent insert (check-then-write; rowcount/total_changes are unreliable).
+    async def _build(conn: Any) -> tuple[int, int]:
+        written = 0
+        bumped = 0
 
-        A repeat is not a no-op: it bumps `seen_count` and refreshes `last_seen`. The same
-        hole observed on three nights is the one worth pursuing, and that ranking is only
-        possible if the repeat is recorded instead of discarded.
-        """
-        h = _gap_hash(text)
-        now = time.time()
-        dup = await (await conn.execute("SELECT id FROM memory_gaps WHERE gap_hash=?", (h,))).fetchone()
-        if dup:
+        async def _insert_gap(user_id: str, text: str, origin: str) -> None:
+            """Idempotent insert (check-then-write; rowcount/total_changes are unreliable).
+
+            A repeat is not a no-op: it bumps `seen_count` and refreshes `last_seen`. The same
+            hole observed on three nights is the one worth pursuing, and that ranking is only
+            possible if the repeat is recorded instead of discarded.
+            """
+            h = _gap_hash(text)
+            now = time.time()
+            cur = await conn.execute("SELECT id FROM memory_gaps WHERE gap_hash=?", (h,))
+            dup = await cur.fetchone()
+            if dup:
+                await conn.execute(
+                    "UPDATE memory_gaps SET seen_count = seen_count + 1, last_seen = ? WHERE id = ?",
+                    (now, int(dup["id"])),
+                )
+                nonlocal bumped
+                bumped += 1
+                return
             await conn.execute(
-                "UPDATE memory_gaps SET seen_count = seen_count + 1, last_seen = ? WHERE id = ?",
-                (now, int(dup["id"])),
+                "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash, last_seen, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+                (now, layer, user_id, text[:300], origin, h, now),
             )
-            nonlocal bumped
-            bumped += 1
-            return
-        await conn.execute(
-            "INSERT INTO memory_gaps (ts, layer, user_id, gap, origin, gap_hash, last_seen, seen_count) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-            (now, layer, user_id, text[:300], origin, h, now),
-        )
-        nonlocal written
-        written += 1
+            nonlocal written
+            written += 1
 
-    try:
-        # L3 questions: a nightly slice across ALL users (search_by_tag is a
-        # per-user API; the registry is a cross-user aggregate).
-        q_rows = await (
-            await conn.execute(
+        try:
+            # L3 questions: a nightly slice across ALL users (search_by_tag is a
+            # per-user API; the registry is a cross-user aggregate).
+            cur = await conn.execute(
                 "SELECT user_id, summary FROM episodes"
                 " WHERE layer=? AND created_at >= ? AND tags LIKE '%\"question\"%'"
                 " ORDER BY created_at DESC LIMIT ?",
                 (layer, cutoff, limit),
             )
-        ).fetchall()
-        for r in q_rows:
-            text = str(r["summary"]).strip()
-            if text:
-                await _insert_gap(str(r["user_id"]), text, "question")
-    except Exception:
-        logger.exception("gap registry question scan failed")
-    try:
-        z_rows = await (
-            await conn.execute(
+            q_rows = await cur.fetchall()
+            for r in q_rows:
+                text = str(r["summary"]).strip()
+                if text:
+                    await _insert_gap(str(r["user_id"]), text, "question")
+        except Exception:
+            logger.exception("gap registry question scan failed")
+        try:
+            cur = await conn.execute(
                 "SELECT user_id, query FROM recall_zero_results WHERE layer=? GROUP BY query_hash, user_id HAVING COUNT(*) >= 2 LIMIT ?",
                 (layer, limit),
             )
-        ).fetchall()
-        for r in z_rows:
-            text = str(r["query"]).strip()
-            if text:
-                await _insert_gap(str(r["user_id"]), text, "zero_result")
-        await conn.commit()
-    except Exception:
-        # recall_zero_results is a lazy-ensure table (the S17 miner); until the
-        # first nightly run it does not exist — the zero-result branch just stays silent.
-        logger.debug("gap registry zero-result scan skipped: no journal yet")
-    rows = await (await conn.execute("SELECT ts, user_id, gap, origin FROM memory_gaps ORDER BY id DESC LIMIT ?", (limit,))).fetchall()
+            z_rows = await cur.fetchall()
+            for r in z_rows:
+                text = str(r["query"]).strip()
+                if text:
+                    await _insert_gap(str(r["user_id"]), text, "zero_result")
+        except Exception:
+            # recall_zero_results is a lazy-ensure table (the S17 miner); until the
+            # first nightly run it does not exist — the zero-result branch just stays silent.
+            logger.debug("gap registry zero-result scan skipped: no journal yet")
+        return written, bumped
+
+    written, bumped = await get_write_dispatch(cm).atomic(DB_NAME, _build)
+    rows = await get_write_dispatch(cm).query(DB_NAME, "SELECT ts, user_id, gap, origin FROM memory_gaps ORDER BY id DESC LIMIT ?", (limit,))
     return {"gaps": [dict(r) for r in rows], "written": written, "bumped": bumped}
 
 
@@ -192,7 +194,6 @@ async def open_gaps(
     except Exception:  # pragma: no cover - a broken schema must cost the line, not the brief
         logger.debug("gap registry ensure failed", exc_info=True)
         return []
-    conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - max_age_days * 86400
     sql = "SELECT id, ts, layer, user_id, gap, origin, last_seen, seen_count FROM memory_gaps WHERE layer=? AND last_seen >= ?"
     params: list[Any] = [layer, cutoff]
@@ -202,7 +203,7 @@ async def open_gaps(
     sql += " ORDER BY seen_count DESC, last_seen DESC LIMIT ?"
     params.append(limit)
     try:
-        rows = await (await conn.execute(sql, tuple(params))).fetchall()
+        rows = await get_write_dispatch(connection_manager).query(DB_NAME, sql, tuple(params))
     except sqlite3.OperationalError:
         return []
     return [dict(r) for r in rows]
@@ -219,7 +220,6 @@ async def count_open_gaps(
     except Exception:  # pragma: no cover - a broken schema must cost the line, not the brief
         logger.debug("gap registry ensure failed", exc_info=True)
         return 0
-    conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - max_age_days * 86400
     sql = "SELECT COUNT(*) FROM memory_gaps WHERE layer=? AND last_seen >= ?"
     params: list[Any] = [layer, cutoff]
@@ -227,7 +227,7 @@ async def count_open_gaps(
         sql += " AND user_id=?"
         params.append(user_id)
     try:
-        row = await (await conn.execute(sql, tuple(params))).fetchone()
+        total = await get_write_dispatch(connection_manager).scalar(DB_NAME, sql, tuple(params))
     except sqlite3.OperationalError:
         return 0
-    return int(row[0] or 0) if row else 0
+    return int(total or 0)
