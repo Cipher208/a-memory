@@ -1081,8 +1081,8 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any =
         if b == 0:
             await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, 'anomaly:junk_vector')", (nid,))
             flagged += 1
-    if flagged and not borrowed:
-        await conn.commit()
+    # The @_maintenance wrapper owns the commit: publishing here would end the
+    # caller's transaction before the edges are written.
 
     edges = 0
     dirty: set[int] = set()
@@ -1260,7 +1260,6 @@ async def wire_new_node(
         shared = my_tags & other_tags.get(oid, set())
         if shared:
             edges += await _insert_edge(conn, min(node_id, oid), max(node_id, oid), "tagged", min(0.3 + 0.1 * len(shared), 0.6), "tags")
-    await conn.commit()
     return edges
 
 

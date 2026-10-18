@@ -176,8 +176,8 @@ async def lateral_inhibition(conn: Any, node_id: int, beta: float = INHIBITION_B
                 (u_new, r["source_id"], r["target_id"], r["relation"]),
             )
             changed += 1
-    if changed:
-        await conn.commit()
+    # The caller owns the transaction: every miner runs inside the maintenance
+    # wrapper's atomic block, and committing here would publish half of it.
     return changed
 
 
