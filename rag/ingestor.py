@@ -7,6 +7,7 @@ from rag.models import RAGPage
 from rag.quantize import binary_batch
 from shared.constants import DB_NAME
 from shared.embeddings import embed_texts
+from shared.write_dispatch import get_write_dispatch
 
 if TYPE_CHECKING:
     from shared.connection import AsyncConnectionManager
@@ -23,17 +24,17 @@ class RAGIngestor:
         # Calculate content hash
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-        conn = await self.cm.get(DB_NAME)
+        dispatch = get_write_dispatch(self.cm)
 
         # Check if page exists — scoped to this layer so the same content
         # can legitimately exist in user and agent layers
-        cursor = await conn.execute(
+        existing = await dispatch.select_one(
+            DB_NAME,
             "SELECT id FROM rag_pages WHERE sha256_hash = ? AND user_id = ? AND layer = ?",
             (content_hash, user_id, self.layer),
         )
-        row = await cursor.fetchone()
-        if row:
-            return int(row[0]) if row[0] is not None else None
+        if existing is not None:
+            return int(existing["id"]) if existing["id"] is not None else None
 
         # Split text into chunks
         from config import config
@@ -68,9 +69,7 @@ class RAGIngestor:
         # Binarize embeddings
         bin_embeddings = binary_batch(embeddings, thresholds=self.thresholds_cache, dim=self.binary_dim)
 
-        # Start transaction
-        await conn.execute("BEGIN TRANSACTION")
-        try:
+        async def _write(conn: Any) -> int:
             # Insert page
             await conn.execute(
                 """
@@ -112,9 +111,6 @@ class RAGIngestor:
                 "INSERT INTO rag_chunks (page_id, chunk_index, content, bin_embedding, float_embedding) VALUES (?, ?, ?, ?, ?)",
                 chunk_data,
             )
-            await conn.commit()
-        except Exception:
-            await conn.rollback()
-            raise
+            return page_id
 
-        return page_id
+        return await dispatch.atomic(DB_NAME, _write)

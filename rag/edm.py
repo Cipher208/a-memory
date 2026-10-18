@@ -109,18 +109,18 @@ async def _led_to_neighbors(cm: Any, node_ids: list[int], layer: str, user_id: s
     try:
         from lifecycle.graph_sanitation import active_edges_clause
         from shared.constants import DB_NAME
+        from shared.write_dispatch import get_write_dispatch
 
-        conn = await cm.get(DB_NAME)
         ph = ",".join("?" * len(node_ids))
         clause, params = active_edges_clause("e")
-        cur = await conn.execute(
+        rows = await get_write_dispatch(cm).query(
+            DB_NAME,
             "SELECT e.source_id, e.target_id FROM epi_edges e"
             " JOIN epi_nodes n ON n.node_id = e.source_id"
             " WHERE e.relation='led_to' AND n.layer=? AND n.user_id=?"
             f" AND (e.source_id IN ({ph}) OR e.target_id IN ({ph})) AND {clause}",
             (layer, user_id, *node_ids, *node_ids, *params),
         )
-        rows = await cur.fetchall()
     except Exception:
         return {}  # G-member unavailable → degrade to R/N/K, do not crash
     neigh: dict[int, set[int]] = {}

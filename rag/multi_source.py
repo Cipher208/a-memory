@@ -11,6 +11,8 @@ import re
 import time
 from typing import Any
 
+from shared.write_dispatch import get_write_dispatch
+
 logger = logging.getLogger(__name__)
 
 # Entity source (S10, 6th RRF source): query tokens resolved through synonym
@@ -270,15 +272,15 @@ class MultiSourceRAG:
         entry_ids = [f["entry_id"] for f in facts if f.get("entry_id")]
         freq: dict[int, int] = {}
         if entry_ids:
-            conn = await core._cm.get(DB_NAME)
             ph = ",".join("?" * len(entry_ids))
-            cur = await conn.execute(
+            rows = await get_write_dispatch(core._cm).query(
+                DB_NAME,
                 f"""SELECT target_id, COUNT(*) c FROM audit_log
                     WHERE action='recall_useful' AND layer='core_memory'
                     AND target_id IN ({ph}) GROUP BY target_id""",
                 tuple(str(i) for i in entry_ids),
             )
-            freq = {int(r["target_id"]): int(r["c"]) for r in await cur.fetchall()}
+            freq = {int(r["target_id"]): int(r["c"]) for r in rows}
 
         # S18 item 1: per-query min-max ACT-R — top fact gets ceil (1.3), worst
         # gets the neutral floor (1.0) relative to this result set.
@@ -304,12 +306,11 @@ class MultiSourceRAG:
         # Basic graph content search via LIKE (primitive)
         from shared.constants import DB_NAME
 
-        conn = await self.cm.get(DB_NAME)
-        cur = await conn.execute(
+        graph_rows = await get_write_dispatch(self.cm).query(
+            DB_NAME,
             "SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE layer=? AND user_id=? AND content LIKE ? LIMIT ?",
             (self.layer, user_id, f"%{query}%", limit),
         )
-        graph_rows = await cur.fetchall()
         return [
             {
                 "id": -r["node_id"] - _ID_OFFSET_GRAPH,
@@ -345,9 +346,9 @@ class MultiSourceRAG:
 
         from shared.constants import DB_NAME
 
-        conn = await self.cm.get(DB_NAME)
         likes = " OR ".join("content LIKE ?" for _ in members)
-        cur = await conn.execute(
+        rows = await get_write_dispatch(self.cm).query(
+            DB_NAME,
             f"SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE layer=? AND user_id=? AND ({likes}) LIMIT ?",
             (self.layer, user_id, *(f"%{m}%" for m in sorted(members)), limit * 2),
         )
@@ -359,7 +360,7 @@ class MultiSourceRAG:
                 "score": _ENTITY_SCORE * weight,
                 "source": "entities",
             }
-            for r in await cur.fetchall()
+            for r in rows
         ]
 
     async def _expand_graph(self, results: list[dict[str, Any]], user_id: str, edge_exclude: set[str] | None = None) -> list[dict[str, Any]]:
@@ -384,7 +385,7 @@ class MultiSourceRAG:
 
         from shared.constants import DB_NAME
 
-        conn = await self.cm.get(DB_NAME)
+        dispatch = get_write_dispatch(self.cm)
         ph = ",".join("?" * len(node_ids))
         where_extra = ""
         params: list[Any] = [*node_ids, *node_ids, self.layer, user_id]
@@ -394,7 +395,8 @@ class MultiSourceRAG:
             like_conds = " AND ".join(["e.tags NOT LIKE ?" for _ in edge_exclude])
             where_extra = f" AND ({like_conds})"
             params.extend(f'%"heuristic:{name}"%' for name in edge_exclude)
-        cur = await conn.execute(
+        rows = await dispatch.query(
+            DB_NAME,
             f"""SELECT n.node_id, n.content, n.node_type, n.confidence, e.weight
                 FROM epi_edges e
                 JOIN epi_nodes n
@@ -404,7 +406,7 @@ class MultiSourceRAG:
             params,
         )
         existing = {r.get("id") for r in results}
-        for row in await cur.fetchall():
+        for row in rows:
             rid = -int(row["node_id"]) - _ID_OFFSET_GRAPH
             if rid in existing:
                 continue

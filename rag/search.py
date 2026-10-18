@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from shared.connection import AsyncConnectionManager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -25,27 +26,27 @@ async def search_fts5(
     A3.1: FTS MATCH gets synonym-expanded (rag/synonyms) — the LIKE fallback
     keeps the ORIGINAL query (substring semantics differ).
     """
-    conn = await cm.get(DB_NAME)
+    dispatch = get_write_dispatch(cm)
     if fts_available:
         try:
             from rag.synonyms import expand_fts_query
 
             match_expr = expand_fts_query(query)
-            cur = await conn.execute(
+            rows = await dispatch.query(
+                DB_NAME,
                 """SELECT wp.id, wp.title, wp.content, wp.wiki_type, fts.rank
                    FROM rag_fts fts JOIN rag_pages wp ON fts.rowid = wp.id
                    WHERE rag_fts MATCH ? AND wp.user_id = ? AND wp.layer = ?
                    ORDER BY fts.rank DESC LIMIT ?""",
                 (match_expr, user_id, layer, limit),
             )
-            rows = await cur.fetchall()
             return [
                 {
-                    "id": r[0],
-                    "title": r[1],
-                    "content": r[2][:500] + "..." if len(r[2]) > 500 else r[2],
-                    "wiki_type": r[3],
-                    "score": abs(r[4]) if r[4] else 0.0,
+                    "id": r["id"],
+                    "title": r["title"],
+                    "content": r["content"][:500] + "..." if len(r["content"]) > 500 else r["content"],
+                    "wiki_type": r["wiki_type"],
+                    "score": abs(r["rank"]) if r["rank"] else 0.0,
                     "source": "fts5",
                 }
                 for r in rows
@@ -55,18 +56,18 @@ async def search_fts5(
             logger.warning("FTS5 query failed (%s) — falling back to LIKE", e)
 
     escaped_query = query.replace("%", "\\%").replace("_", "\\_")
-    cur = await conn.execute(
+    rows = await dispatch.query(
+        DB_NAME,
         "SELECT id, title, content, wiki_type FROM rag_pages WHERE user_id=? AND layer=? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT ?",
         (user_id, layer, f"%{escaped_query}%", f"%{escaped_query}%", limit),
     )
-    rows = await cur.fetchall()
     return [
         {
-            "id": r[0],
-            "page_id": r[0],
-            "title": r[1] or "",
-            "content": r[2] or "",
-            "wiki_type": r[3],
+            "id": r["id"],
+            "page_id": r["id"],
+            "title": r["title"] or "",
+            "content": r["content"] or "",
+            "wiki_type": r["wiki_type"],
             "score": None,
             "source": "fts5_like_fallback",
         }
@@ -95,8 +96,9 @@ async def search_binary(
     if q_bin is None:
         return []
 
-    conn = await cm.get(DB_NAME)
-    cursor = await conn.execute(
+    dispatch = get_write_dispatch(cm)
+    rows_all = await dispatch.query(
+        DB_NAME,
         """
         SELECT c.id, c.page_id, c.content, c.bin_embedding,
                p.title, p.wiki_type
@@ -108,8 +110,6 @@ async def search_binary(
         """,
         (user_id, layer),
     )
-
-    rows_all = await cursor.fetchall()
     scored = []
     # Weighted Hamming (draft v37, option): per-bit weights = log(1/P(b=1)),
     # a rare informative bit weighs more. Off by default — enabled via
@@ -210,26 +210,25 @@ async def _fetch_rrf_results(
     bin_ranks: dict[int, int],
 ) -> list[dict[str, Any]]:
     """Fetch final metadata for RRF results from DB."""
-    conn = await cm.get(DB_NAME)
+    dispatch = get_write_dispatch(cm)
     placeholders = ",".join(["?"] * len(sorted_ids))
     # skylos: ignore [SKY-D211] - Static ID list from internal merged ranks.
     sql = f"SELECT id, title, content, wiki_type FROM rag_pages WHERE id IN ({placeholders})"
-    cur = await conn.execute(sql, tuple(sorted_ids))
-    rows = await cur.fetchall()
-    by_id = {r[0]: r for r in rows}
+    rows = await dispatch.query(DB_NAME, sql, tuple(sorted_ids))
+    by_id = {r["id"]: r for r in rows}
 
     results = []
     for doc_id in sorted_ids:
         row = by_id.get(doc_id)
         if row:
             source = _determine_source(doc_id, fts_ranks, bin_ranks)
-            content = row[2]
+            content = row["content"]
             results.append(
                 {
-                    "id": row[0],
-                    "title": row[1],
+                    "id": row["id"],
+                    "title": row["title"],
                     "content": content[:500] + "..." if len(content) > 500 else content,
-                    "wiki_type": row[3],
+                    "wiki_type": row["wiki_type"],
                     "score": merged[doc_id],
                     "source": source,
                 }

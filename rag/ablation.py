@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from config import config
 from rag.synonyms import load_synonyms
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 from shared.memory_types import kind_for_text
 
 if TYPE_CHECKING:
@@ -302,12 +303,12 @@ async def _kind_hits(cm: Any, kind: str, query: str, *, user_id: str, layer: str
 
     # 1) L4 core — typed fact store (memory_kind is always populated)
     try:
-        conn = await cm.get(DB_NAME)
         like = " OR ".join(["(key LIKE ? OR value LIKE ?)"] * len(toks))
         params: list[Any] = [layer, user_id, kind]
         for t in toks:
             params.extend([f"%{t}%", f"%{t}%"])
-        cur = await conn.execute(
+        rows = await get_write_dispatch(cm).query(
+            DB_NAME,
             "SELECT entry_id, key, value, importance FROM core_memory"
             f" WHERE layer=? AND user_id=? AND memory_kind=? AND ({like})"
             " ORDER BY importance DESC LIMIT ?",
@@ -322,16 +323,15 @@ async def _kind_hits(cm: Any, kind: str, query: str, *, user_id: str, layer: str
                 "source": "core_kind",
                 "memory_kind": kind,
             }
-            for r in await cur.fetchall()
+            for r in rows
         ]
     except Exception:
         logger.debug("dense_per_kind: core branch skipped", exc_info=True)
 
     # 2) rag corpus: page kind via rag_chunks.memory_kind (NULL → 'fact')
     try:
-        conn = await cm.get(DB_NAME)
-        cur = await conn.execute("SELECT DISTINCT page_id FROM rag_chunks WHERE COALESCE(memory_kind, 'fact') = ?", (kind,))
-        kind_pages = {int(r["page_id"]) for r in await cur.fetchall()}
+        rows = await get_write_dispatch(cm).query(DB_NAME, "SELECT DISTINCT page_id FROM rag_chunks WHERE COALESCE(memory_kind, 'fact') = ?", (kind,))
+        kind_pages = {int(r["page_id"]) for r in rows}
     except Exception:
         return hits  # no rag tables (init_rag_db never called) → core branch only
     if not kind_pages:
