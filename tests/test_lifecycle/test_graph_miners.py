@@ -1180,3 +1180,56 @@ async def test_miner_embedding_inhibits_once_against_the_finished_hub(db):
         strong[peer] = round(float(r["weight"]), 6)
     assert strong[n_a] == pytest.approx(0.9), strong
     assert strong[n_b] == pytest.approx(0.555), strong
+
+
+async def test_wire_new_node_leaves_the_commit_to_the_maintenance_wrapper(db):
+    """The @_maintenance wrapper owns the commit; a commit inside a miner publishes
+    work the caller is still building. If wire_new_node commits, an outer
+    transaction that later fails can no longer take its edges back."""
+    import pytest as _pytest
+
+    from lifecycle.graph_miners import wire_new_node
+    from shared.write_dispatch import get_write_dispatch
+
+    await _node("python sqlite database", T, tags=["db"])
+    second = await _node("python sqlite indexing", T + 1, tags=["db"])
+
+    class _OuterRollbackError(Exception):
+        pass
+
+    async def _outer(conn):
+        await wire_new_node(db, "user", second, "python sqlite indexing", ["db"])
+        raise _OuterRollbackError
+
+    with _pytest.raises(_OuterRollbackError):
+        await get_write_dispatch(db).atomic(DB_NAME, _outer)
+
+    assert await _edges("topic_overlap") == [], "an edge survived the outer rollback: the miner committed"
+
+
+def test_no_maintenance_wrapped_function_commits_on_its_own():
+    """_maintenance is the transaction boundary. A commit inside a decorated miner
+    ends the caller's transaction early, so the decorator must be the only writer."""
+    import ast
+    import pathlib
+
+    offenders: list[str] = []
+    roots = ("lifecycle", "shared", "core", "features", "graph", "rag", "wiki", "mcp_server", "hooks", "scripts", "autohooks")
+    for root in roots:
+        for path in pathlib.Path(root).rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            try:
+                source = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if not any("_maintenance" in ast.unparse(d) for d in node.decorator_list):
+                    continue
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == "commit":
+                        offenders.append(f"{path}:{sub.lineno} in {node.name}")
+    assert not offenders, f"@_maintenance function commits on its own: {offenders}"

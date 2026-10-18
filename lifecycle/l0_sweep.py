@@ -24,6 +24,7 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 
 async def sweep_expired(
@@ -34,14 +35,13 @@ async def sweep_expired(
     cm: AsyncConnectionManager | None = None,
 ) -> dict[str, int | str | None]:
     """Delete expired L4 rows (expires_at < now), honoring B5 protections."""
-    conn = await (cm or connection_manager).get(DB_NAME)
+    dispatch = get_write_dispatch(cm or connection_manager)
     now = time.time()
 
     where_layer = "layer=?" if layer else "1=1"
     params: tuple[object, ...] = (now,) if layer else ()
 
-    total_row = await (await conn.execute(f"SELECT COUNT(*) FROM core_memory WHERE {where_layer}", params)).fetchone()
-    total = int(total_row[0]) if total_row else 0
+    total = int(await dispatch.scalar(DB_NAME, f"SELECT COUNT(*) FROM core_memory WHERE {where_layer}", params) or 0)
 
     # never_archive kinds (rule/instruction/commitment) are exempt even when expired
     from shared.memory_types import MemoryKind, get_policy
@@ -49,15 +49,16 @@ async def sweep_expired(
     protected = [k.value for k in MemoryKind if get_policy(k).never_archive]
     placeholders = ",".join(["?"] * len(protected))
 
-    expired_row = await (
-        await conn.execute(
+    expired = int(
+        await dispatch.scalar(
+            DB_NAME,
             f"""SELECT COUNT(*) FROM core_memory
                 WHERE {where_layer} AND expires_at IS NOT NULL AND expires_at < ?
                   AND (memory_kind IS NULL OR memory_kind NOT IN ({placeholders}))""",
             (*params, now, *protected),
         )
-    ).fetchone()
-    expired = int(expired_row[0]) if expired_row else 0
+        or 0
+    )
 
     if total > 0 and expired / total > stop_pct:
         summary: dict[str, int | str | None] = {"deleted": 0, "skipped_reason": "mass_expiry", "remaining": total}
@@ -75,18 +76,16 @@ async def sweep_expired(
     # unchanged (rows leave core_memory), but the data stays in archived_memories.
     from lifecycle.forgetting import ForgettingSystem
 
-    ids_rows = await (
-        await conn.execute(
-            f"""SELECT entry_id FROM core_memory
-                WHERE {where_layer} AND expires_at IS NOT NULL AND expires_at < ?
-                  AND (memory_kind IS NULL OR memory_kind NOT IN ({placeholders}))
-                LIMIT ?""",
-            (*params, now, *protected, batch),
-        )
-    ).fetchall()
+    ids_rows = await dispatch.query(
+        DB_NAME,
+        f"""SELECT entry_id FROM core_memory
+            WHERE {where_layer} AND expires_at IS NOT NULL AND expires_at < ?
+              AND (memory_kind IS NULL OR memory_kind NOT IN ({placeholders}))
+            LIMIT ?""",
+        (*params, now, *protected, batch),
+    )
     ids = [int(r["entry_id"]) for r in ids_rows]
     deleted = await ForgettingSystem(cm=cm or connection_manager, layer=layer or "user").archive_entries(ids)
-    await conn.commit()
 
     remaining = total - deleted
     summary = {"deleted": deleted, "skipped_reason": None, "remaining": remaining}

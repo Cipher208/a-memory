@@ -19,6 +19,7 @@ import time
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.memory_types import MemoryKind, get_policy
+from shared.write_dispatch import get_write_dispatch
 
 
 def _activation_proxy(importance: float, memory_kind: str | None, updated_at: float, now: float) -> float:
@@ -35,27 +36,20 @@ async def compact_under_budget(
     cm: AsyncConnectionManager | None = None,
 ) -> dict[str, int]:
     """Evict lowest-activation facts (via archive) until layer/user fits budget."""
-    conn = await (cm or connection_manager).get(DB_NAME)
-    row = await (
-        await conn.execute(
-            "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?",
-            (layer, user_id),
-        )
-    ).fetchone()
-    count = int(row[0]) if row else 0
+    dispatch = get_write_dispatch(cm or connection_manager)
+    count = int(await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (layer, user_id)) or 0)
     if count <= budget:
         return {"evicted": 0, "remaining": count}
 
     protected = [k.value for k in MemoryKind if get_policy(k).never_archive]
     placeholders = ",".join(["?"] * len(protected))
-    rows = await (
-        await conn.execute(
-            f"""SELECT entry_id, memory_kind, importance, updated_at FROM core_memory
-                WHERE layer=? AND user_id=?
-                  AND (memory_kind IS NULL OR memory_kind NOT IN ({placeholders}))""",
-            (layer, user_id, *protected),
-        )
-    ).fetchall()
+    rows = await dispatch.query(
+        DB_NAME,
+        f"""SELECT entry_id, memory_kind, importance, updated_at FROM core_memory
+            WHERE layer=? AND user_id=?
+              AND (memory_kind IS NULL OR memory_kind NOT IN ({placeholders}))""",
+        (layer, user_id, *protected),
+    )
 
     now = time.time()
     scored = sorted(
@@ -68,10 +62,5 @@ async def compact_under_budget(
     from lifecycle.forgetting import ForgettingSystem
 
     evicted = await ForgettingSystem(cm=cm or connection_manager, layer=layer).archive_entries(evict_ids)
-    row2 = await (
-        await conn.execute(
-            "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?",
-            (layer, user_id),
-        )
-    ).fetchone()
-    return {"evicted": evicted, "remaining": int(row2[0]) if row2 else count - evicted}
+    remaining = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (layer, user_id))
+    return {"evicted": evicted, "remaining": int(remaining) if remaining is not None else count - evicted}

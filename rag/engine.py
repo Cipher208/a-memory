@@ -17,6 +17,7 @@ from typing import Any, TYPE_CHECKING
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 from rag.schema import init_rag_db
 from rag.ingestor import RAGIngestor
 from rag.searcher import RAGSearcher, StrategyT
@@ -142,7 +143,7 @@ class RAGEngine:
         ]
 
     async def get_relations(self, page_id: int, depth: int = 1) -> list[dict[str, Any]]:
-        conn = await self._cm.get(DB_NAME)
+        dispatch = get_write_dispatch(self._cm)
         sql = """
         WITH RECURSIVE graph AS (
             SELECT r.source_id, r.target_id, r.relation_type, r.weight, 1 as d
@@ -154,27 +155,24 @@ class RAGEngine:
         SELECT wp.id, wp.title, g.relation_type, g.weight
         FROM graph g JOIN rag_pages wp ON g.target_id = wp.id
         """
-        cur = await conn.execute(sql, (page_id, depth))
-        rows = await cur.fetchall()
-        return [{"id": r[0], "title": r[1], "relation": r[2], "weight": r[3]} for r in rows]
+        rows = await dispatch.query(DB_NAME, sql, (page_id, depth))
+        return [{"id": r["id"], "title": r["title"], "relation": r["relation_type"], "weight": r["weight"]} for r in rows]
 
     async def add_relation(self, source_id: int, target_id: int, relation_type: str = "elaborates", weight: float = 0.8) -> None:
-        conn = await self._cm.get(DB_NAME)
-        await conn.execute(
+        await get_write_dispatch(self._cm).write(
+            DB_NAME,
             "INSERT OR REPLACE INTO rag_relations (source_id, target_id, relation_type, weight) VALUES (?, ?, ?, ?)",
             (source_id, target_id, relation_type, weight),
         )
-        await conn.commit()
 
     async def count_pages(self, user_id: str | None = None) -> int:
-        conn = await self._cm.get(DB_NAME)
+        dispatch = get_write_dispatch(self._cm)
         if user_id:
-            row = await (await conn.execute("SELECT COUNT(*) FROM rag_pages WHERE user_id=?", (user_id,))).fetchone()
+            total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM rag_pages WHERE user_id=?", (user_id,))
         else:
-            row = await (await conn.execute("SELECT COUNT(*) FROM rag_pages")).fetchone()
-        return row[0] if row else 0
+            total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM rag_pages")
+        return int(total or 0)
 
     async def count_chunks(self) -> int:
-        conn = await self._cm.get(DB_NAME)
-        row = await (await conn.execute("SELECT COUNT(*) FROM rag_chunks")).fetchone()
-        return int(row[0]) if row and row[0] is not None else 0
+        total = await get_write_dispatch(self._cm).scalar(DB_NAME, "SELECT COUNT(*) FROM rag_chunks")
+        return int(total or 0)

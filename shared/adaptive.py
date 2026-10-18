@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any
 
-from shared.connection import connection_manager
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +31,10 @@ class AdaptiveThresholdManager:
             return self._current_value
 
         try:
-            conn = await connection_manager.get("memory.db")
-            row = await (await conn.execute("SELECT value FROM preferences WHERE key=?", (self.key,))).fetchone()
+            value = await get_write_dispatch().scalar("memory.db", "SELECT value FROM preferences WHERE key=?", (self.key,))
 
-            if row:
-                self._current_value = float(row[0])
+            if value is not None:
+                self._current_value = float(value)
             else:
                 self._current_value = self.DEFAULT_THRESHOLD
                 await self._save(self._current_value)
@@ -102,14 +101,13 @@ class AdaptiveThresholdManager:
     async def _save(self, value: float) -> None:
         """Persist threshold to DB."""
         try:
-            conn = await connection_manager.get("memory.db")
-            await conn.execute(
+            await get_write_dispatch().write(
+                "memory.db",
                 """INSERT INTO preferences (key, value, updated_at)
                    VALUES (?, ?, ?)
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
                 (self.key, str(value), time.time()),
             )
-            await conn.commit()
         except Exception as e:
             logger.warning(f"Failed to save adaptive threshold to DB: {e}")
 

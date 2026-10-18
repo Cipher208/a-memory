@@ -8,9 +8,9 @@ import contextlib
 import logging
 import time
 
-from typing import cast
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 class MemoryCompressor:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
+
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        """Resolved on every access so a repointed ``_cm`` is honoured."""
+        return get_write_dispatch(self._cm)
 
     async def deduplicate_core(self, user_id: str) -> int:
         """Legacy-safe same-key dedup per (layer, user_id).
@@ -27,8 +32,8 @@ class MemoryCompressor:
         index existed. Partitioning BY layer is essential: a user fact and
         an agent fact sharing a key are legitimate distinct memories.
         """
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        return await self._dispatch.write(
+            DB_NAME,
             """DELETE FROM core_memory WHERE entry_id IN (
                    SELECT entry_id FROM (
                        SELECT entry_id,
@@ -43,9 +48,6 @@ class MemoryCompressor:
                )""",
             (user_id,),
         )
-        removed = int(cursor.rowcount or 0)
-        await conn.commit()
-        return removed
 
     async def compress_episodes(self, user_id: str, min_weight: float = 0.3, layer: str = "user") -> int:
         """Drop old low-weight episodes of ONE layer, archiving them first.
@@ -53,15 +55,13 @@ class MemoryCompressor:
         Layer-scoped deliberately: agent-layer episodes are identity data
         and must never be swept by user-memory maintenance.
         """
-        conn = await self._cm.get(DB_NAME)
         cutoff = time.time() - 30 * 86400
         params = (user_id, layer, min_weight, cutoff)
-        doomed = await (
-            await conn.execute(
-                "SELECT episode_id, summary, emotional_weight FROM episodes WHERE user_id=? AND layer=? AND emotional_weight < ? AND created_at < ?",
-                params,
-            )
-        ).fetchall()
+        doomed = await self._dispatch.query(
+            DB_NAME,
+            "SELECT episode_id, summary, emotional_weight FROM episodes WHERE user_id=? AND layer=? AND emotional_weight < ? AND created_at < ?",
+            params,
+        )
         if not doomed:
             return 0
 
@@ -86,12 +86,13 @@ class MemoryCompressor:
                     self._cm, user_id, "episode", f"episode:{r['episode_id']}", "archived", f"archived:{archived_id}", "compression_low_weight"
                 )
 
-        cursor = await conn.execute(
-            "DELETE FROM episodes WHERE user_id=? AND layer=? AND emotional_weight < ? AND created_at < ?",
-            params,
+        return int(
+            await self._dispatch.write(
+                DB_NAME,
+                "DELETE FROM episodes WHERE user_id=? AND layer=? AND emotional_weight < ? AND created_at < ?",
+                params,
+            )
         )
-        await conn.commit()
-        return cast("int", cursor.rowcount)
 
     async def get_stats(self, user_id: str | None = None) -> dict[str, int]:
         stats: dict[str, int] = {}
@@ -105,11 +106,10 @@ class MemoryCompressor:
             "file_wiki": ("SELECT COUNT(*) FROM file_wiki", False),
         }
 
-        conn = await self._cm.get(DB_NAME)
         for name, (sql, filtered) in queries.items():
             try:
-                row = await (await conn.execute(sql, (user_id,) if filtered and user_id else ())).fetchone()
-                stats[name] = row[0] if row else 0
+                value = await self._dispatch.scalar(DB_NAME, sql, (user_id,) if filtered and user_id else ())
+                stats[name] = int(value) if value is not None else 0
             except Exception as e:
                 # Absent tables (e.g. file_wiki) are normal; anything else
                 # deserves visibility instead of a healthy-looking zero.

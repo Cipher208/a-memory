@@ -5,11 +5,15 @@ DreamBuffer — async staging memories with TTL
 """
 
 import json
+import logging
 import time
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
+
+logger = logging.getLogger(__name__)
 
 
 class DreamBuffer:
@@ -17,6 +21,10 @@ class DreamBuffer:
         self._cm = cm or connection_manager
         self.layer = layer
         self._ready = False
+
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        return get_write_dispatch(self._cm)
 
     async def ensure(self) -> None:
         """Idempotent schema check: create fresh, or migrate pre-layer tables.
@@ -26,21 +34,18 @@ class DreamBuffer:
         """
         if self._ready:
             return
-        conn = await self._cm.get(DB_NAME)
-        cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(staging_memories)")).fetchall()]
+        cols = [r["name"] for r in await self._dispatch.query(DB_NAME, "PRAGMA table_info(staging_memories)")]
         if not cols:
             await self._init_db()
             self._ready = True
             return
         if "layer" not in cols:
-            await conn.execute("ALTER TABLE staging_memories ADD COLUMN layer TEXT NOT NULL DEFAULT 'user'")
-            await conn.commit()
-        await conn.execute("CREATE INDEX IF NOT EXISTS idx_staging_layer_user ON staging_memories(layer, user_id)")
-        await conn.commit()
+            await self._dispatch.write(DB_NAME, "ALTER TABLE staging_memories ADD COLUMN layer TEXT NOT NULL DEFAULT 'user'")
+        await self._dispatch.write(DB_NAME, "CREATE INDEX IF NOT EXISTS idx_staging_layer_user ON staging_memories(layer, user_id)")
         self._ready = True
 
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS staging_memories (
@@ -67,29 +72,26 @@ class DreamBuffer:
         metadata: dict[str, Any] | None = None,
     ) -> int:
         await self.ensure()
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        return await self._dispatch.insert(
+            DB_NAME,
             "INSERT INTO staging_memories (layer, user_id, session_id, event_id, content, importance, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (self.layer, user_id, session_id, event_id, content, importance, json.dumps(metadata or {})),
         )
-        await conn.commit()
-        last_id: Any = cursor.lastrowid
-        return int(last_id) if last_id is not None else 0
 
     async def get_staging(self, user_id: str = "default", session_id: str | None = None) -> list[dict[str, Any]]:
-        conn = await self._cm.get(DB_NAME)
         await self.ensure()
         if session_id:
-            cursor = await conn.execute(
+            rows = await self._dispatch.query(
+                DB_NAME,
                 "SELECT * FROM staging_memories WHERE layer=? AND user_id=? AND session_id=? ORDER BY created_at",
                 (self.layer, user_id, session_id),
             )
         else:
-            cursor = await conn.execute(
+            rows = await self._dispatch.query(
+                DB_NAME,
                 "SELECT * FROM staging_memories WHERE layer=? AND user_id=? ORDER BY created_at",
                 (self.layer, user_id),
             )
-        rows = await cursor.fetchall()
         return [
             {
                 "id": r["id"],
@@ -102,49 +104,50 @@ class DreamBuffer:
 
     async def clear_staging(self, user_id: str = "default", session_id: str | None = None) -> int:
         await self.ensure()
-        conn = await self._cm.get(DB_NAME)
         if session_id:
-            cursor = await conn.execute("DELETE FROM staging_memories WHERE user_id=? AND session_id=?", (user_id, session_id))
-        else:
-            cursor = await conn.execute("DELETE FROM staging_memories WHERE user_id=?", (user_id,))
-        await conn.commit()
-        return int(cursor.rowcount)
+            return await self._dispatch.write(DB_NAME, "DELETE FROM staging_memories WHERE user_id=? AND session_id=?", (user_id, session_id))
+        return await self._dispatch.write(DB_NAME, "DELETE FROM staging_memories WHERE user_id=?", (user_id,))
 
     async def cleanup_old(self, max_age_hours: int = 24, max_count: int = 500) -> dict[str, int]:
-        now = time.time()
-        conn = await self._cm.get(DB_NAME)
-        result = {"by_age": 0, "by_count": 0}
-        cutoff = now - (max_age_hours * 3600)
-        cursor = await conn.execute(
-            "DELETE FROM staging_memories WHERE created_at < datetime(?, 'unixepoch')",
-            (cutoff,),
-        )
-        result["by_age"] = int(cursor.rowcount)
+        # Housekeeping must not ride, nor wait out, somebody else's transaction: a
+        # foreign write txn on the shared handle means the dispatcher's own connection
+        # would block for the full busy timeout and then raise. The next tick retries.
+        shared = await self._cm.get(DB_NAME)
+        if shared.in_transaction:
+            logger.warning("staging cleanup skipped, a foreign transaction is open")
+            return {"by_age": 0, "by_count": 0}
 
-        rows = await (
-            await conn.execute(
-                "SELECT user_id, COUNT(*) as cnt FROM staging_memories GROUP BY user_id HAVING cnt > ?",
-                (max_count,),
+        now = time.time()
+        cutoff = now - (max_age_hours * 3600)
+
+        async def _cleanup(conn: Any) -> dict[str, int]:
+            result = {"by_age": 0, "by_count": 0}
+            cur = await conn.execute(
+                "DELETE FROM staging_memories WHERE created_at < datetime(?, 'unixepoch')",
+                (cutoff,),
             )
-        ).fetchall()
-        borrowed = conn.in_transaction
-        for row in rows:
-            excess = int(row["cnt"]) - max_count
-            cursor = await conn.execute(
-                "DELETE FROM staging_memories WHERE id IN (SELECT id FROM staging_memories WHERE user_id=? ORDER BY created_at ASC LIMIT ?)",
-                (row["user_id"], excess),
-            )
-            result["by_count"] += int(cursor.rowcount)
-        if not borrowed:
-            await conn.commit()
-        return result
+            result["by_age"] = int(cur.rowcount)
+            rows = await (
+                await conn.execute(
+                    "SELECT user_id, COUNT(*) as cnt FROM staging_memories GROUP BY user_id HAVING cnt > ?",
+                    (max_count,),
+                )
+            ).fetchall()
+            for row in rows:
+                excess = int(row["cnt"]) - max_count
+                cur = await conn.execute(
+                    "DELETE FROM staging_memories WHERE id IN (SELECT id FROM staging_memories WHERE user_id=? ORDER BY created_at ASC LIMIT ?)",
+                    (row["user_id"], excess),
+                )
+                result["by_count"] += int(cur.rowcount)
+            return result
+
+        return await self._dispatch.atomic(DB_NAME, _cleanup)
 
     async def count(self, user_id: str = "default") -> int:
-        conn = await self._cm.get(DB_NAME)
-        row = await (await conn.execute("SELECT COUNT(*) FROM staging_memories WHERE user_id=?", (user_id,))).fetchone()
-        return int(row[0]) if row else 0
+        total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM staging_memories WHERE user_id=?", (user_id,))
+        return int(total) if total is not None else 0
 
     async def count_all(self) -> int:
-        conn = await self._cm.get(DB_NAME)
-        row = await (await conn.execute("SELECT COUNT(*) FROM staging_memories")).fetchone()
-        return int(row[0]) if row else 0
+        total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM staging_memories")
+        return int(total) if total is not None else 0

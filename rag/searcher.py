@@ -3,6 +3,7 @@ import logging
 from typing import Literal, cast, TYPE_CHECKING
 
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 from rag.models import SearchResult
 from rag.search import search_fts5, search_binary, search_rrf, auto_strategy
 
@@ -33,17 +34,16 @@ class RAGSearcher:
         if self._fts_available is not None:
             return bool(self._fts_available)
 
-        conn = await self._cm.get(DB_NAME)
+        dispatch = get_write_dispatch(self._cm)
         try:
-            cur = await conn.execute("PRAGMA compile_options")
-            rows = await cur.fetchall()
-            options = [str(r[0]) for r in rows]
+            rows = await dispatch.query(DB_NAME, "PRAGMA compile_options")
+            options = [str(r["compile_options"]) for r in rows]
             self._fts_available = "ENABLE_FTS5" in options
         except Exception:
             self._fts_available = False
         if not self._fts_available:
-            version_row = await (await conn.execute("SELECT sqlite_version()")).fetchone()
-            logger.warning("SQLite %s lacks FTS5 — falling back to LIKE search", version_row[0] if version_row else "unknown")
+            version = await dispatch.scalar(DB_NAME, "SELECT sqlite_version()")
+            logger.warning("SQLite %s lacks FTS5 — falling back to LIKE search", version or "unknown")
         return bool(self._fts_available)
 
     async def _search_fts5(self, query: str, user_id: str, limit: int) -> list[SearchResult]:

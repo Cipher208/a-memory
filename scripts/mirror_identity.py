@@ -104,7 +104,9 @@ async def mirror(
     files sharing a stem (e.g. ~/AGENTS.md and .config/opencode/AGENTS.md) MUST
     mirror with distinct ``ns`` or each run orphans the other's rows.
     """
-    conn = await cm.get(DB_NAME)
+    from shared.write_dispatch import get_write_dispatch
+
+    dispatch = get_write_dispatch(cm)
     written = 0
     for path in paths:
         stem = ns or path.stem
@@ -118,22 +120,22 @@ async def mirror(
                 written += 1
                 continue
             entry_id = await mem.remember(key, chunk, importance, source="identity_mirror", memory_kind=kind)
-            await conn.execute(
+            await dispatch.write(
+                DB_NAME,
                 "INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)"
                 " VALUES (?,?,?,?,?,?,?,?)",
                 (user_id, int(entry_id), "identity_mirror", 0.0, importance, "{}", f"mirror {path.name} kind={kind}", time.time()),
             )
-            await conn.commit()
             written += 1
             print(f"mirrored {path.name} {key} {len(chunk)}B")
         # orphan pass: same file+kind, keys absent from this run (section
         # deleted / repartitioned / renamed heading)
-        cur = await conn.execute(
+        for row in await dispatch.query(
+            DB_NAME,
             "SELECT key FROM core_memory WHERE layer=? AND user_id=? AND source='identity_mirror' AND key LIKE ?",
             (layer, user_id, f"canon:{kind}:mir:{stem}:%"),
-        )
-        for row in await cur.fetchall():
-            old_key = str(row["key"])  # sqlite3.Row via connection_manager row_factory
+        ):
+            old_key = str(row["key"])
             if old_key in written_keys:
                 continue
             if dry:
@@ -156,7 +158,9 @@ async def check_drift(paths: list[Path], kind: str, layer: str, user_id: str, cm
     Re-mirroring the file resolves all three; this writes nothing.
     ``ns`` must match the namespace the file was mirrored under (see mirror()).
     """
-    conn = await cm.get(DB_NAME)
+    from shared.write_dispatch import get_write_dispatch
+
+    dispatch = get_write_dispatch(cm)
     planned: dict[str, str] = {}
     for path in paths:
         text = path.read_text(encoding="utf-8")
@@ -164,11 +168,11 @@ async def check_drift(paths: list[Path], kind: str, layer: str, user_id: str, cm
             planned[section_key(kind, ns or path.stem, heading, part)] = chunk
     stored: dict[str, str] = {}
     for path in paths:
-        cur = await conn.execute(
+        for row in await dispatch.query(
+            DB_NAME,
             "SELECT key, value FROM core_memory WHERE layer=? AND user_id=? AND source='identity_mirror' AND key LIKE ?",
             (layer, user_id, f"canon:{kind}:mir:{ns or path.stem}:%"),
-        )
-        for row in await cur.fetchall():
+        ):
             stored[str(row["key"])] = str(row["value"])
     stale = sorted(k for k, chunk in planned.items() if k in stored and stored[k] != chunk)
     missing = sorted(k for k in planned if k not in stored)
@@ -239,30 +243,31 @@ async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str, dry: boo
     same report without deleting anything (guard for live bases). Re-run
     mirror afterwards to re-write the same files under stable keys.
     """
-    conn = await cm.get(DB_NAME)
-    cur = await conn.execute(
+    from shared.write_dispatch import get_write_dispatch
+
+    dispatch = get_write_dispatch(cm)
+    rows = await dispatch.query(
+        DB_NAME,
         "SELECT entry_id, key FROM core_memory WHERE layer=? AND user_id=? AND source='identity_mirror'",
         (layer, user_id),
     )
-    rows = [dict(r) for r in await cur.fetchall()]
     removed, kept = 0, []
     for row in rows:
         key = str(row["key"])
         if not _LEGACY_SHA_KEY_RE.match(key):
             continue
-        audit = await (
-            await conn.execute(
-                "SELECT reason FROM importance_audit WHERE chunk_id=? AND source='identity_mirror' LIMIT 1",
-                (int(row["entry_id"]),),
-            )
-        ).fetchone()
+        audit = await dispatch.select_one(
+            DB_NAME,
+            "SELECT reason FROM importance_audit WHERE chunk_id=? AND source='identity_mirror' LIMIT 1",
+            (int(row["entry_id"]),),
+        )
         if audit:
             if dry:
                 removed += 1
-                print(f"[dry-migrate] would retire {key} ({audit[0]})")
+                print(f"[dry-migrate] would retire {key} ({audit['reason']})")
             elif await mem.l4.delete(user_id, key, triggered_by="identity_mirror_migration"):
                 removed += 1
-                print(f"migrated out legacy {key} ({audit[0]})")
+                print(f"migrated out legacy {key} ({audit['reason']})")
         else:
             kept.append(key)
             print(f"unmapped legacy {key}: kept (no audit row — operator decision)")

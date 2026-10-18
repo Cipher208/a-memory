@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from shared.write_dispatch import get_write_dispatch
+
 logger = logging.getLogger(__name__)
 
 SCHEME = "ariel://"
@@ -105,7 +107,7 @@ async def resolve_uri(
     store = parsed["store"]
     from shared.constants import DB_NAME
 
-    conn = await cm.get(DB_NAME)
+    dispatch = get_write_dispatch(cm)
     if store == "fact":
         from core.memory import CoreMemory
 
@@ -140,12 +142,11 @@ async def resolve_uri(
             "uri": wiki_uri(layer, wentry.file_path),
         }
     if store == "graph":
-        row = await (
-            await conn.execute(
-                "SELECT node_id, content, node_type FROM epi_nodes WHERE node_id=? AND layer=?",
-                (parsed["node_id"], layer),
-            )
-        ).fetchone()
+        row = await dispatch.select_one(
+            DB_NAME,
+            "SELECT node_id, content, node_type FROM epi_nodes WHERE node_id=? AND layer=?",
+            (parsed["node_id"], layer),
+        )
         if row is None:
             return None
         return {
@@ -157,12 +158,11 @@ async def resolve_uri(
             "uri": node_uri(layer, int(row["node_id"])),
         }
     if store == "episode":
-        row = await (
-            await conn.execute(
-                "SELECT episode_id, summary FROM episodes WHERE episode_id=? AND layer=?",
-                (parsed["id"], layer),
-            )
-        ).fetchone()
+        row = await dispatch.select_one(
+            DB_NAME,
+            "SELECT episode_id, summary FROM episodes WHERE episode_id=? AND layer=?",
+            (parsed["id"], layer),
+        )
         if row is None:
             return None
         return {
@@ -173,12 +173,11 @@ async def resolve_uri(
             "uri": episode_uri(layer, int(row["episode_id"])),
         }
     if store == "l0":
-        row = await (
-            await conn.execute(
-                "SELECT id, text, ts, event FROM l0_journal WHERE id=? AND layer=?",
-                (parsed["id"], layer),
-            )
-        ).fetchone()
+        row = await dispatch.select_one(
+            DB_NAME,
+            "SELECT id, text, ts, event FROM l0_journal WHERE id=? AND layer=?",
+            (parsed["id"], layer),
+        )
         if row is None:
             return None
         return {

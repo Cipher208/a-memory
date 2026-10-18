@@ -4,6 +4,7 @@ from mcp_server.models import GraphNodeResult
 from mcp_server.registry import _get_ctx
 from shared.constants import DB_NAME
 from shared.metrics import metrics
+from shared.write_dispatch import get_write_dispatch
 
 from graph.epistemic import SOCIAL_NODE_TYPES
 
@@ -141,13 +142,12 @@ async def memory_graph_nodes(
     if node_type:
         nodes = await graph.query_by_type(user_id, node_type, limit)
     else:
-        conn = await graph._cm.get(DB_NAME)
-        cur = await conn.execute(
+        rows = await get_write_dispatch(graph._cm).query(
+            DB_NAME,
             "SELECT * FROM epi_nodes WHERE layer=? AND user_id=? ORDER BY confidence DESC LIMIT ?",
             (graph.layer, user_id, limit),
         )
-        rows = await cur.fetchall()
-        nodes = [graph._row_to_node(dict(r)) for r in rows]
+        nodes = [graph._row_to_node(r) for r in rows]
     return {"nodes": [{"id": n.node_id, "content": n.content, "type": n.node_type, "tags": n.tags} for n in nodes], "count": len(nodes)}
 
 
@@ -169,7 +169,7 @@ async def memory_graph_edges(
     metrics.inc("tool_calls")
     metrics.inc("tool_graph_edges")
     graph = _get_graph(app, layer)
-    conn = await graph._cm.get(DB_NAME)
+    dispatch = get_write_dispatch(graph._cm)
     if node_id:
         where = {
             "out": "e.source_id = ?",
@@ -177,7 +177,8 @@ async def memory_graph_edges(
             "both": "(e.source_id = ? OR e.target_id = ?)",
         }[direction]
         params: tuple[Any, ...] = (node_id,) if direction != "both" else (node_id, node_id)
-        cur = await conn.execute(
+        rows = await dispatch.query(
+            DB_NAME,
             f"""SELECT e.source_id, e.target_id, e.relation, e.weight,
                       s.content as src_content, t.content as tgt_content
                FROM epi_edges e
@@ -188,7 +189,8 @@ async def memory_graph_edges(
             (*params, graph.layer, limit),
         )
     else:
-        cur = await conn.execute(
+        rows = await dispatch.query(
+            DB_NAME,
             """SELECT e.source_id, e.target_id, e.relation, e.weight,
                       s.content as src_content, t.content as tgt_content
                FROM epi_edges e
@@ -198,15 +200,14 @@ async def memory_graph_edges(
                ORDER BY e.weight DESC LIMIT ?""",
             (graph.layer, limit),
         )
-    rows = await cur.fetchall()
     edges = [
         {
-            "source": r[0],
-            "target": r[1],
-            "relation": r[2],
-            "weight": r[3],
-            "source_content": r[4],
-            "target_content": r[5],
+            "source": r["source_id"],
+            "target": r["target_id"],
+            "relation": r["relation"],
+            "weight": r["weight"],
+            "source_content": r["src_content"],
+            "target_content": r["tgt_content"],
         }
         for r in rows
     ]

@@ -6,19 +6,28 @@ AuditTrail — async, SQLite-based audit logging with rotation
 
 import asyncio
 import json
+import logging
 import time
-from typing import Any, cast
+from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
+
+logger = logging.getLogger(__name__)
 
 
 class AuditTrail:
     def __init__(self, cm: AsyncConnectionManager | None = None):
         self._cm = cm or connection_manager
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        """Resolved on every access so a repointed ``_cm`` is honoured."""
+        return get_write_dispatch(self._cm)
+
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS audit_log (
@@ -48,30 +57,29 @@ class AuditTrail:
 
         if not config.is_feature_enabled("audit_trail"):
             return
-        conn = await self._cm.get(DB_NAME)
-        await conn.execute(
+        await self._dispatch.write(
+            DB_NAME,
             "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, action, layer, target_id, json.dumps(details or {}), time.time()),
         )
-        await conn.commit()
 
     async def log_verify(self, user_id: str, verified: int, dropped: int) -> None:
         """E5: record D1.5 verification aggregate per recall (feeds integrity score)."""
         await self.log(user_id, "verify_result", layer="user", details={"verified": verified, "dropped": dropped})
 
     async def get_history(self, user_id: str, limit: int = 50, action: str | None = None) -> list[dict[str, Any]]:
-        conn = await self._cm.get(DB_NAME)
         if action:
-            cursor = await conn.execute(
+            rows = await self._dispatch.query(
+                DB_NAME,
                 "SELECT * FROM audit_log WHERE user_id=? AND action=? ORDER BY timestamp DESC LIMIT ?",
                 (user_id, action, limit),
             )
         else:
-            cursor = await conn.execute(
+            rows = await self._dispatch.query(
+                DB_NAME,
                 "SELECT * FROM audit_log WHERE user_id=? ORDER BY timestamp DESC LIMIT ?",
                 (user_id, limit),
             )
-        rows = await cursor.fetchall()
         return [
             {
                 "log_id": r["log_id"],
@@ -85,31 +93,28 @@ class AuditTrail:
         ]
 
     async def count(self, user_id: str | None = None) -> int:
-        conn = await self._cm.get(DB_NAME)
         if user_id:
-            cursor = await conn.execute("SELECT COUNT(*) FROM audit_log WHERE user_id=?", (user_id,))
+            value = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM audit_log WHERE user_id=?", (user_id,))
         else:
-            cursor = await conn.execute("SELECT COUNT(*) FROM audit_log")
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+            value = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM audit_log")
+        return int(value) if value is not None else 0
 
     async def cleanup_old(self, retention_days: int = 30) -> int:
         cutoff = time.time() - (retention_days * 86400)
-        conn = await self._cm.get(DB_NAME)
-        borrowed = conn.in_transaction
-        cursor = await conn.execute("DELETE FROM audit_log WHERE timestamp < ?", (cutoff,))
-        if not borrowed:
-            await conn.commit()
-        return cast("int", cursor.rowcount)
+        shared = await self._cm.get(DB_NAME)
+        if shared.in_transaction:
+            # Retention is best-effort: never ride or flush a foreign transaction.
+            logger.warning("audit cleanup_old skipped: shared connection holds a transaction")
+            return 0
+        return int(await self._dispatch.write(DB_NAME, "DELETE FROM audit_log WHERE timestamp < ?", (cutoff,)))
 
     async def archive_and_prune(self, retention_days: int = 30, archive_dir: str | None = None) -> dict[str, int]:
         cutoff = time.time() - (retention_days * 86400)
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT * FROM audit_log WHERE timestamp < ? ORDER BY timestamp",
             (cutoff,),
         )
-        rows = await cursor.fetchall()
 
         if not rows:
             return {"archived": 0, "pruned": 0}
@@ -132,12 +137,9 @@ class AuditTrail:
             ]
             await asyncio.to_thread(archive_file.write_text, json.dumps(archive_data, indent=2, default=str), encoding="utf-8")
 
-        cursor = await conn.execute("DELETE FROM audit_log WHERE timestamp < ?", (cutoff,))
-        await conn.commit()
-        return {"archived": len(rows), "pruned": cursor.rowcount}
+        pruned = await self._dispatch.write(DB_NAME, "DELETE FROM audit_log WHERE timestamp < ?", (cutoff,))
+        return {"archived": len(rows), "pruned": pruned}
 
     async def count_all(self) -> int:
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("SELECT COUNT(*) FROM audit_log")
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+        value = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM audit_log")
+        return int(value) if value is not None else 0

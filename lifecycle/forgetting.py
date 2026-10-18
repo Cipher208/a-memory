@@ -16,6 +16,8 @@ from typing import Any
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
+from repositories.memory_repo import MemoryRepo
 from shared.memory_types import (
     MemoryKind,
     apply_decay,
@@ -25,6 +27,13 @@ from shared.memory_types import (
 logger = logging.getLogger(__name__)
 
 ARCHIVE_DIR = Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives"
+
+#: Rows per decay transaction. One transaction for the whole batch held the
+#: SQLite write lock for its full duration, so a tool write arriving mid-batch
+#: waited out `busy_timeout` (250 ms) and failed with `database is locked` —
+#: measured on the hermes base, 106 tracebacks in one night. Each chunk commits
+#: on its own, releasing the write lock between batches.
+_DECAY_CHUNK = 500
 
 #: Which archived kinds a restore may route used to be decided **here**, by an
 #: allowlist built from `MemoryKind`.
@@ -149,6 +158,11 @@ async def _core_key_taken(conn: Any, layer: str, user_id: str, key: str) -> bool
 class ForgettingSystem:
     def __init__(self, cm: AsyncConnectionManager | None = None, layer: str = "user"):
         self._cm = cm or connection_manager
+        # Dedicated write path: a connection of its own, so a stale read snapshot
+        # on the shared connection cannot wedge maintenance writes (BUSY_SNAPSHOT
+        # 517). Shared process-wide with the other writers via the manager key.
+        self._dispatch = get_write_dispatch(self._cm)
+        self._memory = MemoryRepo(self._dispatch)
         self.layer = layer
         self.decay_rate = config.get_forgetting("decay_rate") or 0.01
         self.archive_days = config.get_forgetting("archive_threshold_days") or 90
@@ -159,32 +173,30 @@ class ForgettingSystem:
         """Type-aware decay: instruction/rule/commitment never decay (decay_rate=0)."""
         try:
             now = time.time()
-            conn = await self._cm.get(DB_NAME)
-            cursor = await conn.execute("SELECT entry_id, memory_kind, importance, updated_at FROM core_memory")
+            # Read on the dispatcher's own connection: a cursor retained on the
+            # shared handle would pin a read snapshot there and make every later
+            # write on that handle fail with BUSY_SNAPSHOT.
+            rows = await self._dispatch.query(DB_NAME, "SELECT entry_id, memory_kind, importance, updated_at FROM core_memory")
 
             updates: list[tuple[float, int]] = []
-            while True:
-                rows = await cursor.fetchmany(1000)
-                if not rows:
-                    break
-                for r in rows:
-                    kind_str = r["memory_kind"] or "fact"
-                    if not validate_kind(kind_str):
-                        continue
-                    kind = MemoryKind(kind_str)
-                    days = (now - float(r["updated_at"])) / 86400.0
-                    new_imp = apply_decay(float(r["importance"]), kind, days)
-                    if abs(new_imp - float(r["importance"])) > 1e-3:
-                        updates.append((new_imp, int(r["entry_id"])))
+            for r in rows:
+                kind_str = r["memory_kind"] or "fact"
+                if not validate_kind(kind_str):
+                    continue
+                kind = MemoryKind(kind_str)
+                days = (now - float(r["updated_at"])) / 86400.0
+                new_imp = apply_decay(float(r["importance"]), kind, days)
+                if abs(new_imp - float(r["importance"])) > 1e-3:
+                    updates.append((new_imp, int(r["entry_id"])))
 
             if not updates:
                 return 0
 
-            await conn.executemany(
-                "UPDATE core_memory SET importance = ? WHERE entry_id = ?",
-                updates,
-            )
-            await conn.commit()
+            # Writes go through the repository over the dedicated dispatch built in
+            # __init__: its own connection holds a fresh snapshot, immune to a stale
+            # read txn on the shared conn. The SELECT above runs to completion first.
+            for start in range(0, len(updates), _DECAY_CHUNK):
+                await self._memory.decay_batch(updates[start : start + _DECAY_CHUNK])
             logger.info("Decayed %d entries", len(updates))
             return len(updates)
         except Exception:
@@ -197,21 +209,21 @@ class ForgettingSystem:
         Goal/todo/commitment archived by expires_at. Others by age + importance.
         """
         try:
-            conn = await self._cm.get(DB_NAME)
             now = time.time()
 
-            # 1. Find archivable items
-            all_rows = await self._find_archivable_entries(conn, now)
+            # 1. Find archivable items (dispatcher read, nothing retained on the shared handle)
+            all_rows = await self._find_archivable_entries(now)
             if not all_rows:
                 return 0
 
-            # 2. Perform archiving
-            archived_count = await self._perform_archiving(all_rows, now)
+            async def _run(conn: Any) -> int:
+                # 2 + 3 in one transaction: the archive row and the delete of the
+                # source row either both land or neither does.
+                archived_count = await self._perform_archiving(all_rows, now)
+                await self._delete_archived(conn, all_rows)
+                return archived_count
 
-            # 3. Safe deletion
-            await self._delete_archived(conn, all_rows)
-
-            await conn.commit()
+            archived_count = await self._dispatch.atomic(DB_NAME, _run)
             logger.info("Archived %d entries", archived_count)
             return archived_count
         except Exception:
@@ -227,17 +239,20 @@ class ForgettingSystem:
         if not ids:
             return 0
         try:
-            conn = await self._cm.get(DB_NAME)
             now = time.time()
             placeholders = ",".join(["?"] * len(ids))
-            cur = await conn.execute(f"SELECT * FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
-            rows = await cur.fetchall()
-            if not rows:
-                return 0
-            archived_count = await self._perform_archiving(rows, now)
-            await self._delete_archived(conn, rows)
-            await conn.commit()
-            return archived_count
+
+            async def _run(conn: Any) -> int:
+                cur = await conn.execute(f"SELECT * FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
+                rows = await cur.fetchall()
+                await cur.close()
+                if not rows:
+                    return 0
+                archived_count = await self._perform_archiving(rows, now)
+                await self._delete_archived(conn, rows)
+                return archived_count
+
+            return await self._dispatch.atomic(DB_NAME, _run)
         except Exception:
             logger.exception("archive_entries failed")
             return 0
@@ -538,32 +553,40 @@ class ForgettingSystem:
             ),
         )
 
-    async def _find_archivable_entries(self, conn: Any, now: float) -> list[sqlite3.Row]:
+    async def _find_archivable_entries(self, now: float, conn: Any | None = None) -> list[Any]:
+        """Rows the archive ritual would take.
+
+        `conn` is for callers already in a transaction; without it the read goes
+        through the dispatcher.
+        """
         # Expired goals/todos/commitments
-        expired = await (
-            await conn.execute(
-                """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+        expired = await self._archivable_rows(
+            conn,
+            """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
                FROM core_memory
                WHERE memory_kind IN ('goal', 'todo', 'commitment')
                  AND expires_at IS NOT NULL AND expires_at < ?""",
-                (now,),
-            )
-        ).fetchall()
+            (now,),
+        )
 
         # Old low-importance entries (excluding never-archive types)
-        old = await (
-            await conn.execute(
-                """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+        old = await self._archivable_rows(
+            conn,
+            """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
                FROM core_memory
                WHERE memory_kind NOT IN ('instruction', 'rule', 'commitment')
                  AND (expires_at IS NULL OR expires_at > ?)
                  AND updated_at < ?
                  AND importance < ?""",
-                (now, now - self.archive_days * 86400, self.archive_min_importance),
-            )
-        ).fetchall()
+            (now, now - self.archive_days * 86400, self.archive_min_importance),
+        )
 
         return list(expired) + list(old)
+
+    async def _archivable_rows(self, conn: Any | None, sql: str, params: tuple[Any, ...]) -> list[Any]:
+        if conn is None:
+            return await self._dispatch.query(DB_NAME, sql, params)
+        return list(await (await conn.execute(sql, params)).fetchall())
 
     async def _perform_archiving(self, rows: list[sqlite3.Row], now: float) -> int:
         from shared.archived_memories import ArchivedMemories
@@ -601,26 +624,28 @@ class ForgettingSystem:
 
     async def compress_duplicates(self) -> int:
         try:
-            conn = await self._cm.get(DB_NAME)
             # Same key in DIFFERENT layers is not a duplicate — dedupe per layer.
             # Single set-based DELETE: keep the newest row per (layer, user_id, key),
             # remove the rest in one statement instead of per-key round trips.
-            cursor = await conn.execute(
-                """DELETE FROM core_memory WHERE entry_id IN (
-                       SELECT entry_id FROM (
-                           SELECT entry_id,
-                                  ROW_NUMBER() OVER (
-                                      PARTITION BY layer, user_id, key
-                                      ORDER BY updated_at DESC, entry_id DESC
-                                  ) AS rn
-                           FROM core_memory
-                       )
-                       WHERE rn > 1
-                   )""",
-            )
-            removed = int(cursor.rowcount or 0)
-            await conn.commit()
-            return removed
+            async def _run(conn: Any) -> int:
+                cursor = await conn.execute(
+                    """DELETE FROM core_memory WHERE entry_id IN (
+                           SELECT entry_id FROM (
+                               SELECT entry_id,
+                                      ROW_NUMBER() OVER (
+                                          PARTITION BY layer, user_id, key
+                                          ORDER BY updated_at DESC, entry_id DESC
+                                      ) AS rn
+                               FROM core_memory
+                           )
+                           WHERE rn > 1
+                       )""",
+                )
+                removed = int(cursor.rowcount or 0)
+                await cursor.close()
+                return removed
+
+            return await self._dispatch.atomic(DB_NAME, _run)
         except Exception:
             logger.exception("Compression failed")
             return 0

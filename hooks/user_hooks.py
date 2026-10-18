@@ -290,13 +290,13 @@ class UserHooks:
         if smid is not None:
             from shared.connection import connection_manager
             from shared.constants import DB_NAME
+            from shared.write_dispatch import get_write_dispatch
 
-            conn = await connection_manager.get(DB_NAME)
-            dup = await (
-                await conn.execute(
-                    "SELECT 1 FROM memory_dispatch_log WHERE source_msg_id=? AND user_id=? LIMIT 1", (smid, ctx.get("user_id", self.user_id))
-                )
-            ).fetchone()
+            dup = await get_write_dispatch(connection_manager).select_one(
+                DB_NAME,
+                "SELECT 1 FROM memory_dispatch_log WHERE source_msg_id=? AND user_id=? LIMIT 1",
+                (smid, ctx.get("user_id", self.user_id)),
+            )
             if dup is not None:
                 return {
                     "auto_save": {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False},

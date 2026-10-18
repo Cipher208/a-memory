@@ -28,14 +28,14 @@ async def trace_decision_chain(node_id: int, user_id: str, depth: int = 5, *, la
     """
     from shared.connection import connection_manager
     from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
 
-    conn = await connection_manager.get(DB_NAME)
-    root_row = await (
-        await conn.execute(
-            "SELECT node_id, content, node_type FROM epi_nodes WHERE node_id=? AND layer=? AND user_id=?",
-            (int(node_id), layer, user_id),
-        )
-    ).fetchone()
+    dispatch = get_write_dispatch(connection_manager)
+    root_row = await dispatch.select_one(
+        DB_NAME,
+        "SELECT node_id, content, node_type FROM epi_nodes WHERE node_id=? AND layer=? AND user_id=?",
+        (int(node_id), layer, user_id),
+    )
     if root_row is None:
         return {"root": None, "chain": []}
 
@@ -57,15 +57,14 @@ async def trace_decision_chain(node_id: int, user_id: str, depth: int = 5, *, la
             break
         placeholders = ",".join("?" * len(frontier))
         causal_ph = ",".join("?" * len(causal))
-        rows = await (
-            await conn.execute(
-                f"""SELECT e.target_id, e.relation, e.weight, n.content, n.node_type
-                    FROM epi_edges e JOIN epi_nodes n ON n.node_id = e.target_id
-                    WHERE e.source_id IN ({placeholders}) AND e.relation IN ({causal_ph})
-                      AND n.layer = ? AND n.user_id = ?""",
-                (*frontier, *causal, layer, user_id),
-            )
-        ).fetchall()
+        rows = await dispatch.query(
+            DB_NAME,
+            f"""SELECT e.target_id, e.relation, e.weight, n.content, n.node_type
+                FROM epi_edges e JOIN epi_nodes n ON n.node_id = e.target_id
+                WHERE e.source_id IN ({placeholders}) AND e.relation IN ({causal_ph})
+                  AND n.layer = ? AND n.user_id = ?""",
+            (*frontier, *causal, layer, user_id),
+        )
         frontier = []
         for r in rows:
             target_id = int(r["target_id"])

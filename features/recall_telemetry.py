@@ -11,10 +11,14 @@ operation, not a durable "something happened" event.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from shared.connection import AsyncConnectionManager
@@ -22,7 +26,7 @@ if TYPE_CHECKING:
 
 async def ensure(cm: AsyncConnectionManager) -> None:
     """Idempotent schema setup. Mirror of other features/* stores."""
-    await cm.execute_script(
+    await get_write_dispatch(cm).execute_script(
         DB_NAME,
         """
         CREATE TABLE IF NOT EXISTS recall_events (
@@ -49,16 +53,19 @@ async def record_recall(
     result_count: int,
 ) -> int:
     """Insert a recall record and return its event_id."""
+    # Telemetry is best-effort: it neither rides nor flushes a foreign transaction,
+    # and it must not wait out the write lock behind one. The guard runs before
+    # ensure(), because the schema script is a writer too.
+    shared = await cm.get(DB_NAME)
+    if shared.in_transaction:
+        logger.warning("record_recall skipped: shared connection holds a transaction")
+        return 0
     await ensure(cm)
-    conn = await cm.get(DB_NAME)
-    borrowed = conn.in_transaction
-    cursor = await conn.execute(
+    return await get_write_dispatch(cm).insert(
+        DB_NAME,
         "INSERT INTO recall_events (layer, user_id, query, intent, result_count, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
         (layer, user_id, query[:500], intent, result_count, time.time()),
     )
-    if not borrowed:
-        await conn.commit()
-    return int(cursor.lastrowid or 0)
 
 
 async def count_recalls(
@@ -73,11 +80,10 @@ async def count_recalls(
     agent recalls). Idempotent ensure() guards against a missing table.
     """
     await ensure(cm)
-    conn = await cm.get(DB_NAME)
     sql = "SELECT COUNT(*) FROM recall_events WHERE user_id=?"
     params: list[Any] = [user_id]
     if started_at is not None and ended_at is not None:
         sql += " AND timestamp >= ? AND timestamp <= ?"
         params.extend([started_at, ended_at])
-    row = await (await conn.execute(sql, tuple(params))).fetchone()
-    return int(row[0]) if row else 0
+    value = await get_write_dispatch(cm).scalar(DB_NAME, sql, tuple(params))
+    return int(value) if value is not None else 0

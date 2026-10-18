@@ -17,6 +17,7 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 BRIDGE_MARKER = "# === AUTO-DRAIN BELOW ==="
 DRAIN_COMMENT = "<!-- Текст ниже маркера будет проанализирован и удалён при следующем проходе -->"
@@ -52,16 +53,14 @@ def _atomic_write(path: Path, content: str) -> None:
 async def regenerate_bridge(user_id: str, layer: str = "agent", base_path: str | None = None) -> Path:
     """Write top invariants to the bridge file. The drain section below the marker is preserved."""
     path = _resolve(base_path, layer)
-    conn = await connection_manager.get(DB_NAME)
     placeholders = ",".join("?" * len(INVARIANT_KINDS))
-    rows = await (
-        await conn.execute(
-            f"""SELECT key, value, importance FROM core_memory
-                WHERE layer=? AND user_id=? AND memory_kind IN ({placeholders})
-                  AND importance >= ? ORDER BY importance DESC LIMIT ?""",
-            (layer, user_id, *INVARIANT_KINDS, MIN_IMPORTANCE, TOP_LIMIT),
-        )
-    ).fetchall()
+    rows = await get_write_dispatch(connection_manager).query(
+        DB_NAME,
+        f"""SELECT key, value, importance FROM core_memory
+            WHERE layer=? AND user_id=? AND memory_kind IN ({placeholders})
+              AND importance >= ? ORDER BY importance DESC LIMIT ?""",
+        (layer, user_id, *INVARIANT_KINDS, MIN_IMPORTANCE, TOP_LIMIT),
+    )
     top = f"# MEMORY.md — ariel bridge (layer={layer})\n\n" + "".join(
         f"- [{r['key']}] {r['value']} (importance {float(r['importance']):.2f})\n" for r in rows
     )

@@ -13,6 +13,7 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 
 def _facet_clauses(tags: list[str]) -> tuple[list[str], list[Any]]:
@@ -98,8 +99,9 @@ async def query_memory(
         where.extend(facet_clauses)
         params.extend(facet_params)
 
-    conn = await connection_manager.get(DB_NAME)
-    rows = await (await conn.execute(f"{sql} WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ?", (*params, limit))).fetchall()
+    rows = await get_write_dispatch(connection_manager).query(
+        DB_NAME, f"{sql} WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT ?", (*params, limit)
+    )
     out = []
     for r in rows:
         row = dict(r)

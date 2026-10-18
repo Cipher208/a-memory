@@ -172,23 +172,21 @@ async def test_stats(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_graph_edges_direction_sql():
+async def test_graph_edges_direction_sql(monkeypatch):
     """direction param switches the WHERE clause of the edges query."""
     from mcp_server.tools.graph import memory_graph_edges
 
     for direction, fragment in [("out", "e.source_id = ?"), ("in", "e.target_id = ?"), ("both", "e.source_id = ? OR e.target_id = ?")]:
         ctx, app = _make_ctx()
-        cur = MagicMock()
-        cur.fetchall = AsyncMock(return_value=[])
-        conn = MagicMock()
-        conn.execute = AsyncMock(return_value=cur)
+        dispatch = MagicMock()
+        dispatch.query = AsyncMock(return_value=[])
+        monkeypatch.setattr("mcp_server.tools.graph.get_write_dispatch", lambda cm=None: dispatch)
         graph = MagicMock()
         graph.layer = "user"
         graph._cm = MagicMock()
-        graph._cm.get = AsyncMock(return_value=conn)
         app.user_graph = graph
         await memory_graph_edges(layer="user", user_id="u1", node_id=7, direction=direction, ctx=ctx)
-        sql = conn.execute.call_args[0][0]
+        sql = dispatch.query.call_args[0][1]
         assert fragment in sql, f"{direction}: {fragment!r} not in {sql}"
 
 

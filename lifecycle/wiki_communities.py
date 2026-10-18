@@ -11,6 +11,7 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 
 async def detect_communities(
@@ -30,29 +31,27 @@ async def detect_communities(
         raise RuntimeError("networkx is required for community detection") from exc
 
     cm = cm or connection_manager
-    conn = await cm.get(DB_NAME)
-    rows = await (
-        await conn.execute(
-            "SELECT source_id, target_id, relation FROM epi_edges e"
-            " JOIN epi_nodes s ON s.node_id = e.source_id AND s.layer=? AND s.user_id=? AND s.node_type='wiki_page'"
-            " JOIN epi_nodes t ON t.node_id = e.target_id AND t.layer=? AND t.user_id=? AND t.node_type='wiki_page'",
-            (layer, user_id, layer, user_id),
-        )
-    ).fetchall()
+    dispatch = get_write_dispatch(cm)
+    rows = await dispatch.query(
+        DB_NAME,
+        "SELECT source_id, target_id, relation FROM epi_edges e"
+        " JOIN epi_nodes s ON s.node_id = e.source_id AND s.layer=? AND s.user_id=? AND s.node_type='wiki_page'"
+        " JOIN epi_nodes t ON t.node_id = e.target_id AND t.layer=? AND t.user_id=? AND t.node_type='wiki_page'",
+        (layer, user_id, layer, user_id),
+    )
 
     graph = nx.Graph()
     node_path: dict[int, str] = {}
-    node_rows = await (
-        await conn.execute(
-            "SELECT node_id, content FROM epi_nodes WHERE layer=? AND user_id=? AND node_type='wiki_page'",
-            (layer, user_id),
-        )
-    ).fetchall()
-    for nid, content in node_rows:
-        node_path[int(nid)] = str(content)
-        graph.add_node(int(nid))
-    for src, dst, _rel in rows:
-        graph.add_edge(int(src), int(dst))
+    node_rows = await dispatch.query(
+        DB_NAME,
+        "SELECT node_id, content FROM epi_nodes WHERE layer=? AND user_id=? AND node_type='wiki_page'",
+        (layer, user_id),
+    )
+    for r in node_rows:
+        node_path[int(r["node_id"])] = str(r["content"])
+        graph.add_node(int(r["node_id"]))
+    for r in rows:
+        graph.add_edge(int(r["source_id"]), int(r["target_id"]))
 
     communities: list[dict[str, Any]] = []
     if graph.number_of_nodes():

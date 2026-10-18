@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.write_dispatch import get_write_dispatch
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 
@@ -22,7 +23,6 @@ async def wiki_query_bfs(
 ) -> dict[str, Any]:
     """BFS from `start_path` over wiki_links. direction: out | in | both."""
     cm = connection_manager
-    conn = await cm.get(DB_NAME)
     depth = max(1, min(int(depth), 5))
 
     type_filter = "AND link_type = ?" if link_type else ""
@@ -56,10 +56,9 @@ async def wiki_query_bfs(
     GROUP BY path ORDER BY depth, path LIMIT ?
     """
     params = base_params + rec_params + [depth, start_path, limit]
-    cur = await conn.execute(sql, tuple(params))
-    rows = await cur.fetchall()
+    rows = await get_write_dispatch(cm).query(DB_NAME, sql, tuple(params))
     return {
         "start": start_path,
         "depth": depth,
-        "nodes": [{"path": r[0], "depth": int(r[1]), "link_type": r[2]} for r in rows],
+        "nodes": [{"path": r["path"], "depth": int(r["depth"]), "link_type": r["link_type"]} for r in rows],
     }

@@ -33,10 +33,11 @@ async def reconcile(user_id: str = "default", layer: str = "user") -> dict[str, 
     """
     from shared.connection import connection_manager
     from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
 
     base_dir = Path(str(connection_manager.base_dir)) / "wiki" / layer
-    conn = await connection_manager.get(DB_NAME)
-    db_paths = {str(r["file_path"]) for r in (await (await conn.execute("SELECT file_path FROM wiki_index WHERE layer=?", (layer,))).fetchall())}
+    rows = await get_write_dispatch(connection_manager).query(DB_NAME, "SELECT file_path FROM wiki_index WHERE layer=?", (layer,))
+    db_paths = {str(r["file_path"]) for r in rows}
 
     def _scan() -> tuple[list[Path], list[str]]:
         files: list[Path] = []

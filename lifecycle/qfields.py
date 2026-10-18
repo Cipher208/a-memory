@@ -16,10 +16,14 @@ import json
 import logging
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from config import config
 from shared.connection import connection_manager
+from shared.write_dispatch import get_write_dispatch
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -80,18 +84,17 @@ async def qfield_enrich(layer: str = "user") -> dict[str, Any]:
     cap = int(config.get("retrieval", "qfields", "max_units_per_night", default=100))
     result["asleep"] = False
 
-    conn = await connection_manager.get(DB_NAME)
-    rows = await (
-        await conn.execute(
-            f"SELECT id, content FROM rag_pages WHERE layer=? AND qfields_json IS NULL "
-            f"AND content IS NOT NULL AND length(content) > 0 LIMIT {int(cap)}",
-            (layer,),
-        )
-    ).fetchall()
+    dispatch = get_write_dispatch(connection_manager)
+    rows = await dispatch.query(
+        DB_NAME,
+        f"SELECT id, content FROM rag_pages WHERE layer=? AND qfields_json IS NULL AND content IS NOT NULL AND length(content) > 0 LIMIT {int(cap)}",
+        (layer,),
+    )
     if not rows:
         return result
 
     done = 0
+    ops: list[tuple[str, Sequence[Any]]] = []
     for row in rows:
         try:
             queries = _call_llm(cfg, str(row["content"]))
@@ -102,9 +105,10 @@ async def qfield_enrich(layer: str = "user") -> dict[str, Any]:
         if not queries:
             result["failed"] += 1
             continue
-        await conn.execute("UPDATE rag_pages SET qfields_json=? WHERE id=?", (json.dumps(queries, ensure_ascii=False), row["id"]))
+        ops.append(("UPDATE rag_pages SET qfields_json=? WHERE id=?", (json.dumps(queries, ensure_ascii=False), row["id"])))
         done += 1
-    await conn.commit()
+    if ops:
+        await dispatch.write_many(DB_NAME, ops)
     result["generated"] = done
     result["skipped_done"] = max(0, len(rows) - done - result["failed"])
     return result
@@ -124,9 +128,8 @@ async def apply_qfield_boost(cm: Any, hits: list[dict[str, Any]], query: str) ->
         return hits
     from rag.edm import tokens
 
-    conn = await cm.get(DB_NAME)
     placeholders = ",".join("?" * len(ids))
-    rows = await (await conn.execute(f"SELECT id, qfields_json FROM rag_pages WHERE id IN ({placeholders})", ids)).fetchall()
+    rows = await get_write_dispatch(cm).query(DB_NAME, f"SELECT id, qfields_json FROM rag_pages WHERE id IN ({placeholders})", ids)
     qf_by_id: dict[int, frozenset[str]] = {}
     for r in rows:
         try:

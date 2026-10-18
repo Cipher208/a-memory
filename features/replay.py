@@ -24,55 +24,68 @@ from typing import Any
 from config import config
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 
 async def record_recall_useful(cm: Any, layer: str, user_id: str, entries: list[tuple[int, str]]) -> int:
     """Record one recall_useful row per (entry_id, key). Returns rows written."""
     if not entries:
         return 0
-    conn = await cm.get(DB_NAME)
+    shared = await cm.get(DB_NAME)
+    if shared.in_transaction:
+        # A best-effort counter: a foreign transaction holds the write lock, and
+        # riding it is not an option on a dedicated connection.
+        return 0
     now = time.time()
-    borrowed = conn.in_transaction
-    await conn.executemany(
-        "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?, 'recall_useful', 'core_memory', ?, ?, ?)",
-        [(user_id, str(entry_id), json.dumps({"key": key}), now) for entry_id, key in entries],
+    await get_write_dispatch(cm).write_many(
+        DB_NAME,
+        [
+            (
+                ("INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?, 'recall_useful', 'core_memory', ?, ?, ?)"),
+                (user_id, str(entry_id), json.dumps({"key": key}), now),
+            )
+            for entry_id, key in entries
+        ],
     )
-    if not borrowed:
-        await conn.commit()
     return len(entries)
 
 
 async def cls_replay(cm: Any, user_id: str, layer: str = "user", window_hours: int = 24, boost: float = 0.05) -> dict[str, int]:
     """Boost L4 facts recalled within the window. Returns counters."""
-    conn = await cm.get(DB_NAME)
+    shared = await cm.get(DB_NAME)
+    if shared.in_transaction:
+        return {"boosted": 0}
     cutoff = time.time() - window_hours * 3600
-    rows = await (
-        await conn.execute(
-            """SELECT entry_id, importance FROM core_memory
-               WHERE layer=? AND user_id=? AND importance < 1.0
-                 AND entry_id IN (
-                     SELECT DISTINCT CAST(target_id AS INTEGER) FROM audit_log
-                     WHERE action='recall_useful' AND layer='core_memory' AND timestamp > ?
-                 )""",
-            (layer, user_id, cutoff),
-        )
-    ).fetchall()
-    boosted = 0
     now = time.time()
-    for r in rows:
-        old = float(r["importance"])
-        new = min(1.0, old + boost)
-        if new <= old:
-            continue
-        await conn.execute("UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?", (new, now, int(r["entry_id"])))
-        await conn.execute(
-            """INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)
-               VALUES (?, ?, 'core_memory', ?, ?, '{}', 'cls_replay', ?)""",
-            (user_id, int(r["entry_id"]), old, new, now),
-        )
-        boosted += 1
-    await conn.commit()
-    return {"boosted": boosted}
+
+    async def _txn(conn: Any) -> int:
+        rows = await (
+            await conn.execute(
+                """SELECT entry_id, importance FROM core_memory
+                   WHERE layer=? AND user_id=? AND importance < 1.0
+                     AND entry_id IN (
+                         SELECT DISTINCT CAST(target_id AS INTEGER) FROM audit_log
+                         WHERE action='recall_useful' AND layer='core_memory' AND timestamp > ?
+                     )""",
+                (layer, user_id, cutoff),
+            )
+        ).fetchall()
+        boosted = 0
+        for r in rows:
+            old = float(r["importance"])
+            new = min(1.0, old + boost)
+            if new <= old:
+                continue
+            await conn.execute("UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?", (new, now, int(r["entry_id"])))
+            await conn.execute(
+                """INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)
+                   VALUES (?, ?, 'core_memory', ?, ?, '{}', 'cls_replay', ?)""",
+                (user_id, int(r["entry_id"]), old, new, now),
+            )
+            boosted += 1
+        return boosted
+
+    return {"boosted": await get_write_dispatch(cm).atomic(DB_NAME, _txn)}
 
 
 def config_hash() -> str:
@@ -151,25 +164,23 @@ async def replay(
     from graph.epistemic import EpistemicGraph
     from lifecycle.distiller import distill_and_route, score_text
 
-    conn = await connection_manager.get(DB_NAME)
+    dispatch = get_write_dispatch()
     cutoff = time.time() - since_days * 86400
     chash = config_hash()
     if ids:
         placeholders = ",".join("?" for _ in ids)
-        rows = await (
-            await conn.execute(
-                f"SELECT id, ts, layer, user_id, text, decisions FROM l0_journal WHERE id IN ({placeholders}) ORDER BY id",
-                tuple(ids),
-            )
-        ).fetchall()
+        rows = await dispatch.query(
+            DB_NAME,
+            f"SELECT id, ts, layer, user_id, text, decisions FROM l0_journal WHERE id IN ({placeholders}) ORDER BY id",
+            tuple(ids),
+        )
     else:
-        rows = await (
-            await conn.execute(
-                "SELECT id, ts, layer, user_id, text, decisions FROM l0_journal"
-                " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
-                (cutoff, time.time() - 600.0),
-            )
-        ).fetchall()
+        rows = await dispatch.query(
+            DB_NAME,
+            "SELECT id, ts, layer, user_id, text, decisions FROM l0_journal"
+            " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
+            (cutoff, time.time() - 600.0),
+        )
 
     # An explicit id list is a human decision to wake that row; a window run is
     # automation and obeys the gate. Callers may override either way.
@@ -190,22 +201,27 @@ async def replay(
         # S6a-1 single entry: rows with skip_distill (remember/think) were
         # already written addressably by their own entry — replay does not distill them.
         if any(d.get("skip_distill") for d in decisions):
-            await conn.execute("UPDATE l0_journal SET status='routed_direct', processed_at=? WHERE id=?", (time.time(), row["id"]))
+            await dispatch.write(DB_NAME, "UPDATE l0_journal SET status='routed_direct', processed_at=? WHERE id=?", (time.time(), row["id"]))
             skipped += 1
             continue
+
         # Audit 05.09 (P1) replay race: claim by status — a second concurrent
         # replay sees the status already 'processing' with a fresh processed_at
         # and skips the row; a stuck 'processing' (grace 10m) is re-processed.
         # aiosqlite rowcount after UPDATE is unreliable → check-then-update.
-        recheck = await (await conn.execute("SELECT status, processed_at FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
-        if recheck is None:
+        async def _claim(conn: Any) -> bool:
+            recheck = await (await conn.execute("SELECT status, processed_at FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
+            if recheck is None:
+                return False
+            if recheck[0] == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
+                return False
+            await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time(), row["id"]))
+            return True
+
+        # The claim is committed before distillation, so the next tick sees it.
+        if not await dispatch.atomic(DB_NAME, _claim):
             skipped += 1
             continue
-        if recheck[0] == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
-            skipped += 1
-            continue
-        await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time(), row["id"]))
-        await conn.commit()  # the claim is fixed before distillation
 
         if respect_gate:
             # Judged by the gate's own measure, not by what the distiller is fed.
@@ -230,7 +246,8 @@ async def replay(
                         "threshold": verdict["threshold"],
                     }
                 )
-                await conn.execute(
+                await dispatch.write(
+                    DB_NAME,
                     "UPDATE l0_journal SET status='gated_out', processed_at=?, decisions=? WHERE id=?",
                     (time.time(), json.dumps(decisions, ensure_ascii=False), row["id"]),
                 )
@@ -265,10 +282,10 @@ async def replay(
             # admitted this row.
             decision["gate_override"] = True
         decisions.append(decision)
-        await conn.execute(
+        await dispatch.write(
+            DB_NAME,
             "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
             (new_status, time.time(), json.dumps(decisions, ensure_ascii=False), row["id"]),
         )
         processed += 1
-    await conn.commit()
     return {"processed": processed, "skipped": skipped, "conflicts": conflicts, "gated": gated, "limit": max_rows}

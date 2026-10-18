@@ -173,7 +173,7 @@ def repair(conn: sqlite3.Connection, specs: tuple[tuple[str, str], ...] = FTS_SP
             continue
         conn.execute(f"INSERT INTO {table}({table}) VALUES('rebuild')")
         done.append(table)
-    conn.commit()
+    # The caller owns the transaction and commits it.
     return done
 
 
@@ -209,6 +209,7 @@ def main() -> int:
         print(f"  backup: {backup}")
 
         done = repair(conn)
+        conn.commit()
         left = probe(conn)
         print(f"  rebuilt: {', '.join(done) or '(nothing)'}")
         print(f"  search after repair: {left or 'OK'}")

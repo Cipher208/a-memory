@@ -16,6 +16,7 @@ from typing import Any, TYPE_CHECKING
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 if TYPE_CHECKING:
     from shared.connection import AsyncConnectionManager
@@ -39,6 +40,11 @@ class TemporalGraph:
         self._cm = cm or connection_manager
         self._ready = False
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        # Resolved on every access so a repointed manager is honoured.
+        return get_write_dispatch(self._cm)
+
     async def ensure(self) -> None:
         """Lazy one-time schema setup (create/migrate), mirroring DreamBuffer."""
         if self._ready:
@@ -47,7 +53,7 @@ class TemporalGraph:
         self._ready = True
 
     async def init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS temporal_events (
@@ -74,13 +80,11 @@ class TemporalGraph:
         )
         # PRAGMA-first migration for tables created before layers existed.
         # Every live install has 0 rows here, so backfill is trivially safe.
-        conn = await self._cm.get(DB_NAME)
-        cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(temporal_events)")).fetchall()]
+        cols = [str(r["name"]) for r in await self._dispatch.query(DB_NAME, "PRAGMA table_info(temporal_events)")]
         if cols and "layer" not in cols:
-            await conn.execute("ALTER TABLE temporal_events ADD COLUMN layer TEXT NOT NULL DEFAULT 'user'")
-            await conn.commit()
+            await self._dispatch.write(DB_NAME, "ALTER TABLE temporal_events ADD COLUMN layer TEXT NOT NULL DEFAULT 'user'")
         # layer-dependent index last: it would fail on pre-layer tables
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             "CREATE INDEX IF NOT EXISTS idx_temp_layer_user ON temporal_events(layer, user_id);",
         )
@@ -95,21 +99,18 @@ class TemporalGraph:
         layer: str = "user",
     ) -> int:
         await self.ensure()
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        return await self._dispatch.insert(
+            DB_NAME,
             "INSERT INTO temporal_events (layer, user_id, event_type, content, timestamp, importance, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (layer, user_id, event_type, content[:500], time.time(), importance, json.dumps(metadata or {})),
         )
-        await conn.commit()
-        return int(cursor.lastrowid or 0)
 
     async def link_events(self, from_event: int, to_event: int, link_type: str = "follows", strength: float = 0.5) -> None:
-        conn = await self._cm.get(DB_NAME)
-        await conn.execute(
+        await self._dispatch.write(
+            DB_NAME,
             "INSERT OR REPLACE INTO temporal_links (from_event, to_event, link_type, strength) VALUES (?, ?, ?, ?)",
             (from_event, to_event, link_type, strength),
         )
-        await conn.commit()
 
     @staticmethod
     def _row_to_event(r: Any) -> TemporalEvent:
@@ -129,7 +130,6 @@ class TemporalGraph:
         )
 
     async def get_timeline(self, user_id: str, limit: int = 50, offset: int = 0, layer: str | None = None) -> list[TemporalEvent]:
-        conn = await self._cm.get(DB_NAME)
         sql = "SELECT * FROM temporal_events WHERE user_id=?"
         params: list[Any] = [user_id]
         if layer:
@@ -137,8 +137,7 @@ class TemporalGraph:
             params.append(layer)
         sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
-        cur = await conn.execute(sql, tuple(params))
-        rows = await cur.fetchall()
+        rows = await self._dispatch.query(DB_NAME, sql, tuple(params))
         return [self._row_to_event(r) for r in rows]
 
     async def get_recent(self, user_id: str, layer: str | None = None, limit: int = 5) -> list[TemporalEvent]:
@@ -147,12 +146,11 @@ class TemporalGraph:
         return await self.get_timeline(user_id, limit=limit, layer=layer)
 
     async def get_events_near(self, user_id: str, timestamp: float, window_seconds: float = 3600, limit: int = 20) -> list[TemporalEvent]:
-        conn = await self._cm.get(DB_NAME)
-        cur = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT * FROM temporal_events WHERE user_id=? AND ABS(timestamp - ?) < ? ORDER BY timestamp LIMIT ?",
             (user_id, timestamp, window_seconds, limit),
         )
-        rows = await cur.fetchall()
         return [self._row_to_event(r) for r in rows]
 
     async def get_causal_chain(self, event_id: int, direction: str = "forward", limit: int = 10, user_id: str | None = None) -> list[dict[str, Any]]:
@@ -160,22 +158,26 @@ class TemporalGraph:
 
         Pass user_id to keep traversal inside that user's timeline.
         """
-        conn = await self._cm.get(DB_NAME)
         user_filter = " AND te.user_id=?" if user_id else ""
         if direction == "forward":
-            sql = f"SELECT tl.to_event, te.event_type, te.content, te.timestamp FROM temporal_links tl JOIN temporal_events te ON tl.to_event = te.event_id WHERE tl.from_event = ?{user_filter} LIMIT ?"
+            sql = (
+                "SELECT tl.to_event AS peer_event, te.event_type, te.content, te.timestamp"
+                " FROM temporal_links tl JOIN temporal_events te ON tl.to_event = te.event_id"
+                f" WHERE tl.from_event = ?{user_filter} LIMIT ?"
+            )
         else:
-            sql = f"SELECT tl.from_event, te.event_type, te.content, te.timestamp FROM temporal_links tl JOIN temporal_events te ON tl.from_event = te.event_id WHERE tl.to_event = ?{user_filter} LIMIT ?"
+            sql = (
+                "SELECT tl.from_event AS peer_event, te.event_type, te.content, te.timestamp"
+                " FROM temporal_links tl JOIN temporal_events te ON tl.from_event = te.event_id"
+                f" WHERE tl.to_event = ?{user_filter} LIMIT ?"
+            )
         params: tuple[Any, ...] = (event_id, limit) if not user_id else (event_id, user_id, limit)
-        cur = await conn.execute(sql, params)
-        rows = await cur.fetchall()
-        return [{"event_id": r[0], "type": r[1], "content": r[2], "timestamp": r[3]} for r in rows]
+        rows = await self._dispatch.query(DB_NAME, sql, params)
+        return [{"event_id": r["peer_event"], "type": r["event_type"], "content": r["content"], "timestamp": r["timestamp"]} for r in rows]
 
     async def count_events(self, user_id: str | None = None) -> int:
-        conn = await self._cm.get(DB_NAME)
         if user_id:
-            cur = await conn.execute("SELECT COUNT(*) FROM temporal_events WHERE user_id=?", (user_id,))
+            total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM temporal_events WHERE user_id=?", (user_id,))
         else:
-            cur = await conn.execute("SELECT COUNT(*) FROM temporal_events")
-        row = await cur.fetchone()
-        return row[0] if row else 0
+            total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM temporal_events")
+        return int(total or 0)

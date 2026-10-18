@@ -16,6 +16,7 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 from .session_quality import (
     compute_session_quality,
     parts_from_json,
@@ -53,8 +54,13 @@ class SessionStore:
     def __init__(self, cm: AsyncConnectionManager | None = None) -> None:
         self._cm = cm or connection_manager
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        """Resolved on every access so a repointed ``_cm`` is honoured."""
+        return get_write_dispatch(self._cm)
+
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -77,27 +83,24 @@ class SessionStore:
         # NOTE: alembic creates sessions; this is belt-and-suspenders for
         # direct _init_db callers (tests). Runtime path goes through
         # _ensure_quality_columns().
-        conn = await self._cm.get(DB_NAME)
-        await self._ensure_quality_columns(conn)
+        await self._ensure_quality_columns()
 
     async def create_session(self, user_id: str) -> str:
         session_id = f"sess_{user_id}_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-        conn = await self._cm.get(DB_NAME)
-        await conn.execute(
+        await self._dispatch.write(
+            DB_NAME,
             "INSERT INTO sessions (session_id, user_id, started_at) VALUES (?, ?, ?)",
             (session_id, user_id, time.time()),
         )
-        await conn.commit()
         return session_id
 
-    async def _ensure_quality_columns(self, conn: Any) -> None:
+    async def _ensure_quality_columns(self) -> None:
         """Idempotent PRAGMA migration: add quality columns if missing."""
-        cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(sessions)")).fetchall()]
+        cols = [r["name"] for r in await self._dispatch.query(DB_NAME, "PRAGMA table_info(sessions)")]
         if cols and "quality_score" not in cols:
-            await conn.execute("ALTER TABLE sessions ADD COLUMN quality_score REAL")
+            await self._dispatch.write(DB_NAME, "ALTER TABLE sessions ADD COLUMN quality_score REAL")
         if cols and "quality_parts" not in cols:
-            await conn.execute("ALTER TABLE sessions ADD COLUMN quality_parts TEXT")
-        await conn.commit()
+            await self._dispatch.write(DB_NAME, "ALTER TABLE sessions ADD COLUMN quality_parts TEXT")
 
     async def close_session(
         self,
@@ -110,15 +113,13 @@ class SessionStore:
         """Close session and compute quality score. Scoring is non-fatal."""
         topics = topics or []
         state_deltas = state_deltas or {}
-        conn = await self._cm.get(DB_NAME)
-        await self._ensure_quality_columns(conn)
+        await self._ensure_quality_columns()
 
-        row = await (
-            await conn.execute(
-                "SELECT user_id, started_at, message_count FROM sessions WHERE session_id=?",
-                (session_id,),
-            )
-        ).fetchone()
+        row = await self._dispatch.select_one(
+            DB_NAME,
+            "SELECT user_id, started_at, message_count FROM sessions WHERE session_id=?",
+            (session_id,),
+        )
         if row is None:
             logger.warning("SessionStore.close_session: no row for %s", session_id)
             return
@@ -140,7 +141,8 @@ class SessionStore:
         except Exception as exc:
             logger.warning("SessionStore.close_session: scoring failed for %s: %s", session_id, exc)
 
-        await conn.execute(
+        await self._dispatch.write(
+            DB_NAME,
             "UPDATE sessions SET summary=?, state_deltas=?, topics=?, message_count=?, ended_at=?, quality_score=?, quality_parts=? WHERE session_id=?",
             (
                 summary,
@@ -153,16 +155,14 @@ class SessionStore:
                 session_id,
             ),
         )
-        await conn.commit()
 
     async def get_recent_sessions(self, user_id: str, limit: int = 10) -> list[SessionRecord]:
-        conn = await self._cm.get(DB_NAME)
-        await self._ensure_quality_columns(conn)
-        cursor = await conn.execute(
+        await self._ensure_quality_columns()
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT * FROM sessions WHERE user_id=? ORDER BY started_at DESC LIMIT ?",
             (user_id, limit),
         )
-        rows = await cursor.fetchall()
         return [self._row_to_record(r) for r in rows]
 
     async def get_session_summary(self, user_id: str) -> str:
@@ -178,29 +178,26 @@ class SessionStore:
         return "\n".join(lines)
 
     async def count_sessions(self, user_id: str | None = None) -> int:
-        conn = await self._cm.get(DB_NAME)
         if user_id:
-            cursor = await conn.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (user_id,))
+            value = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM sessions WHERE user_id=?", (user_id,))
         else:
-            cursor = await conn.execute("SELECT COUNT(*) FROM sessions")
-        row = await cursor.fetchone()
-        return int(row[0]) if row else 0
+            value = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM sessions")
+        return int(value) if value is not None else 0
 
     async def avg_quality(self, user_id: str | None = None) -> float | None:
         """Average quality_score over scored (non-NULL) sessions. None if none scored."""
-        conn = await self._cm.get(DB_NAME)
-        await self._ensure_quality_columns(conn)
+        await self._ensure_quality_columns()
         if user_id:
-            cursor = await conn.execute(
+            value = await self._dispatch.scalar(
+                DB_NAME,
                 "SELECT AVG(quality_score) FROM sessions WHERE user_id=? AND quality_score IS NOT NULL",
                 (user_id,),
             )
         else:
-            cursor = await conn.execute("SELECT AVG(quality_score) FROM sessions WHERE quality_score IS NOT NULL")
-        row = await cursor.fetchone()
-        if row is None or row[0] is None:
+            value = await self._dispatch.scalar(DB_NAME, "SELECT AVG(quality_score) FROM sessions WHERE quality_score IS NOT NULL")
+        if value is None:
             return None
-        return float(row[0])
+        return float(value)
 
     def _row_to_record(self, row: dict[str, Any] | Any) -> SessionRecord:
         return SessionRecord(

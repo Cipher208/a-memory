@@ -9,6 +9,7 @@ per-text path returned, and it does not issue one query per text.
 
 import shared.embeddings as emb
 from shared.connection import connection_manager
+from shared.write_dispatch import WriteDispatch
 
 
 async def _cache(tmp_path, monkeypatch) -> emb.EmbeddingCache:
@@ -76,16 +77,16 @@ async def test_batched_lookup_does_not_query_per_text(tmp_path, monkeypatch):
     texts = [f"t{i}" for i in range(50)]
     await cache._cache_many([(t, [1.0, 2.0]) for t in texts], "m")
 
-    conn = await connection_manager.get(emb.DB_NAME)
-    real_execute = conn.execute
+    # Observation point: the dispatcher is the read path now, not the shared handle.
+    real_query = WriteDispatch.query
     selects: list[str] = []
 
-    async def counting_execute(sql, params=()):
+    async def counting_query(self, db, sql, params=()):
         if "embedding_cache" in sql and "select" in sql.lower():
             selects.append(sql)
-        return await real_execute(sql, params)
+        return await real_query(self, db, sql, params)
 
-    monkeypatch.setattr(conn, "execute", counting_execute)
+    monkeypatch.setattr(WriteDispatch, "query", counting_query)
     results, to_compute = await cache._get_results_from_cache(texts, "m")
 
     assert to_compute == []
@@ -105,16 +106,16 @@ async def test_cache_many_commits_in_batches_not_one_transaction(tmp_path, monke
     monkeypatch.setattr(emb, "_CACHE_LOOKUP_CHUNK", 4)
     total = 10
 
-    conn = await connection_manager.get(emb.DB_NAME)
-    real_commit = conn.commit
+    # One `write_many` per batch is one commit; the batching property is what matters.
+    real_write_many = WriteDispatch.write_many
     commits = 0
 
-    async def counting_commit():
+    async def counting_write_many(self, db, ops):
         nonlocal commits
         commits += 1
-        await real_commit()
+        await real_write_many(self, db, ops)
 
-    monkeypatch.setattr(conn, "commit", counting_commit)
+    monkeypatch.setattr(WriteDispatch, "write_many", counting_write_many)
     await cache._cache_many([(f"b{i}", [1.0]) for i in range(total)], "m")
 
     assert await cache.count() == total

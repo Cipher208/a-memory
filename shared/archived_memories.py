@@ -5,6 +5,7 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 #: Archive reasons that record a *deliberate* removal rather than a routine one.
 #:
@@ -144,6 +145,10 @@ class ArchivedMemories:
         self._cm = cm or connection_manager
         self._ready = False
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        return get_write_dispatch(self._cm)
+
     async def ensure(self) -> None:
         """Create the table if it is not there yet, once per instance.
 
@@ -161,14 +166,13 @@ class ArchivedMemories:
         """
         if self._ready:
             return
-        conn = await self._cm.get(DB_NAME)
-        cols = [r[1] for r in await (await conn.execute("PRAGMA table_info(archived_memories)")).fetchall()]
+        cols = [r["name"] for r in await self._dispatch.query(DB_NAME, "PRAGMA table_info(archived_memories)")]
         if not cols:
             await self._init_db()
         self._ready = True
 
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS archived_memories (
@@ -212,14 +216,11 @@ class ArchivedMemories:
         in an earlier version of this docstring.)
         """
         await self.ensure()
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        return await self._dispatch.insert(
+            DB_NAME,
             "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason) VALUES (?, ?, ?, ?, ?, ?)",
             (user_id, original_id, content, memory_type, importance, reason),
         )
-        await conn.commit()
-        last_id: Any = cursor.lastrowid
-        return int(last_id) if last_id is not None else 0
 
     async def get_archived(self, user_id: str = "default", limit: int = 50) -> dict[str, Any]:
         """Return the bin as an agent may see it: restorable rows, and a count of the rest.
@@ -256,18 +257,17 @@ class ArchivedMemories:
         unnameable bin is unusable rather than merely full.
         """
         await self.ensure()
-        conn = await self._cm.get(DB_NAME)
         # Every row for this user, classified in Python by the same function the
         # restore uses. A `WHERE` clause would be faster and would duplicate the
         # rules in a second language — which is the drift this is built to avoid —
         # and the counts below need every row anyway. `content` is deliberately not
         # read here: rows that will be hidden never have their text loaded.
-        cursor = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT id, original_id, memory_type, importance, archive_reason, archived_at "
             "FROM archived_memories WHERE user_id=? ORDER BY archived_at DESC, id DESC",
             (user_id,),
         )
-        rows = await cursor.fetchall()
 
         kept: list[Any] = []
         omitted_by_reason = {REFUSAL_PURGED: 0, REFUSAL_UNROUTABLE: 0}
@@ -282,12 +282,11 @@ class ArchivedMemories:
         contents: dict[int, Any] = {}
         if page:
             marks = ",".join(["?"] * len(page))
-            fetched = await (
-                await conn.execute(
-                    f"SELECT id, content FROM archived_memories WHERE id IN ({marks})",
-                    tuple(int(r["id"]) for r in page),
-                )
-            ).fetchall()
+            fetched = await self._dispatch.query(
+                DB_NAME,
+                f"SELECT id, content FROM archived_memories WHERE id IN ({marks})",
+                tuple(int(r["id"]) for r in page),
+            )
             contents = {int(r["id"]): r["content"] for r in fetched}
 
         return {
@@ -311,6 +310,5 @@ class ArchivedMemories:
 
     async def count(self, user_id: str = "default") -> int:
         await self.ensure()
-        conn = await self._cm.get(DB_NAME)
-        row = await (await conn.execute("SELECT COUNT(*) FROM archived_memories WHERE user_id=?", (user_id,))).fetchone()
-        return int(row[0]) if row else 0
+        total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM archived_memories WHERE user_id=?", (user_id,))
+        return int(total) if total is not None else 0

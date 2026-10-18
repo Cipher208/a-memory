@@ -12,6 +12,7 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 # ─── B3: BM25 + char-trigram similarity ───
 
@@ -73,7 +74,7 @@ class ConflictResolver:
         self._cm = cm or connection_manager
 
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await get_write_dispatch(self._cm).execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS memory_conflicts (
@@ -111,24 +112,23 @@ class ConflictResolver:
         await self._init_db()
         if self._is_benign(new_content):
             return {"content": new_content, "is_conflict": False}
-        conn = await self._cm.get(DB_NAME)
         keywords = [w for w in new_content.split() if len(w) > 3][:5]
         if not keywords:
             return {"content": new_content, "is_conflict": False}
 
-        rows = await self._find_potential_conflicts(conn, user_id, keywords)
+        async def _check(conn: Any) -> dict[str, Any]:
+            rows = await self._find_potential_conflicts(conn, user_id, keywords)
+            for row in rows:
+                existing_id, existing_content, is_conflict, group_id = row
+                similarity = float(self._calculate_similarity(new_content, str(existing_content)))
+                if similarity > min_similarity and str(existing_content) != new_content:
+                    return await self._handle_conflict(
+                        conn, int(existing_id), str(existing_content), bool(is_conflict), group_id, new_content, similarity
+                    )
+            await conn.execute("INSERT INTO memory_conflicts (user_id, content) VALUES (?, ?)", (user_id, new_content))
+            return {"content": new_content, "is_conflict": False}
 
-        for row in rows:
-            existing_id, existing_content, is_conflict, group_id = row
-            similarity = float(self._calculate_similarity(new_content, str(existing_content)))
-            if similarity > min_similarity and str(existing_content) != new_content:
-                return await self._handle_conflict(
-                    conn, int(existing_id), str(existing_content), bool(is_conflict), group_id, new_content, similarity
-                )
-
-        await conn.execute("INSERT INTO memory_conflicts (user_id, content) VALUES (?, ?)", (user_id, new_content))
-        await conn.commit()
-        return {"content": new_content, "is_conflict": False}
+        return await get_write_dispatch(self._cm).atomic(DB_NAME, _check)
 
     async def _find_potential_conflicts(self, conn: Any, user_id: str, keywords: list[str]) -> Any:
         if not keywords:
@@ -146,7 +146,6 @@ class ConflictResolver:
         gid = str(group_id) if group_id else str(uuid.uuid4())
         if not is_conflict:
             await conn.execute("UPDATE memory_conflicts SET is_conflict=1, conflict_group_id=? WHERE id=?", (gid, existing_id))
-        await conn.commit()
         return {
             "content": new_content,
             "is_conflict": True,
@@ -158,18 +157,18 @@ class ConflictResolver:
     async def resolve(self, conflict_group_id: str, keep_id: int) -> bool:
         """B3: Archive deleted conflicts before removal, add audit trail."""
         await self._init_db()
-        conn = await self._cm.get(DB_NAME)
+        dispatch = get_write_dispatch(self._cm)
 
         # Get entries to delete
-        cur = await conn.execute(
+        to_delete = await dispatch.query(
+            DB_NAME,
             "SELECT id, content FROM memory_conflicts WHERE conflict_group_id=? AND id!=?",
             (conflict_group_id, keep_id),
         )
-        to_delete = await cur.fetchall()
 
         # Archive before deletion
         for row in to_delete:
-            del_id, del_content = row
+            del_id, del_content = row["id"], row["content"]
             with suppress(Exception):
                 from shared.archived_memories import ArchivedMemories
 
@@ -182,9 +181,13 @@ class ConflictResolver:
                 )
 
         # Delete and resolve
-        await conn.execute("DELETE FROM memory_conflicts WHERE conflict_group_id=? AND id!=?", (conflict_group_id, keep_id))
-        await conn.execute("UPDATE memory_conflicts SET is_conflict=0, conflict_group_id=NULL WHERE id=?", (keep_id,))
-        await conn.commit()
+        await dispatch.write_many(
+            DB_NAME,
+            [
+                ("DELETE FROM memory_conflicts WHERE conflict_group_id=? AND id!=?", (conflict_group_id, keep_id)),
+                ("UPDATE memory_conflicts SET is_conflict=0, conflict_group_id=NULL WHERE id=?", (keep_id,)),
+            ],
+        )
 
         # B3: Log audit trail with conflict_group_id
         with suppress(Exception):
@@ -199,7 +202,7 @@ class ConflictResolver:
                 details={
                     "conflict_group_id": conflict_group_id,
                     "kept_id": keep_id,
-                    "removed_ids": [r[0] for r in to_delete],
+                    "removed_ids": [r["id"] for r in to_delete],
                     "removed_count": len(to_delete),
                 },
             )

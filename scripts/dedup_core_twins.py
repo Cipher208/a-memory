@@ -91,14 +91,13 @@ async def run(apply: bool) -> int:
     from shared.archived_memories import ArchivedMemories
     from shared.connection import connection_manager as cm
     from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
 
-    conn = await cm.get(DB_NAME)
-    cur = await conn.execute(DUP_SQL)
-    cols = [d[0] for d in cur.description]
-    rows = [dict(zip(cols, r, strict=True)) for r in await cur.fetchall()]
+    dispatch = get_write_dispatch(cm)
+    rows = [dict(r) for r in await dispatch.query(DB_NAME, DUP_SQL)]
 
     keep, drop = pick(rows)
-    before_total = (await (await conn.execute("SELECT COUNT(*) FROM core_memory")).fetchone())[0]
+    before_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory") or 0
 
     print(f"base={DATA_DIR}")
     print(f"mode={'APPLY' if apply else 'dry-run'}  dup_rows={len(rows)} groups={len(keep)} drop={len(drop)} total={before_total}")
@@ -111,14 +110,11 @@ async def run(apply: bool) -> int:
 
     # guard: every doomed key must address exactly one row
     for d in drop:
-        n = (
-            await (
-                await conn.execute(
-                    "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND key=?",
-                    (d["layer"], d["user_id"], d["key"]),
-                )
-            ).fetchone()
-        )[0]
+        n = await dispatch.scalar(
+            DB_NAME,
+            "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+            (d["layer"], d["user_id"], d["key"]),
+        )
         if n != 1:
             print(f"  ABORT: key {d['key']!r} matches {n} rows, expected 1")
             await cm.close_all()
@@ -154,7 +150,8 @@ async def run(apply: bool) -> int:
         ok = await l4.delete(d["user_id"], d["key"], triggered_by="dedup_core_twins")
         if ok:
             done += 1
-        await conn.execute(
+        await dispatch.write(
+            DB_NAME,
             "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
             (
                 d["user_id"],
@@ -165,11 +162,10 @@ async def run(apply: bool) -> int:
                 now,
             ),
         )
-    await conn.commit()
 
     # verify
-    left = await (await conn.execute(DUP_SQL)).fetchall()
-    after_total = (await (await conn.execute("SELECT COUNT(*) FROM core_memory")).fetchone())[0]
+    left = [dict(r) for r in await dispatch.query(DB_NAME, DUP_SQL)]
+    after_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory") or 0
     print(f"archive: {path}")
     print(f"deleted={done}/{len(drop)}  dup_left={len(left)}  total {before_total}->{after_total}")
     print("VERDICT=" + ("CLEAN" if not left and after_total == before_total - done else "LEFTOVER"))

@@ -489,13 +489,11 @@ async def _purge_table(cm: Any, table: str, user_id: str, cutoff: float, timesta
         raise ValueError(f"Invalid purge target: {table}.{timestamp_col}")
     if not cm:
         return 0
-    conn = await cm.get(DB_NAME)
     try:
-        sql = f"DELETE FROM {table} WHERE user_id=? AND {timestamp_col} > ?"
-        cursor = await conn.execute(sql, (user_id, cutoff))
-        result = int(cursor.rowcount)
-        await conn.commit()
-        return result
+        from shared.write_dispatch import get_write_dispatch
+
+        deleted = await get_write_dispatch(cm).write(DB_NAME, f"DELETE FROM {table} WHERE user_id=? AND {timestamp_col} > ?", (user_id, cutoff))
+        return int(deleted)
     except Exception:
         return 0
 
@@ -759,31 +757,31 @@ async def _proposals_conflict(layer: str, user_id: str, payload: dict[str, Any])
     from lifecycle.distiller import _canonical_key
     from shared.memory_types import kind_for_text
 
-    conn = await connection_manager.get(DB_NAME)
+    from shared.write_dispatch import get_write_dispatch
+
+    dispatch = get_write_dispatch(connection_manager)
     try:
-        rows = await (
-            await conn.execute("SELECT id, content FROM memory_conflicts WHERE conflict_group_id=? ORDER BY id LIMIT 1", (group_id,))
-        ).fetchall()
+        rows = await dispatch.query(DB_NAME, "SELECT id, content FROM memory_conflicts WHERE conflict_group_id=? ORDER BY id LIMIT 1", (group_id,))
     except Exception:  # no conflicts table yet == group never existed
         return {"status": "error", "error": f"unknown group {group_id}"}
     cmem = CoreMemory(cm=connection_manager, layer=layer)
-    key = _canonical_key(str(rows[0][1]), kind_for_text(str(rows[0][1])))
-    row = await (
-        await conn.execute(
-            "SELECT value, importance, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
-            (layer, user_id, key),
-        )
-    ).fetchone()
+    conflict_content = str(rows[0]["content"])
+    key = _canonical_key(conflict_content, kind_for_text(conflict_content))
+    row = await dispatch.select_one(
+        DB_NAME,
+        "SELECT value, importance, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+        (layer, user_id, key),
+    )
     if row is None:
         return {"status": "error", "error": "no matching L4 fact to annotate"}
-    merged = _load_meta(row[2])
+    merged = _load_meta(row["metadata"])
     merged["annotated"] = annotation
     await cmem.save(
         user_id,
         key,
-        str(row[0]),
-        importance=float(row[1]),
-        memory_kind=kind_for_text(str(rows[0][1])).value,
+        str(row["value"]),
+        importance=float(row["importance"]),
+        memory_kind=kind_for_text(conflict_content).value,
         source="consolidation:annotate",
         metadata=merged,
     )

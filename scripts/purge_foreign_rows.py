@@ -198,6 +198,7 @@ async def apply(p: dict[str, Any], db: Path) -> None:
     from shared.archived_memories import ArchivedMemories
     from shared.connection import connection_manager
     from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
 
     if not _same_path(connection_manager.base_dir, db.parent):
         print(f"  ОТКАЗ: активная база {connection_manager.base_dir} != {db.parent}")
@@ -205,7 +206,7 @@ async def apply(p: dict[str, Any], db: Path) -> None:
 
     am = ArchivedMemories(cm=connection_manager)
     await am._init_db()
-    conn = await connection_manager.get(DB_NAME)
+    dispatch = get_write_dispatch(connection_manager)
 
     archived = 0
     for r in p["episodes"]:
@@ -230,24 +231,28 @@ async def apply(p: dict[str, Any], db: Path) -> None:
         archived += 1
     print(f"  заархивировано: {archived}")
 
+    # Every delete lands in one transaction: a purge that stops halfway would leave
+    # edges pointing at removed nodes.
+    ops: list[tuple[str, tuple[Any, ...]]] = []
     node_ids = p["node_ids"]
     if node_ids:
         ph = ",".join("?" * len(node_ids))
-        await conn.execute(f"DELETE FROM epi_edges WHERE source_id IN ({ph}) OR target_id IN ({ph})", node_ids + node_ids)
-        await conn.execute(f"DELETE FROM epi_tags WHERE node_id IN ({ph})", node_ids)
-        await conn.execute(f"DELETE FROM epi_nodes WHERE node_id IN ({ph})", node_ids)
+        ops.append((f"DELETE FROM epi_edges WHERE source_id IN ({ph}) OR target_id IN ({ph})", tuple(node_ids) * 2))
+        ops.append((f"DELETE FROM epi_tags WHERE node_id IN ({ph})", tuple(node_ids)))
+        ops.append((f"DELETE FROM epi_nodes WHERE node_id IN ({ph})", tuple(node_ids)))
 
     ep_ids = [int(r["episode_id"]) for r in p["episodes"]]
     if ep_ids:
         ph = ",".join("?" * len(ep_ids))
-        await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({ph})", ep_ids)
+        ops.append((f"DELETE FROM episodes WHERE episode_id IN ({ph})", tuple(ep_ids)))
 
     fact_ids = [int(r["entry_id"]) for r in p["facts"]]
     if fact_ids:
         ph = ",".join("?" * len(fact_ids))
-        await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({ph})", fact_ids)
+        ops.append((f"DELETE FROM core_memory WHERE entry_id IN ({ph})", tuple(fact_ids)))
 
-    await conn.commit()
+    if ops:
+        await dispatch.write_many(DB_NAME, ops)
 
 
 def _counts(db: Path) -> dict[str, int]:

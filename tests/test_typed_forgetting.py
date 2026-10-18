@@ -17,7 +17,7 @@ async def cm(tmp_path):
         """
         CREATE TABLE core_memory (
             entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT, "key" TEXT, value TEXT,
+            layer TEXT DEFAULT 'user', user_id TEXT, "key" TEXT, value TEXT,
             importance REAL, memory_kind TEXT,
             expires_at REAL, source TEXT DEFAULT 'manual', metadata TEXT,
             created_at REAL, updated_at REAL
@@ -85,3 +85,139 @@ async def test_archive_old_low_importance_fact(cm):
     fs = ForgettingSystem(cm=cm)
     n = await fs.archive_old_entries()
     assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_decay_commits_in_chunks(cm):
+    """decay must release the write lock between batches, not hold it for all.
+
+    It used to `executemany` every row in one transaction and commit once, so the
+    SQLite write lock was held for the whole batch. A tool write arriving
+    mid-batch waited out `busy_timeout` (250 ms) and failed with
+    `database is locked` — measured on the hermes base, 106 tracebacks in one
+    night, one every fifteen minutes. Chunked commits release the write lock
+    between batches, so a tool write can interleave instead of failing.
+    """
+    N = 2500
+    now = time.time()
+    conn = await cm.get("memory.db")
+    await conn.executemany(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, memory_kind,
+            expires_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?)""",
+        [("u", f"k{i}", f"v{i}", 0.5, "fact", now - 120 * 86400, now - 120 * 86400) for i in range(N)],
+    )
+    await conn.commit()
+
+    fs = ForgettingSystem(cm=cm)
+
+    # Decay writes through the dispatch's private connection, so count the
+    # dispatch's write_many calls: it commits once per call, and more than one
+    # call means the write lock is released between batches.
+    batches: list[int] = []
+    real_write_many = fs._dispatch.write_many
+
+    async def counting_write_many(db: str, ops: object) -> None:
+        batches.append(1)  # type: ignore[arg-type]
+        await real_write_many(db, ops)  # type: ignore[arg-type]
+
+    fs._dispatch.write_many = counting_write_many  # type: ignore[method-assign]
+
+    n = await fs.decay_importance()
+    assert n == N, f"every row should decay, got {n}"
+    assert len(batches) > 1, (
+        "decay must commit in chunks so the SQLite write lock is released "
+        "between batches — one long transaction is what made tool writes fail "
+        "with 'database is locked'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_decay_survives_stale_read_snapshot_on_shared_conn(cm):
+    """decay must not fail `database is locked` when the shared conn holds a stale read txn.
+
+    A read cursor retained on the shared connection keeps a read transaction (and
+    with it a snapshot) open on the handle every component borrows. Once a foreign
+    writer — here another manager on the same file — commits, that snapshot is
+    stale, and the next write on the *same* connection fails instantly with
+    `SQLITE_BUSY_SNAPSHOT` (517); SQLite does not consult the busy handler for it.
+    Measured on the hermes base 17.10: decay/compress/prune all failed for hours
+    with the shm read-lock byte held by the MCP process while the autohooks daemon
+    kept committing. Maintenance writes must therefore not ride the shared
+    connection: they get their own, fresh one, whose snapshot cannot be stale.
+    """
+    # Two rows, not one. With a single row the table fits in one b-tree page, and
+    # SQLite can keep the write off the page the retained read snapshot touched, so
+    # the BUSY_SNAPSHOT never fires and the test would pass even on the buggy code.
+    # Two rows spread across pages, and the foreign write then touches a page the
+    # stale snapshot already read — the exact production shape. Verified: one row
+    # returns n>=1 (green, useless); two rows return 0 with `database is locked`.
+    await _insert(cm, "u", "f1", "любит синий", 0.5, "fact", days_ago=120)
+    await _insert(cm, "u", "f2", "любит зелёный", 0.4, "fact", days_ago=120)
+    fs = ForgettingSystem(cm=cm)
+
+    # Retain a read cursor on the SHARED conn: fetch one row, exhaust neither the
+    # cursor nor the statement. While it lives, the read txn and its snapshot are open.
+    shared = await cm.get("memory.db")
+    cur = await shared.execute("SELECT entry_id, importance FROM core_memory")
+    await cur.fetchone()
+
+    # Foreign writer commits on a different connection -> the shared snapshot is stale.
+    # It must UPDATE the same column decay writes (`importance`) of a row the retained
+    # cursor already read: SQLITE_BUSY_SNAPSHOT (517) fires when the stale connection
+    # writes a page whose content it read under the stale snapshot — an INSERT
+    # appending to a fresh page does not touch what was read.
+    foreign = AsyncConnectionManager(base_dir=str(cm.base_dir))
+    try:
+        fconn = await foreign.get("memory.db")
+        await fconn.execute("UPDATE core_memory SET importance=0.1 WHERE \"key\"='f1'")
+        await fconn.commit()
+    finally:
+        await foreign.close_all()
+
+    try:
+        n = await fs.decay_importance()
+        assert n >= 1, (
+            "decay must not be wedged by a stale read snapshot on the shared connection — BUSY_SNAPSHOT is instant and unhandled by busy_timeout"
+        )
+    finally:
+        await cur.close()
+
+
+@pytest.mark.asyncio
+async def test_compress_and_archive_survive_stale_read_snapshot_on_shared_conn(cm):
+    """The other two maintenance writers must also stay off the shared connection.
+
+    Same production shape as the decay test: a retained read cursor holds a
+    snapshot on the shared handle, a foreign writer commits, and the snapshot goes
+    stale. `compress_duplicates` and `archive_old_entries` both still read and wrote
+    on that handle, so they failed the same instant BUSY_SNAPSHOT way.
+    """
+    # Duplicate key -> compress has something to remove; two rows so the read
+    # snapshot spans more than one page (see the decay test for why that matters).
+    await _insert(cm, "u", "dup", "первый", 0.5, "fact", days_ago=120)
+    await _insert(cm, "u", "dup", "второй", 0.5, "fact", days_ago=10)
+    # Old + unimportant -> archive has something to take (default 90d / 0.3).
+    await _insert(cm, "u", "stale", "забытое", 0.1, "fact", days_ago=400)
+    fs = ForgettingSystem(cm=cm)
+
+    shared = await cm.get("memory.db")
+    cur = await shared.execute("SELECT entry_id, importance FROM core_memory")
+    await cur.fetchone()
+
+    foreign = AsyncConnectionManager(base_dir=str(cm.base_dir))
+    try:
+        fconn = await foreign.get("memory.db")
+        await fconn.execute("UPDATE core_memory SET importance=0.2")
+        await fconn.commit()
+    finally:
+        await foreign.close_all()
+
+    try:
+        removed = await fs.compress_duplicates()
+        assert removed >= 1, "compress_duplicates must not be wedged by a stale shared snapshot"
+        archived = await fs.archive_old_entries()
+        assert archived >= 1, "archive_old_entries must not be wedged by a stale shared snapshot"
+    finally:
+        await cur.close()

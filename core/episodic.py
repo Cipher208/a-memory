@@ -5,12 +5,16 @@ L3 EpisodicMemory — async important moments with emotional weight
 """
 
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,8 +32,13 @@ class EpisodicMemory:
         self._cm = cm or connection_manager
         self.layer = layer
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        """Resolved on every access so a repointed ``_cm`` is honoured."""
+        return get_write_dispatch(self._cm)
+
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             f"""
             CREATE TABLE IF NOT EXISTS episodes (
@@ -74,38 +83,39 @@ class EpisodicMemory:
 
         None keeps the old behaviour, so a live message is unchanged.
         """
-        conn = await self._cm.get(DB_NAME)
-        # Dedup guard: an identical (layer, user_id, summary) must not land as a
-        # second row. The live base accumulated 468 such duplicates (17.5% of the
-        # table), every pair written seconds apart. Return the existing id.
-        cursor = await conn.execute(
-            "SELECT episode_id FROM episodes WHERE layer=? AND user_id=? AND summary=? ORDER BY episode_id ASC LIMIT 1",
-            (self.layer, user_id, summary),
-        )
-        row = await cursor.fetchone()
-        if row is not None:
-            return int(row[0])
-        cursor = await conn.execute(
-            "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                self.layer,
-                user_id,
-                summary,
-                emotional_weight,
-                json.dumps(tags or []),
-                created_at if created_at is not None else time.time(),
-            ),
-        )
-        await conn.commit()
-        return int(cursor.lastrowid or 0)
+
+        async def _txn(conn: Any) -> int:
+            # Dedup guard: an identical (layer, user_id, summary) must not land as a
+            # second row. The live base accumulated 468 such duplicates (17.5% of the
+            # table), every pair written seconds apart. Return the existing id.
+            cursor = await conn.execute(
+                "SELECT episode_id FROM episodes WHERE layer=? AND user_id=? AND summary=? ORDER BY episode_id ASC LIMIT 1",
+                (self.layer, user_id, summary),
+            )
+            row = await cursor.fetchone()
+            if row is not None:
+                return int(row[0])
+            cursor = await conn.execute(
+                "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    self.layer,
+                    user_id,
+                    summary,
+                    emotional_weight,
+                    json.dumps(tags or []),
+                    created_at if created_at is not None else time.time(),
+                ),
+            )
+            return int(cursor.lastrowid or 0)
+
+        return int(await self._dispatch.atomic(DB_NAME, _txn))
 
     async def get_episodes(self, user_id: str, limit: int = 20, offset: int = 0) -> list[Episode]:
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT * FROM episodes WHERE layer=? AND user_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (self.layer, user_id, limit, offset),
         )
-        rows = await cursor.fetchall()
         return [self._row_to_episode(r) for r in rows]
 
     async def search_by_tag(self, user_id: str, tag: str, limit: int = 10) -> list[Episode]:
@@ -114,32 +124,31 @@ class EpisodicMemory:
 
     async def get_by_id(self, episode_id: int) -> Episode | None:
         """Fetch one episode by id (D2.2 promotion pipeline)."""
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("SELECT * FROM episodes WHERE episode_id = ?", (episode_id,))
-        row = await cursor.fetchone()
+        row = await self._dispatch.select_one(DB_NAME, "SELECT * FROM episodes WHERE episode_id = ?", (episode_id,))
         return self._row_to_episode(row) if row else None
 
     async def add_tag(self, episode_id: int, tag: str) -> bool:
         """Append a tag to an episode's JSON tag list (idempotent). D2.2."""
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("SELECT tags FROM episodes WHERE episode_id = ?", (episode_id,))
-        row = await cursor.fetchone()
-        if row is None:
-            return False
-        try:
-            tags = json.loads(row["tags"] or "[]")
-        except (json.JSONDecodeError, TypeError):
-            tags = []
-        if tag in tags:
+
+        async def _txn(conn: Any) -> bool:
+            cursor = await conn.execute("SELECT tags FROM episodes WHERE episode_id = ?", (episode_id,))
+            row = await cursor.fetchone()
+            if row is None:
+                return False
+            try:
+                tags = json.loads(row["tags"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                tags = []
+            if tag in tags:
+                return True
+            tags.append(tag)
+            await conn.execute("UPDATE episodes SET tags = ? WHERE episode_id = ?", (json.dumps(tags), episode_id))
             return True
-        tags.append(tag)
-        await conn.execute("UPDATE episodes SET tags = ? WHERE episode_id = ?", (json.dumps(tags), episode_id))
-        await conn.commit()
-        return True
+
+        return bool(await self._dispatch.atomic(DB_NAME, _txn))
 
     async def search(self, user_id: str, query: str, limit: int = 10, use_tag_match: bool = False) -> list[Episode]:
         """Unified search across summary and tags."""
-        conn = await self._cm.get(DB_NAME)
         params: tuple[Any, ...]
         if use_tag_match:
             sql = "SELECT * FROM episodes WHERE layer=? AND user_id=? AND tags LIKE ? ORDER BY created_at DESC LIMIT ?"
@@ -153,19 +162,17 @@ class EpisodicMemory:
             sql = f"SELECT * FROM episodes WHERE layer=? AND user_id=? AND ({like_conds}) ORDER BY created_at DESC LIMIT ?"
             params = (self.layer, user_id, *[f"%{w}%" for w in tokens], limit)
 
-        cursor = await conn.execute(sql, params)
-        rows = await cursor.fetchall()
+        rows = await self._dispatch.query(DB_NAME, sql, params)
         return [self._row_to_episode(r) for r in rows]
 
     async def archive_old(self, user_id: str, days: int = 90) -> int:
         """Archive old episodes into ArchivedMemories, then delete them."""
-        conn = await self._cm.get(DB_NAME)
         cutoff = time.time() - (days * 86400)
-        cursor = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             "SELECT * FROM episodes WHERE layer=? AND user_id=? AND created_at < ? AND emotional_weight < 0.3",
             (self.layer, user_id, cutoff),
         )
-        rows = await cursor.fetchall()
         if not rows:
             return 0
 
@@ -190,41 +197,40 @@ class EpisodicMemory:
 
         placeholders = ",".join(["?"] * len(ids))
         sql = f"DELETE FROM episodes WHERE episode_id IN ({placeholders})"
-        await conn.execute(sql, tuple(ids))
-        await conn.commit()
+        await self._dispatch.write(DB_NAME, sql, tuple(ids))
         return archived_count
 
     async def count(self, user_id: str) -> int:
         """Count episodes for a user (fast COUNT query)."""
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        value = await self._dispatch.scalar(
+            DB_NAME,
             "SELECT COUNT(*) as cnt FROM episodes WHERE layer=? AND user_id=?",
             (self.layer, user_id),
         )
-        row = await cursor.fetchone()
-        return int(row["cnt"]) if row and row[0] is not None else 0
+        return int(value) if value is not None else 0
 
     async def delete_older_than(self, user_id: str, cutoff: float) -> int:
         """Delete this layer's episodes with created_at > cutoff (recent purge)."""
-        conn = await self._cm.get(DB_NAME)
-        borrowed = conn.in_transaction
-        cursor = await conn.execute(
-            "DELETE FROM episodes WHERE layer=? AND user_id=? AND created_at > ?",
-            (self.layer, user_id, cutoff),
+        shared = await self._cm.get(DB_NAME)
+        if shared.in_transaction:
+            # A purge neither rides another component's transaction nor blocks on
+            # its write lock; the next tick retries.
+            logger.warning("delete_older_than skipped: shared connection holds a transaction")
+            return 0
+        return int(
+            await self._dispatch.write(
+                DB_NAME,
+                "DELETE FROM episodes WHERE layer=? AND user_id=? AND created_at > ?",
+                (self.layer, user_id, cutoff),
+            )
         )
-        if not borrowed:
-            await conn.commit()
-        return int(cursor.rowcount)
 
     async def delete_by_ids(self, episode_ids: list[int]) -> int:
         """Delete episodes by id. Returns the number of rows removed."""
         if not episode_ids:
             return 0
-        conn = await self._cm.get(DB_NAME)
         placeholders = ",".join(["?"] * len(episode_ids))
-        cur = await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({placeholders})", tuple(episode_ids))
-        await conn.commit()
-        return int(cur.rowcount)
+        return int(await self._dispatch.write(DB_NAME, f"DELETE FROM episodes WHERE episode_id IN ({placeholders})", tuple(episode_ids)))
 
     def _row_to_episode(self, row: dict[str, Any] | Any) -> Episode:
         return Episode(

@@ -45,16 +45,19 @@ async def _fact(key: str, value: str, kind: str = "fact", user_id: str = "ab", i
 
 async def _page(title: str, content: str, kind: str | None, user_id: str = "ab") -> int:
     """rag-страница с одним чанком; bin_embedding — с query-префиксом (сторона search_binary)."""
+    # The embedding is computed BEFORE this helper opens a write transaction: the
+    # cache row is written by the dispatcher on its own connection, and a shared
+    # handle holding an uncommitted INSERT would make it wait out the busy timeout.
+    from rag.quantize import embed_to_binary
+    from shared.embeddings import embed_text
+
+    emb = await embed_text(content, prefix="query: ")
     conn = await connection_manager.get(DB_NAME)
     cur = await conn.execute(
         "INSERT INTO rag_pages (layer, user_id, title, content, wiki_type) VALUES ('user', ?, ?, ?, 'note')",
         (user_id, title, content),
     )
     page_id = int(cur.lastrowid or 0)
-    from rag.quantize import embed_to_binary
-    from shared.embeddings import embed_text
-
-    emb = await embed_text(content, prefix="query: ")
     await conn.execute(
         "INSERT INTO rag_chunks (page_id, chunk_index, content, bin_embedding, memory_kind) VALUES (?, 0, ?, ?, ?)",
         (page_id, content, embed_to_binary(emb, threshold=0.0, dim=len(emb)), kind),

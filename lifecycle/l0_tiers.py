@@ -31,6 +31,7 @@ from typing import Any
 from config import config
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 # Processed statuses (S1): received is one of these. received is never tiered.
 _PROCESSED = ("promoted_l4", "saved_l3", "gated_out")
@@ -68,40 +69,38 @@ async def close_overdue_received(
     if ttl_days is None:
         ttl_days = float(config.get("l0", "received_ttl_days", default=7))
     cm = cm or connection_manager
-    conn = await cm.get(DB_NAME)
     ts_now = now if now is not None else time.time()
     cutoff = ts_now - ttl_days * 86400
-    rows = list(
-        await (
-            await conn.execute(
-                # `raw_type != 'import'` is the second line of defence, not the
-                # mechanism: migration g27 renames those rows to `parked`, and this
-                # clause keeps them safe if that migration has not run or failed
-                # halfway. The cost of being wrong here is one owner-requested
-                # history silently closed, so the redundant guard is worth it.
-                "SELECT id, decisions FROM l0_journal WHERE status='received' AND raw_type != 'import' AND ts <= ? ORDER BY id",
-                (cutoff,),
-            )
-        ).fetchall()
-    )
-    if not rows:
-        return {"closed": 0, "ttl_days": ttl_days}
 
     from features.replay import config_hash
 
     chash = config_hash()
-    for row in rows:
-        try:
-            decisions: list[dict[str, Any]] = json.loads(row["decisions"] or "[]")
-        except (json.JSONDecodeError, TypeError):
-            decisions = []
-        decisions.append({"gate": "g1", "config_hash": chash, "ts": ts_now, "reason": "never_processed"})
-        await conn.execute(
-            "UPDATE l0_journal SET status='gated_out', processed_at=?, decisions=? WHERE id=?",
-            (ts_now, json.dumps(decisions, ensure_ascii=False), row["id"]),
+
+    async def _close(conn: Any) -> int:
+        cur = await conn.execute(
+            # `raw_type != 'import'` is the second line of defence, not the
+            # mechanism: migration g27 renames those rows to `parked`, and this
+            # clause keeps them safe if that migration has not run or failed
+            # halfway. The cost of being wrong here is one owner-requested
+            # history silently closed, so the redundant guard is worth it.
+            "SELECT id, decisions FROM l0_journal WHERE status='received' AND raw_type != 'import' AND ts <= ? ORDER BY id",
+            (cutoff,),
         )
-    await conn.commit()
-    return {"closed": len(rows), "ttl_days": ttl_days}
+        rows = await cur.fetchall()
+        for row in rows:
+            try:
+                decisions: list[dict[str, Any]] = json.loads(row["decisions"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                decisions = []
+            decisions.append({"gate": "g1", "config_hash": chash, "ts": ts_now, "reason": "never_processed"})
+            await conn.execute(
+                "UPDATE l0_journal SET status='gated_out', processed_at=?, decisions=? WHERE id=?",
+                (ts_now, json.dumps(decisions, ensure_ascii=False), row["id"]),
+            )
+        return len(rows)
+
+    closed = await get_write_dispatch(cm).atomic(DB_NAME, _close)
+    return {"closed": closed, "ttl_days": ttl_days}
 
 
 def _preview(text: str) -> str:
@@ -112,8 +111,9 @@ def _preview(text: str) -> str:
 
 async def _ensure_schema(cm: Any) -> None:
     """Create the schema idempotently — mirror of migration g22 for live DBs before it runs."""
-    conn = await cm.get(DB_NAME)
-    await conn.execute(
+    dispatch = get_write_dispatch(cm)
+    await dispatch.execute_script(
+        DB_NAME,
         """CREATE TABLE IF NOT EXISTS l0_cold_archive (
             id INTEGER PRIMARY KEY,
             ts REAL NOT NULL,
@@ -126,7 +126,7 @@ async def _ensure_schema(cm: Any) -> None:
             text TEXT NOT NULL,
             hash_prev TEXT,
             hash_self TEXT
-        )"""
+        )""",
     )
     for ddl in (
         "ALTER TABLE l0_journal ADD COLUMN tier TEXT",
@@ -138,9 +138,8 @@ async def _ensure_schema(cm: Any) -> None:
         "ALTER TABLE l0_cold_archive ADD COLUMN hash_self TEXT",
     ):
         with contextlib.suppress(Exception):  # column already exists
-            await conn.execute(ddl)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_cold_ts ON l0_cold_archive(ts)")
-    await conn.commit()
+            await dispatch.write(DB_NAME, ddl, ())
+    await dispatch.write(DB_NAME, "CREATE INDEX IF NOT EXISTS idx_cold_ts ON l0_cold_archive(ts)", ())
 
 
 def _parse_decisions(raw: Any) -> list[dict[str, Any]]:
@@ -163,75 +162,72 @@ async def tier_l0(
     if not config.get("l0", "tiers_enabled", default=True):
         return {"warm": 0, "cold": 0, "skipped": "disabled"}
     cm = cm or connection_manager
-    conn = await cm.get(DB_NAME)
     await _ensure_schema(cm)
     ts_now = now if now is not None else time.time()
     warm_cutoff = ts_now - 30 * 86400
     cold_cutoff = ts_now - 180 * 86400
     archived_at = time.time()
 
-    # --- cold tier: >180d, processed -> l0_cold_archive + deletion ---
-    cold_rows = list(
-        await (
-            await conn.execute(
-                f"""SELECT id, ts, event, raw_type, layer, user_id, decisions, text, text_z, hash_prev, hash_self
-                    FROM l0_journal
-                    WHERE status IN ({_PLACEHOLDERS}) AND ts <= ?
-                    ORDER BY id""",
-                (*_PROCESSED, cold_cutoff),
-            )
-        ).fetchall()
-    )
-    months: set[str] = set()
-    for rid, ts, event, raw_type, layer, user_id, decisions, text, text_z, hash_prev, hash_self in cold_rows:
-        full = text
-        if text_z:
-            with contextlib.suppress(Exception):
-                full = zlib.decompress(bytes(text_z)).decode("utf-8")
-        # id is explicitly the archive PK: re-runs are idempotent (OR IGNORE), no duplicates.
-        # hash_prev/hash_self travel with the row: deleting it from the journal would
-        # otherwise take its chain link with it and break verification for every row
-        # that follows.
-        await conn.execute(
-            """INSERT OR IGNORE INTO l0_cold_archive
-               (id, ts, event, raw_type, layer, user_id, decisions, archived_at, text, hash_prev, hash_self)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                rid,
-                ts,
-                event,
-                raw_type,
-                layer,
-                user_id,
-                decisions if decisions is not None else "[]",
-                archived_at,
-                full,
-                hash_prev,
-                hash_self,
-            ),
+    async def _tier(conn: Any) -> tuple[int, int, set[str]]:
+        # --- cold tier: >180d, processed -> l0_cold_archive + deletion ---
+        cur = await conn.execute(
+            f"""SELECT id, ts, event, raw_type, layer, user_id, decisions, text, text_z, hash_prev, hash_self
+                FROM l0_journal
+                WHERE status IN ({_PLACEHOLDERS}) AND ts <= ?
+                ORDER BY id""",
+            (*_PROCESSED, cold_cutoff),
         )
-        await conn.execute("DELETE FROM l0_journal WHERE id = ?", (rid,))
-        months.add(time.strftime("%Y-%m", time.gmtime(ts)))
-
-    # --- warm tier: 30–180d, processed, not yet warm -> preview + zlib ---
-    warm_rows = list(
-        await (
+        cold_rows = await cur.fetchall()
+        months: set[str] = set()
+        for rid, ts, event, raw_type, layer, user_id, decisions, text, text_z, hash_prev, hash_self in cold_rows:
+            full = text
+            if text_z:
+                with contextlib.suppress(Exception):
+                    full = zlib.decompress(bytes(text_z)).decode("utf-8")
+            # id is explicitly the archive PK: re-runs are idempotent (OR IGNORE), no duplicates.
+            # hash_prev/hash_self travel with the row: deleting it from the journal would
+            # otherwise take its chain link with it and break verification for every row
+            # that follows.
             await conn.execute(
-                f"""SELECT id, text FROM l0_journal
-                    WHERE status IN ({_PLACEHOLDERS}) AND tier IS NULL AND ts <= ? AND ts > ?
-                    ORDER BY id""",
-                (*_PROCESSED, warm_cutoff, cold_cutoff),
+                """INSERT OR IGNORE INTO l0_cold_archive
+                   (id, ts, event, raw_type, layer, user_id, decisions, archived_at, text, hash_prev, hash_self)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    rid,
+                    ts,
+                    event,
+                    raw_type,
+                    layer,
+                    user_id,
+                    decisions if decisions is not None else "[]",
+                    archived_at,
+                    full,
+                    hash_prev,
+                    hash_self,
+                ),
             )
-        ).fetchall()
-    )
-    await conn.executemany(
-        "UPDATE l0_journal SET tier = 'warm', text = ?, text_z = ? WHERE id = ?",
-        [(_preview(text), zlib.compress(text.encode("utf-8")), rid) for rid, text in warm_rows],
-    )
-    await conn.commit()
+            await conn.execute("DELETE FROM l0_journal WHERE id = ?", (rid,))
+            months.add(time.strftime("%Y-%m", time.gmtime(ts)))
+
+        # --- warm tier: 30–180d, processed, not yet warm -> preview + zlib ---
+        cur = await conn.execute(
+            f"""SELECT id, text FROM l0_journal
+                WHERE status IN ({_PLACEHOLDERS}) AND tier IS NULL AND ts <= ? AND ts > ?
+                ORDER BY id""",
+            (*_PROCESSED, warm_cutoff, cold_cutoff),
+        )
+        warm_rows = await cur.fetchall()
+        for rid, text in warm_rows:
+            await conn.execute(
+                "UPDATE l0_journal SET tier = 'warm', text = ?, text_z = ? WHERE id = ?",
+                (_preview(text), zlib.compress(text.encode("utf-8")), rid),
+            )
+        return len(cold_rows), len(warm_rows), months
+
+    cold_count, warm_count, months = await get_write_dispatch(cm).atomic(DB_NAME, _tier)
 
     exported = [await export_clack(m, cm=cm) for m in sorted(months)]
-    return {"warm": len(warm_rows), "cold": len(cold_rows), "exported": exported}
+    return {"warm": warm_count, "cold": cold_count, "exported": exported}
 
 
 async def read_cold(since_days: float, *, cm: Any | None = None) -> list[dict[str, Any]]:
@@ -241,31 +237,27 @@ async def read_cold(since_days: float, *, cm: Any | None = None) -> list[dict[st
     decisions, archived_at, brief} without calls; text is the full plaintext.
     """
     cm = cm or connection_manager
-    conn = await cm.get(DB_NAME)
     cutoff = time.time() - since_days * 86400
-    rows = list(
-        await (
-            await conn.execute(
-                """SELECT id, ts, event, raw_type, layer, user_id, decisions, archived_at, text
-                   FROM l0_cold_archive WHERE archived_at >= ? ORDER BY ts DESC, id DESC LIMIT 500""",
-                (cutoff,),
-            )
-        ).fetchall()
+    rows = await get_write_dispatch(cm).query(
+        DB_NAME,
+        """SELECT id, ts, event, raw_type, layer, user_id, decisions, archived_at, text
+           FROM l0_cold_archive WHERE archived_at >= ? ORDER BY ts DESC, id DESC LIMIT 500""",
+        (cutoff,),
     )
     return [
         {
-            "id": rid,
-            "ts": ts,
-            "event": event,
-            "raw_type": raw_type,
-            "layer": layer,
-            "user_id": user_id,
-            "decisions": _parse_decisions(decisions),
-            "archived_at": archived_at,
-            "brief": text[:200],
-            "text": text,
+            "id": r["id"],
+            "ts": r["ts"],
+            "event": r["event"],
+            "raw_type": r["raw_type"],
+            "layer": r["layer"],
+            "user_id": r["user_id"],
+            "decisions": _parse_decisions(r["decisions"]),
+            "archived_at": r["archived_at"],
+            "brief": r["text"][:200],
+            "text": r["text"],
         }
-        for rid, ts, event, raw_type, layer, user_id, decisions, archived_at, text in rows
+        for r in rows
     ]
 
 
@@ -285,32 +277,28 @@ async def export_clack(month: str, *, cm: Any | None = None) -> str:
     y, m = (int(p) for p in month.split("-"))
     start = datetime(y, m, 1, tzinfo=timezone.utc).timestamp()  # ValueError on a bad month
     end = datetime(y + 1, 1, 1, tzinfo=timezone.utc).timestamp() if m == 12 else datetime(y, m + 1, 1, tzinfo=timezone.utc).timestamp()
-    conn = await cm.get(DB_NAME)
-    rows = list(
-        await (
-            await conn.execute(
-                """SELECT id, ts, event, raw_type, layer, user_id, decisions, archived_at, text
-                   FROM l0_cold_archive WHERE ts >= ? AND ts < ? ORDER BY ts, id""",
-                (start, end),
-            )
-        ).fetchall()
+    rows = await get_write_dispatch(cm).query(
+        DB_NAME,
+        """SELECT id, ts, event, raw_type, layer, user_id, decisions, archived_at, text
+           FROM l0_cold_archive WHERE ts >= ? AND ts < ? ORDER BY ts, id""",
+        (start, end),
     )
     lines = [
         json.dumps(
             {
-                "id": rid,
-                "ts": ts,
-                "event": event,
-                "raw_type": raw_type,
-                "layer": layer,
-                "user_id": user_id,
-                "decisions": _parse_decisions(decisions),
-                "archived_at": archived_at,
-                "text": text,
+                "id": r["id"],
+                "ts": r["ts"],
+                "event": r["event"],
+                "raw_type": r["raw_type"],
+                "layer": r["layer"],
+                "user_id": r["user_id"],
+                "decisions": _parse_decisions(r["decisions"]),
+                "archived_at": r["archived_at"],
+                "text": r["text"],
             },
             ensure_ascii=False,
         )
-        for rid, ts, event, raw_type, layer, user_id, decisions, archived_at, text in rows
+        for r in rows
     ]
     path = Path(cm.base_dir) / "l0_cold" / f"{month}.clack.jsonl"
     content = "\n".join(lines) + ("\n" if lines else "")

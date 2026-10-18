@@ -96,6 +96,10 @@ async def test_e2e_wave_pipeline_l0_to_graph_and_wiki(wave_db):
         "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES ('user','wv',?,'fact','[]',0.5,?)",
         (text, _time.time()),
     )
+    # Commit before the wiki write: a row left uncommitted on the shared handle is
+    # both invisible to the dispatcher's connection and an open write lock that
+    # would make the next domain writer wait out the busy timeout.
+    await conn.commit()
     from lifecycle.graph_miners import miner_provenance
 
     mp = await miner_provenance(wave_db, "user")

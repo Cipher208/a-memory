@@ -15,6 +15,7 @@ from lifecycle.transitions import record_transition
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.memory_types import MemoryKind, get_policy, validate_kind
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,6 @@ async def _mark_seen(conn: Any, episode_id: int, tags_json: str | None) -> None:
         return
     tags.append(_L4_SEEN)
     await conn.execute("UPDATE episodes SET tags = ? WHERE episode_id = ?", (json.dumps(tags), episode_id))
-    await conn.commit()
 
 
 def passes_promotion_gate(item: dict[str, Any], min_importance: float = 0.7) -> bool:
@@ -275,81 +275,85 @@ class ConsolidationEngine:
 
         cm = CoreMemory(cm=self._cm, layer=self.layer)
         epi_db = episodic_db or "memory.db"
-        epi_conn = await self._cm.get(epi_db)
-        cursor = await epi_conn.execute(
-            # created_at is SELECTED, not only ordered by: the promotion below
-            # writes it into L4, and without it the fact was dated by the
-            # promotion run rather than by the episode it came from. Same defect
-            # shape as the three writers fixed alongside this — a placeholder
-            # clock standing in for a time the caller actually knows.
-            "SELECT episode_id, summary, emotional_weight, tags, created_at FROM episodes "
-            "WHERE layer=? AND user_id=? AND emotional_weight > ? "
-            "AND (tags IS NULL OR tags NOT LIKE ?) "
-            "ORDER BY created_at ASC LIMIT 10",
-            (self.layer, user_id, min_weight, f'%"{_L4_SEEN}"%'),
-        )
-        rows = await cursor.fetchall()
 
-        if not rows:
-            return 0
-
-        consolidated = 0
-        for row in rows:
-            summary = row["summary"]
-            weight = row["emotional_weight"]
-            if _looks_like_transcript(summary):
-                logger.warning(
-                    "skipping transcript-shaped episode %s from L4 promotion",
-                    row["episode_id"],
-                )
-                await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
-                continue
-            # Audit 05.09 (P1): an event with live decay (question/hypothesis/
-            # context) must not become an eternal L4 fact. Facts with near-zero
-            # decay (fact/decision/preference/relationship + never_archive)
-            # are promoted as before — kind routing is consistent with the distiller.
-            from lifecycle.distiller import _canonical_key
-            from shared.broadcast import is_status_broadcast
-            from shared.dialogue import is_dialogic
-            from shared.memory_types import kind_for_text
-
-            kind = kind_for_text(summary)
-            if get_policy(kind).decay_rate > 0.01:
-                logger.debug("episode %s is event-kind (%s), stays in L3", row["episode_id"], kind.value)
-                await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
-                continue
-            key = _canonical_key(summary, kind)
-            # F1 2026-09-12: the transcript + event-kind gates miss the
-            # conversational class — greetings/vocatives/questions promoted
-            # verbatim filled L4 with `fact:…` chat slugs (61 rows, one base).
-            # Status-broadcast follow-up: close-out echoes are not facts either.
-            if is_dialogic(summary) or is_status_broadcast(summary) or key.endswith(":misc"):
-                logger.debug("episode %s is conversational/unkeyable, stays in L3", row["episode_id"])
-                await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
-                continue
-            entry_id = await cm.save(
-                user_id,
-                key,
-                summary[:200],
-                importance=weight,
-                memory_kind=kind.value,
-                source="episode_promotion",
-                metadata=_parent_refs(f"episode:{row['episode_id']}"),
-                # The episode's own time. Observed live without this: episodes
-                # re-dated to 29.09 promoted into L4 rows stamped 04.10 16:49 —
-                # the promotion ran now, the memory happened then.
-                created_at=row["created_at"],
+        async def _promote(conn: Any) -> int:
+            cur = await conn.execute(
+                # created_at is SELECTED, not only ordered by: the promotion below
+                # writes it into L4, and without it the fact was dated by the
+                # promotion run rather than by the episode it came from. Same defect
+                # shape as the three writers fixed alongside this — a placeholder
+                # clock standing in for a time the caller actually knows.
+                "SELECT episode_id, summary, emotional_weight, tags, created_at FROM episodes "
+                "WHERE layer=? AND user_id=? AND emotional_weight > ? "
+                "AND (tags IS NULL OR tags NOT LIKE ?) "
+                "ORDER BY created_at ASC LIMIT 10",
+                (self.layer, user_id, min_weight, f'%"{_L4_SEEN}"%'),
             )
-            with contextlib.suppress(Exception):
-                await record_transition(self._cm, user_id, "episode", f"episode:{row['episode_id']}", "l4", f"core:{entry_id}", "episode_promotion")
-            await _mark_seen(epi_conn, int(row["episode_id"]), row["tags"])
-            consolidated += 1
-        return consolidated
+            rows = await cur.fetchall()
+
+            if not rows:
+                return 0
+
+            consolidated = 0
+            for row in rows:
+                summary = row["summary"]
+                weight = row["emotional_weight"]
+                if _looks_like_transcript(summary):
+                    logger.warning(
+                        "skipping transcript-shaped episode %s from L4 promotion",
+                        row["episode_id"],
+                    )
+                    await _mark_seen(conn, int(row["episode_id"]), row["tags"])
+                    continue
+                # Audit 05.09 (P1): an event with live decay (question/hypothesis/
+                # context) must not become an eternal L4 fact. Facts with near-zero
+                # decay (fact/decision/preference/relationship + never_archive)
+                # are promoted as before — kind routing is consistent with the distiller.
+                from lifecycle.distiller import _canonical_key
+                from shared.broadcast import is_status_broadcast
+                from shared.dialogue import is_dialogic
+                from shared.memory_types import kind_for_text
+
+                kind = kind_for_text(summary)
+                if get_policy(kind).decay_rate > 0.01:
+                    logger.debug("episode %s is event-kind (%s), stays in L3", row["episode_id"], kind.value)
+                    await _mark_seen(conn, int(row["episode_id"]), row["tags"])
+                    continue
+                key = _canonical_key(summary, kind)
+                # F1 2026-09-12: the transcript + event-kind gates miss the
+                # conversational class — greetings/vocatives/questions promoted
+                # verbatim filled L4 with `fact:…` chat slugs (61 rows, one base).
+                # Status-broadcast follow-up: close-out echoes are not facts either.
+                if is_dialogic(summary) or is_status_broadcast(summary) or key.endswith(":misc"):
+                    logger.debug("episode %s is conversational/unkeyable, stays in L3", row["episode_id"])
+                    await _mark_seen(conn, int(row["episode_id"]), row["tags"])
+                    continue
+                entry_id = await cm.save(
+                    user_id,
+                    key,
+                    summary[:200],
+                    importance=weight,
+                    memory_kind=kind.value,
+                    source="episode_promotion",
+                    metadata=_parent_refs(f"episode:{row['episode_id']}"),
+                    # The episode's own time. Observed live without this: episodes
+                    # re-dated to 29.09 promoted into L4 rows stamped 04.10 16:49 —
+                    # the promotion ran now, the memory happened then.
+                    created_at=row["created_at"],
+                )
+                with contextlib.suppress(Exception):
+                    await record_transition(
+                        self._cm, user_id, "episode", f"episode:{row['episode_id']}", "l4", f"core:{entry_id}", "episode_promotion"
+                    )
+                await _mark_seen(conn, int(row["episode_id"]), row["tags"])
+                consolidated += 1
+            return consolidated
+
+        return await get_write_dispatch(self._cm).atomic(epi_db, _promote)
 
     async def get_lineage(self, entry_id: int) -> list[str]:
         """Return the parent references recorded for a promoted fact (B1.4)."""
-        conn = await self._cm.get(DB_NAME)
-        row = await (await conn.execute("SELECT metadata FROM core_memory WHERE entry_id=?", (entry_id,))).fetchone()
+        row = await get_write_dispatch(self._cm).select_one(DB_NAME, "SELECT metadata FROM core_memory WHERE entry_id=?", (entry_id,))
         if not row or not row["metadata"]:
             return []
         try:
@@ -360,22 +364,16 @@ class ConsolidationEngine:
         return [str(p) for p in parents if p]
 
     async def get_stats(self, user_id: str) -> dict[str, int]:
-        conn = await self._cm.get(DB_NAME)
-        total_cursor = await conn.execute("SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id))
-        total_row = await total_cursor.fetchone()
-        total = int(total_row[0]) if total_row and total_row[0] is not None else 0
-
-        high_cursor = await conn.execute(
+        dispatch = get_write_dispatch(self._cm)
+        total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=?", (self.layer, user_id))
+        high = await dispatch.scalar(
+            DB_NAME,
             "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND importance > 0.7",
             (self.layer, user_id),
         )
-        high_row = await high_cursor.fetchone()
-        high = int(high_row[0]) if high_row and high_row[0] is not None else 0
-
-        low_cursor = await conn.execute(
+        low = await dispatch.scalar(
+            DB_NAME,
             "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND importance < 0.3",
             (self.layer, user_id),
         )
-        low_row = await low_cursor.fetchone()
-        low = int(low_row[0]) if low_row and low_row[0] is not None else 0
-        return {"total": total, "high_importance": high, "low_importance": low}
+        return {"total": int(total or 0), "high_importance": int(high or 0), "low_importance": int(low or 0)}

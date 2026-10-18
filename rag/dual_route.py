@@ -26,6 +26,7 @@ from typing import Any
 
 from rag.ablation import dense_per_kind_search, gated_search, pre_gate_flags, retrieval_mode
 from rag.edm import DMEM_MIN_CONFIDENCE, FOK_TAU, dense_confidence, edm_rerank, make_s2_hit
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -138,12 +139,12 @@ async def s2_exhaustive(
         try:
             from shared.constants import DB_NAME
 
-            conn = await cm.get(DB_NAME)
-            cur = await conn.execute(
+            rows = await get_write_dispatch(cm).query(
+                DB_NAME,
                 "SELECT node_id, content, node_type, confidence FROM epi_nodes WHERE layer=? AND user_id=? AND node_type=?",
                 (layer, user_id, category),
             )
-            for r in await cur.fetchall():
+            for r in rows:
                 hits.append(
                     {
                         "id": -int(r["node_id"]) - 3_000_000,

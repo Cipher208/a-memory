@@ -15,6 +15,7 @@ from typing import Any
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
 from shared.path_safety import safe_resolve
+from shared.write_dispatch import get_write_dispatch
 
 # user_id lands in filesystem names on export — keep it strict.
 _USER_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -49,9 +50,7 @@ class ImportExport:
             "l1": l1,
         }
 
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute("SELECT * FROM core_memory WHERE user_id=?", (user_id,))
-        rows = await cursor.fetchall()
+        rows = await get_write_dispatch(self._cm).query(DB_NAME, "SELECT * FROM core_memory WHERE user_id=?", (user_id,))
         for r in rows:
             core_memory.append(
                 {
@@ -65,8 +64,7 @@ class ImportExport:
                 }
             )
 
-        cursor = await conn.execute("SELECT * FROM episodes WHERE user_id=?", (user_id,))
-        rows = await cursor.fetchall()
+        rows = await get_write_dispatch(self._cm).query(DB_NAME, "SELECT * FROM episodes WHERE user_id=?", (user_id,))
         for r in rows:
             episodes.append(
                 {
@@ -78,8 +76,7 @@ class ImportExport:
                 }
             )
 
-        cursor = await conn.execute("SELECT * FROM sessions WHERE user_id=?", (user_id,))
-        for r in await cursor.fetchall():
+        for r in await get_write_dispatch(self._cm).query(DB_NAME, "SELECT * FROM sessions WHERE user_id=?", (user_id,)):
             sessions.append(
                 {
                     "session_id": r["session_id"],
@@ -116,8 +113,7 @@ class ImportExport:
         user_id = target_user_id or data.get("user_id", "default")
         imported = {"core_memory": 0, "episodes": 0, "sessions": 0}
 
-        conn = await self._cm.get(DB_NAME)
-        try:
+        async def _txn(conn: Any) -> None:
             # Newest-wins conflict guard: a stale backup must never clobber
             # newer live values. Layer travels with the row.
             core_rows = [
@@ -199,12 +195,7 @@ class ImportExport:
                 layer.l1.restore([ReflexEntry(**e) for e in entries])
                 imported["l1"] += len(entries)
 
-            await conn.commit()
-        except Exception:
-            # Half-applied imports are worse than failed ones
-            await conn.rollback()
-            raise
-
+        await get_write_dispatch(self._cm).atomic(DB_NAME, _txn)
         return imported
 
     def list_exports(self, user_id: str | None = None) -> list[dict[str, Any]]:

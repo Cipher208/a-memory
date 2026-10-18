@@ -16,44 +16,35 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 
 async def fact_blame(user_id: str, layer: str, entry_id: int = 0, key: str = "") -> dict[str, Any]:
     """Assemble the evidence trail for one core_memory fact."""
-    conn = await connection_manager.get(DB_NAME)
+    dispatch = get_write_dispatch(connection_manager)
     if entry_id:
-        row = await (
-            await conn.execute(
-                "SELECT * FROM core_memory WHERE entry_id=? AND layer=? AND user_id=?",
-                (int(entry_id), layer, user_id),
-            )
-        ).fetchone()
+        row = await dispatch.select_one(
+            DB_NAME, "SELECT * FROM core_memory WHERE entry_id=? AND layer=? AND user_id=?", (int(entry_id), layer, user_id)
+        )
     elif key:
-        row = await (
-            await conn.execute(
-                "SELECT * FROM core_memory WHERE key=? AND layer=? AND user_id=?",
-                (key, layer, user_id),
-            )
-        ).fetchone()
+        row = await dispatch.select_one(DB_NAME, "SELECT * FROM core_memory WHERE key=? AND layer=? AND user_id=?", (key, layer, user_id))
     else:
         raise ValueError("blame requires entry_id or key")
     if row is None:
         raise ValueError(f"entry not found: entry_id={entry_id} key={key!r}")
     eid = int(row["entry_id"])
 
-    audit_rows = await (
-        await conn.execute(
-            "SELECT source, old_importance, new_importance, reason, rescored_at FROM importance_audit"
-            " WHERE user_id=? AND chunk_id=? ORDER BY rescored_at",
-            (user_id, eid),
-        )
-    ).fetchall()
-    log_rows = await (
-        await conn.execute(
-            "SELECT action, layer, details, timestamp FROM audit_log WHERE user_id=? AND target_id=? ORDER BY timestamp",
-            (user_id, str(eid)),
-        )
-    ).fetchall()
+    audit_rows = await dispatch.query(
+        DB_NAME,
+        "SELECT source, old_importance, new_importance, reason, rescored_at FROM importance_audit"
+        " WHERE user_id=? AND chunk_id=? ORDER BY rescored_at",
+        (user_id, eid),
+    )
+    log_rows = await dispatch.query(
+        DB_NAME,
+        "SELECT action, layer, details, timestamp FROM audit_log WHERE user_id=? AND target_id=? ORDER BY timestamp",
+        (user_id, str(eid)),
+    )
 
     history = [
         {

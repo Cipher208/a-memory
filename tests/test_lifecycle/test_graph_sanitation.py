@@ -397,3 +397,32 @@ async def test_node_communities_excludes_hubs(db):
 
     assert all(moc not in c for c in comms)
     assert comms == []  # без хаба a и b изолированы — сообществ нет
+
+
+async def test_validate_edges_does_not_commit_an_outer_transaction(db):
+    """The caller owns the transaction. A commit here would publish an outer
+    block that later fails, leaving expired edges the caller meant to undo."""
+    from lifecycle.graph_sanitation import validate_edges
+    from shared.write_dispatch import get_write_dispatch
+
+    a, b = await _node("окно раз"), await _node("окно два")
+    conn = await connection_manager.get(DB_NAME)
+    await conn.execute(
+        "INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags, valid_from, valid_to, status)"
+        " VALUES (?, ?, 'tagged', 0.5, ?, '[]', ?, ?, 'active')",
+        (a, b, T, T, T - 10),
+    )
+    await conn.commit()
+
+    class _RollbackError(Exception):
+        pass
+
+    async def _outer(c):
+        await validate_edges(c)
+        raise _RollbackError
+
+    with pytest.raises(_RollbackError):
+        await get_write_dispatch(db).atomic(DB_NAME, _outer)
+
+    row = await (await conn.execute("SELECT status FROM epi_edges WHERE source_id=? AND target_id=?", (a, b))).fetchone()
+    assert row["status"] == "active", "the recheck survived the outer rollback: validate_edges committed"
