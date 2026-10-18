@@ -155,6 +155,7 @@ async def apply(p: dict[str, Any], db: Path) -> None:
     from shared.archived_memories import ArchivedMemories
     from shared.connection import connection_manager
     from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
 
     active = Path(connection_manager.base_dir)
     if not _same_path(active, db.parent):
@@ -163,79 +164,91 @@ async def apply(p: dict[str, Any], db: Path) -> None:
 
     am = ArchivedMemories(cm=connection_manager)
     await am._init_db()
-    conn = await connection_manager.get(DB_NAME)
+    dispatch = get_write_dispatch(connection_manager)
     now = time.time()
 
-    async def _audit(target_id: str, details: dict[str, Any]) -> None:
-        """One row per removed record, the shape `purge_l3_legacy` writes.
+    async def _run(conn: Any) -> tuple[int, int, int]:
+        """Archive, delete and audit in one transaction on the dispatcher.
 
-        Per-record and not a summary line: `features/blame.py` answers «what happened
-        to this row» with `WHERE target_id=?`, and `lifecycle/importance_scheduler.py`
-        counts `target_id`. A single summary row would answer neither.
+        The archive bin and the deletions used to live on the shared handle while
+        the audit rows were written there too; once the bin moved to the dispatcher,
+        mixing the two would have held a shared transaction open across a write on
+        another connection — the busy-timeout deadlock. Everything here rides the
+        one dispatcher connection instead.
         """
-        await conn.execute(
-            "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
-            ("default", "speaker_layer_leak_purge", "user", target_id, json.dumps(details, ensure_ascii=False), now),
-        )
 
-    for r in p["facts"]:
-        # Re-read before deleting: the row must still be what the plan saw.
-        row = await (await conn.execute("SELECT layer, key, value FROM core_memory WHERE entry_id=?", (int(r["entry_id"]),))).fetchone()
-        if row is None or str(row["layer"]) != "user":
-            print(f"  ОТКАЗ: entry_id={r['entry_id']} изменился — прогон прерван")
-            raise SystemExit(3)
-        await am.archive(
-            user_id=r["user_id"] or "default",
-            content=f"{r['key']} = {r['value']}",
-            memory_type="core_memory",
-            importance=float(r["importance"] or 0.0),
-            original_id=int(r["entry_id"]),
-            reason=ARCHIVE_REASON,
-        )
-    ids = [int(r["entry_id"]) for r in p["facts"]]
-    if ids:
-        ph = ",".join("?" * len(ids))
-        await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({ph})", tuple(ids))
-        for r in p["facts"]:
-            await _audit(
-                f"core_memory:{int(r['entry_id'])}",
-                {"klass": ARCHIVE_REASON, "kind": str(r["memory_kind"]), "archive": f"archived_memories:{ARCHIVE_REASON}"},
+        async def _audit(target_id: str, details: dict[str, Any]) -> None:
+            """One row per removed record, the shape `purge_l3_legacy` writes.
+
+            Per-record and not a summary line: `features/blame.py` answers «what happened
+            to this row» with `WHERE target_id=?`, and `lifecycle/importance_scheduler.py`
+            counts `target_id`. A single summary row would answer neither.
+            """
+            await conn.execute(
+                "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
+                ("default", "speaker_layer_leak_purge", "user", target_id, json.dumps(details, ensure_ascii=False), now),
             )
 
-    # Episodes are archived and removed like facts. They are 0 on the live base, but a
-    # replay that reintroduces the class must be handled, not merely displayed: the
-    # plan and the report already count them, so an apply that skipped them would
-    # print a success line over rows it left in place.
-    ep_ids = [int(r["episode_id"]) for r in p["episodes"]]
-    if ep_ids:
-        for r in p["episodes"]:
+        for r in p["facts"]:
+            # Re-read before deleting: the row must still be what the plan saw.
+            row = await (await conn.execute("SELECT layer, key, value FROM core_memory WHERE entry_id=?", (int(r["entry_id"]),))).fetchone()
+            if row is None or str(row["layer"]) != "user":
+                print(f"  ОТКАЗ: entry_id={r['entry_id']} изменился — прогон прерван")
+                raise SystemExit(3)
             await am.archive(
                 user_id=r["user_id"] or "default",
-                content=str(r["summary"]),
-                memory_type="episodes",
-                importance=float(r["emotional_weight"] or 0.0),
-                original_id=int(r["episode_id"]),
+                content=f"{r['key']} = {r['value']}",
+                memory_type="core_memory",
+                importance=float(r["importance"] or 0.0),
+                original_id=int(r["entry_id"]),
                 reason=ARCHIVE_REASON,
             )
-        ph = ",".join("?" * len(ep_ids))
-        await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({ph})", tuple(ep_ids))
-        for r in p["episodes"]:
-            await _audit(f"episode:{int(r['episode_id'])}", {"klass": ARCHIVE_REASON, "archive": f"archived_memories:{ARCHIVE_REASON}"})
+        ids = [int(r["entry_id"]) for r in p["facts"]]
+        if ids:
+            ph = ",".join("?" * len(ids))
+            await conn.execute(f"DELETE FROM core_memory WHERE entry_id IN ({ph})", tuple(ids))
+            for r in p["facts"]:
+                await _audit(
+                    f"core_memory:{int(r['entry_id'])}",
+                    {"klass": ARCHIVE_REASON, "kind": str(r["memory_kind"]), "archive": f"archived_memories:{ARCHIVE_REASON}"},
+                )
 
-    if p["node_ids"]:
-        ph = ",".join("?" * len(p["node_ids"]))
-        await conn.execute(
-            f"DELETE FROM epi_edges WHERE source_id IN ({ph}) OR target_id IN ({ph})",
-            tuple(p["node_ids"] * 2),
-        )
-        await conn.execute(f"DELETE FROM epi_tags WHERE node_id IN ({ph})", tuple(p["node_ids"]))
-        await conn.execute(f"DELETE FROM epi_nodes WHERE node_id IN ({ph})", tuple(p["node_ids"]))
-        for nid in p["node_ids"]:
-            await _audit(f"epi_node:{int(nid)}", {"klass": ARCHIVE_REASON, "archive": f"archived_memories:{ARCHIVE_REASON}"})
+        # Episodes are archived and removed like facts. They are 0 on the live base, but a
+        # replay that reintroduces the class must be handled, not merely displayed: the
+        # plan and the report already count them, so an apply that skipped them would
+        # print a success line over rows it left in place.
+        ep_ids = [int(r["episode_id"]) for r in p["episodes"]]
+        if ep_ids:
+            for r in p["episodes"]:
+                await am.archive(
+                    user_id=r["user_id"] or "default",
+                    content=str(r["summary"]),
+                    memory_type="episodes",
+                    importance=float(r["emotional_weight"] or 0.0),
+                    original_id=int(r["episode_id"]),
+                    reason=ARCHIVE_REASON,
+                )
+            ph = ",".join("?" * len(ep_ids))
+            await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({ph})", tuple(ep_ids))
+            for r in p["episodes"]:
+                await _audit(f"episode:{int(r['episode_id'])}", {"klass": ARCHIVE_REASON, "archive": f"archived_memories:{ARCHIVE_REASON}"})
 
-    await conn.commit()
-    audited = len(ids) + len(ep_ids) + len(p["node_ids"])
-    print(f"  заархивировано и удалено: {len(ids)}  эпизодов: {len(ep_ids)}  узлов: {len(p['node_ids'])}")
+        if p["node_ids"]:
+            ph = ",".join("?" * len(p["node_ids"]))
+            await conn.execute(
+                f"DELETE FROM epi_edges WHERE source_id IN ({ph}) OR target_id IN ({ph})",
+                tuple(p["node_ids"] * 2),
+            )
+            await conn.execute(f"DELETE FROM epi_tags WHERE node_id IN ({ph})", tuple(p["node_ids"]))
+            await conn.execute(f"DELETE FROM epi_nodes WHERE node_id IN ({ph})", tuple(p["node_ids"]))
+            for nid in p["node_ids"]:
+                await _audit(f"epi_node:{int(nid)}", {"klass": ARCHIVE_REASON, "archive": f"archived_memories:{ARCHIVE_REASON}"})
+
+        return len(ids), len(ep_ids), len(p["node_ids"])
+
+    ids_count, ep_count, node_count = await dispatch.atomic(DB_NAME, _run)
+    audited = ids_count + ep_count + node_count
+    print(f"  заархивировано и удалено: {ids_count}  эпизодов: {ep_count}  узлов: {node_count}")
     print(f"  строк audit_log записано: {audited}")
 
 
