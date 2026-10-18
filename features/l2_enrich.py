@@ -9,9 +9,11 @@ lines; state_deltas/topics/quality are left untouched.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 _TOP_LINES = 5
 
@@ -38,15 +40,14 @@ async def enrich_sessions(*, days: int = 1) -> dict[str, int]:
     from core.session import SessionStore
 
     await SessionStore(cm=connection_manager)._init_db()  # self-healing schema
-    conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - days * 86400
-    l0_rows = await (
-        await conn.execute(
-            "SELECT user_id, ts, text FROM l0_journal WHERE ts > ? AND raw_type = 'user-message' ORDER BY ts",
-            (cutoff,),
-        )
-    ).fetchall()
-    sessions = await (await conn.execute("SELECT session_id, user_id, started_at, ended_at FROM sessions ORDER BY started_at")).fetchall()
+    dispatch = get_write_dispatch(connection_manager)
+    l0_rows = await dispatch.query(
+        DB_NAME,
+        "SELECT user_id, ts, text FROM l0_journal WHERE ts > ? AND raw_type = 'user-message' ORDER BY ts",
+        (cutoff,),
+    )
+    sessions = await dispatch.query(DB_NAME, "SELECT session_id, user_id, started_at, ended_at FROM sessions ORDER BY started_at")
 
     bound: dict[str, list[str]] = {}
     for r in l0_rows:
@@ -58,12 +59,12 @@ async def enrich_sessions(*, days: int = 1) -> dict[str, int]:
         nearest = max(cand, key=lambda s: s["started_at"])
         bound.setdefault(str(nearest["session_id"]), []).append(str(r["text"]))
 
-    updated = 0
+    updates: list[tuple[str, tuple[Any, ...]]] = []
     for sid, texts in bound.items():
         topics = _topic_lines(texts)
         if not topics:
             continue
-        await conn.execute("UPDATE sessions SET summary = ? WHERE session_id = ?", ("\n".join(topics), sid))
-        updated += 1
-    await conn.commit()
-    return {"sessions_updated": updated, "l0_bound": sum(len(v) for v in bound.values())}
+        updates.append(("UPDATE sessions SET summary = ? WHERE session_id = ?", ("\n".join(topics), sid)))
+    if updates:
+        await dispatch.write_many(DB_NAME, updates)
+    return {"sessions_updated": len(updates), "l0_bound": sum(len(v) for v in bound.values())}

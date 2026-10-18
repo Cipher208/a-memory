@@ -120,17 +120,16 @@ async def skill_reinforce(wiki: Any, window_hours: int = 24) -> dict[str, Any]:
     from shared.constants import DB_NAME
 
     from shared.connection import connection_manager
+    from shared.write_dispatch import get_write_dispatch
 
-    conn = await connection_manager.get(DB_NAME)
     cutoff = time.time() - window_hours * 3600
-    rows = await (
-        await conn.execute(
-            """SELECT target_id, MAX(timestamp) AS last_read FROM audit_log
-               WHERE action='skill_read' AND layer='wiki' AND timestamp > ?
-               GROUP BY target_id""",
-            (cutoff,),
-        )
-    ).fetchall()
+    rows = await get_write_dispatch(connection_manager).query(
+        DB_NAME,
+        """SELECT target_id, MAX(timestamp) AS last_read FROM audit_log
+           WHERE action='skill_read' AND layer='wiki' AND timestamp > ?
+           GROUP BY target_id""",
+        (cutoff,),
+    )
     reinforced = 0
     errors: list[str] = []
     for r in rows:
