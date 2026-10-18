@@ -15,6 +15,7 @@ from mcp.server.mcpserver import Context  # noqa: TC002
 from mcp_server.registry import _get_ctx
 from mcp_server.tools.base import _validate_layer, _get_memory
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +38,12 @@ async def daily_brief(
     # 1. Pending work: L4 todo facts
     pending: list[str] = []
     try:
-        conn = await app.mm._cm.get(DB_NAME)
-        rows = await (
-            await conn.execute(
-                "SELECT key, value FROM core_memory WHERE layer=? AND user_id=? AND memory_kind='todo' ORDER BY importance DESC LIMIT 20",
-                (layer, user_id),
-            )
-        ).fetchall()
-        pending = [f"- [{r[0]}] {str(r[1])[:120]}" for r in rows]
+        rows = await get_write_dispatch(app.mm._cm).query(
+            DB_NAME,
+            "SELECT key, value FROM core_memory WHERE layer=? AND user_id=? AND memory_kind='todo' ORDER BY importance DESC LIMIT 20",
+            (layer, user_id),
+        )
+        pending = [f"- [{r['key']}] {str(r['value'])[:120]}" for r in rows]
     except Exception as exc:
         logger.warning("daily_brief: pending section failed: %s", exc)
         pending = ["_(unavailable)_"]
@@ -70,15 +69,13 @@ async def daily_brief(
         for r in pending:
             if not r.startswith("_(unavailable)_"):
                 suggested.append(f"- follow up on: {r[3:]}")
-        conn = await app.mm._cm.get(DB_NAME)
-        rows = await (
-            await conn.execute(
-                "SELECT session_id, summary FROM sessions WHERE user_id=? AND ended_at IS NULL LIMIT 5",
-                (user_id,),
-            )
-        ).fetchall()
-        for r in rows:
-            label = r[1] or r[0]
+        rows = await get_write_dispatch(app.mm._cm).query(
+            DB_NAME,
+            "SELECT session_id, summary FROM sessions WHERE user_id=? AND ended_at IS NULL LIMIT 5",
+            (user_id,),
+        )
+        for session_row in rows:
+            label = session_row["summary"] or session_row["session_id"]
             suggested.append(f"- resume session: {str(label)[:120]}")
     except Exception as exc:
         logger.warning("daily_brief: suggested section failed: %s", exc)

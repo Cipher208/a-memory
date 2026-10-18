@@ -27,16 +27,15 @@ def mock_recall(monkeypatch):
 # ── Structure / non-fatal (mock app) ──────────────────────────────────
 
 
-def _make_mock_app():
+def _make_mock_app(monkeypatch):
+    """Empty-store app: the brief reads through the dispatcher, so its `query`
+    answering [] is what renders the empty markers."""
     fake_app = MagicMock()
     fake_app.mm = MagicMock()
-    # _cm.get() -> conn; conn.execute() returns the same mock acting as cursor;
-    # cursor.fetchall() -> [] (empty store) so sections render empty markers.
-    conn = MagicMock()
-    conn.fetchall = AsyncMock(return_value=[])
-    conn.execute = AsyncMock(return_value=conn)
+    dispatch = MagicMock()
+    dispatch.query = AsyncMock(return_value=[])
+    monkeypatch.setattr("mcp_server.tools.brief.get_write_dispatch", lambda cm=None: dispatch)
     fake_app.mm._cm = MagicMock()
-    fake_app.mm._cm.get = AsyncMock(return_value=conn)
     fake_app.temporal = MagicMock()
     fake_app.temporal.get_recent = AsyncMock(return_value=[])
     return fake_app
@@ -44,7 +43,7 @@ def _make_mock_app():
 
 @pytest.mark.asyncio
 async def test_brief_returns_expected_keys(monkeypatch, mock_recall):
-    app = _make_mock_app()
+    app = _make_mock_app(monkeypatch)
     monkeypatch.setattr("mcp_server.tools.brief._get_ctx", lambda c: app)
     res = await daily_brief(layer="user", user_id="u1")
     assert res["status"] == "ok"
@@ -53,7 +52,7 @@ async def test_brief_returns_expected_keys(monkeypatch, mock_recall):
 
 @pytest.mark.asyncio
 async def test_brief_empty_store_marks_all_sections(monkeypatch, mock_recall):
-    app = _make_mock_app()
+    app = _make_mock_app(monkeypatch)
     monkeypatch.setattr("mcp_server.tools.brief._get_ctx", lambda c: app)
     res = await daily_brief(layer="user", user_id="u1")
     assert "_(nothing pending)_" in res["summary"]
@@ -64,7 +63,7 @@ async def test_brief_empty_store_marks_all_sections(monkeypatch, mock_recall):
 
 @pytest.mark.asyncio
 async def test_brief_nonfatal_when_temporal_fails(monkeypatch, mock_recall):
-    app = _make_mock_app()
+    app = _make_mock_app(monkeypatch)
     app.temporal.get_recent = AsyncMock(side_effect=RuntimeError("temporal down"))
     monkeypatch.setattr("mcp_server.tools.brief._get_ctx", lambda c: app)
     res = await daily_brief(layer="user", user_id="u1")

@@ -78,7 +78,7 @@ class _CountingForgetting:
 
         return _CM()
 
-    async def _find_archivable_entries(self, _conn, _now):
+    async def _find_archivable_entries(self, _now, _conn=None):
         return []
 
     async def decay_importance(self) -> int:

@@ -4,6 +4,7 @@ from mcp_server.models import EpisodeResult
 from mcp_server.registry import _get_ctx
 from shared.constants import DB_NAME
 from shared.metrics import metrics
+from shared.write_dispatch import get_write_dispatch
 
 from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache, _fire_hook
 from typing import Any
@@ -96,12 +97,11 @@ async def memory_episode_get(
     metrics.inc("tool_calls")
     metrics.inc("tool_episode_get")
     mem = _get_memory(app, layer, user_id)
-    conn = await mem.l3._cm.get(DB_NAME)
-    cur = await conn.execute(
+    row = await get_write_dispatch(mem.l3._cm).select_one(
+        DB_NAME,
         "SELECT * FROM episodes WHERE episode_id=? AND user_id=?",
         (episode_id, user_id),
     )
-    row = await cur.fetchone()
     if not row:
         return {"error": "episode_not_found", "episode_id": episode_id}
     return {

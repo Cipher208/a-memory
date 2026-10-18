@@ -18,7 +18,7 @@ from lifecycle.forgetting import ForgettingSystem
 from rag.conflict import ConflictResolver
 from rag.router import RetrievalRouter
 
-from shared.constants import DB_NAME, DEFAULT_USER
+from shared.constants import DEFAULT_USER
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -97,8 +97,7 @@ async def _forgetting_ritual_locked(config: Any) -> dict[str, Any]:
         return await fs.cleanup()
 
     # C1.11: archive (destructive) is staged; decay + compress stay direct.
-    conn = await fs._cm.get(DB_NAME)
-    rows = await fs._find_archivable_entries(conn, time.time())
+    rows = await fs._find_archivable_entries(time.time())
     ids = [r["entry_id"] for r in rows]
     staged: dict[str, Any] = {"decayed": await fs.decay_importance(), "compressed": await fs.compress_duplicates()}
     if not ids:

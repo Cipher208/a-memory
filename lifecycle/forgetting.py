@@ -215,7 +215,7 @@ class ForgettingSystem:
             now = time.time()
 
             # 1. Find archivable items
-            all_rows = await self._find_archivable_entries(conn, now)
+            all_rows = await self._find_archivable_entries(now, conn)
             if not all_rows:
                 return 0
 
@@ -552,32 +552,40 @@ class ForgettingSystem:
             ),
         )
 
-    async def _find_archivable_entries(self, conn: Any, now: float) -> list[sqlite3.Row]:
+    async def _find_archivable_entries(self, now: float, conn: Any | None = None) -> list[Any]:
+        """Rows the archive ritual would take.
+
+        `conn` is for callers already in a transaction; without it the read goes
+        through the dispatcher.
+        """
         # Expired goals/todos/commitments
-        expired = await (
-            await conn.execute(
-                """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+        expired = await self._archivable_rows(
+            conn,
+            """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
                FROM core_memory
                WHERE memory_kind IN ('goal', 'todo', 'commitment')
                  AND expires_at IS NOT NULL AND expires_at < ?""",
-                (now,),
-            )
-        ).fetchall()
+            (now,),
+        )
 
         # Old low-importance entries (excluding never-archive types)
-        old = await (
-            await conn.execute(
-                """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+        old = await self._archivable_rows(
+            conn,
+            """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
                FROM core_memory
                WHERE memory_kind NOT IN ('instruction', 'rule', 'commitment')
                  AND (expires_at IS NULL OR expires_at > ?)
                  AND updated_at < ?
                  AND importance < ?""",
-                (now, now - self.archive_days * 86400, self.archive_min_importance),
-            )
-        ).fetchall()
+            (now, now - self.archive_days * 86400, self.archive_min_importance),
+        )
 
         return list(expired) + list(old)
+
+    async def _archivable_rows(self, conn: Any | None, sql: str, params: tuple[Any, ...]) -> list[Any]:
+        if conn is None:
+            return await self._dispatch.query(DB_NAME, sql, params)
+        return list(await (await conn.execute(sql, params)).fetchall())
 
     async def _perform_archiving(self, rows: list[sqlite3.Row], now: float) -> int:
         from shared.archived_memories import ArchivedMemories

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from shared.connection import AsyncConnectionManager
 
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +64,12 @@ async def _count_window(
     timestamp column (recall_events uses `timestamp`, stores use `created_at`).
     """
     assert table in {"episodes", "core_memory", "recall_events"}, f"unsupported count table: {table!r}"
-    conn = await cm.get(DB_NAME)
-    cursor = await conn.execute(
+    total = await get_write_dispatch(cm).scalar(
+        DB_NAME,
         f"SELECT COUNT(*) FROM {table} WHERE user_id=? AND {col} >= ? AND {col} <= ?",
         (user_id, started_at, ended_at),
     )
-    row = await cursor.fetchone()
-    return int(row[0]) if row else 0
+    return int(total or 0)
 
 
 async def compute_session_quality(
