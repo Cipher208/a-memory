@@ -173,23 +173,21 @@ class ForgettingSystem:
         """Type-aware decay: instruction/rule/commitment never decay (decay_rate=0)."""
         try:
             now = time.time()
-            conn = await self._cm.get(DB_NAME)
-            cursor = await conn.execute("SELECT entry_id, memory_kind, importance, updated_at FROM core_memory")
+            # Read on the dispatcher's own connection: a cursor retained on the
+            # shared handle would pin a read snapshot there and make every later
+            # write on that handle fail with BUSY_SNAPSHOT.
+            rows = await self._dispatch.query(DB_NAME, "SELECT entry_id, memory_kind, importance, updated_at FROM core_memory")
 
             updates: list[tuple[float, int]] = []
-            while True:
-                rows = await cursor.fetchmany(1000)
-                if not rows:
-                    break
-                for r in rows:
-                    kind_str = r["memory_kind"] or "fact"
-                    if not validate_kind(kind_str):
-                        continue
-                    kind = MemoryKind(kind_str)
-                    days = (now - float(r["updated_at"])) / 86400.0
-                    new_imp = apply_decay(float(r["importance"]), kind, days)
-                    if abs(new_imp - float(r["importance"])) > 1e-3:
-                        updates.append((new_imp, int(r["entry_id"])))
+            for r in rows:
+                kind_str = r["memory_kind"] or "fact"
+                if not validate_kind(kind_str):
+                    continue
+                kind = MemoryKind(kind_str)
+                days = (now - float(r["updated_at"])) / 86400.0
+                new_imp = apply_decay(float(r["importance"]), kind, days)
+                if abs(new_imp - float(r["importance"])) > 1e-3:
+                    updates.append((new_imp, int(r["entry_id"])))
 
             if not updates:
                 return 0
@@ -211,21 +209,21 @@ class ForgettingSystem:
         Goal/todo/commitment archived by expires_at. Others by age + importance.
         """
         try:
-            conn = await self._cm.get(DB_NAME)
             now = time.time()
 
-            # 1. Find archivable items
-            all_rows = await self._find_archivable_entries(now, conn)
+            # 1. Find archivable items (dispatcher read, nothing retained on the shared handle)
+            all_rows = await self._find_archivable_entries(now)
             if not all_rows:
                 return 0
 
-            # 2. Perform archiving
-            archived_count = await self._perform_archiving(all_rows, now)
+            async def _run(conn: Any) -> int:
+                # 2 + 3 in one transaction: the archive row and the delete of the
+                # source row either both land or neither does.
+                archived_count = await self._perform_archiving(all_rows, now)
+                await self._delete_archived(conn, all_rows)
+                return archived_count
 
-            # 3. Safe deletion
-            await self._delete_archived(conn, all_rows)
-
-            await conn.commit()
+            archived_count = await self._dispatch.atomic(DB_NAME, _run)
             logger.info("Archived %d entries", archived_count)
             return archived_count
         except Exception:
@@ -241,17 +239,20 @@ class ForgettingSystem:
         if not ids:
             return 0
         try:
-            conn = await self._cm.get(DB_NAME)
             now = time.time()
             placeholders = ",".join(["?"] * len(ids))
-            cur = await conn.execute(f"SELECT * FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
-            rows = await cur.fetchall()
-            if not rows:
-                return 0
-            archived_count = await self._perform_archiving(rows, now)
-            await self._delete_archived(conn, rows)
-            await conn.commit()
-            return archived_count
+
+            async def _run(conn: Any) -> int:
+                cur = await conn.execute(f"SELECT * FROM core_memory WHERE entry_id IN ({placeholders})", tuple(ids))
+                rows = await cur.fetchall()
+                await cur.close()
+                if not rows:
+                    return 0
+                archived_count = await self._perform_archiving(rows, now)
+                await self._delete_archived(conn, rows)
+                return archived_count
+
+            return await self._dispatch.atomic(DB_NAME, _run)
         except Exception:
             logger.exception("archive_entries failed")
             return 0
@@ -623,26 +624,28 @@ class ForgettingSystem:
 
     async def compress_duplicates(self) -> int:
         try:
-            conn = await self._cm.get(DB_NAME)
             # Same key in DIFFERENT layers is not a duplicate — dedupe per layer.
             # Single set-based DELETE: keep the newest row per (layer, user_id, key),
             # remove the rest in one statement instead of per-key round trips.
-            cursor = await conn.execute(
-                """DELETE FROM core_memory WHERE entry_id IN (
-                       SELECT entry_id FROM (
-                           SELECT entry_id,
-                                  ROW_NUMBER() OVER (
-                                      PARTITION BY layer, user_id, key
-                                      ORDER BY updated_at DESC, entry_id DESC
-                                  ) AS rn
-                           FROM core_memory
-                       )
-                       WHERE rn > 1
-                   )""",
-            )
-            removed = int(cursor.rowcount or 0)
-            await conn.commit()
-            return removed
+            async def _run(conn: Any) -> int:
+                cursor = await conn.execute(
+                    """DELETE FROM core_memory WHERE entry_id IN (
+                           SELECT entry_id FROM (
+                               SELECT entry_id,
+                                      ROW_NUMBER() OVER (
+                                          PARTITION BY layer, user_id, key
+                                          ORDER BY updated_at DESC, entry_id DESC
+                                      ) AS rn
+                               FROM core_memory
+                           )
+                           WHERE rn > 1
+                       )""",
+                )
+                removed = int(cursor.rowcount or 0)
+                await cursor.close()
+                return removed
+
+            return await self._dispatch.atomic(DB_NAME, _run)
         except Exception:
             logger.exception("Compression failed")
             return 0

@@ -17,7 +17,7 @@ async def cm(tmp_path):
         """
         CREATE TABLE core_memory (
             entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT, "key" TEXT, value TEXT,
+            layer TEXT DEFAULT 'user', user_id TEXT, "key" TEXT, value TEXT,
             importance REAL, memory_kind TEXT,
             expires_at REAL, source TEXT DEFAULT 'manual', metadata TEXT,
             created_at REAL, updated_at REAL
@@ -181,5 +181,43 @@ async def test_decay_survives_stale_read_snapshot_on_shared_conn(cm):
         assert n >= 1, (
             "decay must not be wedged by a stale read snapshot on the shared connection — BUSY_SNAPSHOT is instant and unhandled by busy_timeout"
         )
+    finally:
+        await cur.close()
+
+
+@pytest.mark.asyncio
+async def test_compress_and_archive_survive_stale_read_snapshot_on_shared_conn(cm):
+    """The other two maintenance writers must also stay off the shared connection.
+
+    Same production shape as the decay test: a retained read cursor holds a
+    snapshot on the shared handle, a foreign writer commits, and the snapshot goes
+    stale. `compress_duplicates` and `archive_old_entries` both still read and wrote
+    on that handle, so they failed the same instant BUSY_SNAPSHOT way.
+    """
+    # Duplicate key -> compress has something to remove; two rows so the read
+    # snapshot spans more than one page (see the decay test for why that matters).
+    await _insert(cm, "u", "dup", "первый", 0.5, "fact", days_ago=120)
+    await _insert(cm, "u", "dup", "второй", 0.5, "fact", days_ago=10)
+    # Old + unimportant -> archive has something to take (default 90d / 0.3).
+    await _insert(cm, "u", "stale", "забытое", 0.1, "fact", days_ago=400)
+    fs = ForgettingSystem(cm=cm)
+
+    shared = await cm.get("memory.db")
+    cur = await shared.execute("SELECT entry_id, importance FROM core_memory")
+    await cur.fetchone()
+
+    foreign = AsyncConnectionManager(base_dir=str(cm.base_dir))
+    try:
+        fconn = await foreign.get("memory.db")
+        await fconn.execute("UPDATE core_memory SET importance=0.2")
+        await fconn.commit()
+    finally:
+        await foreign.close_all()
+
+    try:
+        removed = await fs.compress_duplicates()
+        assert removed >= 1, "compress_duplicates must not be wedged by a stale shared snapshot"
+        archived = await fs.archive_old_entries()
+        assert archived >= 1, "archive_old_entries must not be wedged by a stale shared snapshot"
     finally:
         await cur.close()
