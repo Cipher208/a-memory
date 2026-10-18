@@ -139,3 +139,44 @@ async def test_get_write_dispatch_is_shared_per_manager(cm):
         assert get_write_dispatch(cm) is not get_write_dispatch(other)
     finally:
         await other.close_all()
+
+
+@pytest.mark.asyncio
+async def test_atomic_is_reentrant_for_the_same_task(cm):
+    """A domain writer called from inside an atomic body must join that transaction.
+
+    Without re-entrancy the inner call waits on the lock the outer frame holds,
+    which is a permanent hang rather than an error.
+    """
+    d = WriteDispatch(cm)
+
+    async def _outer(conn):
+        await conn.execute('INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)', ("u", "outer", "1"))
+        # Nested write through the public API: same connection, no extra commit.
+        await d.write(DB_NAME, 'INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)', ("u", "inner", "2"))
+
+        async def _inner(conn2):
+            assert conn2 is conn, "nested atomic must reuse the outer connection"
+            await conn2.execute('INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)', ("u", "deep", "3"))
+            return 3
+
+        return await d.atomic(DB_NAME, _inner)
+
+    assert await d.atomic(DB_NAME, _outer) == 3
+    rows = await d.query(DB_NAME, 'SELECT "key" FROM core_memory ORDER BY entry_id')
+    assert [r["key"] for r in rows] == ["outer", "inner", "deep"]
+
+
+@pytest.mark.asyncio
+async def test_atomic_rollback_covers_nested_writes(cm):
+    """A failure outside a nested call still discards everything it wrote."""
+    d = WriteDispatch(cm)
+
+    async def _outer(conn):
+        await d.write(DB_NAME, 'INSERT INTO core_memory (user_id, "key", value) VALUES (?, ?, ?)', ("u", "kept", "1"))
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        await d.atomic(DB_NAME, _outer)
+    rows = await d.query(DB_NAME, 'SELECT "key" FROM core_memory')
+    assert rows == [], "the whole outer transaction must roll back"
