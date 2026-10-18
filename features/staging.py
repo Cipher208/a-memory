@@ -13,6 +13,7 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 _EXPIRE_DAYS_DEFAULT = 7
 
@@ -45,45 +46,46 @@ async def propose(source: str, kind: str, user_id: str, layer: str, payload: dic
     the same rejected keys (#80-84 after #75-79) and drowned the queue again.
     """
     now = time.time()
-    conn = await connection_manager.get(DB_NAME)
     dedup_key = payload.get("key") or payload.get("title")
-    if dedup_key is not None:
-        tomb = await conn.execute(
-            "SELECT id, payload FROM mutation_proposals"
-            " WHERE status IN ('rejected', 'expired') AND source = ? AND kind = ? AND user_id = ? AND layer = ?"
-            " AND COALESCE(decided_at, expires_at, proposed_at) > ?",
-            (source, kind, user_id, layer, now - _expire_days() * 86400),
-        )
-        for row in await tomb.fetchall():
-            try:
-                decided = json.loads(row["payload"])
-            except Exception:
-                decided = {}
-            if (decided.get("key") or decided.get("title")) == dedup_key:
-                return int(row["id"])
+
+    async def _txn(conn: Any) -> int:
+        if dedup_key is not None:
+            tomb = await conn.execute(
+                "SELECT id, payload FROM mutation_proposals"
+                " WHERE status IN ('rejected', 'expired') AND source = ? AND kind = ? AND user_id = ? AND layer = ?"
+                " AND COALESCE(decided_at, expires_at, proposed_at) > ?",
+                (source, kind, user_id, layer, now - _expire_days() * 86400),
+            )
+            for row in await tomb.fetchall():
+                try:
+                    decided = json.loads(row["payload"])
+                except Exception:
+                    decided = {}
+                if (decided.get("key") or decided.get("title")) == dedup_key:
+                    return int(row["id"])
+            cur = await conn.execute(
+                "SELECT id, payload FROM mutation_proposals WHERE status = 'pending' AND source = ? AND kind = ? AND user_id = ? AND layer = ?",
+                (source, kind, user_id, layer),
+            )
+            for row in await cur.fetchall():
+                try:
+                    existing = json.loads(row["payload"])
+                except Exception:
+                    existing = {}
+                if (existing.get("key") or existing.get("title")) == dedup_key:
+                    await conn.execute(
+                        "UPDATE mutation_proposals SET payload = ?, proposed_at = ?, expires_at = ? WHERE id = ?",
+                        (json.dumps(payload, ensure_ascii=False), now, now + _expire_days() * 86400, row["id"]),
+                    )
+                    return int(row["id"])
         cur = await conn.execute(
-            "SELECT id, payload FROM mutation_proposals WHERE status = 'pending' AND source = ? AND kind = ? AND user_id = ? AND layer = ?",
-            (source, kind, user_id, layer),
+            "INSERT INTO mutation_proposals (source, kind, user_id, layer, payload, status, proposed_at, expires_at)"
+            " VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (source, kind, user_id, layer, json.dumps(payload, ensure_ascii=False), now, now + _expire_days() * 86400),
         )
-        for row in await cur.fetchall():
-            try:
-                existing = json.loads(row["payload"])
-            except Exception:
-                existing = {}
-            if (existing.get("key") or existing.get("title")) == dedup_key:
-                await conn.execute(
-                    "UPDATE mutation_proposals SET payload = ?, proposed_at = ?, expires_at = ? WHERE id = ?",
-                    (json.dumps(payload, ensure_ascii=False), now, now + _expire_days() * 86400, row["id"]),
-                )
-                await conn.commit()
-                return int(row["id"])
-    cur = await conn.execute(
-        "INSERT INTO mutation_proposals (source, kind, user_id, layer, payload, status, proposed_at, expires_at)"
-        " VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
-        (source, kind, user_id, layer, json.dumps(payload, ensure_ascii=False), now, now + _expire_days() * 86400),
-    )
-    await conn.commit()
-    return int(cur.lastrowid or 0)
+        return int(cur.lastrowid or 0)
+
+    return await get_write_dispatch().atomic(DB_NAME, _txn)
 
 
 def decision_hint() -> str:
@@ -105,17 +107,22 @@ def decision_hint() -> str:
 
 async def expire_stale() -> int:
     """Flip pending rows past expires_at → expired. Lazy; called on reads."""
-    conn = await connection_manager.get(DB_NAME)
     now = time.time()
-    cur = await conn.execute("SELECT id, user_id, layer FROM mutation_proposals WHERE status = 'pending' AND expires_at < ?", (now,))
-    rows = await cur.fetchall()
+
+    async def _txn(conn: Any) -> list[dict[str, Any]]:
+        cur = await conn.execute("SELECT id, user_id, layer FROM mutation_proposals WHERE status = 'pending' AND expires_at < ?", (now,))
+        rows = await cur.fetchall()
+        if not rows:
+            return []
+        await conn.execute(
+            "UPDATE mutation_proposals SET status = 'expired', decided_at = ?, decided_by = 'expiry' WHERE status = 'pending' AND expires_at < ?",
+            (now, now),
+        )
+        return [dict(r) for r in rows]
+
+    rows = await get_write_dispatch().atomic(DB_NAME, _txn)
     if not rows:
         return 0
-    await conn.execute(
-        "UPDATE mutation_proposals SET status = 'expired', decided_at = ?, decided_by = 'expiry' WHERE status = 'pending' AND expires_at < ?",
-        (now, now),
-    )
-    await conn.commit()
     from features.audit_trail import AuditTrail
 
     audit = AuditTrail()
@@ -134,16 +141,17 @@ async def purge_decided_past_window() -> int:
 
     days = max(_expire_days(), int(config.get("staging", "purge_after_days", default=14)))
     cutoff = time.time() - days * 86400
-    conn = await connection_manager.get(DB_NAME)
-    borrowed = conn.in_transaction
-    cur = await conn.execute(
+    shared = await connection_manager.get(DB_NAME)
+    if shared.in_transaction:
+        # A foreign transaction owns the write lock; the dedicated dispatch would
+        # spin out its busy timeout. Purging dust can wait for the next tick.
+        return 0
+    return await get_write_dispatch().write(
+        DB_NAME,
         """DELETE FROM mutation_proposals WHERE status IN ('rejected', 'expired') AND
                COALESCE(decided_at, expires_at, proposed_at) < ?""",
         (cutoff,),
     )
-    if not borrowed:
-        await conn.commit()
-    return int(cur.rowcount or 0)
 
 
 # Pattern-extraction sources with honest kind tagging: their proposals either
@@ -164,11 +172,10 @@ async def auto_apply_pending(mem: Any) -> int:
     logger = logging.getLogger(__name__)
     from lifecycle.consolidation import passes_promotion_gate
 
-    conn = await connection_manager.get(DB_NAME)
-    cur = await conn.execute(
+    rows = await get_write_dispatch().query(
+        DB_NAME,
         "SELECT id, payload FROM mutation_proposals WHERE status = 'pending' AND kind = 'core_write' AND source IN ('session_close', 'dream') ORDER BY id",
     )
-    rows = await cur.fetchall()
     applied = 0
     for row in rows:
         try:
@@ -193,13 +200,12 @@ async def auto_apply_pending(mem: Any) -> int:
 
 async def list_pending(user_id: str = "default", limit: int = 20) -> list[dict[str, Any]]:
     await expire_stale()
-    conn = await connection_manager.get(DB_NAME)
-    cur = await conn.execute(
+    rows = await get_write_dispatch().query(
+        DB_NAME,
         "SELECT id, source, kind, user_id, layer, payload, status, proposed_at, expires_at FROM mutation_proposals"
         " WHERE status = 'pending' AND user_id = ? ORDER BY id LIMIT ?",
         (user_id, limit),
     )
-    rows = await cur.fetchall()
     out: list[dict[str, Any]] = []
     for r in rows:
         try:
@@ -223,39 +229,38 @@ async def list_pending(user_id: str = "default", limit: int = 20) -> list[dict[s
 
 
 async def count_pending(user_id: str = "default") -> int:
-    conn = await connection_manager.get(DB_NAME)
-    cur = await conn.execute("SELECT count(*) FROM mutation_proposals WHERE status = 'pending' AND user_id = ?", (user_id,))
-    row = await cur.fetchone()
-    return int(row[0]) if row else 0
+    value = await get_write_dispatch().scalar(DB_NAME, "SELECT count(*) FROM mutation_proposals WHERE status = 'pending' AND user_id = ?", (user_id,))
+    return int(value or 0)
 
 
 async def decide(proposal_id: int, approve: bool, mem: Any) -> dict[str, Any]:
     """Apply (approve=True) or reject one proposal. Unknown id → ValueError."""
-    conn = await connection_manager.get(DB_NAME)
-    cur = await conn.execute("SELECT id, source, kind, user_id, layer, payload, status FROM mutation_proposals WHERE id = ?", (proposal_id,))
-    row = await cur.fetchone()
+    dispatch = get_write_dispatch()
+    row = await dispatch.select_one(
+        DB_NAME, "SELECT id, source, kind, user_id, layer, payload, status FROM mutation_proposals WHERE id = ?", (proposal_id,)
+    )
     if row is None:
         raise ValueError(f"unknown proposal id: {proposal_id}")
     if row["status"] != "pending":
         raise ValueError(f"proposal {proposal_id} is not pending (status={row['status']})")
     payload = json.loads(row["payload"])
     if not approve:
-        await conn.execute(
+        await dispatch.write(
+            DB_NAME,
             "UPDATE mutation_proposals SET status = 'rejected', decided_at = ?, decided_by = 'tool' WHERE id = ?",
             (time.time(), proposal_id),
         )
-        await conn.commit()
         from features.audit_trail import AuditTrail
 
         await AuditTrail().log(row["user_id"], "proposal_rejected", layer=row["layer"], target_id=str(proposal_id), details={"kind": row["kind"]})
         return {"id": proposal_id, "status": "rejected", "result_ref": None}
 
     result_ref = await _apply(row["kind"], row["user_id"], row["layer"], payload, mem)
-    await conn.execute(
+    await dispatch.write(
+        DB_NAME,
         "UPDATE mutation_proposals SET status = 'applied', decided_at = ?, decided_by = 'tool', result_ref = ? WHERE id = ?",
         (time.time(), result_ref, proposal_id),
     )
-    await conn.commit()
     from features.audit_trail import AuditTrail
 
     await AuditTrail().log(
@@ -321,12 +326,12 @@ async def _apply(kind: str, user_id: str, layer: str, payload: dict[str, Any], m
 
 async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
     """Undo an APPLIED proposal (C1.13). Only kinds with exact provenance: core_write, archive."""
-    conn = await connection_manager.get(DB_NAME)
-    cur = await conn.execute(
+    dispatch = get_write_dispatch()
+    row = await dispatch.select_one(
+        DB_NAME,
         "SELECT id, kind, user_id, layer, payload, status, result_ref FROM mutation_proposals WHERE id = ?",
         (proposal_id,),
     )
-    row = await cur.fetchone()
     if row is None:
         raise ValueError(f"unknown proposal id: {proposal_id}")
     if row["status"] != "applied":
@@ -397,11 +402,11 @@ async def revert(proposal_id: int, mem: Any) -> dict[str, Any]:
     else:
         raise ValueError(f"revert not supported for kind {row['kind']!r} (v2: core_write, archive, wiki_write)")
 
-    await conn.execute(
+    await dispatch.write(
+        DB_NAME,
         "UPDATE mutation_proposals SET status = 'reverted', decided_at = ?, decided_by = 'tool' WHERE id = ?",
         (time.time(), proposal_id),
     )
-    await conn.commit()
     from features.audit_trail import AuditTrail
 
     await AuditTrail().log(
@@ -424,12 +429,12 @@ async def revert_transition(user_id: str, transition_id: int) -> dict[str, Any]:
     row). Consolidation never deletes the source episode, so reverting only
     removes the promoted L4 fact. Audit-logged; no schema change.
     """
-    conn = await connection_manager.get(DB_NAME)
-    cur = await conn.execute(
+    dispatch = get_write_dispatch()
+    row = await dispatch.select_one(
+        DB_NAME,
         "SELECT id, user_id, kind, from_ref, to_ref FROM memory_transitions WHERE id = ?",
         (int(transition_id),),
     )
-    row = await cur.fetchone()
     if row is None:
         raise ValueError(f"unknown transition id: {transition_id}")
     if row["user_id"] != user_id:
@@ -438,8 +443,7 @@ async def revert_transition(user_id: str, transition_id: int) -> dict[str, Any]:
         raise ValueError(f"transition {transition_id} is not an L4 promotion (to_ref={row['to_ref']!r})")
     entry_id = int(str(row["to_ref"]).removeprefix("core:"))
 
-    key_cur = await conn.execute("SELECT key, layer FROM core_memory WHERE entry_id = ?", (entry_id,))
-    key_row = await key_cur.fetchone()
+    key_row = await dispatch.select_one(DB_NAME, "SELECT key, layer FROM core_memory WHERE entry_id = ?", (entry_id,))
     if key_row is None:
         return {"transition_id": int(transition_id), "deleted": False, "reason": "already reverted or absent"}
 

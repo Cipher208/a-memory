@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from weakref import WeakKeyDictionary
 
 from shared.connection import AsyncConnectionManager, connection_manager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+
+_T = TypeVar("_T")
 
 
 class WriteDispatch:
@@ -128,7 +130,7 @@ class WriteDispatch:
                     await conn.rollback()
                     raise
 
-    async def atomic(self, db: str, fn: Callable[[Any], Awaitable[Any]]) -> Any:
+    async def atomic(self, db: str, fn: Callable[[Any], Awaitable[_T]]) -> _T:
         """Run ``fn(conn)`` inside one transaction on the dispatch's connection.
 
         The only supported way to do read-then-write atomically (the L0 hash
