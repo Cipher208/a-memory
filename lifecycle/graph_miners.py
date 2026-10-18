@@ -1217,14 +1217,23 @@ async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str, *, conn: A
     return {"edges": edges}
 
 
-async def wire_new_node(cm: AsyncConnectionManager, layer: str, node_id: int, content: str, tags: list[str] | None = None) -> int:
+@_maintenance
+async def wire_new_node(
+    cm: AsyncConnectionManager,
+    layer: str,
+    node_id: int,
+    content: str,
+    tags: list[str] | None = None,
+    *,
+    conn: Any = None,
+    borrowed: bool = False,
+) -> int:
     """Incremental mode (G4): edges of a NEW node vs existing ones — wired at write time.
 
     Light signals: shared tags (tagged), >=2 shared canon-tokens + Jaccard >=0.3
     (topic_overlap), shared dictionary/NER entity (co_mentions). Heavy signals
     (embedding/sessions) stay with the nightly graph_enrich. Returns the edge count.
     """
-    conn = await cm.get(DB_NAME)
     from rag.synonyms import load_synonyms
 
     syn = load_synonyms()
@@ -1284,7 +1293,8 @@ async def log_zero_result(cm: AsyncConnectionManager, layer: str, user_id: str, 
     )
 
 
-async def miner_zero_results(cm: AsyncConnectionManager, layer: str) -> dict[str, int]:
+@_maintenance
+async def miner_zero_results(cm: AsyncConnectionManager, layer: str, *, conn: Any = None, borrowed: bool = False) -> dict[str, int]:
     """#12 zero-result miner (S17 #6, open-index): repeated failed queries → question nodes.
 
     The same query (query_hash, per-user) failed >=2 times → find_or_add a
@@ -1295,7 +1305,6 @@ async def miner_zero_results(cm: AsyncConnectionManager, layer: str) -> dict[str
     MINERS contract is the single `edges` key; graph_enrich reports it as is).
     """
     await ensure_zero_result(cm)
-    conn = await cm.get(DB_NAME)
     rows = await (
         await conn.execute(
             "SELECT query, user_id, COUNT(*) c FROM recall_zero_results WHERE layer=? GROUP BY query_hash, user_id HAVING c >= 2 LIMIT 20",
