@@ -90,8 +90,8 @@ User facts live in the `user` namespace, agent identity in the `agent` namespace
 
 ## Status
 
-- **Version:** 1.12.0
-- **Tests:** 2261 passed (property-based Hypothesis tests + Phase D E2E/chaos suites included)
+- **Version:** 1.13.0
+- **Tests:** 2361 passed (property-based Hypothesis tests + Phase D E2E/chaos suites included)
 - **DB tables:** 57 (alembic head `20261004_2200_g27`)
 - **Tool surface:** 7 primitives by default · 59 with the `agent` preset (`primitives,context,insight,write,wiki,review`) · 66 with `all`
 - **Python:** 3.11–3.13

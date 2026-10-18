@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-18
+
 ### Added
 - **The maintenance loop now reports its own connection health (2026-10-16).** Every diagnosis of the 15–16.10 lock storms had to be made from outside, by poking at `/proc`: descriptor counts that oscillated between 49 and 57 and could not be read as a trend, and no way at all to ask the process how many connections it believed it had, or how many aiosqlite workers were running with no owner.
 
@@ -41,6 +43,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Suite 2311 passed (was 2306).
 
 ### Fixed
+- **A cursor could pin a snapshot and wedge every writer (2026-10-18).** Every write in the library rode one shared `aiosqlite` connection. A read cursor retained on that connection pinned a WAL read snapshot in shared memory, and after any foreign commit — the autohooks daemon, a cron job, a CLI process — the next write on the same connection failed *instantly* with `SQLITE_BUSY_SNAPSHOT` (517), surfacing as `database is locked` despite `busy_timeout=15000`, because the busy handler is never consulted for 517. The failure then cascaded: decay failed, `prune_dangling_edges` raised, and the periodic pass aborted **before** the WAL checkpoint, so the WAL grew without bound and the database looked permanently wedged.
+
+  Nineteen preceding PRs each fixed one symptom of this class — a connection of one's own for the checkpoint, a connection of one's own for the rescore sweep, close-on-drop, a `flock` per base. None of them removed the shared connection from the reach of an ordinary caller, so the class stayed open.
+
+  `shared/write_dispatch.py` closes it. `WriteDispatch` is the sole owner of a **private** connector built from the manager's `base_dir`; a cursor never leaves a method body — every read opens, consumes and closes inside the call — so no snapshot can outlive the statement that took it. One instance per process (`get_write_dispatch`), with `query` / `select_one` / `scalar` / `write` / `insert` / `write_many` / `atomic` / `execute_script`. `atomic` runs a read-then-write callback under the write lock and is re-entrant per task through a `ContextVar`, so a domain writer can join a maintenance transaction instead of deadlocking against it. `close_all()` tears the dispatcher down with its manager.
+
+  Every write site moved onto it: core, features, graph, lifecycle, shared, rag, wiki, hooks, the MCP tools and the maintenance scripts — 90 files. `shared/l0.py` keeps its hash-chain transaction (head read, digest, insert, hash update) as a single `atomic` callback, with `BEGIN IMMEDIATE` retained for cross-process safety. Subsystems that already had a connection of their own — the WAL checkpoint, the importance scheduler, the read-only replica — were left as they are: that pattern was the model, not the target.
+
+  The `in_transaction` guards and the `_BUSY_ERRORS` catches stay. They still defend against a foreign transaction arriving through `AsyncConnectionManager.execute_script`, and they are the regression fence for the class.
+
+  Verified live, not only in the suite. The shared memory-map byte that marks an open read transaction (`/proc/locks`, `-shm` byte 123) was held permanently by the server process before the change and is absent after; the periodic pass now reaches the checkpoint, which reclaimed the backlog (`memory.db-wal` fell from a frozen 4.86 MB to 0.1 MB), and three consecutive passes on each of the three deployed bases logged `Decayed` / `WAL checkpoint` / `connection health ... leaked_workers=0` with zero `database is locked` lines. Suite 2361 passed (was 2357).
+
+- **Two test-invisible defects surfaced by the migration itself (2026-10-18).** Moving transaction ownership exposed commits that were already wrong and had never failed a test, because a commit on a borrowed connection only misbehaves when something later rolls back.
+
+  `miner_embedding` and `wire_new_node` committed inside their own `@_maintenance` wrapper, which already owns the transaction, so they published half of it; `lateral_inhibition` committed the connection passed to it by `_insert_edge`. Proven behaviourally — an edge written by `wire_new_node` survived an outer `atomic` rollback — then fixed by leaving the commit to the owner. An invariant test now scans the source for any maintenance-wrapped function that commits on its own, rather than trusting the next reader to notice.
+
+  The same trap sat in three helpers that take a `conn` and commit it — `validate_edges`, `_dream`, `wiki_fts_check.repair`. Their callers now commit explicitly, and a behavioural test asserts that a rechecked expired edge rolls back with its caller.
+
+- **A repointed base directory kept answering from the previous database (2026-10-18).** `AsyncConnectionManager.get()` cached a handle per database name and never re-examined the path, so a manager whose `base_dir` had been changed returned the old file. Tests that redirect the manager were silently reading and migrating the previous database; the failure only became visible once a fresh dispatch opened the *new* one and found no tables. The manager now records the path each handle was opened on and reopens on a mismatch.
+
+- **A process could outlive its work and hang on exit (2026-10-18).** aiosqlite worker threads are not daemons and block in `queue.get()`; closing the manager left the dispatcher's connector alive, so short-lived CLIs waited for threads nobody would ever signal. `close_all()` now closes the dispatchers belonging to that manager. One CLI test that had been timing out for 62 s completes in 3.3 s.
+
 - **A connection can be created while another writer holds the file (2026-10-17).** `_get_aiosqlite_conn` ran its PRAGMAs unconditionally, and two of them need a write lock:
 
   ```
@@ -341,6 +365,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Mutation-checked, three mutations, zero survivors — drop without closing (M1), remove the identity guard (M2), and stop suppressing a failing `close()` (M3). M2 is worth recording: it survived the first run because two earlier versions of its test asserted the wrong thing — `not replacement.closed` passes even with the guard gone (the code closes `conn`, never the replacement), and asserting the dict still holds the replacement fails on correct code because `get()` installs a fresh connection over it. The real property is that the replacement is not **evicted**, and the test now records `pop` calls to check exactly that. A third version had to be fixed too: `dict.pop` cannot be assigned on an instance (`AttributeError: 'dict' object attribute 'pop' is read-only`), and the test was erroring rather than asserting, which made the mutation run look green for the wrong reason.
 
   Suite 2301 passed (was 2297). `ruff check`, `ruff format --check` and `mypy` over the CI's directory list are clean.
+
 
 ## [1.12.0] - 2026-10-13
 
