@@ -198,6 +198,18 @@ def get_write_dispatch(cm: AsyncConnectionManager | None = None) -> WriteDispatc
     return dispatch
 
 
+async def close_dispatchers_for(manager: AsyncConnectionManager) -> None:
+    """Close the dispatcher built on ``manager``, if one exists.
+
+    Called from ``AsyncConnectionManager.close_all``: the dispatcher's connector is a
+    separate set of handles, and their non-daemon worker threads keep a finished CLI
+    alive until they are closed.
+    """
+    entry = _dispatchers.pop(manager, None)
+    if entry is not None:
+        await entry[1].close()
+
+
 async def reset_write_dispatchers() -> None:
     """Close and forget every dispatcher (test teardown only)."""
     for _base, dispatch in list(_dispatchers.values()):

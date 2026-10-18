@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from lifecycle.importance_scheduler import ImportanceScheduler
 from shared.connection import connection_manager
+from shared.write_dispatch import get_write_dispatch
 from shared.memory_types import backfill_null_kinds, kind_for_text
 
 if TYPE_CHECKING:
@@ -28,13 +29,12 @@ async def do_export(user_id: str, kind: str | None) -> Path:
     import time
     from pathlib import Path
 
-    conn = await connection_manager.get("memory.db")
     sql = "SELECT * FROM core_memory WHERE user_id=?"
     params: tuple[str, ...] = (user_id,)
     if kind:
         sql += " AND memory_kind=?"
         params = (user_id, kind)
-    rows = await (await conn.execute(sql, params)).fetchall()
+    rows = await get_write_dispatch().query("memory.db", sql, params)
 
     base = Path(str(connection_manager.base_dir)) / "exports"
     base.mkdir(parents=True, exist_ok=True)
@@ -70,13 +70,11 @@ async def do_reclassify(user_id: str, dry_run: bool = True) -> list[tuple[str, s
     Returns the plan as `(old_kind, new_kind, entry_id)` triples, in both modes, so a
     caller can assert on it without parsing stdout.
     """
-    conn = await connection_manager.get("memory.db")
-    rows = await (
-        await conn.execute(
-            "SELECT entry_id as id, key, value, memory_kind, source FROM core_memory WHERE user_id=?",
-            (user_id,),
-        )
-    ).fetchall()
+    rows = await get_write_dispatch().query(
+        "memory.db",
+        "SELECT entry_id as id, key, value, memory_kind, source FROM core_memory WHERE user_id=?",
+        (user_id,),
+    )
     changes: list[tuple[str, str, int]] = []
     keys: dict[int, str] = {}
     curated = 0
@@ -102,10 +100,10 @@ async def do_reclassify(user_id: str, dry_run: bool = True) -> list[tuple[str, s
 
     if dry_run or not changes:
         return changes
-    await conn.execute("BEGIN")
-    for _old, kind, rid in changes:
-        await conn.execute("UPDATE core_memory SET memory_kind=? WHERE entry_id=?", (kind, rid))
-    await conn.commit()
+    await get_write_dispatch().write_many(
+        "memory.db",
+        [("UPDATE core_memory SET memory_kind=? WHERE entry_id=?", (kind, rid)) for _old, kind, rid in changes],
+    )
     return changes
 
 

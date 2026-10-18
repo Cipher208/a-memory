@@ -240,6 +240,10 @@ class AsyncConnectionManager:
         self.base_dir = Path(base_dir or _DEFAULT_DIR)
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._conns: dict[str, Any] = {}
+        #: The file each cached handle was opened on. `base_dir` is mutable (tests
+        #: repoint it), and a handle cached under the old directory would otherwise
+        #: keep answering after the manager was moved to a different database.
+        self._paths: dict[str, str] = {}
         _managers.add(self)
 
     # ------------------------------------------------------------------
@@ -248,6 +252,16 @@ class AsyncConnectionManager:
 
     async def get(self, db_name: str = "memory.db") -> _SyncConnectionWrapper | Any:
         """Return (or create) a connection to `db_name`."""
+        expected_path = str(self.base_dir / db_name)
+        cached_path = self._paths.get(db_name)
+        if cached_path is not None and cached_path != expected_path:
+            # base_dir moved after this handle was opened: the cache is for another
+            # file, so keep the handle only if its path still matches.
+            stale = self._conns.pop(db_name, None)
+            self._paths.pop(db_name, None)
+            if stale is not None:
+                with contextlib.suppress(Exception):
+                    await stale.close()
         if db_name in self._conns:
             conn = self._conns[db_name]
             try:
@@ -288,6 +302,7 @@ class AsyncConnectionManager:
             conn = await self._get_sync_conn(db_path)
 
         self._conns[db_name] = conn
+        self._paths[db_name] = db_path
         logger.debug(f"opened connection {db_name} ({db_path}) [sync={_USE_SYNC}]")
         return conn
 
@@ -382,6 +397,14 @@ class AsyncConnectionManager:
                 await conn.close()
                 logger.debug("closed connection %s", name)
         self._conns.clear()
+        self._paths.clear()
+        # The write dispatcher owns a connector of its own, built on this manager.
+        # Its worker threads are non-daemon, so a CLI that closes only `self._conns`
+        # finishes its work and then hangs at interpreter shutdown. One call site
+        # (`close_all`) therefore closes both.
+        from shared.write_dispatch import close_dispatchers_for
+
+        await close_dispatchers_for(self)
 
     def stats(self) -> dict[str, Any]:
         return {
