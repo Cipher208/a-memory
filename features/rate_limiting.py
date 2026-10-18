@@ -11,6 +11,7 @@ from typing import Any, cast
 from config import config
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 
 class RateLimiter:
@@ -19,8 +20,13 @@ class RateLimiter:
         self._max_per_user = config.get("security", "rate_limit_per_user") or 100
         self._window_seconds = 60
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        """Resolved on every access so a repointed ``_cm`` is honoured."""
+        return get_write_dispatch(self._cm)
+
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS rate_limits (
@@ -35,55 +41,52 @@ class RateLimiter:
     async def check(self, user_id: str) -> dict[str, Any]:
         now = time.time()
         cutoff = now - self._window_seconds
-        conn = await self._cm.get(DB_NAME)
-        # `get()` hands out one connection per database, shared with every other component, so a
-        # transaction may already be open on somebody else's behalf. Committing then would put
-        # *their* unfinished work on disk — and this runs at the top of every tool call
-        # (`mcp_server/tools/base.py:149`), which is what makes it the widest-reaching instance
-        # of that shape. Commit only a transaction this method started.
-        borrowed = conn.in_transaction
-        await conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
-        await conn.execute("INSERT INTO rate_limits (user_id, timestamp) VALUES (?, ?)", (user_id, now))
-        cursor = await conn.execute(
-            "SELECT COUNT(*) as cnt FROM rate_limits WHERE user_id=? AND timestamp >= ?",
-            (user_id, cutoff),
-        )
-        row = await cursor.fetchone()
-        count = row["cnt"] if row else 0
-        if not borrowed:
-            await conn.commit()
+        # This runs at the top of every tool call (`mcp_server/tools/base.py:149`), so it is
+        # the widest-reaching writer in the process. With a foreign transaction open on the
+        # shared connection it records nothing rather than waiting on the write lock or
+        # flushing work it does not own: skipping one rate-limit tick is cheaper than a
+        # stalled tool call.
+        shared = await self._cm.get(DB_NAME)
+        if shared.in_transaction:
+            return {"allowed": True, "remaining": self._max_per_user}
 
-        if count > self._max_per_user:
+        async def _txn(conn: Any) -> dict[str, Any]:
+            await conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
+            await conn.execute("INSERT INTO rate_limits (user_id, timestamp) VALUES (?, ?)", (user_id, now))
             cursor = await conn.execute(
-                "SELECT MIN(timestamp) as ts FROM rate_limits WHERE user_id=? AND timestamp >= ?",
+                "SELECT COUNT(*) as cnt FROM rate_limits WHERE user_id=? AND timestamp >= ?",
                 (user_id, cutoff),
             )
-            oldest = await cursor.fetchone()
-            reset_in = int(self._window_seconds - (now - (oldest["ts"] if oldest else now)))
-            return {"allowed": False, "remaining": 0, "reset_in": max(reset_in, 1)}
+            row = await cursor.fetchone()
+            count = row["cnt"] if row else 0
+            if count > self._max_per_user:
+                cursor = await conn.execute(
+                    "SELECT MIN(timestamp) as ts FROM rate_limits WHERE user_id=? AND timestamp >= ?",
+                    (user_id, cutoff),
+                )
+                oldest = await cursor.fetchone()
+                reset_in = int(self._window_seconds - (now - (oldest["ts"] if oldest else now)))
+                return {"allowed": False, "remaining": 0, "reset_in": max(reset_in, 1)}
+            return {"allowed": True, "remaining": self._max_per_user - count}
 
-        return {"allowed": True, "remaining": self._max_per_user - count}
+        return cast("dict[str, Any]", await self._dispatch.atomic(DB_NAME, _txn))
 
     async def get_stats(self, user_id: str) -> dict[str, Any]:
         cutoff = time.time() - self._window_seconds
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        value = await self._dispatch.scalar(
+            DB_NAME,
             "SELECT COUNT(*) as cnt FROM rate_limits WHERE user_id=? AND timestamp >= ?",
             (user_id, cutoff),
         )
-        row = await cursor.fetchone()
-        return {"requests_last_minute": row["cnt"] if row else 0, "limit": self._max_per_user}
+        return {"requests_last_minute": int(value) if value is not None else 0, "limit": self._max_per_user}
 
     async def cleanup_old(self) -> int:
         cutoff = time.time() - (self._window_seconds * 10)
-        conn = await self._cm.get(DB_NAME)
-        # Same shape as `check()` above: the shared handle may carry another component's
-        # transaction, and this method has no business committing it.
-        borrowed = conn.in_transaction
-        cursor = await conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
-        if not borrowed:
-            await conn.commit()
-        return cast("int", cursor.rowcount)
+        # Same shape as `check()` above: never ride or flush another component's transaction.
+        shared = await self._cm.get(DB_NAME)
+        if shared.in_transaction:
+            return 0
+        return int(await self._dispatch.write(DB_NAME, "DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,)))
 
 
 class ConnectionLimiter:

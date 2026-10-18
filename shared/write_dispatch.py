@@ -52,22 +52,31 @@ class WriteDispatch:
     async def query(self, db: str, sql: str, params: Sequence[Any] = ()) -> list[dict[str, Any]]:
         async with self._get_lock():
             conn: Any = await self._cm.get(db)
-            async with conn.execute(sql, params) as cur:
+            cur = await conn.execute(sql, params)
+            try:
                 rows = await cur.fetchall()
+            finally:
+                await cur.close()
         return [dict(r) for r in rows]
 
     async def select_one(self, db: str, sql: str, params: Sequence[Any] = ()) -> dict[str, Any] | None:
         async with self._get_lock():
             conn: Any = await self._cm.get(db)
-            async with conn.execute(sql, params) as cur:
+            cur = await conn.execute(sql, params)
+            try:
                 row = await cur.fetchone()
+            finally:
+                await cur.close()
         return dict(row) if row is not None else None
 
     async def scalar(self, db: str, sql: str, params: Sequence[Any] = ()) -> Any:
         async with self._get_lock():
             conn: Any = await self._cm.get(db)
-            async with conn.execute(sql, params) as cur:
+            cur = await conn.execute(sql, params)
+            try:
                 row = await cur.fetchone()
+            finally:
+                await cur.close()
         if row is None:
             return None
         return row[0]
@@ -75,8 +84,11 @@ class WriteDispatch:
     async def write(self, db: str, sql: str, params: Sequence[Any] = ()) -> int:
         async with self._get_lock():
             conn: Any = await self._cm.get(db)
-            async with conn.execute(sql, params) as cur:
+            cur = await conn.execute(sql, params)
+            try:
                 rowcount = cur.rowcount
+            finally:
+                await cur.close()
             await conn.commit()
         return int(rowcount or 0)
 
@@ -88,8 +100,11 @@ class WriteDispatch:
         """
         async with self._get_lock():
             conn: Any = await self._cm.get(db)
-            async with conn.execute(sql, params) as cur:
+            cur = await conn.execute(sql, params)
+            try:
                 lastrowid = cur.lastrowid
+            finally:
+                await cur.close()
             await conn.commit()
         return int(lastrowid or 0)
 
@@ -141,12 +156,15 @@ class WriteDispatch:
         chunk: int = 1000,
     ) -> AsyncIterator[list[dict[str, Any]]]:
         conn: Any = await self._cm.get(db)
-        async with conn.execute(sql, params) as cur:
+        cur = await conn.execute(sql, params)
+        try:
             while True:
                 batch = await cur.fetchmany(chunk)
                 if not batch:
                     break
                 yield [dict(r) for r in batch]
+        finally:
+            await cur.close()
 
     async def close(self) -> None:
         await self._cm.close_all()
