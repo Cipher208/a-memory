@@ -5,7 +5,6 @@ WikiIndex Layer — handles all SQLite and FTS5 operations for Wiki.
 Isolates DB logic from filesystem and business logic.
 """
 
-import asyncio
 import contextlib
 import json
 import logging
@@ -14,6 +13,7 @@ import time
 from typing import Any, TYPE_CHECKING
 
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 if TYPE_CHECKING:
     from wiki.models import WikiEntry
@@ -38,24 +38,9 @@ def _fts5_match_expr(query: str) -> str | None:
 
 logger = logging.getLogger(__name__)
 
-# All WikiIndex instances (user/agent layers) share one SQLite connection;
-# multi-statement mutations must be serialized or a concurrent commit()
-# can land another task's half-finished transaction.
-_mutation_lock = asyncio.Lock()
-
-
-def _rebind_mutation_lock() -> None:
-    """Recreate the mutation lock if it is bound to a dead event loop.
-
-    Production runs a single loop, so this is a no-op there; test suites
-    (and anything spawning one-shot loops) would otherwise trip the lock's
-    loop-affinity check on its second acquire.
-    """
-    global _mutation_lock
-    loop = asyncio.get_running_loop()
-    bound = getattr(_mutation_lock, "_loop", None)
-    if bound is not None and bound is not loop and bound.is_closed():
-        _mutation_lock = asyncio.Lock()
+# All WikiIndex instances (user/agent layers) share one write dispatcher, whose
+# atomic() serialises multi-statement mutations on the process-wide write lock —
+# a concurrent commit() can no longer land another task's half-finished transaction.
 
 
 class WikiIndex:
@@ -65,8 +50,18 @@ class WikiIndex:
         self._cm = connection_manager
         self.layer = layer
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        """Process-wide write dispatcher; resolved per access so a repointed `_cm` is honoured."""
+        return get_write_dispatch(self._cm)
+
     async def init_db(self) -> None:
-        """Initialize tables and indexes."""
+        """Initialize tables and indexes.
+
+        DDL stays on the manager helper: `execute_script` is idempotent, and when a
+        foreign transaction already holds the shared write lock it rides it instead
+        of blocking a second connection until the busy timeout.
+        """
         await self._cm.execute_script(
             DB_NAME,
             """
@@ -129,26 +124,19 @@ class WikiIndex:
 
     async def save(self, entry: WikiEntry, content_hash: str) -> None:
         """Atomic insert/update in both wiki_index and wiki_fts."""
-        _rebind_mutation_lock()
-        async with _mutation_lock:
-            conn = await self._cm.get(DB_NAME)
-            try:
-                existing = await self._get_existing(conn, entry.file_path)
 
-                if existing:
-                    if existing["content_hash"] == content_hash:
-                        return
-                    await self._update_entry_and_fts(conn, entry, existing, content_hash)
-                else:
-                    await self._insert_entry_and_fts(conn, entry, content_hash, time.time())
+        async def _save(conn: Any) -> None:
+            existing = await self._get_existing(conn, entry.file_path)
+            if existing:
+                if existing["content_hash"] == content_hash:
+                    return
+                await self._update_entry_and_fts(conn, entry, existing, content_hash)
+            else:
+                await self._insert_entry_and_fts(conn, entry, content_hash, time.time())
 
-                await conn.commit()
-            except Exception:
-                # Never leave a half-done index+FTS pair for the next
-                # unrelated commit() to finalize.
-                with contextlib.suppress(Exception):
-                    await conn.rollback()
-                raise
+        # One transaction: index row and FTS shadow row can never diverge, and a
+        # failure rolls both back (atomic owns commit/rollback and the write lock).
+        await self._dispatch.atomic(DB_NAME, _save)
 
     async def _get_existing(self, conn: Any, file_path: str) -> dict[str, Any] | None:
         cur = await conn.execute(
@@ -209,12 +197,11 @@ class WikiIndex:
 
     async def get_by_path(self, file_path: str) -> dict[str, Any] | None:
         """Fetch metadata and hash by file path."""
-        conn = await self._cm.get(DB_NAME)
-        cur = await conn.execute(
+        row = await self._dispatch.select_one(
+            DB_NAME,
             "SELECT * FROM wiki_index WHERE layer=? AND file_path=?",
             (self.layer, file_path),
         )
-        row = await cur.fetchone()
         return dict(row) if row else None
 
     async def search(self, query: str, limit: int = 10, status: str | None = "active") -> list[dict[str, Any]]:
@@ -222,9 +209,8 @@ class WikiIndex:
 
         A1.2: status filter — default 'active' hides stale/archived; None = all.
         """
-        conn = await self._cm.get(DB_NAME)
         try:
-            return await self._fts_search(conn, query, limit, status)
+            return await self._fts_search(query, limit, status)
         except Exception:
             # FTS5 syntax error (stray , " ( * …): retry once with a safe
             # tokenized expression (live incident 2026-09-13). No logging here
@@ -233,18 +219,19 @@ class WikiIndex:
             if safe_expr is None:
                 return []
             try:
-                return await self._fts_search(conn, safe_expr, limit, status)
+                return await self._fts_search(safe_expr, limit, status)
             except Exception:
                 logger.exception("Search failed for query '%s'", query)
                 return []
 
-    async def _fts_search(self, conn: Any, match_expr: str, limit: int, status: str | None) -> list[dict[str, Any]]:
+    async def _fts_search(self, match_expr: str, limit: int, status: str | None) -> list[dict[str, Any]]:
         status_sql = "AND wi.status = ?" if status else ""
         params_list: list[Any] = [match_expr, self.layer]
         if status:
             params_list.append(status)
         params_list.append(limit)
-        cur = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             f"""SELECT wi.*, fts.rank
                 FROM wiki_fts fts
                 JOIN wiki_index wi ON fts.rowid = wi.entry_id
@@ -252,113 +239,84 @@ class WikiIndex:
                 ORDER BY fts.rank LIMIT ?""",
             tuple(params_list),
         )
-        rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
     async def list_by_type(self, wiki_type: str, limit: int = 20, status: str | None = "active") -> list[dict[str, Any]]:
         """List entries of a specific type (A1.2: default active only)."""
-        conn = await self._cm.get(DB_NAME)
         status_sql = "AND status = ?" if status else ""
         params_list: list[Any] = [self.layer, wiki_type]
         if status:
             params_list.append(status)
         params_list.append(limit)
-        cur = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             f"SELECT * FROM wiki_index WHERE layer=? AND wiki_type=? {status_sql} ORDER BY updated_at DESC LIMIT ?",
             tuple(params_list),
         )
-        rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
     async def list_all(self, limit: int = 50, status: str | None = "active") -> list[dict[str, Any]]:
         """List all entries in the current layer (A1.2: default active only)."""
-        conn = await self._cm.get(DB_NAME)
         status_sql = "AND status = ?" if status else ""
         params_list: list[Any] = [self.layer]
         if status:
             params_list.append(status)
         params_list.append(limit)
-        cur = await conn.execute(
+        rows = await self._dispatch.query(
+            DB_NAME,
             f"SELECT * FROM wiki_index WHERE layer=? {status_sql} ORDER BY updated_at DESC LIMIT ?",
             tuple(params_list),
         )
-        rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
     async def delete(self, file_path: str) -> None:
         """Remove from both tables."""
-        _rebind_mutation_lock()
-        async with _mutation_lock:
-            conn = await self._cm.get(DB_NAME)
-            try:
-                cur = await conn.execute(
-                    "SELECT entry_id, title, content, wiki_type, tags FROM wiki_index WHERE layer=? AND file_path=?",
-                    (self.layer, file_path),
-                )
-                row = await cur.fetchone()
-                if not row:
-                    return
 
-                entry_id = row["entry_id"]
-                # Delete from FTS first (using the 'delete' special command)
-                await conn.execute(
-                    "INSERT INTO wiki_fts(wiki_fts, rowid, title, content, wiki_type, tags) VALUES ('delete', ?, ?, ?, ?, ?)",
-                    (entry_id, row["title"], row["content"], row["wiki_type"], row["tags"]),
-                )
-                # Delete from main index
-                await conn.execute("DELETE FROM wiki_index WHERE entry_id=?", (entry_id,))
-                await conn.commit()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    await conn.rollback()
-                raise
+        async def _delete(conn: Any) -> None:
+            cur = await conn.execute(
+                "SELECT entry_id, title, content, wiki_type, tags FROM wiki_index WHERE layer=? AND file_path=?",
+                (self.layer, file_path),
+            )
+            row = await cur.fetchone()
+            await cur.close()
+            if not row:
+                return
+            entry_id = row["entry_id"]
+            # Delete from FTS first (using the 'delete' special command)
+            await conn.execute(
+                "INSERT INTO wiki_fts(wiki_fts, rowid, title, content, wiki_type, tags) VALUES ('delete', ?, ?, ?, ?, ?)",
+                (entry_id, row["title"], row["content"], row["wiki_type"], row["tags"]),
+            )
+            await conn.execute("DELETE FROM wiki_index WHERE entry_id=?", (entry_id,))
+
+        await self._dispatch.atomic(DB_NAME, _delete)
 
     async def count(self, wiki_type: str | None = None) -> int:
         """Count entries, optionally filtered by type."""
-        conn = await self._cm.get(DB_NAME)
         if wiki_type:
-            cur = await conn.execute(
-                "SELECT COUNT(*) FROM wiki_index WHERE layer=? AND wiki_type=?",
-                (self.layer, wiki_type),
-            )
+            total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM wiki_index WHERE layer=? AND wiki_type=?", (self.layer, wiki_type))
         else:
-            cur = await conn.execute(
-                "SELECT COUNT(*) FROM wiki_index WHERE layer=?",
-                (self.layer,),
-            )
-        row = await cur.fetchone()
-        return row[0] if row else 0
+            total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM wiki_index WHERE layer=?", (self.layer,))
+        return int(total or 0)
 
     async def add_link(self, from_path: str, to_path: str, link_type: str) -> int:
         """Create a typed link between two page paths. Idempotent (returns the link_id)."""
-        conn = await self._cm.get(DB_NAME)
-        await conn.execute(
+        await self._dispatch.write(
+            DB_NAME,
             "INSERT OR IGNORE INTO wiki_links (layer, from_path, to_path, link_type, created_at) VALUES (?, ?, ?, ?, ?)",
             (self.layer, from_path, to_path, link_type, time.time()),
         )
-        await conn.commit()
-        cur = await conn.execute(
+        link_id = await self._dispatch.scalar(
+            DB_NAME,
             "SELECT link_id FROM wiki_links WHERE layer=? AND from_path=? AND to_path=? AND link_type=?",
             (self.layer, from_path, to_path, link_type),
         )
-        row = await cur.fetchone()
-        return int(row[0]) if row else 0
+        return int(link_id or 0)
 
     async def get_links(self, path: str) -> list[dict[str, Any]]:
         """Return typed links involving `path`, both out (from) and in (to)."""
-        conn = await self._cm.get(DB_NAME)
-        out_rows = await (
-            await conn.execute(
-                "SELECT to_path, link_type FROM wiki_links WHERE layer=? AND from_path=?",
-                (self.layer, path),
-            )
-        ).fetchall()
-        in_rows = await (
-            await conn.execute(
-                "SELECT from_path, link_type FROM wiki_links WHERE layer=? AND to_path=?",
-                (self.layer, path),
-            )
-        ).fetchall()
-        links = [{"path": r[0], "link_type": r[1], "direction": "out"} for r in out_rows]
-        links += [{"path": r[0], "link_type": r[1], "direction": "in"} for r in in_rows]
+        out_rows = await self._dispatch.query(DB_NAME, "SELECT to_path, link_type FROM wiki_links WHERE layer=? AND from_path=?", (self.layer, path))
+        in_rows = await self._dispatch.query(DB_NAME, "SELECT from_path, link_type FROM wiki_links WHERE layer=? AND to_path=?", (self.layer, path))
+        links = [{"path": r["to_path"], "link_type": r["link_type"], "direction": "out"} for r in out_rows]
+        links += [{"path": r["from_path"], "link_type": r["link_type"], "direction": "in"} for r in in_rows]
         return links
