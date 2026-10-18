@@ -14,6 +14,7 @@ from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +35,13 @@ def _bits_from_blob(blob: bytes) -> int:
     return _to_int(embed_to_binary(floats, dim=_BIT_DIM))
 
 
-async def _load_bits(conn: Any, layer: str) -> tuple[list[int], list[int]]:
+async def _load_bits(dispatch: Any, layer: str) -> tuple[list[int], list[int]]:
     """Return (node_ids, bits) of layer nodes with cached non-zero MIB vectors."""
-    rows = await (
-        await conn.execute(
-            "SELECT n.node_id, n.content FROM epi_nodes n WHERE n.layer=? AND n.content NOT LIKE '[{%' AND n.content NOT LIKE '%tool_use_id%'",
-            (layer,),
-        )
-    ).fetchall()
+    rows = await dispatch.query(
+        DB_NAME,
+        "SELECT n.node_id, n.content FROM epi_nodes n WHERE n.layer=? AND n.content NOT LIKE '[{%' AND n.content NOT LIKE '%tool_use_id%'",
+        (layer,),
+    )
     from shared.embeddings import EmbeddingCache, _get_model
 
     cache = EmbeddingCache()
@@ -51,12 +51,12 @@ async def _load_bits(conn: Any, layer: str) -> tuple[list[int], list[int]]:
     bits: list[int] = []
     for r in rows:
         nid, content = int(r["node_id"]), str(r["content"])
-        cached = await (
-            await conn.execute("SELECT embedding FROM embedding_cache WHERE text_hash=? AND model_name=?", (cache._hash_text(content), tag))
-        ).fetchone()
+        cached = await dispatch.select_one(
+            DB_NAME, "SELECT embedding FROM embedding_cache WHERE text_hash=? AND model_name=?", (cache._hash_text(content), tag)
+        )
         if cached is None:
             continue
-        blob = bytes(cached[0])
+        blob = bytes(cached["embedding"])
         if not blob:
             continue  # junk vector (addendum 10) — not taken into clustering
         b = _bits_from_blob(blob)
@@ -93,8 +93,8 @@ async def cluster_embeddings(
     absent or the number of cached vectors is too small.
     """
     cm = cm or connection_manager
-    conn = await cm.get(DB_NAME)
-    ids, bits = await _load_bits(conn, layer)
+    dispatch = get_write_dispatch(cm)
+    ids, bits = await _load_bits(dispatch, layer)
     if len(ids) < _MIN_CLUSTER_NODES:
         return {"clusters": [], "node_count": len(ids), "skipped": f"<{_MIN_CLUSTER_NODES} cached vectors"}
     try:
@@ -113,12 +113,11 @@ async def cluster_embeddings(
     labels = HDBSCAN(min_cluster_size=_MIN_CLUSTER_SIZE, metric="precomputed").fit(dist).labels_.tolist()
 
     ph = ",".join("?" * n)
-    edge_rows = await (
-        await conn.execute(
-            f"SELECT source_id, target_id FROM epi_edges WHERE source_id IN ({ph}) AND target_id IN ({ph})",
-            (*ids, *ids),
-        )
-    ).fetchall()
+    edge_rows = await dispatch.query(
+        DB_NAME,
+        f"SELECT source_id, target_id FROM epi_edges WHERE source_id IN ({ph}) AND target_id IN ({ph})",
+        (*ids, *ids),
+    )
     try:
         louvain_of = _louvain_partition([(int(r["source_id"]), int(r["target_id"])) for r in edge_rows], ids)
     except Exception as exc:

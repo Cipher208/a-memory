@@ -18,6 +18,7 @@ from shared.dialogue import is_dialogic as _is_dialogic
 from shared.door_log import REASON_MACHINE_REPORT, record_rejection
 from shared.machine_report import is_machine_report
 from shared.memory_types import MemoryKind, get_policy, kind_for_text
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -491,18 +492,17 @@ async def _mark_earlier_scope(cmem: Any, user_id: str, conflict: dict[str, Any])
     prior_id = conflict.get("conflicts_with_id")
     if not prior_id:
         return None
-    conn = await cmem._cm.get(DB_NAME)
-    row = await (await conn.execute("SELECT content FROM memory_conflicts WHERE id=?", (int(prior_id),))).fetchone()
+    dispatch = get_write_dispatch(cmem._cm)
+    row = await dispatch.select_one(DB_NAME, "SELECT content FROM memory_conflicts WHERE id=?", (int(prior_id),))
     if row is None:
         return None
     prior_text = str(row["content"])
     first_key = _canonical_key(prior_text, kind_for_text(prior_text))
-    prow = await (
-        await conn.execute(
-            "SELECT value, importance, memory_kind, source, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
-            (cmem.layer, user_id, first_key),
-        )
-    ).fetchone()
+    prow = await dispatch.select_one(
+        DB_NAME,
+        "SELECT value, importance, memory_kind, source, metadata FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+        (cmem.layer, user_id, first_key),
+    )
     if prow is None:
         return None
     try:

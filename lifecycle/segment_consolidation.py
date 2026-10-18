@@ -98,15 +98,14 @@ async def segment_l0(since_hours: float = 24.0, layer: str = "user") -> dict[str
     consumes the segments as a grouping.
     """
     from shared.connection import connection_manager
+    from shared.write_dispatch import get_write_dispatch
 
-    conn = await connection_manager.get(DB_NAME)
     cutoff = __import__("time").time() - since_hours * 3600
-    rows = await (
-        await conn.execute(
-            "SELECT id, text FROM l0_journal WHERE ts >= ? AND layer=? ORDER BY id ASC LIMIT 500",
-            (cutoff, layer),
-        )
-    ).fetchall()
+    rows = await get_write_dispatch(connection_manager).query(
+        DB_NAME,
+        "SELECT id, text FROM l0_journal WHERE ts >= ? AND layer=? ORDER BY id ASC LIMIT 500",
+        (cutoff, layer),
+    )
     records = [(int(r["id"]), str(r["text"])) for r in rows]
     segments = detect_boundaries(records)
     sizes = [len(s) for s in segments]

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from shared.constants import DB_NAME
+from shared.write_dispatch import get_write_dispatch
 
 # Binary patterns: "<Subject> <relation phrase> <Object>" — both sides become
 # entities. Order matters only for readability; all are applied.
@@ -91,14 +92,12 @@ async def build_from_episodes(cm: Any, user_id: str, layer: str = "user", window
     from graph.epistemic import EpistemicGraph
 
     graph = EpistemicGraph(cm=cm, layer=layer)
-    conn = await cm.get(DB_NAME)
     cutoff = time.time() - window_hours * 3600
-    rows = await (
-        await conn.execute(
-            "SELECT summary FROM episodes WHERE layer=? AND user_id=? AND created_at > ?",
-            (layer, user_id, cutoff),
-        )
-    ).fetchall()
+    rows = await get_write_dispatch(cm).query(
+        DB_NAME,
+        "SELECT summary FROM episodes WHERE layer=? AND user_id=? AND created_at > ?",
+        (layer, user_id, cutoff),
+    )
 
     stats = {"episodes": len(rows), "entities": 0, "edges": 0}
     seen: set[tuple[int, int, str]] = set()
