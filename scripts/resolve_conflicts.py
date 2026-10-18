@@ -13,6 +13,8 @@ archive step and the audit trail.
 
 from __future__ import annotations
 
+from typing import Any
+
 import argparse
 import asyncio
 import os
@@ -27,25 +29,32 @@ os.environ["MCP_MEMORY_DATA_DIR"] = DATA_DIR
 os.environ.setdefault("MCP_CONFIG_PATH", str(Path(DATA_DIR) / "config.yaml"))
 
 
-async def flagged(conn) -> list:
-    cur = await conn.execute("SELECT id, conflict_group_id, substr(content,1,60) FROM memory_conflicts WHERE is_conflict=1 ORDER BY id")
-    return list(await cur.fetchall())
+async def flagged(dispatch: Any) -> list[dict[str, Any]]:
+    from shared.constants import DB_NAME
+
+    return list(
+        await dispatch.query(
+            DB_NAME, "SELECT id, conflict_group_id, substr(content,1,60) AS preview FROM memory_conflicts WHERE is_conflict=1 ORDER BY id"
+        )
+    )
 
 
 async def run(apply: bool, limit: int = 0) -> int:
     from rag.conflict import ConflictResolver
     from shared.connection import connection_manager
-    from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
 
     cm = connection_manager
-    rows = await flagged(await cm.get(DB_NAME))
+    dispatch = get_write_dispatch(cm)
+    rows = await flagged(dispatch)
     if limit:
         rows = rows[:limit]
     print(f"base={DATA_DIR}  flagged={len(rows)}  mode={'APPLY' if apply else 'dry-run'}")
 
     resolver = ConflictResolver(cm=cm)
     ok = fail = 0
-    for rid, gid, preview in rows:
+    for row in rows:
+        rid, gid, preview = row["id"], row["conflict_group_id"], row["preview"]
         if not gid:
             print(f"  SKIP id={rid}: no conflict_group_id")
             fail += 1
@@ -64,7 +73,7 @@ async def run(apply: bool, limit: int = 0) -> int:
             fail += 1
             print(f"  ERR  id={rid}: {type(e).__name__}: {e}")
 
-    left = len(await flagged(await cm.get(DB_NAME)))
+    left = len(await flagged(dispatch))
     print(f"done: resolved={ok} failed={fail}  flagged_before={len(rows)} flagged_after={left}")
     if apply and not limit:
         assert left == len(rows) - ok, f"flag count mismatch: {left} != {len(rows) - ok}"

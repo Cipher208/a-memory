@@ -32,12 +32,13 @@ BATCH_SIZE = 100
 async def backfill_memory_kind(cm: Any, *, dry_run: bool = True, batch_size: int = BATCH_SIZE, limit: int | None = None) -> int:
     """NULL memory_kind → kind_for_text(content). Возвращает количество затронутых строк (уже тегированные не трогает)."""
     from shared.memory_types import kind_for_text
+    from shared.write_dispatch import get_write_dispatch
 
-    conn = await cm.get(DB_NAME)
-    cur = await conn.execute(
+    dispatch = get_write_dispatch(cm)
+    rows = await dispatch.query(
+        DB_NAME,
         "SELECT id, content FROM rag_chunks WHERE memory_kind IS NULL ORDER BY id" + (f" LIMIT {int(limit)}" if limit is not None else ""),
     )
-    rows = await cur.fetchall()
 
     if dry_run:
         logger.info("backfill dry-run: %d rag_chunks без memory_kind", len(rows))
@@ -46,8 +47,8 @@ async def backfill_memory_kind(cm: Any, *, dry_run: bool = True, batch_size: int
     updated = 0
     for start in range(0, len(rows), batch_size):
         batch = [(kind_for_text(str(r["content"])).value, int(r["id"])) for r in rows[start : start + batch_size]]
-        await conn.executemany("UPDATE rag_chunks SET memory_kind = ? WHERE id = ? AND memory_kind IS NULL", batch)
-        await conn.commit()
+        # One transaction per batch: an interrupted run leaves whole batches done.
+        await dispatch.write_many(DB_NAME, [("UPDATE rag_chunks SET memory_kind = ? WHERE id = ? AND memory_kind IS NULL", row) for row in batch])
         updated += len(batch)
         logger.info("backfill batch: %d/%d", min(start + batch_size, len(rows)), len(rows))
     return updated
