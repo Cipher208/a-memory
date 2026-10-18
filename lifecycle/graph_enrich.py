@@ -248,7 +248,7 @@ async def _dream(conn: Any, layer: str) -> dict[str, int]:
     nrem = await _dream_nrem(conn, time.time())
     rem = await _dream_rem(conn, layer, time.time())
     insights = await _dream_insight(conn, layer)
-    await conn.commit()
+    # The caller owns the transaction and commits it.
     return {"nrem_decayed": nrem["decayed"] + nrem["boosted"], "nrem_pruned": nrem["pruned"], "rem_bridged": rem, "insights": insights}
 
 
@@ -422,6 +422,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     dream: dict[str, int] = {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0}
     with contextlib.suppress(Exception), _timed_phase(layer, "dream"):
         dream = await _dream(conn, layer)
+        await conn.commit()
 
     # C8 segment-consolidation: Lychee boundary map of the daily L0 (report).
     segment_map: dict[str, Any] = {}

@@ -122,7 +122,7 @@ async def validate_edges(conn: Any, now: float | None = None) -> int:
         " WHERE status!='expired' AND ((valid_from IS NOT NULL AND valid_from > ?) OR (valid_to IS NOT NULL AND valid_to < ?))",
         (ts, ts),
     )
-    await conn.commit()
+    # The caller owns the transaction and commits it.
     return int(cur.rowcount or 0)
 
 
