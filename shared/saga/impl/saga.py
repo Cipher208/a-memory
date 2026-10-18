@@ -170,32 +170,28 @@ class Saga:
 
     async def _is_already_completed(self, key: str) -> bool:
         """Check idempotency log for completed step."""
-        from shared.connection import connection_manager
+        from shared.write_dispatch import get_write_dispatch
 
-        conn = await connection_manager.get("memory.db")
         try:
-            row = await (
-                await conn.execute(
-                    "SELECT 1 FROM saga_step_log WHERE saga_id=? AND params_hash=? LIMIT 1",
-                    (self._saga_id, key),
-                )
-            ).fetchone()
+            row = await get_write_dispatch().select_one(
+                "memory.db",
+                "SELECT 1 FROM saga_step_log WHERE saga_id=? AND params_hash=? LIMIT 1",
+                (self._saga_id, key),
+            )
             return row is not None
         except Exception:
             return False
 
     async def _get_cached_result(self, key: str) -> dict[str, Any] | None:
         """Get cached result from idempotency log."""
-        from shared.connection import connection_manager
+        from shared.write_dispatch import get_write_dispatch
 
-        conn = await connection_manager.get("memory.db")
         try:
-            row = await (
-                await conn.execute(
-                    "SELECT result_json FROM saga_step_log WHERE saga_id=? AND params_hash=?",
-                    (self._saga_id, key),
-                )
-            ).fetchone()
+            row = await get_write_dispatch().select_one(
+                "memory.db",
+                "SELECT result_json FROM saga_step_log WHERE saga_id=? AND params_hash=?",
+                (self._saga_id, key),
+            )
             if row is None:
                 return None
             result_blob = row["result_json"]
@@ -210,9 +206,8 @@ class Saga:
 
     async def _record_completed(self, key: str, step_name: str, result: dict[str, Any]) -> None:
         """Record completed step in idempotency log."""
-        from shared.connection import connection_manager
+        from shared.write_dispatch import get_write_dispatch
 
-        conn = await connection_manager.get("memory.db")
         try:
             if storage._HAS_ENCRYPTION:
                 from shared.master_key import encrypt_json
@@ -220,13 +215,13 @@ class Saga:
                 encrypted = encrypt_json(result)
             else:
                 encrypted = json.dumps(result).encode()
-            await conn.execute(
+            await get_write_dispatch().write(
+                "memory.db",
                 """INSERT INTO saga_step_log (saga_id, step_name, params_hash, result_json, completed_at)
                    VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(saga_id, step_name, params_hash) DO NOTHING""",
                 (self._saga_id, step_name, key, encrypted, time.time()),
             )
-            await conn.commit()
         except Exception as e:
             logger.warning(f"Failed to record idempotency log: {e}")
 

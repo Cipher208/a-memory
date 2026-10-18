@@ -92,6 +92,9 @@ async def test_resolve_graph_episode_l0(db) -> None:
         (time.time(),),
     )
     ep_id = int(cur.lastrowid)
+    # The row must be durable before another connection can resolve it: reads now
+    # run on the write dispatcher, not on this test's handle.
+    await conn.commit()
     hit = await resolve_uri(db, "user", "ru", f"ariel://user/episode/{ep_id}")
     assert hit and "деплой" in hit["summary"]
 

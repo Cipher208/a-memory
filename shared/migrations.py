@@ -14,6 +14,7 @@ from alembic.script import ScriptDirectory
 
 import alembic.command as alembic_command
 from shared.connection import AsyncConnectionManager, connection_manager
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,9 @@ class MigrationManager:
         return cfg
 
     async def get_current_version(self) -> str | None:
-        conn = await self._cm.get(DB_NAME)
         try:
-            row = await (await conn.execute("SELECT version_num FROM alembic_version")).fetchone()
-            return row["version_num"] if row else None
+            row = await get_write_dispatch(self._cm).select_one(DB_NAME, "SELECT version_num FROM alembic_version")
+            return str(row["version_num"]) if row else None
         except Exception:
             return None
 

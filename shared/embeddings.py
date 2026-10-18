@@ -15,6 +15,7 @@ from typing import Any
 from shared.circuit_breaker import breaker_registry
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 # E2: 3 consecutive model.encode failures → open 30s → hash-fallback service.
 # Created through the registry factory (E2-audit fix): direct construction
@@ -195,6 +196,10 @@ class EmbeddingCache:
         self._dimension = 384
         self._ready = False
 
+    @property
+    def _dispatch(self) -> WriteDispatch:
+        return get_write_dispatch(self._cm)
+
     def _cache_model_tag(self, model: Any) -> str:
         """Cache rows are keyed by the BACKEND that produced them.
 
@@ -215,7 +220,7 @@ class EmbeddingCache:
         self._ready = True
 
     async def _init_db(self) -> None:
-        await self._cm.execute_script(
+        await self._dispatch.execute_script(
             DB_NAME,
             """
             CREATE TABLE IF NOT EXISTS embedding_cache (
@@ -238,14 +243,13 @@ class EmbeddingCache:
     async def _get_cached(self, text: str, cache_tag: str) -> list[float] | None:
         await self.ensure()
         text_hash = self._hash_text(text)
-        conn = await self._cm.get(DB_NAME)
-        cursor = await conn.execute(
+        blob = await self._dispatch.scalar(
+            DB_NAME,
             "SELECT embedding FROM embedding_cache WHERE text_hash=? AND model_name=?",
             (text_hash, cache_tag),
         )
-        row = await cursor.fetchone()
-        if row:
-            return _decode_blob(row[0])
+        if blob is not None:
+            return _decode_blob(blob)
         return None
 
     async def _cache_many(self, items: list[tuple[str, list[float]]], cache_tag: str) -> None:
@@ -265,7 +269,6 @@ class EmbeddingCache:
             return
         await self.ensure()
         int8 = _int8_enabled()
-        conn = await self._cm.get(DB_NAME)
         for start in range(0, len(items), _CACHE_LOOKUP_CHUNK):
             batch = items[start : start + _CACHE_LOOKUP_CHUNK]
             rows = [
@@ -276,11 +279,10 @@ class EmbeddingCache:
                 )
                 for text, emb in batch
             ]
-            await conn.executemany(
-                "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",
-                rows,
+            await self._dispatch.write_many(
+                DB_NAME,
+                [("INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)", row) for row in rows],
             )
-            await conn.commit()
 
     async def _cache(self, text: str, embedding: list[float], cache_tag: str) -> None:
         await self._cache_many([(text, embedding)], cache_tag)
@@ -317,20 +319,18 @@ class EmbeddingCache:
 
         await self.ensure()
         hashes = [self._hash_text(t) for t in texts]
-        conn = await self._cm.get(DB_NAME)
         by_hash: dict[str, list[float]] = {}
         for chunk in _chunked(list(dict.fromkeys(hashes)), _CACHE_LOOKUP_CHUNK):
             placeholders = ",".join("?" * len(chunk))
-            rows = await (
-                await conn.execute(
-                    f"SELECT text_hash, embedding FROM embedding_cache WHERE model_name=? AND text_hash IN ({placeholders})",
-                    (cache_tag, *chunk),
-                )
-            ).fetchall()
+            rows = await self._dispatch.query(
+                DB_NAME,
+                f"SELECT text_hash, embedding FROM embedding_cache WHERE model_name=? AND text_hash IN ({placeholders})",
+                (cache_tag, *chunk),
+            )
             for row in rows:
-                decoded = _decode_blob(row[1])
+                decoded = _decode_blob(row["embedding"])
                 if decoded is not None:
-                    by_hash[str(row[0])] = decoded
+                    by_hash[str(row["text_hash"])] = decoded
 
         for i, (text, text_hash) in enumerate(zip(texts, hashes, strict=True)):
             hit = by_hash.get(text_hash)
@@ -441,9 +441,8 @@ class EmbeddingCache:
 
     async def count(self) -> int:
         await self.ensure()
-        conn = await self._cm.get(DB_NAME)
-        row = await (await conn.execute("SELECT COUNT(*) FROM embedding_cache")).fetchone()
-        return int(row[0]) if row else 0
+        total = await self._dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM embedding_cache")
+        return int(total) if total is not None else 0
 
 
 async def embed_text(text: str, *, prefix: str = "") -> list[float]:
