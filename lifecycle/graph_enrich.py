@@ -5,6 +5,15 @@ dumps out of epi_nodes — each is first captured to the append-only l0_journal
 (event='graph_cleanup') so nothing is lost, then deleted with its edges/tags.
 Miners (Tasks 2-5) plug into MINERS from lifecycle.graph_miners; stubs
 contribute no edges yet.
+
+Every read and every write of this module goes through the write dispatch
+(`shared/write_dispatch.py`), the process's only owner of transactions. The
+shared handle (`connection_manager.get(DB_NAME)`) is ONE connection for the
+whole process: a phase that read on it could pin a read snapshot there (the
+next write on that handle then fails with BUSY_SNAPSHOT 517), and the two
+`await conn.commit()` calls this module used to make published whatever a
+handler had left uncommitted on that handle — the failure class #130 rolled
+back for the importance sweep.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from lifecycle.graph_sanitation import HUB_EXCLUSION_PARAMS, hub_exclusion_clause
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -66,12 +76,43 @@ REM_WEIGHT_SCALE = 0.3  # bridge weight = sim × 0.3
 INSIGHT_MAX = 10  # abstractions per sleep
 
 
-async def _rows(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> list[Any]:
-    rows: list[Any] = await (await conn.execute(sql, params)).fetchall()
-    return rows
+#: Rows per write transaction in the writing phases of this module.
+#:
+#: One transaction for a whole phase held the dispatch's process-wide write
+#: lock for the whole pass — measured 15649 ms for the dream phase — and every
+#: tool write queued behind it. Each phase therefore commits in batches, so the
+#: lock is released between them; the same rule `lifecycle/forgetting.py` follows
+#: for its decay.
+_DREAM_CHUNK = 200
 
 
-async def _dream_nrem(conn: Any, now: float) -> dict[str, int]:
+async def _apply_ops(dispatch: WriteDispatch, ops: list[tuple[str, tuple[Any, ...]]]) -> None:
+    """Apply one batch of writes in a single dispatch transaction.
+
+    The dispatch owns the transaction: it commits when the body returns and
+    rolls it back if the body raises. Nothing here touches the shared
+    connection, so a handler's uncommitted row can neither be published by this
+    pass nor discarded by it.
+    """
+
+    async def _run(conn: Any) -> None:
+        for sql, params in ops:
+            await conn.execute(sql, params)
+
+    await dispatch.atomic(DB_NAME, _run)
+
+
+async def _apply_ops_in_chunks(dispatch: WriteDispatch, ops: list[tuple[str, tuple[Any, ...]]]) -> None:
+    """Apply the writes in batches, committing between them.
+
+    A single transaction for the whole list would hold the dispatch's write lock
+    for the whole phase and stall every other writer in the process behind it.
+    """
+    for start in range(0, len(ops), _DREAM_CHUNK):
+        await _apply_ops(dispatch, ops[start : start + _DREAM_CHUNK])
+
+
+async def _dream_nrem(dispatch: WriteDispatch, now: float) -> dict[str, int]:
     """Run the NREM spreading activation pass.
 
     Freshly co-fired heuristic edges +0.05, stale inactive ones −0.01;
@@ -88,16 +129,20 @@ async def _dream_nrem(conn: Any, now: float) -> dict[str, int]:
     A row with a NULL `created_at` is now skipped rather than raising
     `float(None)`; no house database has one, and "unknown age" is not a reason
     to decay, boost, or prune an edge.
+
+    The writes are applied in batches: one transaction for the whole pass would
+    hold the dispatch's write lock for its whole duration.
     """
     stale_before = now - NREM_STALE_DAYS * 86400.0
     fresh_from = now - NREM_FRESH_DAYS * 86400.0
     decayed = pruned = boosted = 0
-    rows = await _rows(
-        conn,
+    rows = await dispatch.query(
+        DB_NAME,
         "SELECT source_id, target_id, relation, weight, created_at FROM epi_edges"
         " WHERE tags LIKE '%heuristic:%' AND (created_at < ? OR created_at >= ?)",
         (stale_before, fresh_from),
     )
+    ops: list[tuple[str, tuple[Any, ...]]] = []
     for r in rows:
         w = float(r["weight"])
         age_days = (now - float(r["created_at"])) / 86400.0
@@ -105,18 +150,19 @@ async def _dream_nrem(conn: Any, now: float) -> dict[str, int]:
         if age_days > NREM_STALE_DAYS:
             w2 = w - NREM_DECAY
             if w2 < NREM_FLOOR:
-                await conn.execute("DELETE FROM epi_edges WHERE source_id=? AND target_id=? AND relation=?", key)
+                ops.append(("DELETE FROM epi_edges WHERE source_id=? AND target_id=? AND relation=?", key))
                 pruned += 1
             else:
-                await conn.execute("UPDATE epi_edges SET weight=? WHERE source_id=? AND target_id=? AND relation=?", (w2, *key))
+                ops.append(("UPDATE epi_edges SET weight=? WHERE source_id=? AND target_id=? AND relation=?", (w2, *key)))
                 decayed += 1
         elif age_days <= NREM_FRESH_DAYS:
-            await conn.execute("UPDATE epi_edges SET weight=? WHERE source_id=? AND target_id=? AND relation=?", (w + NREM_BOOST, *key))
+            ops.append(("UPDATE epi_edges SET weight=? WHERE source_id=? AND target_id=? AND relation=?", (w + NREM_BOOST, *key)))
             boosted += 1
+    await _apply_ops_in_chunks(dispatch, ops)
     return {"decayed": decayed, "pruned": pruned, "boosted": boosted}
 
 
-async def _dream_rem(conn: Any, layer: str, now: float) -> int:
+async def _dream_rem(dispatch: WriteDispatch, layer: str, now: float) -> int:
     """Build REM bridges: isolated nodes to similar unlinked ones, weight = sim × 0.3.
 
     Similarity — token Jaccard (len ≥ 3, rag.edm.tokens): deterministic and
@@ -127,8 +173,8 @@ async def _dream_rem(conn: Any, layer: str, now: float) -> int:
 
     isolated = [
         (int(r["node_id"]), tokens(str(r["content"])))
-        for r in await _rows(
-            conn,
+        for r in await dispatch.query(
+            DB_NAME,
             "SELECT node_id, content FROM epi_nodes n WHERE n.layer=?"
             " AND NOT EXISTS (SELECT 1 FROM epi_edges e WHERE e.source_id=n.node_id OR e.target_id=n.node_id)"
             " AND " + hub_exclusion_clause("n"),
@@ -139,14 +185,15 @@ async def _dream_rem(conn: Any, layer: str, now: float) -> int:
         return 0
     others = [
         (int(r["node_id"]), tokens(str(r["content"])))
-        for r in await _rows(
-            conn,
+        for r in await dispatch.query(
+            DB_NAME,
             "SELECT node_id, content FROM epi_nodes n WHERE n.layer=? AND " + hub_exclusion_clause("n"),
             (layer, *HUB_EXCLUSION_PARAMS),
         )
     ]
     bridged = 0
     seen: set[tuple[int, int]] = set()
+    ops: list[tuple[str, tuple[Any, ...]]] = []
     for nid, nt in isolated:
         best_id, best_sim = 0, 0.0
         for oid, ot in others:
@@ -159,16 +206,44 @@ async def _dream_rem(conn: Any, layer: str, now: float) -> int:
         a, b = sorted((nid, best_id))
         if best_id and best_sim >= REM_SIM_THRESHOLD and (a, b) not in seen:
             seen.add((a, b))
-            await conn.execute(
-                "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
-                " VALUES (?, ?, 'dream_bridge', ?, ?, '[\"dream:rem\"]')",
-                (a, b, best_sim * REM_WEIGHT_SCALE, now),
+            ops.append(
+                (
+                    (
+                        "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
+                        " VALUES (?, ?, 'dream_bridge', ?, ?, '[\"dream:rem\"]')"
+                    ),
+                    (a, b, best_sim * REM_WEIGHT_SCALE, now),
+                )
             )
             bridged += 1
+    await _apply_ops_in_chunks(dispatch, ops)
     return bridged
 
 
-async def _dream_insight(conn: Any, layer: str) -> int:
+async def _insert_insight(dispatch: WriteDispatch, layer: str, summary: str, user_id: str, members: list[int]) -> None:
+    """Materialize one insight node and the edges to its members.
+
+    The node and its edges land in one transaction: an insight without its
+    `insight_of` edges is an abstraction nobody can walk back from.
+    """
+
+    async def _run(conn: Any) -> None:
+        cur = await conn.execute(
+            "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, 'insight', '[]', 0.6, ?)",
+            (layer, user_id, summary, time.time()),
+        )
+        insight_id = int(cur.lastrowid or 0)
+        for nid in members:
+            await conn.execute(
+                "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
+                " VALUES (?, ?, 'insight_of', 0.5, ?, '[\"dream:insight\"]')",
+                (insight_id, nid, time.time()),
+            )
+
+    await dispatch.atomic(DB_NAME, _run)
+
+
+async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
     """Build insight abstractions from BFS communities.
 
     Connected components become node_type='insight' nodes with a top-token
@@ -180,15 +255,15 @@ async def _dream_insight(conn: Any, layer: str) -> int:
 
     nodes = [
         (int(r["node_id"]), str(r["user_id"]), str(r["content"]))
-        for r in await _rows(
-            conn,
+        for r in await dispatch.query(
+            DB_NAME,
             "SELECT node_id, user_id, content FROM epi_nodes n WHERE n.layer=? AND " + hub_exclusion_clause("n") + " AND n.node_type != 'insight'",
             (layer, *HUB_EXCLUSION_PARAMS),
         )
     ]
     member_ids = {nid for nid, _, _ in nodes}
     adj: dict[int, set[int]] = {}
-    for r in await _rows(conn, "SELECT source_id, target_id FROM epi_edges"):
+    for r in await dispatch.query(DB_NAME, "SELECT source_id, target_id FROM epi_edges"):
         a, b = int(r["source_id"]), int(r["target_id"])
         if a in member_ids and b in member_ids:
             adj.setdefault(a, set()).add(b)
@@ -218,37 +293,29 @@ async def _dream_insight(conn: Any, layer: str) -> int:
             freq.update(tokens(contents[nid]))
         top = ", ".join(t for t, _ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:3])
         summary = f"insight ({len(members)} узлов): {top}"
-        dup = await (
-            await conn.execute("SELECT node_id FROM epi_nodes WHERE layer=? AND node_type='insight' AND content=? LIMIT 1", (layer, summary))
-        ).fetchone()
+        dup = await dispatch.select_one(
+            DB_NAME,
+            "SELECT node_id FROM epi_nodes WHERE layer=? AND node_type='insight' AND content=? LIMIT 1",
+            (layer, summary),
+        )
         if dup:
             continue
         user_id = next(u for nid, u, _ in nodes if nid == members[0])
-        cur = await conn.execute(
-            "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, 'insight', '[]', 0.6, ?)",
-            (layer, user_id, summary, time.time()),
-        )
-        insight_id = int(cur.lastrowid or 0)
-        for nid in members:
-            await conn.execute(
-                "INSERT OR IGNORE INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
-                " VALUES (?, ?, 'insight_of', 0.5, ?, '[\"dream:insight\"]')",
-                (insight_id, nid, time.time()),
-            )
+        await _insert_insight(dispatch, layer, summary, user_id, members)
         created += 1
     return created
 
 
-async def _dream(conn: Any, layer: str) -> dict[str, int]:
+async def _dream(dispatch: WriteDispatch, layer: str) -> dict[str, int]:
     """Run the three-phase sleep: NREM → REM → Insight.
 
     NREM — spreading activation, REM — bridges, Insight — materialized
     abstractions.
     """
-    nrem = await _dream_nrem(conn, time.time())
-    rem = await _dream_rem(conn, layer, time.time())
-    insights = await _dream_insight(conn, layer)
-    # The caller owns the transaction and commits it.
+    nrem = await _dream_nrem(dispatch, time.time())
+    rem = await _dream_rem(dispatch, layer, time.time())
+    insights = await _dream_insight(dispatch, layer)
+    # Each phase committed its own batches; no transaction is left open here.
     return {"nrem_decayed": nrem["decayed"] + nrem["boosted"], "nrem_pruned": nrem["pruned"], "rem_bridged": rem, "insights": insights}
 
 
@@ -256,7 +323,7 @@ async def _dream(conn: Any, layer: str) -> dict[str, int]:
 _ORPHAN_MIN_AGE_DAYS = 7
 
 
-async def _orphan_anchor_gc(conn: Any, layer: str) -> int:
+async def _orphan_anchor_gc(dispatch: WriteDispatch, layer: str) -> int:
     """Prune derived anchors 'episode:N' (fact/question) that are edge-less and older than 7d (S18 item 4).
 
     Miners create anchor nodes (provenance 'episode:N', zero-result question);
@@ -264,7 +331,8 @@ async def _orphan_anchor_gc(conn: Any, layer: str) -> int:
     edges — junk. Nodes with any edge survive; fresh ones (<7d) are untouched.
     """
     cutoff = time.time() - _ORPHAN_MIN_AGE_DAYS * 86400
-    cur = await conn.execute(
+    rows = await dispatch.query(
+        DB_NAME,
         "SELECT node_id FROM epi_nodes n"
         " WHERE n.layer=? AND n.node_type IN ('fact', 'question')"
         " AND n.content LIKE 'episode:%'"
@@ -272,7 +340,7 @@ async def _orphan_anchor_gc(conn: Any, layer: str) -> int:
         " AND NOT EXISTS (SELECT 1 FROM epi_edges e WHERE e.source_id = n.node_id OR e.target_id = n.node_id)",
         (layer, cutoff),
     )
-    ids = [int(r["node_id"]) for r in await cur.fetchall()]
+    ids = [int(r["node_id"]) for r in rows]
     if not ids:
         return 0
     from graph.epistemic import EpistemicGraph
@@ -287,16 +355,15 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     from shared.l0 import capture
 
     cm = connection_manager
-    conn = await cm.get(DB_NAME)
+    dispatch = get_write_dispatch(cm)
     with _timed_phase(layer, "junk_scan"):
-        junk = await (
-            await conn.execute(
-                f"SELECT node_id, user_id, content FROM epi_nodes"
-                f" WHERE layer=? AND node_type='fact'"
-                f" AND (content LIKE {' OR content LIKE '.join(['?'] * len(_JUNK_LIKE))})",
-                (layer, *_JUNK_LIKE),
-            )
-        ).fetchall()
+        junk = await dispatch.query(
+            DB_NAME,
+            f"SELECT node_id, user_id, content FROM epi_nodes"
+            f" WHERE layer=? AND node_type='fact'"
+            f" AND (content LIKE {' OR content LIKE '.join(['?'] * len(_JUNK_LIKE))})",
+            (layer, *_JUNK_LIKE),
+        )
 
     cleaned = 0
     ids: list[int] = []
@@ -346,7 +413,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     from lifecycle.graph_sanitation import validate_edges
 
     with _timed_phase(layer, "validate_edges"):
-        expired = await validate_edges(conn)
+        expired = await dispatch.atomic(DB_NAME, validate_edges)
 
     # G5 sanitation valence: fact nodes are classified by the valence of their edges
     # (classify_fact) → 'valence:<bucket>' tag ('primary' is not tagged — the default).
@@ -355,8 +422,8 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
         from lifecycle.graph_sanitation import classify_fact
 
         with _timed_phase(layer, "valence"):
-            rel_rows = await _rows(
-                conn,
+            rel_rows = await dispatch.query(
+                DB_NAME,
                 "SELECT e.source_id, e.target_id, e.relation FROM epi_edges e"
                 " JOIN epi_nodes n ON n.node_id = e.source_id OR n.node_id = e.target_id"
                 " WHERE n.layer=?",
@@ -366,14 +433,15 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
             for r in rel_rows:
                 node_rels.setdefault(int(r["source_id"]), []).append(str(r["relation"]))
                 node_rels.setdefault(int(r["target_id"]), []).append(str(r["relation"]))
+            ops: list[tuple[str, tuple[Any, ...]]] = []
             for nid, rels in node_rels.items():
                 bucket = classify_fact(rels)
                 if bucket == "primary":
                     continue
-                await conn.execute("DELETE FROM epi_tags WHERE node_id=? AND tag LIKE 'valence:%'", (nid,))
-                await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, ?)", (nid, f"valence:{bucket}"))
+                ops.append(("DELETE FROM epi_tags WHERE node_id=? AND tag LIKE 'valence:%'", (nid,)))
+                ops.append(("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, ?)", (nid, f"valence:{bucket}")))
                 valence_tagged += 1
-            await conn.commit()
+            await _apply_ops_in_chunks(dispatch, ops)
     except Exception as exc:
         logger.warning("valence tagging failed: %s", exc)
 
@@ -383,7 +451,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
         from lifecycle.graph_sanitation import centrality_candidates
 
         with _timed_phase(layer, "centrality"):
-            centrality_top = (await centrality_candidates(conn, layer))[:5]
+            centrality_top = (await dispatch.atomic(DB_NAME, lambda conn: centrality_candidates(conn, layer)))[:5]
     except Exception as exc:
         logger.warning("centrality top failed: %s", exc)
 
@@ -398,7 +466,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     # (anchors 'episode:N' tokenize identically → Jaccard 1.0 → a bridge),
     # so edge-less anchors must be removed before the sleep phase.
     with _timed_phase(layer, "orphan_gc"):
-        orphaned = await _orphan_anchor_gc(conn, layer)
+        orphaned = await _orphan_anchor_gc(dispatch, layer)
 
     # S18 item 9 gap-registry: question episodes + zero-result tails (best-effort).
     gap_written = 0
@@ -421,8 +489,9 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     # C6: three-phase dream — NREM decay/prune → REM bridge → Insight abstracts.
     dream: dict[str, int] = {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0}
     with contextlib.suppress(Exception), _timed_phase(layer, "dream"):
-        dream = await _dream(conn, layer)
-        await conn.commit()
+        # Every phase committed its own batches; there is nothing left to commit
+        # here, and a commit here would publish a handler's pending work.
+        dream = await _dream(dispatch, layer)
 
     # C8 segment-consolidation: Lychee boundary map of the daily L0 (report).
     segment_map: dict[str, Any] = {}
