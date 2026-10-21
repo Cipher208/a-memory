@@ -125,6 +125,42 @@ async def run_startup_gated(
         maintenance_lock.release(holder)
 
 
+# How often a follower re-attempts leadership (spec S4). Bounded failover:
+# when a leader's process dies its flock dies with it, so the first retry
+# after that moment wins — worst case one cadence of no housekeeping.
+PROMOTION_RETRY_S: float = 60.0
+
+
+async def leadership_loop(
+    claim: Callable[[], int | None],
+    on_claim: Callable[[int], None],
+    on_promote: Callable[[], None],
+    stop: asyncio.Event,
+    *,
+    retry_s: float = PROMOTION_RETRY_S,
+) -> None:
+    """Become the leader and stay one until `stop` (spec S4).
+
+    A lost claim is the normal state of a follower, not an error: retry at a
+    slow cadence instead of spinning. The fd is handed to `on_claim` before
+    `on_promote` so the caller can always release what leadership holds — the
+    loop itself never releases, because cancellation between claim and wait
+    must not race two releasers (lifespan's `finally` owns the fd).
+    """
+    while not stop.is_set():
+        fd = claim()
+        if fd is None:
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=retry_s)
+            except TimeoutError:
+                continue
+            return
+        on_claim(fd)
+        on_promote()
+        await stop.wait()
+        return
+
+
 @asynccontextmanager
 async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
     from shared.migrations import migration_manager
