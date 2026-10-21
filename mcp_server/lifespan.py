@@ -1,7 +1,8 @@
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from typing import Any
 from mcp.server.mcpserver import MCPServer
 from config import config
@@ -72,6 +73,50 @@ async def _storage_pass() -> None:
     # Logged in the same pass the failures come from, so the next storm has a reading
     # taken moments before it rather than after the fact.
     await _connection_health()
+
+
+# How long startup waits its turn on the maintenance turnstile before running
+# migrations ungated (spec S3). Bounded: the normal wait is milliseconds —
+# only a genuinely long migration makes a follower wait at all.
+MIGRATION_GATE_TIMEOUT_S = 120.0
+
+
+async def run_startup_gated(
+    migrate: Callable[[], Awaitable[Any]],
+    sync: Callable[[], None],
+    *,
+    base_dir: str | Path | None = None,
+    gate_timeout: float = MIGRATION_GATE_TIMEOUT_S,
+) -> None:
+    """Run migrations and the replica sync under the maintenance turnstile.
+
+    Every instance passes through here before serving, so exactly one migration
+    writer goes at a time and the rest wait for their turn instead of failing
+    the client's connect with `CancelledError` (spec S1/S3 — the 07:02/08:02
+    shape). `migrate()` is idempotent at head (see
+    `tests/test_shared/test_migrate_skips_when_at_head.py`), so a follower that
+    gets the turn right after the leader observes a no-op.
+
+    On timeout the gate is abandoned and both writes run ungated: better a
+    noisy success than a server that never comes up. Leadership (who runs the
+    background set) is decided separately, in `lifespan()` — followers must
+    pass this gate too, they serve tools against the same schema.
+    """
+    from shared import maintenance_lock
+
+    log = logging.getLogger(__name__)
+    holder = maintenance_lock.acquire(base_dir, timeout=gate_timeout)
+    if holder is None:
+        log.warning(
+            "migration gate timed out after %.1fs; running migrations ungated",
+            gate_timeout,
+        )
+    try:
+        result = await migrate()
+        log.info("Migrations: %s", result)
+        await asyncio.to_thread(sync)
+    finally:
+        maintenance_lock.release(holder)
 
 
 @asynccontextmanager
