@@ -319,6 +319,11 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
 
         async def _delayed_start() -> None:
             await asyncio.sleep(BACKGROUND_DELAY_S)
+            # This orphan task is not stored in _LeaderState: if lifespan exits
+            # while we sleep, stop is already set and starting the background
+            # set would race (and outlive) shutdown — return instead.
+            if stop.is_set():
+                return
             backup_cron.capture_main_loop()
             backup_cron.start()
             importance_scheduler.start()

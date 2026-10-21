@@ -78,9 +78,31 @@ async def test_follower_promotes_when_the_leader_leaves(wired) -> None:
     backup, _scheduler = wired
     held = leader_lock.claim()
     assert held is not None
+    try:
+        async with lifespan(None):
+            await asyncio.sleep(0.1)
+            assert not backup.started
+            leader_lock.release(held)  # stand in for the old leader's process dying
+            await asyncio.sleep(0.2)  # 0.05 retry + 0.01 start delay
+            assert backup.started, "a follower must promote and take over the background set"
+    finally:
+        # Failure before the mid-context release must not leak the session lock
+        # (release is a safe no-op on an already-closed fd).
+        leader_lock.release(held)
+
+
+async def test_shutdown_during_the_delay_never_starts_backup(wired) -> None:
+    backup, _scheduler = wired
+    # One loop cycle inside the context: the leadership task runs, this
+    # instance promotes, and _delayed_start begins its BACKGROUND_DELAY_S
+    # sleep. Exiting now lands squarely inside the delay window.
     async with lifespan(None):
-        await asyncio.sleep(0.1)
-        assert not backup.started
-        leader_lock.release(held)  # stand in for the old leader's process dying
-        await asyncio.sleep(0.2)  # 0.05 retry + 0.01 start delay
-        assert backup.started, "a follower must promote and take over the background set"
+        await asyncio.sleep(0)
+    # state.started was True, so the finally legitimately called stop() —
+    # that is NOT the race. The race is capture/start firing after shutdown.
+    assert backup.stopped, "precondition: promotion happened, shutdown stopped the set"
+    # Cycle well past the compressed delay (0.01s) so the orphan, if
+    # unchecked, would have fired by now.
+    await asyncio.sleep(0.1)
+    assert not backup.captured, "capture_main_loop must not run after shutdown"
+    assert not backup.started, "backup_cron must not start after shutdown"
