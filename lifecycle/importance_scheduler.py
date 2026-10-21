@@ -51,6 +51,13 @@ _MAX_USER_RETRIES = 2
 # has done so before the next attempt re-enters the busy wait.
 _RETRY_BACKOFF_S = 0.1
 
+# How many busy timeouts one pass may spend in total, across all its users. Two:
+# one to find out that the lock is gone, one to try again without it. The pass-wide
+# bound is what keeps the sweep's hold on the base's maintenance lock bounded - that
+# lock is what excludes the 15-minute cleanup and the nightly pass, and a per-user
+# bound alone would let a base with N blocked users hold it for N x 3 x 15 s.
+_PASS_RETRY_BUDGET_TIMEOUTS = 2
+
 # REVERTED — a retry around the write. It was added on the theory that a momentary BUSY
 # would clear if the statement were repeated. Measured since: when the connection holds a
 # stale read snapshot, SQLite answers BUSY in well under a millisecond and **never
@@ -73,6 +80,29 @@ class SchedulerConfig:
     delta_threshold: float = 0.15
     only_recent_days: int = 30
     enabled: bool = True
+
+
+@dataclass
+class _PassState:
+    """What one pass may still spend on writes that lose the write lock.
+
+    The per-user retry bound alone lets a base with N blocked users hold the
+    maintenance lock for N x 3 x busy timeouts, and that lock is what excludes the
+    15-minute cleanup and the nightly pass. This budget caps the WHOLE pass at two
+    busy timeouts, so the hold does not grow with the number of users.
+
+    The accounting is in time, not in failures: a write that lost the lock waited
+    out the busy timeout before giving up, and that wait is what the pass spends
+    under the lock. A stale snapshot (517) fails instantly, waits for nothing, and
+    therefore spends nothing here - what bounds such a user is the per-user retry
+    count instead.
+    """
+
+    limit_s: float
+    spent_s: float = 0.0
+    waits: int = 0
+    stopped: bool = False
+    stop_reason: str = ""
 
 
 class ImportanceScheduler:
@@ -168,6 +198,9 @@ class ImportanceScheduler:
     def _rescore_sync(self, db_path: Any) -> dict[str, int]:
         """Run the sweep itself, synchronously, through `to_thread`."""
         stats = {"rescored": 0, "skipped": 0, "errors": 0}
+        # The budget belongs to the pass, not to a user: the cost of a contended
+        # base must not grow with the number of users in it.
+        state = _PassState(limit_s=_PASS_RETRY_BUDGET_TIMEOUTS * _SWEEP_TIMEOUT_S)
 
         conn = self._open_sweep_connection(db_path)
         try:
@@ -183,9 +216,25 @@ class ImportanceScheduler:
                 ).fetchall()
             ]
 
+            attempted = 0
             for start in range(0, len(users), self.cfg.user_batch_size):
                 for uid in users[start : start + self.cfg.user_batch_size]:
-                    conn = self._rescore_one_user(uid, conn, stats, db_path)
+                    conn = self._rescore_one_user(uid, conn, stats, db_path, state)
+                    attempted += 1
+                    if state.stopped:
+                        break
+                if state.stopped:
+                    break
+
+            not_attempted = len(users) - attempted
+            if not_attempted:
+                # Said out loud: a pass that gave up half way through its users
+                # looks like a pass that had nothing to do.
+                logger.error(
+                    "importance sweep: %d user(s) not attempted this pass (%s)",
+                    not_attempted,
+                    state.stop_reason,
+                )
         finally:
             conn.close()
 
@@ -212,7 +261,7 @@ class ImportanceScheduler:
         conn.execute(f"PRAGMA busy_timeout={int(_SWEEP_TIMEOUT_S * 1000)}")
         return conn
 
-    def _rescore_one_user(self, user_id: str, conn: Any, stats: dict[str, int], db_path: Any) -> Any:
+    def _rescore_one_user(self, user_id: str, conn: Any, stats: dict[str, int], db_path: Any, state: _PassState) -> Any:
         """Rescore one user, reconnecting and retrying when the write lock is lost.
 
         The sweep writes on a connection of its own (#132) and therefore sits outside the
@@ -232,9 +281,19 @@ class ImportanceScheduler:
 
         Both are answered the same way: close the connection, open a fresh one, and try
         the same user again. A fresh connection holds no stale snapshot and re-enters
-        the busy wait from scratch. Bounded at two retries, so a writer that never
-        releases the lock cannot hold the pass open forever — the failure is then
-        counted once and logged with its SQLite error code and the attempt count.
+        the busy wait from scratch.
+
+        Two bounds keep that from becoming a stall. The per-user one (two retries, so
+        three attempts) stops a single user from being retried forever. The pass-wide
+        one (see `_PassState`) stops the retries of one user from multiplying by the
+        number of users in the base; when it runs out, this user is counted as an
+        error, the pass stops, and the log says which of the two bounds it was.
+
+        The counters describe committed work: an attempt that is rolled back
+        contributes nothing to them, on every failure path, not only on the retried
+        ones. The parent implementation kept the partial counts of a failed attempt;
+        here they are restored, because the retry below would otherwise count the
+        same rows twice.
 
         Returns the connection the next user must run on: a retry replaces it.
         """
@@ -244,19 +303,32 @@ class ImportanceScheduler:
             # The counters describe committed work. An attempt that is rolled back
             # contributes nothing, and the retry below would count its rows twice.
             before = dict(stats)
+            started = time.monotonic()
             try:
                 self._rescore_user(user_id, conn, stats)
                 conn.commit()
                 return conn
             except sqlite3.OperationalError as exc:
+                elapsed = time.monotonic() - started
                 code = getattr(exc, "sqlite_errorcode", None)
                 name = getattr(exc, "sqlite_errorname", None) or "SQLITE_UNKNOWN"
                 if code not in (_SQLITE_BUSY, _SQLITE_BUSY_SNAPSHOT):
-                    logger.exception("rescore for user=%s failed: sqlite error %s (%s)", user_id, code, name)
+                    logger.exception(
+                        "rescore for user=%s failed: sqlite error %s (%s)",
+                        user_id,
+                        self._error_code_text(code),
+                        name,
+                    )
                     self._restore_counters(stats, before)
                     stats["errors"] += 1
                     self._rollback(conn)
                     return conn
+                # A write that lost the lock waited out the busy timeout before giving
+                # up; that wait is what the pass spends under the maintenance lock, so
+                # it is what the pass-wide budget is measured in. A stale snapshot
+                # fails instantly and waits for nothing.
+                state.spent_s += _SWEEP_TIMEOUT_S if code == _SQLITE_BUSY else elapsed
+                state.waits += 1
                 if attempts > _MAX_USER_RETRIES:
                     logger.exception(
                         "rescore for user=%s failed after %d attempts: sqlite error %s (%s)",
@@ -269,6 +341,26 @@ class ImportanceScheduler:
                     stats["errors"] += 1
                     self._rollback(conn)
                     return conn
+                if state.spent_s >= state.limit_s:
+                    # The pass-wide budget is spent: the retries of one user must not
+                    # multiply by the number of users in the base, or the pass holds
+                    # the maintenance lock for N x 3 x busy timeouts.
+                    logger.exception(
+                        "rescore for user=%s failed: the pass-wide retry budget is spent "
+                        "after %d busy wait(s) (%.1f s of %.1f s): sqlite error %s (%s)",
+                        user_id,
+                        state.waits,
+                        state.spent_s,
+                        state.limit_s,
+                        code,
+                        name,
+                    )
+                    self._restore_counters(stats, before)
+                    stats["errors"] += 1
+                    self._rollback(conn)
+                    state.stopped = True
+                    state.stop_reason = "the pass-wide retry budget is spent"
+                    return conn
                 logger.warning(
                     "rescore for user=%s hit sqlite error %s (%s); reconnecting and retrying (attempt %d of %d)",
                     user_id,
@@ -278,7 +370,23 @@ class ImportanceScheduler:
                     _MAX_USER_RETRIES + 1,
                 )
                 self._restore_counters(stats, before)
-                conn = self._reconnect(conn, db_path)
+                try:
+                    conn = self._reconnect(conn, db_path)
+                except Exception as reconnect_exc:
+                    # The replacement could not be opened (no space, file gone,
+                    # permissions). That is this user's error and not the pass's: the
+                    # old connection is still open, the pass carries on, and the log
+                    # says why.
+                    reason = str(reconnect_exc)
+                    logger.exception(
+                        "rescore for user=%s failed: could not open a replacement connection: %s",
+                        user_id,
+                        reason,
+                    )
+                    self._restore_counters(stats, before)
+                    stats["errors"] += 1
+                    self._rollback(conn)
+                    return conn
                 time.sleep(_RETRY_BACKOFF_S)
             except Exception:
                 logger.exception("rescore for user=%s failed", user_id)
@@ -286,6 +394,16 @@ class ImportanceScheduler:
                 stats["errors"] += 1
                 self._rollback(conn)
                 return conn
+
+    @staticmethod
+    def _error_code_text(code: int | None) -> str:
+        """Render the SQLite error code for the log.
+
+        `unknown` when the exception carries none: SQLite sets `sqlite_errorcode` on
+        the errors it raises itself, and an exception built by hand has no such
+        attribute.
+        """
+        return "unknown" if code is None else str(code)
 
     @staticmethod
     def _restore_counters(stats: dict[str, int], before: dict[str, int]) -> None:
@@ -299,11 +417,15 @@ class ImportanceScheduler:
         Fresh is the point: a new connection carries no read snapshot, so it cannot
         fail with 517, and it enters the busy wait from scratch against the writer
         that is holding the lock.
+
+        The fresh connection is opened BEFORE the old one is closed, so a failure to
+        open it leaves the old connection open and usable.
         """
+        fresh = self._open_sweep_connection(db_path)
         self._rollback(conn)
         with contextlib.suppress(sqlite3.Error):
             conn.close()
-        return self._open_sweep_connection(db_path)
+        return fresh
 
     @staticmethod
     def _rollback(conn: Any) -> None:
