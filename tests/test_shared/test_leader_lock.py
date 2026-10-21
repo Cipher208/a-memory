@@ -12,7 +12,9 @@ def test_second_claim_gets_nothing(tmp_path) -> None:
     # exactly how a second process behaves (spec S2: no double leader).
     assert claim(tmp_path) is None, "a second claimer must not become leader"
     release(first)
-    assert claim(tmp_path) is not None, "leadership must be reclaimable after release"
+    last = claim(tmp_path)
+    assert last is not None, "leadership must be reclaimable after release"
+    release(last)
 
 
 def test_lock_file_has_the_contract_name(tmp_path) -> None:

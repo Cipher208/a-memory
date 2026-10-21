@@ -148,7 +148,11 @@ async def leadership_loop(
     must not race two releasers (lifespan's `finally` owns the fd).
     """
     while not stop.is_set():
-        fd = claim()
+        try:
+            fd = claim()
+        except OSError:
+            logging.getLogger(__name__).warning("leadership claim failed; retrying in %.0fs", retry_s, exc_info=True)
+            fd = None
         if fd is None:
             try:
                 await asyncio.wait_for(stop.wait(), timeout=retry_s)
