@@ -2,11 +2,13 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from mcp.server.mcpserver import MCPServer
 from config import config
 from mcp_server.context import AppContext
+from shared import leader_lock
 from shared.read_only import read_only_replica
 from features.backup_cron import backup_cron
 from lifecycle.importance_scheduler import importance_scheduler
@@ -130,6 +132,11 @@ async def run_startup_gated(
 # after that moment wins — worst case one cadence of no housekeeping.
 PROMOTION_RETRY_S: float = 60.0
 
+# How long the leader waits after claiming before starting the background set
+# (spec: value unchanged from the old _delayed_start — the server answers tool
+# calls first). Kept as a named constant so tests can compress it.
+BACKGROUND_DELAY_S = 5
+
 
 async def leadership_loop(
     claim: Callable[[], int | None],
@@ -165,25 +172,31 @@ async def leadership_loop(
         return
 
 
+@dataclass
+class _LeaderState:
+    """What leadership granted this instance, so shutdown can unwind it.
+
+    The loop claims and promotes (Tasks 2-3); `lifespan()`'s `finally` is the
+    single owner of release/stop, which keeps cancellation between claim and
+    promote from racing two releasers.
+    """
+
+    fd: int | None = None
+    periodic: asyncio.Task[None] | None = None
+    started: bool = False
+
+
 @asynccontextmanager
 async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
     from shared.migrations import migration_manager
 
-    result = await migration_manager.migrate()
-    logging.getLogger(__name__).info(f"Migrations: {result}")
-
-    await asyncio.to_thread(read_only_replica.sync)
+    # Spec S3: one migration writer per base; the rest wait, then observe the
+    # no-op. Runs for every instance, leader or follower.
+    await run_startup_gated(migration_manager.migrate, read_only_replica.sync, gate_timeout=MIGRATION_GATE_TIMEOUT_S)
 
     ctx = AppContext()
-
-    async def _delayed_start() -> None:
-        await asyncio.sleep(5)
-        backup_cron.capture_main_loop()
-        backup_cron.start()
-        importance_scheduler.start()
-        logging.getLogger(__name__).info("Background tasks started after delay")
-
-    asyncio.create_task(_delayed_start())
+    state = _LeaderState()
+    stop = asyncio.Event()
 
     async def _periodic_tasks() -> None:
         from lifecycle.consolidation import ConsolidationEngine
@@ -299,12 +312,52 @@ async def lifespan(server: MCPServer) -> AsyncGenerator[AppContext, None]:
                 # silently stop housekeeping for every other process.
                 maintenance_lock.release(holder)
 
-    periodic_task = asyncio.create_task(_periodic_tasks())
+    def _start_background() -> None:
+        if state.started:
+            return
+        state.started = True
+
+        async def _delayed_start() -> None:
+            await asyncio.sleep(BACKGROUND_DELAY_S)
+            backup_cron.capture_main_loop()
+            backup_cron.start()
+            importance_scheduler.start()
+            logging.getLogger(__name__).info("Background tasks started after delay")
+
+        asyncio.create_task(_delayed_start())
+        state.periodic = asyncio.create_task(_periodic_tasks())
+        logging.getLogger(__name__).info("Leader elected: background set started")
+
+    def _on_claim(fd: int) -> None:
+        state.fd = fd
+
+    # Spec S2/S4: claim leadership; a follower retries every PROMOTION_RETRY_S
+    # and promotes through the same _start_background path.
+    leadership_task = asyncio.create_task(
+        leadership_loop(
+            leader_lock.claim,
+            _on_claim,
+            _start_background,
+            stop,
+            retry_s=PROMOTION_RETRY_S,
+        )
+    )
     try:
         yield ctx
     finally:
-        periodic_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await periodic_task
-        importance_scheduler.stop()
-        backup_cron.stop()
+        stop.set()
+        leadership_task.cancel()
+        try:
+            await leadership_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logging.getLogger(__name__).exception("leadership task died before shutdown")
+        if state.periodic is not None:
+            state.periodic.cancel()
+            with suppress(asyncio.CancelledError):
+                await state.periodic
+        if state.started:
+            importance_scheduler.stop()
+            backup_cron.stop()
+        leader_lock.release(state.fd)
