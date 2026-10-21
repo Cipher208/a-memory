@@ -33,6 +33,24 @@ logger = logging.getLogger(__name__)
 # applied to a connection nobody else can queue behind.
 _SWEEP_TIMEOUT_S = 15.0
 
+# The SQLite error codes the sweep reacts to (`sqlite3.OperationalError.sqlite_errorcode`,
+# Python 3.11+):
+#   5   SQLITE_BUSY           - another connection holds the write lock. The wait was
+#                                the busy timeout, so the lock was held for at least that.
+#   517 SQLITE_BUSY_SNAPSHOT  - this connection's read snapshot went stale. It is
+#                                instant and never consults the busy timeout.
+_SQLITE_BUSY = 5
+_SQLITE_BUSY_SNAPSHOT = 517
+
+# How many times one user's rescore may be retried after a busy failure: two retries,
+# so three attempts in all. A competing writer that releases the lock is worth waiting
+# for; one that never releases it is not, and the pass must give up and say so.
+_MAX_USER_RETRIES = 2
+
+# Short pause between two attempts, so a writer that is about to let go of the lock
+# has done so before the next attempt re-enters the busy wait.
+_RETRY_BACKOFF_S = 0.1
+
 # REVERTED — a retry around the write. It was added on the theory that a momentary BUSY
 # would clear if the statement were repeated. Measured since: when the connection holds a
 # stale read snapshot, SQLite answers BUSY in well under a millisecond and **never
@@ -40,6 +58,12 @@ _SWEEP_TIMEOUT_S = 15.0
 # has to be abandoned, and on a shared connection abandoning it is not this pass's right.
 # All the retry did was turn one 15 s wait into four, holding the single aiosqlite worker
 # and stalling every tool handler for the duration.
+#
+# The retry that IS here is a different one: it repeats the statement on a FRESH
+# connection, and only for the sweep's own connection, which no handler is waiting on.
+# The REVERTED retry repeated it on the same connection, where a stale snapshot cannot
+# be shaken off — that is what the measurement above rules out, and it is not what the
+# retry below does.
 
 
 @dataclass
@@ -145,11 +169,8 @@ class ImportanceScheduler:
         """Run the sweep itself, synchronously, through `to_thread`."""
         stats = {"rescored": 0, "skipped": 0, "errors": 0}
 
-        conn = sqlite3.connect(str(db_path), timeout=_SWEEP_TIMEOUT_S)
+        conn = self._open_sweep_connection(db_path)
         try:
-            conn.row_factory = sqlite3.Row
-            conn.execute(f"PRAGMA busy_timeout={int(_SWEEP_TIMEOUT_S * 1000)}")
-
             # Materialised, not iterated: a cursor left mid-`fetchmany` keeps a read
             # statement in flight, and SQLite refuses to upgrade that snapshot to a write
             # once another connection has committed — BUSY in well under a millisecond,
@@ -164,14 +185,7 @@ class ImportanceScheduler:
 
             for start in range(0, len(users), self.cfg.user_batch_size):
                 for uid in users[start : start + self.cfg.user_batch_size]:
-                    try:
-                        self._rescore_user(uid, conn, stats)
-                        conn.commit()
-                    except Exception:
-                        logger.exception("rescore for user=%s failed", uid)
-                        stats["errors"] += 1
-                        with contextlib.suppress(sqlite3.Error):
-                            conn.rollback()
+                    conn = self._rescore_one_user(uid, conn, stats, db_path)
         finally:
             conn.close()
 
@@ -186,6 +200,116 @@ class ImportanceScheduler:
             len(users),
         )
         return stats
+
+    def _open_sweep_connection(self, db_path: Any) -> Any:
+        """Open the sweep's own connection to the base.
+
+        `busy_timeout` is this connection's alone — no handler queues behind it, so the
+        wait it imposes is the wait of the sweep and of nobody else.
+        """
+        conn = sqlite3.connect(str(db_path), timeout=_SWEEP_TIMEOUT_S)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={int(_SWEEP_TIMEOUT_S * 1000)}")
+        return conn
+
+    def _rescore_one_user(self, user_id: str, conn: Any, stats: dict[str, int], db_path: Any) -> Any:
+        """Rescore one user, reconnecting and retrying when the write lock is lost.
+
+        The sweep writes on a connection of its own (#132) and therefore sits outside the
+        process's single-writer discipline: any other writer on the same base — another
+        process, or a raw connection inside this one — can hold the write lock, and the
+        sweep's write then fails with `OperationalError: database is locked`. Measured on
+        the hermes base 21.10.2026: the whole pass was lost that way, twice in an hour
+        and 14 times over two days before, with one user in the base and half an hour
+        between passes.
+
+        Two error classes are worth another attempt, and they mean different things:
+
+        * 5 (`SQLITE_BUSY`) — another connection holds the write lock. The wait was the
+          busy timeout, so the lock was held for at least that long.
+        * 517 (`SQLITE_BUSY_SNAPSHOT`) — this connection's read snapshot went stale.
+          It is instant and never consults the busy timeout.
+
+        Both are answered the same way: close the connection, open a fresh one, and try
+        the same user again. A fresh connection holds no stale snapshot and re-enters
+        the busy wait from scratch. Bounded at two retries, so a writer that never
+        releases the lock cannot hold the pass open forever — the failure is then
+        counted once and logged with its SQLite error code and the attempt count.
+
+        Returns the connection the next user must run on: a retry replaces it.
+        """
+        attempts = 0
+        while True:
+            attempts += 1
+            # The counters describe committed work. An attempt that is rolled back
+            # contributes nothing, and the retry below would count its rows twice.
+            before = dict(stats)
+            try:
+                self._rescore_user(user_id, conn, stats)
+                conn.commit()
+                return conn
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                name = getattr(exc, "sqlite_errorname", None) or "SQLITE_UNKNOWN"
+                if code not in (_SQLITE_BUSY, _SQLITE_BUSY_SNAPSHOT):
+                    logger.exception("rescore for user=%s failed: sqlite error %s (%s)", user_id, code, name)
+                    self._restore_counters(stats, before)
+                    stats["errors"] += 1
+                    self._rollback(conn)
+                    return conn
+                if attempts > _MAX_USER_RETRIES:
+                    logger.exception(
+                        "rescore for user=%s failed after %d attempts: sqlite error %s (%s)",
+                        user_id,
+                        attempts,
+                        code,
+                        name,
+                    )
+                    self._restore_counters(stats, before)
+                    stats["errors"] += 1
+                    self._rollback(conn)
+                    return conn
+                logger.warning(
+                    "rescore for user=%s hit sqlite error %s (%s); reconnecting and retrying (attempt %d of %d)",
+                    user_id,
+                    code,
+                    name,
+                    attempts,
+                    _MAX_USER_RETRIES + 1,
+                )
+                self._restore_counters(stats, before)
+                conn = self._reconnect(conn, db_path)
+                time.sleep(_RETRY_BACKOFF_S)
+            except Exception:
+                logger.exception("rescore for user=%s failed", user_id)
+                self._restore_counters(stats, before)
+                stats["errors"] += 1
+                self._rollback(conn)
+                return conn
+
+    @staticmethod
+    def _restore_counters(stats: dict[str, int], before: dict[str, int]) -> None:
+        """Undo the counts of an attempt whose transaction was rolled back."""
+        stats.clear()
+        stats.update(before)
+
+    def _reconnect(self, conn: Any, db_path: Any) -> Any:
+        """Close the current connection and open a fresh one on the same base.
+
+        Fresh is the point: a new connection carries no read snapshot, so it cannot
+        fail with 517, and it enters the busy wait from scratch against the writer
+        that is holding the lock.
+        """
+        self._rollback(conn)
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
+        return self._open_sweep_connection(db_path)
+
+    @staticmethod
+    def _rollback(conn: Any) -> None:
+        """Undo the failed attempt's transaction, if the connection still has one."""
+        with contextlib.suppress(sqlite3.Error):
+            conn.rollback()
 
     def _rescore_user(self, user_id: str, conn: Any, stats: dict[str, int]) -> None:
         # Retrieval counts batched once per user instead of one COUNT query
