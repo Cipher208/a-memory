@@ -1200,7 +1200,7 @@ async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str, *, conn: A
     """
     from lifecycle.tool_stats import _SNIP, scan_tool_pairs, tool_query_text, tool_result_text
 
-    pairs, _ = await scan_tool_pairs(conn, 0.0, layer=layer)
+    pairs, _ = await scan_tool_pairs(get_write_dispatch(cm), 0.0, layer=layer)
     edges = 0
     for use, result in pairs:
         query = tool_query_text(use.get("input"))

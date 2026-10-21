@@ -15,6 +15,7 @@ from typing import Any
 
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
+from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 _SNIP = 200  # a graph node must not be a wall of text
 
@@ -56,7 +57,7 @@ def tool_query_text(tool_input: Any) -> str:
 
 
 async def scan_tool_pairs(
-    conn: Any,
+    dispatch: WriteDispatch,
     since_ts: float,
     layer: str | None = None,
 ) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], dict[str, int]]:
@@ -65,12 +66,17 @@ async def scan_tool_pairs(
     l0_journal rows with raw_type tool_use/tool_result and ts >= since_ts
     (layer — a filter, None = all), ordered by ts; uses without a result
     (dangling) do not form pairs. use_block carries _uid/_layer from the row.
+
+    The read goes through the write dispatch, not through the shared handle:
+    the dispatch opens, reads and closes the cursor inside one method body, so
+    no read snapshot is pinned on a connection the whole process shares (a
+    pinned snapshot turns the next write on that handle into BUSY_SNAPSHOT 517).
     """
     where, params = "raw_type IN ('tool_use','tool_result') AND ts >= ?", [since_ts]
     if layer is not None:
         where += " AND layer = ?"
         params.append(layer)  # type: ignore[arg-type]  # sqlite placeholders: float and str in one list
-    rows = await (await conn.execute(f"SELECT layer, user_id, text FROM l0_journal WHERE {where} ORDER BY ts", params)).fetchall()
+    rows = await dispatch.query(DB_NAME, f"SELECT layer, user_id, text FROM l0_journal WHERE {where} ORDER BY ts", tuple(params))
     uses: dict[str, dict[str, Any]] = {}
     pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
     calls: dict[str, int] = {}
@@ -91,8 +97,8 @@ async def scan_tool_pairs(
 
 async def tool_behavior_stats(*, days: int = 30) -> dict[str, dict[str, float]]:
     """Per-tool: calls, errors, error_rate, avg_result_len over the days window → JSON."""
-    conn = await connection_manager.get(DB_NAME)
-    pairs, calls = await scan_tool_pairs(conn, time.time() - days * 86400.0)
+    dispatch = get_write_dispatch(connection_manager)
+    pairs, calls = await scan_tool_pairs(dispatch, time.time() - days * 86400.0)
     stats: dict[str, dict[str, float]] = {
         name: {"calls": float(n), "errors": 0.0, "error_rate": 0.0, "avg_result_len": 0.0} for name, n in calls.items()
     }
