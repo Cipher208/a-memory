@@ -8,6 +8,8 @@ import logging
 import threading
 import time
 
+import pytest
+
 from mcp_server.lifespan import run_startup_gated
 
 
@@ -80,6 +82,23 @@ async def test_gate_releases_the_turnstile_for_the_next_process(tmp_path) -> Non
     )
     fd = acquire(tmp_path)
     assert fd is not None, "the gate must hand the turnstile back"
+    from shared.maintenance_lock import release
+
+    release(fd)
+
+
+async def test_gate_releases_even_when_migrate_raises(tmp_path) -> None:
+    # The finally-release is load-bearing: a leaked turnstile would silently
+    # stop housekeeping for every other process on this base.
+    async def migrate() -> str:
+        raise RuntimeError("migration blew up")
+
+    with pytest.raises(RuntimeError, match="blew up"):
+        await run_startup_gated(migrate, lambda: None, base_dir=tmp_path, gate_timeout=5.0)
+    from shared.maintenance_lock import acquire
+
+    fd = acquire(tmp_path)
+    assert fd is not None, "turnstile must come back even when migrations raise"
     from shared.maintenance_lock import release
 
     release(fd)

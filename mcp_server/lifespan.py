@@ -78,12 +78,12 @@ async def _storage_pass() -> None:
 # How long startup waits its turn on the maintenance turnstile before running
 # migrations ungated (spec S3). Bounded: the normal wait is milliseconds —
 # only a genuinely long migration makes a follower wait at all.
-MIGRATION_GATE_TIMEOUT_S = 120.0
+MIGRATION_GATE_TIMEOUT_S: float = 120.0
 
 
 async def run_startup_gated(
     migrate: Callable[[], Awaitable[Any]],
-    sync: Callable[[], None],
+    sync: Callable[[], Any],
     *,
     base_dir: str | Path | None = None,
     gate_timeout: float = MIGRATION_GATE_TIMEOUT_S,
@@ -105,7 +105,13 @@ async def run_startup_gated(
     from shared import maintenance_lock
 
     log = logging.getLogger(__name__)
-    holder = maintenance_lock.acquire(base_dir, timeout=gate_timeout)
+    # In a thread: acquire() polls with a synchronous time.sleep, and a
+    # follower may wait out a long migration — the event loop must keep
+    # servicing other tasks (and signal delivery) meanwhile. A cancellation
+    # landing while the thread still polls leaves the fd to this process;
+    # fcntl drops it with the process, which is what startup cancellation
+    # means at that point.
+    holder = await asyncio.to_thread(maintenance_lock.acquire, base_dir, gate_timeout)
     if holder is None:
         log.warning(
             "migration gate timed out after %.1fs; running migrations ungated",
