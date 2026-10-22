@@ -15,7 +15,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from shared.connection import AsyncConnectionManager
@@ -53,6 +53,86 @@ def _maintenance(miner: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitabl
             return await miner(cm, *args, conn=shared, borrowed=True, **kwargs)
         dispatch = get_write_dispatch(cm)
         return await dispatch.atomic(DB_NAME, lambda conn: miner(cm, *args, conn=conn, borrowed=False, **kwargs))
+
+    return wrapper
+
+
+class _ReadCursor:
+    """Awaitable fetchall over rows already read (the compute phase needs no live cursor)."""
+
+    __slots__ = ("_rows",)
+
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    async def fetchall(self) -> list[Any]:
+        return self._rows
+
+
+class _Reader:
+    """Read-only handle for the compute phase: `execute(sql, params)` → cursor.
+
+    Deliberately exposes NO commit, NO in_transaction and no DML: a write
+    attempt inside compute fails loudly instead of silently opening a
+    transaction the two-phase contract does not allow.
+    """
+
+    __slots__ = ("_run",)
+
+    def __init__(self, run: Callable[..., Awaitable[Any]]) -> None:
+        self._run = run
+
+    async def execute(self, sql: str, params: Sequence[Any] = ()) -> _ReadCursor:
+        rows = await self._run(sql, params)
+        return _ReadCursor(list(rows))
+
+
+async def _rows_via(conn: Any, sql: str, params: Sequence[Any]) -> list[Any]:
+    """Query-form rows through an existing connection (borrowed/inline path)."""
+    rows = await (await conn.execute(sql, params)).fetchall()
+    return list(rows)
+
+
+def _noop(result: Any) -> Callable[[Any], Awaitable[Any]]:
+    """Return the apply call of a compute phase that decided it has nothing to write."""
+
+    async def apply(_conn: Any) -> Any:
+        return result
+
+    return apply
+
+
+def _maintenance_split(
+    compute: Callable[..., Awaitable[Callable[[Any], Awaitable[Any]]]],
+) -> Callable[..., Awaitable[Any]]:
+    """Run a miner in two phases: compute outside any transaction, apply inside one.
+
+    22.10, live attribution: `@_maintenance` put the WHOLE body — reads, CPU,
+    network — inside one transaction, so the write lock was held for the whole
+    body: on the live house `wire_new_node` held it 2.217 s (`slow write:
+    phase=lifecycle.graph_miners:wrapper:55`). A read-then-write body still
+    needs ONE transaction, so the boundary does not disappear — it moves: the
+    body reads and computes with NO transaction open (no lock held), returns
+    the apply call, and the wrapper runs that apply in one short dispatch
+    transaction.
+
+    Contract: compute must not write and must not commit; apply must not
+    commit — the wrapper owns the single transaction. A caller that already
+    holds a transaction on the shared connection keeps it: compute reads on
+    that same connection (so it sees the caller's uncommitted rows) and apply
+    runs inline, with no second transaction that would wait out the busy
+    timeout.
+    """
+
+    @functools.wraps(compute)
+    async def wrapper(cm: AsyncConnectionManager, *args: Any, **kwargs: Any) -> Any:
+        shared = await cm.get(DB_NAME)
+        if shared.in_transaction:
+            apply = await compute(cm, *args, read=_Reader(functools.partial(_rows_via, shared)), **kwargs)
+            return await apply(shared)
+        dispatch = get_write_dispatch(cm)
+        apply = await compute(cm, *args, read=_Reader(functools.partial(dispatch.query, DB_NAME)), **kwargs)
+        return await dispatch.atomic(DB_NAME, apply)
 
     return wrapper
 
@@ -215,17 +295,20 @@ async def miner_tags(cm: AsyncConnectionManager, layer: str, *, conn: Any = None
     return {"edges": edges}
 
 
-@_maintenance
-async def miner_tokens(cm: AsyncConnectionManager, layer: str, *, conn: Any = None, borrowed: bool = False) -> dict[str, int]:
+@_maintenance_split
+async def miner_tokens(cm: AsyncConnectionManager, layer: str, *, read: Any) -> Callable[[Any], Awaitable[dict[str, int]]]:
     """#2: >=2 shared rare tokens and Jaccard >= threshold → `topic_overlap`, weight = Jaccard.
 
     Threshold = max(0.3, mad_threshold(jaccards)) — the MAD threshold (G2
     sanitation) raises the cutoff only when the distribution is genuinely
     shifted upward; the 0.3 floor preserves historical behavior on sparse layers.
+
+    Two phases: read the nodes and score the pairs outside any transaction
+    (`read`), write the accepted edges in the wrapper's one short transaction.
     """
     from lifecycle.graph_sanitation import mad_threshold
 
-    nodes = await (await conn.execute("SELECT node_id, content FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
+    nodes = await (await read.execute("SELECT node_id, content FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
     syn: dict[str, list[str]] | None = None
     toks: dict[int, set[str]] = {}
     for r in nodes:
@@ -246,25 +329,33 @@ async def miner_tokens(cm: AsyncConnectionManager, layer: str, *, conn: Any = No
             if len(shared) >= 2:
                 cands.append((a, b, jaccard))
     tau = max(0.3, mad_threshold([c[2] for c in cands])) if cands else 0.3
-    edges = 0
-    dirty: set[int] = set()
-    for a, b, jaccard in cands:
-        if jaccard >= tau:
+    wanted = [(a, b, jaccard) for a, b, jaccard in cands if jaccard >= tau]
+
+    async def apply(conn: Any) -> dict[str, int]:
+        edges = 0
+        dirty: set[int] = set()
+        for a, b, jaccard in wanted:
             edges += await _insert_edge(conn, a, b, "topic_overlap", jaccard, "tokens", dirty)
-    await _inhibit_dirty(conn, dirty)
-    return {"edges": edges}
+        await _inhibit_dirty(conn, dirty)
+        return {"edges": edges}
+
+    return apply
 
 
-@_maintenance
-async def miner_sessions(cm: AsyncConnectionManager, layer: str, *, conn: Any = None, borrowed: bool = False) -> dict[str, int]:
+@_maintenance_split
+async def miner_sessions(cm: AsyncConnectionManager, layer: str, *, read: Any) -> Callable[[Any], Awaitable[dict[str, int]]]:
     """#4: facts of one session → `same_session`, weight = 0.3.
 
     L0 user-message rows are clustered by close ts (or shared source_msg_id);
     a node binds to a cluster via the ts window from L0 rows or via >=2 shared
     canon-tokens with cluster texts (synonym canonicalization).
+
+    Two phases: read the journal and the nodes, cluster and pick the pairs
+    outside any transaction; write the pairs in the wrapper's one short
+    transaction.
     """
     l0 = await (
-        await conn.execute(
+        await read.execute(
             "SELECT ts, source_msg_id, text FROM l0_journal WHERE layer=? AND raw_type='user-message' ORDER BY ts",
             (layer,),
         )
@@ -292,7 +383,7 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str, *, conn: Any = 
         else:
             merged.append(c)
 
-    nodes = await (await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
+    nodes = await (await read.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
     assigned: dict[int, set[int]] = {}  # node_id → cluster indexes
     for idx, c in enumerate(merged):
         for r in nodes:
@@ -301,8 +392,7 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str, *, conn: Any = 
             if near or len(_canon_tokens(str(r["content"])) & c["toks"]) >= _BIND_SHARED:
                 assigned.setdefault(nid, set()).add(idx)
 
-    edges = 0
-    dirty: set[int] = set()
+    wanted: list[tuple[int, int]] = []
     degree: dict[int, int] = {}
     for idx in range(len(merged)):
         members = sorted(nid for nid, cs in assigned.items() if idx in cs)
@@ -310,16 +400,24 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str, *, conn: Any = 
             for b in members[i + 1 :]:
                 if degree.get(a, 0) >= _SESSION_TOPK or degree.get(b, 0) >= _SESSION_TOPK:
                     continue  # 19.09 (issue G, part 3): anti-hub cap — a mega-cluster
-                # must not materialize the complete graph (1.1M edges in 10 min)
-                edges += await _insert_edge(conn, a, b, "same_session", 0.3, "sessions", dirty)
+                    # must not materialize the complete graph (1.1M edges in 10 min)
+                wanted.append((a, b))
                 degree[a] = degree.get(a, 0) + 1
                 degree[b] = degree.get(b, 0) + 1
-    await _inhibit_dirty(conn, dirty)
-    return {"edges": edges}
+
+    async def apply(conn: Any) -> dict[str, int]:
+        edges = 0
+        dirty: set[int] = set()
+        for a, b in wanted:
+            edges += await _insert_edge(conn, a, b, "same_session", 0.3, "sessions", dirty)
+        await _inhibit_dirty(conn, dirty)
+        return {"edges": edges}
+
+    return apply
 
 
-@_maintenance
-async def miner_entities(cm: AsyncConnectionManager, layer: str, *, conn: Any = None, borrowed: bool = False) -> dict[str, int]:
+@_maintenance_split
+async def miner_entities(cm: AsyncConnectionManager, layer: str, *, read: Any) -> Callable[[Any], Awaitable[dict[str, int]]]:
     """#3: synonym dictionary (canon classes, both sides) + spaCy NER (Latin ORG/GPE) → `co_mentions` 0.4.
 
     S17 B6 post-eval (2026-09-06, numbers in the design doc): no false-merge
@@ -327,17 +425,21 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str, *, conn: Any = 
     multi-topic dump with 11 canon classes gathered 109 of 137 co_mentions
     (hermes). The `_CO_MENTIONS_TOPK` per-node degree cap trims the hubs
     (same pattern as miner #9's _EMBED_TOPK).
+
+    Two phases: NER inference and pair scoring run outside any transaction
+    (the cache read is a read, the misses' rows travel to apply); the cache
+    rows and the edges are written together in the wrapper's one short
+    transaction.
     """
-    nodes = await _layer_nodes(conn, layer)
+    nodes = await _layer_nodes(read, layer)
     if len(nodes) < 2:
-        return {"edges": 0}
+        return _noop({"edges": 0})
     from rag.synonyms import load_synonyms
 
     syn = load_synonyms()
     nlp = _get_ner()
-    ents = await _entities_cached(conn, [str(c) for _, c in nodes], syn, nlp)
-    edges = 0
-    dirty: set[int] = set()
+    ents, pending = await _entities_read(read, [str(c) for _, c in nodes], syn, nlp)
+    wanted: list[tuple[int, int]] = []
     degree: dict[int, int] = {}
     for i in range(len(nodes)):
         if not ents[i]:
@@ -347,11 +449,20 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str, *, conn: Any = 
                 a, b = nodes[i][0], nodes[j][0]
                 if degree.get(a, 0) >= _CO_MENTIONS_TOPK or degree.get(b, 0) >= _CO_MENTIONS_TOPK:
                     continue  # B6: active-entity cap — anti-hub
-                edges += await _insert_edge(conn, a, b, "co_mentions", 0.4, "entities", dirty)
+                wanted.append((a, b))
                 degree[a] = degree.get(a, 0) + 1
                 degree[b] = degree.get(b, 0) + 1
-    await _inhibit_dirty(conn, dirty)
-    return {"edges": edges}
+
+    async def apply(conn: Any) -> dict[str, int]:
+        await _entities_cache_write(conn, pending)
+        edges = 0
+        dirty: set[int] = set()
+        for a, b in wanted:
+            edges += await _insert_edge(conn, a, b, "co_mentions", 0.4, "entities", dirty)
+        await _inhibit_dirty(conn, dirty)
+        return {"edges": edges}
+
+    return apply
 
 
 def _entities(text: str, syn: dict[str, list[str]], nlp: Any = None) -> set[str]:
@@ -414,6 +525,66 @@ async def _ensure_ner_cache(conn: Any) -> None:
     )
 
 
+async def _entities_read(read: Any, texts: list[str], syn: dict[str, list[str]], nlp: Any) -> tuple[list[set[str]], list[tuple[str, str, str]]]:
+    """Cache read + fresh extraction, WITHOUT writing: returns (entities per text, rows to write).
+
+    Split from `_entities_cached` for the two-phase miners: the compute phase
+    reads the cache and parses only the misses (spaCy inference is the CPU this
+    whole refactor exists to move out of the write transaction), and the rows
+    for the misses travel to apply, where they are written inside the same
+    transaction as the edges.
+
+    The table's absence IS the cold cache: no schema statement runs here (a
+    read must not DDL), and the first apply creates it when it has rows to
+    write — a fully-warm cache implies the table already exists.
+    """
+    if not texts:
+        return [], []
+    tag = _ner_cache_tag(syn, nlp)
+    hashes = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
+
+    cached: dict[str, set[str]] = {}
+    unique = list(dict.fromkeys(hashes))
+    exists = await (await read.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ner_cache'")).fetchall()
+    if exists:
+        for start in range(0, len(unique), _NER_CACHE_CHUNK):
+            chunk = unique[start : start + _NER_CACHE_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = await (
+                await read.execute(
+                    f"SELECT text_hash, entities FROM ner_cache WHERE tag=? AND text_hash IN ({placeholders})",
+                    (tag, *chunk),
+                )
+            ).fetchall()
+            for row in rows:
+                with contextlib.suppress(Exception):
+                    cached[str(row["text_hash"])] = set(json.loads(str(row["entities"])))
+
+    pending: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for text_hash, text in zip(hashes, texts, strict=True):
+        if text_hash in cached or text_hash in seen:
+            continue
+        seen.add(text_hash)
+        ents = _entities(text, syn, nlp)
+        cached[text_hash] = ents
+        # sorted: a set has no stable order, and a stable blob keeps the
+        # table diffable and the tests deterministic
+        pending.append((text_hash, tag, json.dumps(sorted(ents), ensure_ascii=False)))
+    return [cached[h] for h in hashes], pending
+
+
+async def _entities_cache_write(conn: Any, pending: list[tuple[str, str, str]]) -> None:
+    """Persist the cache rows computed in `_entities_read` (apply phase, one transaction)."""
+    if not pending:
+        return
+    await _ensure_ner_cache(conn)
+    await conn.executemany(
+        "INSERT OR REPLACE INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+        pending,
+    )
+
+
 async def _entities_cached(conn: Any, texts: list[str], syn: dict[str, list[str]], nlp: Any) -> list[set[str]]:
     """`_entities` for every text, computing only what the cache does not hold.
 
@@ -425,56 +596,22 @@ async def _entities_cached(conn: Any, texts: list[str], syn: dict[str, list[str]
     exactly "do not recompute what did not change".
 
     Misses are parsed synchronously, then written in one transaction; identical
-    texts are parsed once.
+    texts are parsed once. The conn-path contract (used by the callers that
+    already hold a connection) is unchanged: the caller's transaction is not
+    ours to end — read ownership BEFORE this helper's own DML, commit only when
+    we own the connection and we wrote something.
     """
     # `conn` arrives from the caller, so ownership has to be read here, before this helper's own
     # DML: the caller's transaction is not ours to end, and our writes ride along with it.
     borrowed = conn.in_transaction
     if not texts:
         return []
-    tag = _ner_cache_tag(syn, nlp)
-    hashes = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
-    await _ensure_ner_cache(conn)
-
-    cached: dict[str, set[str]] = {}
-    unique = list(dict.fromkeys(hashes))
-    for start in range(0, len(unique), _NER_CACHE_CHUNK):
-        chunk = unique[start : start + _NER_CACHE_CHUNK]
-        placeholders = ",".join("?" * len(chunk))
-        rows = await (
-            await conn.execute(
-                f"SELECT text_hash, entities FROM ner_cache WHERE tag=? AND text_hash IN ({placeholders})",
-                (tag, *chunk),
-            )
-        ).fetchall()
-        for row in rows:
-            with contextlib.suppress(Exception):
-                cached[str(row[0])] = set(json.loads(row[1]))
-
-    fresh: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for text_hash, text in zip(hashes, texts, strict=True):
-        if text_hash in cached or text_hash in seen:
-            continue
-        seen.add(text_hash)
-        fresh.append((text_hash, text))
-
-    if fresh:
-        writes: list[tuple[str, str, str]] = []
-        for text_hash, text in fresh:
-            ents = _entities(text, syn, nlp)
-            cached[text_hash] = ents
-            # sorted: a set has no stable order, and a stable blob keeps the
-            # table diffable and the tests deterministic
-            writes.append((text_hash, tag, json.dumps(sorted(ents), ensure_ascii=False)))
-        await conn.executemany(
-            "INSERT OR REPLACE INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
-            writes,
-        )
+    ents, pending = await _entities_read(_Reader(functools.partial(_rows_via, conn)), texts, syn, nlp)
+    if pending:
+        await _entities_cache_write(conn, pending)
         if not borrowed:
             await conn.commit()
-
-    return [cached[h] for h in hashes]
+    return ents
 
 
 def _get_ner() -> Any:
@@ -774,20 +911,23 @@ _MARKERS = re.compile(r"починила|исправила|теперь раб�
 _MARKER_MIN, _MARKER_MAX = 300.0, 30 * 86400.0  # ts delta within [5 min, 30 days]
 
 
-@_maintenance
-async def miner_markers(cm: AsyncConnectionManager, layer: str, *, conn: Any = None, borrowed: bool = False) -> dict[str, int]:
+@_maintenance_split
+async def miner_markers(cm: AsyncConnectionManager, layer: str, *, read: Any) -> Callable[[Any], Awaitable[dict[str, int]]]:
     """#6: node pairs sharing a canon-token with ts delta in-window and a marker on the later one → `led_to` 0.3.
 
     Direction A→B (A earlier, B carrying a 'fixed/broke/…' marker): the early
     node is about X, the later one is the outcome for X. Without a shared
     token or outside the window — no edge.
+
+    Two phases: read + tokenize + window scoring outside any transaction,
+    edges in the wrapper's one short transaction.
     """
     from rag.synonyms import load_synonyms
 
     syn = load_synonyms()
-    nodes = await (await conn.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
+    nodes = await (await read.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
     parsed = [(int(r["node_id"]), _canon_tokens(str(r["content"]), syn), _MARKERS.search(str(r["content"])), float(r["created_at"])) for r in nodes]
-    edges = 0
+    wanted: list[tuple[int, int]] = []
     for i, (a, ta, _, ta_ts) in enumerate(parsed):
         if not ta:
             continue
@@ -797,8 +937,15 @@ async def miner_markers(cm: AsyncConnectionManager, layer: str, *, conn: Any = N
             lo, hi = (a, b) if ta_ts <= tb_ts else (b, a)  # edge from the earlier to the later (marker) node
             delta = abs(tb_ts - ta_ts)
             if _MARKER_MIN <= delta <= _MARKER_MAX:
-                edges += await _insert_edge(conn, lo, hi, "led_to", 0.3, "marker")
-    return {"edges": edges}
+                wanted.append((lo, hi))
+
+    async def apply(conn: Any) -> dict[str, int]:
+        edges = 0
+        for lo, hi in wanted:
+            edges += await _insert_edge(conn, lo, hi, "led_to", 0.3, "marker")
+        return {"edges": edges}
+
+    return apply
 
 
 @_maintenance
@@ -1018,25 +1165,30 @@ def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[An
     return ii[order], jj[order]
 
 
-@_maintenance
-async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any = None, borrowed: bool = False) -> dict[str, int]:
+@_maintenance_split
+async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) -> Callable[[Any], Awaitable[dict[str, int]]]:
     """#9: rich embedding (content+tags) → MIB bits → pairwise Jaccard >=0.7 → `semantic_overlap`.
 
     A-MEM rich embedding: encodes "content + tags from epi_tags" with synonym
     token canonicalization (_canon from T2). Junk filter — same as graph_enrich
     ([{…-JSON / tool_use_id). O(n²) is fine at the current scale
     (~200 nodes = 20k pairs); top-k=15 per node.
+
+    Two phases: the embedding SERVICE call (network) and the whole pairwise
+    scan run outside any transaction — this is the miner whose compute phase
+    is the most expensive of the six; the junk flags and the accepted edges
+    are written together in the wrapper's one short transaction.
     """
-    nodes = await _layer_nodes(conn, layer)
+    nodes = await _layer_nodes(read, layer)
     if len(nodes) < 2:
-        return {"edges": 0}
+        return _noop({"edges": 0})
     from rag.quantize import embed_to_binary
     from rag.synonyms import load_synonyms
     from shared.embeddings import embed_texts
 
     syn = load_synonyms()
     tag_rows = await (
-        await conn.execute(
+        await read.execute(
             f"SELECT node_id, tag FROM epi_tags WHERE node_id IN ({','.join('?' * len(nodes))})",
             tuple(nid for nid, _ in nodes),
         )
@@ -1076,19 +1228,14 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any =
     # S17 addendum 10: bit-degenerate vectors (0 bits — text without significant
     # tokens, junk from L3 dumps) → flagged `anomaly:junk_vector`, cleanup candidate.
     # anomaly:* tags never enter the rich-embed text (see above) — no self-pollution.
-    flagged = 0
-    for (nid, _), b in zip(nodes, bits, strict=True):
-        if b == 0:
-            await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, 'anomaly:junk_vector')", (nid,))
-            flagged += 1
-    # The @_maintenance wrapper owns the commit: publishing here would end the
-    # caller's transaction before the edges are written.
+    # The flags are computed here and written in apply: a flag INSERT in compute
+    # would open a transaction the two-phase contract does not allow.
+    junk = [nid for (nid, _), b in zip(nodes, bits, strict=True) if b == 0]
 
-    edges = 0
-    dirty: set[int] = set()
+    wanted: list[tuple[int, int, float]] = []  # (a, b, weight) accepted in compute
 
-    async def _write_edge(i: int, j: int) -> bool:
-        """Apply the crosscheck vote and write the edge.
+    def _accept(i: int, j: int) -> bool:
+        """Apply the crosscheck vote and take the pair for apply (no I/O).
 
         The top-k budget is checked by the caller, in the same order the previous
         loop checked `degree` before the crosscheck. A crosscheck rejection
@@ -1098,7 +1245,6 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any =
         Inhibition is deferred: `dirty` collects the touched nodes for one sweep
         at the end, as miners #1/#2/#3/#4 already do (see `_inhibit_dirty`).
         """
-        nonlocal edges
         a, b = nodes[i][0], nodes[j][0]
         if crosscheck:
             # addendum 9: keyword vote — shared canon-tokens OR shared tags;
@@ -1107,9 +1253,9 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any =
             lex_agree = bool(token_sets[i] & token_sets[j]) or bool(set(tags.get(a, [])) & set(tags.get(b, [])))
             if not lex_agree:
                 return False
-            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_CONFIRMED_WEIGHT, "embedding", dirty)
+            wanted.append((a, b, _SEMANTIC_CONFIRMED_WEIGHT))
         else:
-            edges += await _insert_edge(conn, a, b, "semantic_overlap", _SEMANTIC_WEIGHT, "embedding", dirty)
+            wanted.append((a, b, _SEMANTIC_WEIGHT))
         return True
 
     open_nodes = sum(1 for b in bits if b)
@@ -1129,7 +1275,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any =
         for _, i, j in sorted(cands, reverse=True):
             if remaining[i] <= 0 or remaining[j] <= 0:
                 continue
-            if await _write_edge(i, j):
+            if _accept(i, j):
                 remaining[i] -= 1
                 remaining[j] -= 1
     else:
@@ -1152,7 +1298,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any =
             for i, j in zip(ci[keep].tolist(), cj[keep].tolist(), strict=True):
                 if budget[i] <= 0 or budget[j] <= 0:
                     continue
-                if not await _write_edge(i, j):
+                if not _accept(i, j):
                     continue
                 budget[i] -= 1
                 budget[j] -= 1
@@ -1160,15 +1306,25 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, conn: Any =
                     open_nodes -= 1
                 if budget[j] == 0:
                     open_nodes -= 1
-    # One lateral_inhibition per touched node, after every edge is in place,
-    # instead of one per edge against a half-built neighbourhood: the pattern
-    # `_inhibit_dirty` exists for and that miners #1/#2/#3/#4 already use.
-    # A/B on two identical `VACUUM INTO` snapshots of live hermes, fresh WAL
-    # included, same layer: 66.2 s -> 25.3 s. The graph ends up with the same
-    # edges either way; what changes is where inhibition lands (see the
-    # `_inhibit_dirty` docstring).
-    await _inhibit_dirty(conn, dirty)
-    return {"edges": edges, "anomalies": flagged}
+
+    async def apply(conn: Any) -> dict[str, int]:
+        for nid in junk:
+            await conn.execute("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, 'anomaly:junk_vector')", (nid,))
+        edges = 0
+        dirty: set[int] = set()
+        for a, b, weight in wanted:
+            edges += await _insert_edge(conn, a, b, "semantic_overlap", weight, "embedding", dirty)
+        # One lateral_inhibition per touched node, after every edge is in place,
+        # instead of one per edge against a half-built neighbourhood: the pattern
+        # `_inhibit_dirty` exists for and that miners #1/#2/#3/#4 already use.
+        # A/B on two identical `VACUUM INTO` snapshots of live hermes, fresh WAL
+        # included, same layer: 66.2 s -> 25.3 s. The graph ends up with the same
+        # edges either way; what changes is where inhibition lands (see the
+        # `_inhibit_dirty` docstring).
+        await _inhibit_dirty(conn, dirty)
+        return {"edges": edges, "anomalies": len(junk)}
+
+    return apply
 
 
 async def _find_or_add_node(conn: Any, layer: str, user_id: str, node_type: str, content: str) -> int:
@@ -1246,7 +1402,7 @@ async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str, *, conn: A
     return {"edges": edges}
 
 
-@_maintenance
+@_maintenance_split
 async def wire_new_node(
     cm: AsyncConnectionManager,
     layer: str,
@@ -1254,14 +1410,19 @@ async def wire_new_node(
     content: str,
     tags: list[str] | None = None,
     *,
-    conn: Any = None,
-    borrowed: bool = False,
-) -> int:
+    read: Any,
+) -> Callable[[Any], Awaitable[int]]:
     """Incremental mode (G4): edges of a NEW node vs existing ones — wired at write time.
 
     Light signals: shared tags (tagged), >=2 shared canon-tokens + Jaccard >=0.3
     (topic_overlap), shared dictionary/NER entity (co_mentions). Heavy signals
     (embedding/sessions) stay with the nightly graph_enrich. Returns the edge count.
+
+    Two phases: this runs on the LIVE new_message path (the 2.217 s slow write
+    this refactor exists for), so reading the layer, tokenizing and the NER pass
+    over the neighbours all happen outside any transaction — the writes go into
+    the wrapper's one short transaction. Wired-at-write order within the pair
+    list is preserved; the edges are written in the order computed.
     """
     from rag.synonyms import load_synonyms
 
@@ -1270,26 +1431,34 @@ async def wire_new_node(
     my_ents = _entities(content, syn)
     my_tags = set(tags or [])
     if not my_toks and not my_ents and not my_tags:
-        return 0
-    others = await _layer_nodes(conn, layer)
+        return _noop(0)
+    others = await _layer_nodes(read, layer)
     other_tags: dict[int, set[str]] = {}
-    for r in await (await conn.execute("SELECT node_id, tag FROM epi_tags WHERE node_id != ?", (node_id,))).fetchall():
+    for r in await (await read.execute("SELECT node_id, tag FROM epi_tags WHERE node_id != ?", (node_id,))).fetchall():
         other_tags.setdefault(int(r["node_id"]), set()).add(str(r["tag"]))
     nlp = _get_ner()
-    edges = 0
+    wanted: list[tuple[int, int, str, float, str]] = []  # (a, b, relation, weight, heuristic)
     for oid, ocontent in others:
         if oid == node_id:
             continue
         otoks = _canon_tokens(ocontent, syn)
         union = my_toks | otoks
-        if len(my_toks & otoks) >= 2 and union and len(my_toks & otoks) / len(union) >= 0.3:
-            edges += await _insert_edge(conn, min(node_id, oid), max(node_id, oid), "topic_overlap", len(my_toks & otoks) / len(union), "tokens")
+        shared_toks = my_toks & otoks
+        if len(shared_toks) >= 2 and union and len(shared_toks) / len(union) >= 0.3:
+            wanted.append((min(node_id, oid), max(node_id, oid), "topic_overlap", len(shared_toks) / len(union), "tokens"))
         if my_ents and my_ents & _entities(ocontent, syn, nlp):
-            edges += await _insert_edge(conn, min(node_id, oid), max(node_id, oid), "co_mentions", 0.4, "entities")
+            wanted.append((min(node_id, oid), max(node_id, oid), "co_mentions", 0.4, "entities"))
         shared = my_tags & other_tags.get(oid, set())
         if shared:
-            edges += await _insert_edge(conn, min(node_id, oid), max(node_id, oid), "tagged", min(0.3 + 0.1 * len(shared), 0.6), "tags")
-    return edges
+            wanted.append((min(node_id, oid), max(node_id, oid), "tagged", min(0.3 + 0.1 * len(shared), 0.6), "tags"))
+
+    async def apply(conn: Any) -> int:
+        edges = 0
+        for a, b, relation, weight, heuristic in wanted:
+            edges += await _insert_edge(conn, a, b, relation, weight, heuristic)
+        return edges
+
+    return apply
 
 
 async def ensure_zero_result(cm: AsyncConnectionManager) -> None:
