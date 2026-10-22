@@ -7,13 +7,18 @@ Miners (Tasks 2-5) plug into MINERS from lifecycle.graph_miners; stubs
 contribute no edges yet.
 
 Every read and every write of this module goes through the write dispatch
-(`shared/write_dispatch.py`), the process's only owner of transactions. The
-shared handle (`connection_manager.get(DB_NAME)`) is ONE connection for the
-whole process: a phase that read on it could pin a read snapshot there (the
-next write on that handle then fails with BUSY_SNAPSHOT 517), and the two
-`await conn.commit()` calls this module used to make published whatever a
-handler had left uncommitted on that handle — the failure class #130 rolled
-back for the importance sweep.
+(`shared/write_dispatch.py`), the process's only owner of transactions — with
+one deliberate exception: the miners this pass delegates to. A miner's
+borrowed branch runs on the shared handle (`connection_manager.get(DB_NAME)`)
+by design, because that branch exists to serve a caller that already holds a
+transaction there; such a miner reads AND writes on that one connection, so
+its snapshot is never split.
+
+The shared handle is ONE connection for the whole process: a phase that read
+on it could pin a read snapshot there (the next write on that handle then
+fails with BUSY_SNAPSHOT 517), and the two `await conn.commit()` calls this
+module used to make published whatever a handler had left uncommitted on that
+handle — the failure class #130 rolled back for the importance sweep.
 """
 
 from __future__ import annotations
@@ -32,6 +37,13 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
 logger = logging.getLogger(__name__)
+
+#: One write operation: the SQL and its parameters.
+Op = tuple[str, tuple[Any, ...]]
+#: A set of operations that must land in ONE transaction (the valence phase's
+#: DELETE+INSERT for one node). A chunk boundary may fall BETWEEN groups, never
+#: inside one.
+Group = list[Op]
 
 
 @contextlib.contextmanager
@@ -86,7 +98,7 @@ INSIGHT_MAX = 10  # abstractions per sleep
 _DREAM_CHUNK = 200
 
 
-async def _apply_ops(dispatch: WriteDispatch, ops: list[tuple[str, tuple[Any, ...]]]) -> None:
+async def _apply_ops(dispatch: WriteDispatch, ops: list[Op]) -> None:
     """Apply one batch of writes in a single dispatch transaction.
 
     The dispatch owns the transaction: it commits when the body returns and
@@ -102,7 +114,31 @@ async def _apply_ops(dispatch: WriteDispatch, ops: list[tuple[str, tuple[Any, ..
     await dispatch.atomic(DB_NAME, _run)
 
 
-async def _apply_ops_in_chunks(dispatch: WriteDispatch, ops: list[tuple[str, tuple[Any, ...]]]) -> None:
+def _group_chunks(groups: list[Group], limit: int) -> Iterator[list[Group]]:
+    """Split groups into batches of at most `limit` operations.
+
+    A group is a set of operations that must land in ONE transaction (the
+    valence phase's DELETE+INSERT for one node), so a batch boundary falls
+    BETWEEN groups and never inside one: a split group leaves the node without
+    its `valence:*` tag when the second half fails — a state the old
+    single-transaction code could not produce.
+
+    A group larger than `limit` is still kept whole — it goes into a batch of
+    its own rather than being cut.
+    """
+    batch: list[Group] = []
+    size = 0
+    for group in groups:
+        if batch and size + len(group) > limit:
+            yield batch
+            batch, size = [], 0
+        batch.append(group)
+        size += len(group)
+    if batch:
+        yield batch
+
+
+async def _apply_ops_in_chunks(dispatch: WriteDispatch, ops: list[Op]) -> None:
     """Apply the writes in batches, committing between them.
 
     A single transaction for the whole list would hold the dispatch's write lock
@@ -348,6 +384,27 @@ async def _orphan_anchor_gc(dispatch: WriteDispatch, layer: str) -> int:
     return await EpistemicGraph(cm=connection_manager, layer=layer).delete_nodes(ids)
 
 
+def _skipped_report() -> dict[str, Any]:
+    """Build the report of a pass that did not run.
+
+    The shape is the normal one, with every counter at zero: the nightly
+    consumer reads these keys, and a pass that skipped did nothing — it must
+    not look like a pass that found nothing. The warning in the log is what
+    says the pass was skipped, not this report.
+    """
+    return {
+        "nodes_cleaned": 0,
+        "orphan_gc": 0,
+        "gap_registry": {"written": 0, "bumped": 0, "open": 0},
+        "miners": {},
+        "sanitation": {"expired": 0, "valence_tagged": 0, "centrality_top": []},
+        "behavior": {},
+        "dream": {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0},
+        "segments": {},
+        "wiki_communities": [],
+    }
+
+
 async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     """Pre-clean JSON junk from the graph, then run miners. Returns stats."""
     from graph.epistemic import EpistemicGraph
@@ -355,6 +412,15 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     from shared.l0 import capture
 
     cm = connection_manager
+    # Housekeeping must not ride, nor wait out, somebody else's transaction: a
+    # foreign write txn on the shared handle means the dispatcher's own
+    # connection would block for the full busy timeout and then raise. The next
+    # tick retries — so the whole pass is skipped, not just the write that
+    # would have blocked.
+    shared = await cm.get(DB_NAME)
+    if shared.in_transaction:
+        logger.warning("graph enrich skipped, a foreign transaction is open")
+        return _skipped_report()
     dispatch = get_write_dispatch(cm)
     with _timed_phase(layer, "junk_scan"):
         junk = await dispatch.query(
@@ -412,8 +478,17 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     # G5 sanitation: validity recheck (edges outside the window → status='expired').
     from lifecycle.graph_sanitation import validate_edges
 
-    with _timed_phase(layer, "validate_edges"):
-        expired = await dispatch.atomic(DB_NAME, validate_edges)
+    expired = 0
+    try:
+        with _timed_phase(layer, "validate_edges"):
+            expired = await dispatch.atomic(DB_NAME, validate_edges)
+    except Exception as exc:
+        # Like its neighbours below: a BUSY here must not take the rest of the
+        # pass (the orphan GC, the gap registry, the dream, the segments, the
+        # wiki communities) down with it — and the hook that calls this pass
+        # suppresses exceptions, so a silent death here would look like a
+        # normal night.
+        logger.warning("validate_edges failed: %s", exc)
 
     # G5 sanitation valence: fact nodes are classified by the valence of their edges
     # (classify_fact) → 'valence:<bucket>' tag ('primary' is not tagged — the default).
@@ -433,15 +508,25 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
             for r in rel_rows:
                 node_rels.setdefault(int(r["source_id"]), []).append(str(r["relation"]))
                 node_rels.setdefault(int(r["target_id"]), []).append(str(r["relation"]))
-            ops: list[tuple[str, tuple[Any, ...]]] = []
+            groups: list[Group] = []
             for nid, rels in node_rels.items():
                 bucket = classify_fact(rels)
                 if bucket == "primary":
                     continue
-                ops.append(("DELETE FROM epi_tags WHERE node_id=? AND tag LIKE 'valence:%'", (nid,)))
-                ops.append(("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, ?)", (nid, f"valence:{bucket}")))
-                valence_tagged += 1
-            await _apply_ops_in_chunks(dispatch, ops)
+                # The DELETE and the INSERT of one node are ONE group: a batch
+                # boundary must never fall between them, or a failure there
+                # leaves the node without its `valence:*` tag.
+                groups.append(
+                    [
+                        ("DELETE FROM epi_tags WHERE node_id=? AND tag LIKE 'valence:%'", (nid,)),
+                        ("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, ?)", (nid, f"valence:{bucket}")),
+                    ]
+                )
+            for batch in _group_chunks(groups, _DREAM_CHUNK):
+                await _apply_ops(dispatch, [op for group in batch for op in group])
+                # Count what was applied, not what was planned: a failing batch
+                # must not leave the report claiming tags that were never written.
+                valence_tagged += len(batch)
     except Exception as exc:
         logger.warning("valence tagging failed: %s", exc)
 
@@ -488,10 +573,16 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
 
     # C6: three-phase dream — NREM decay/prune → REM bridge → Insight abstracts.
     dream: dict[str, int] = {"nrem_decayed": 0, "nrem_pruned": 0, "rem_bridged": 0, "insights": 0}
-    with contextlib.suppress(Exception), _timed_phase(layer, "dream"):
-        # Every phase committed its own batches; there is nothing left to commit
-        # here, and a commit here would publish a handler's pending work.
-        dream = await _dream(dispatch, layer)
+    try:
+        with _timed_phase(layer, "dream"):
+            # Every phase committed its own batches; there is nothing left to commit
+            # here, and a commit here would publish a handler's pending work.
+            dream = await _dream(dispatch, layer)
+    except Exception as exc:
+        # The dream phase carries most of the dispatch writes, so it is the phase
+        # most likely to hit a BUSY — and this phase used to run under a bare
+        # `contextlib.suppress(Exception)`: its failure left no trace at all.
+        logger.warning("dream phase failed: %s", exc)
 
     # C8 segment-consolidation: Lychee boundary map of the daily L0 (report).
     segment_map: dict[str, Any] = {}
