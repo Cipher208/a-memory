@@ -1,11 +1,38 @@
 """Tests for leaked aiosqlite worker-thread cleanup (os._exit removal)."""
 
 import asyncio
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from shared.connection import AsyncConnectionManager, leaked_connection_workers
+
+#: How long a condition wait may take before it is called a failure.
+_WAIT_TIMEOUT = 5.0
+#: How often the condition is polled while waiting.
+_WAIT_INTERVAL = 0.01
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = _WAIT_TIMEOUT, interval: float = _WAIT_INTERVAL) -> bool:
+    """Wait until `predicate` holds, or the deadline passes.
+
+    The aiosqlite worker is a separate thread. `stop()` only queues the stop
+    sentinel; the sqlite handle is closed later, when that thread gets round
+    to the queue. A fixed sleep therefore races the worker: it was measured at
+    ~1.5 ms in isolation, but CI runs 2400+ tests with several interpreters in
+    parallel, and 200 ms was not always enough — the test then failed on
+    correct code. Polling the condition against a deadline replaces the guess
+    with a bound.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        if predicate():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(interval)
 
 
 async def _open_two_conns(base: Path) -> AsyncConnectionManager:
@@ -86,8 +113,8 @@ async def test_force_stops_even_owned_connections(tmp_path: Path) -> None:
     assert all(c is not conn for c in leaked)
     forced = leaked_connection_workers(stop=True, force=True)
     assert any(c is conn for c in forced)
-    await asyncio.sleep(0.2)
-    # worker processed the sentinel: sqlite handle closed synchronously.
+    # The worker closes the handle when it processes the sentinel, on its own
+    # thread, so wait for that to happen instead of guessing a delay.
     # Do NOT await conn.execute here — its worker thread is gone, the call
     # would park forever on the drained queue.
-    assert conn._connection is None
+    assert await _wait_until(lambda: conn._connection is None), "the worker must close the sqlite handle after the stop sentinel"
