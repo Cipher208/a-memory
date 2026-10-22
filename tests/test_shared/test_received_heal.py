@@ -202,3 +202,73 @@ async def test_find_block_never_raises_even_if_classifier_does(cm, monkeypatch):
     assert await find_block("user", "u1", text) == rid
     status, _ = await _status(cm, rid)
     assert status == "received"  # классификатор не тронул строку
+
+
+@pytest.mark.asyncio
+async def test_replay_skips_case_b_and_never_calls_distill(cm, monkeypatch):
+    """S5: текст уже сохранён -> реплей не дистиллирует его повторно (spy)."""
+    from features.replay import replay
+
+    rid = await _captured(cm, "реплей не должен дистиллировать это", age_s=86400)
+    await _tag_l3(cm, rid)
+
+    calls = []
+
+    async def spy(*a, **k):
+        calls.append(k.get("source_rid"))
+        return {"l4_saved": 0, "l3_saved": 1, "conflicts": 0}
+
+    import lifecycle.distiller as dist_mod
+
+    monkeypatch.setattr(dist_mod, "distill_and_route", spy)
+    out = await replay(since_days=7, respect_gate=False, max_rows=10)
+    assert calls == []  # RED: сейчас spy вызывается — эхо-взрыв 120 строк
+    assert out["processed"] == 0
+    status, _ = await _status(cm, rid)
+    assert status == "saved_l3"
+
+
+@pytest.mark.asyncio
+async def test_replay_distills_case_a_after_heal(cm, monkeypatch):
+    """S5/regression: письмо без следа -> unaccounted -> ЭТОТ же реплей его спасает."""
+    from features.replay import replay
+
+    rid = await _captured(cm, "реплей спасает несдавшееся письмо", age_s=86400)
+    calls = []
+
+    async def spy(*a, **k):
+        calls.append(k.get("source_rid"))
+        return {"l4_saved": 0, "l3_saved": 1, "conflicts": 0}
+
+    import lifecycle.distiller as dist_mod
+
+    monkeypatch.setattr(dist_mod, "distill_and_route", spy)
+    out = await replay(since_days=7, respect_gate=False, max_rows=10)
+    # Может быть GREEN и до правки — регрессионный щит: guard обязан ПРОПУСКАТЬ
+    # эту строку через claim к дистиллятору, а не бросать её.
+    assert calls == [rid]
+    assert out["processed"] == 1
+    status, _ = await _status(cm, rid)
+    assert status == "saved_l3"
+
+
+@pytest.mark.asyncio
+async def test_replay_skips_fresh_received(cm, monkeypatch):
+    """S5: свежая строка (< грейса) не реплеится — ждёт своего писателя/ночи."""
+    from features.replay import replay
+
+    rid = await _captured(cm, "свежая, реплей ждёт грейса")
+    calls = []
+
+    async def spy(*a, **k):
+        calls.append(k.get("source_rid"))
+        return {"l4_saved": 0, "l3_saved": 1, "conflicts": 0}
+
+    import lifecycle.distiller as dist_mod
+
+    monkeypatch.setattr(dist_mod, "distill_and_route", spy)
+    out = await replay(since_days=7, respect_gate=False, max_rows=10)
+    assert calls == []  # RED: сейчас свежая строка дистиллируется в первый же прогон
+    assert out["skipped"] >= 1
+    status, _ = await _status(cm, rid)
+    assert status == "received"

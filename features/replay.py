@@ -163,6 +163,7 @@ async def replay(
     from core import MemoryManager
     from graph.epistemic import EpistemicGraph
     from lifecycle.distiller import distill_and_route, score_text
+    from shared.l0 import STATUS_RECEIVED, classify_received
 
     dispatch = get_write_dispatch()
     cutoff = time.time() - since_days * 86400
@@ -171,13 +172,13 @@ async def replay(
         placeholders = ",".join("?" for _ in ids)
         rows = await dispatch.query(
             DB_NAME,
-            f"SELECT id, ts, layer, user_id, text, decisions FROM l0_journal WHERE id IN ({placeholders}) ORDER BY id",
+            f"SELECT id, ts, layer, user_id, text, status, decisions FROM l0_journal WHERE id IN ({placeholders}) ORDER BY id",
             tuple(ids),
         )
     else:
         rows = await dispatch.query(
             DB_NAME,
-            "SELECT id, ts, layer, user_id, text, decisions FROM l0_journal"
+            "SELECT id, ts, layer, user_id, text, status, decisions FROM l0_journal"
             " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
             (cutoff, time.time() - 600.0),
         )
@@ -194,6 +195,21 @@ async def replay(
     processed = skipped = conflicts = 0
     gated = 0
     for row in rows:
+        # Read-time heal (spec 2026-10-22, S5): classify BEFORE anything
+        # judges the row. Case-b (memory already holds the text) must not
+        # reach the distiller — it re-emits every clause under one raw:<rid>
+        # tag (measured: raw:164 -> 120 rows across three days). Case-a
+        # (nothing was written) is closed re-enterable right here and falls
+        # through so THIS run claims and distills it. Fresh row or a broken
+        # reader (verdict None) -> skip until the next night.
+        if str(row["status"] or "") == STATUS_RECEIVED:
+            try:
+                heal_verdict = await classify_received(int(row["id"]))
+            except Exception:
+                heal_verdict = None  # classify's contract is never-raise; keep replay's own guarantee local
+            if heal_verdict is None or heal_verdict in ("saved_l3", "promoted_l4"):
+                skipped += 1
+                continue
         decisions: list[dict[str, Any]] = json.loads(row["decisions"] or "[]")
         if any(d.get("gate") == gate and d.get("config_hash") == chash for d in decisions):
             skipped += 1

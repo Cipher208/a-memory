@@ -214,10 +214,14 @@ async def test_all_distill_call_sites_pass_source_rid(cm, tmp_path, monkeypatch)
     # 1) replay: строка L0 → дистилляция с source_rid
     rid = await capture("new_message", "user", "rp", "решила кэш чистить по расписанию еженощно")
     assert rid is not None
+    conn = await cm.get("memory.db")
+    # S5: replay sees a received row only past the 600 s classify grace — age it
+    # like production, where the nightly run fires 10+ minutes after capture.
+    await conn.execute("UPDATE l0_journal SET ts = ts - 1200 WHERE id=?", (rid,))
+    await conn.commit()  # WriteDispatch holds its own connection: uncommitted rows are invisible to it
     # respect_gate=False: тест про source_rid на месте вызова, а не про отбор.
     res = await replay(since_days=1, respect_gate=False)
     assert res["processed"] >= 1
-    conn = await cm.get("memory.db")
     rows = await (await conn.execute("SELECT metadata FROM core_memory WHERE user_id='rp'")).fetchall()
     assert rows and json.loads(rows[0]["metadata"]).get("source_raw_id") == rid
 
@@ -259,8 +263,12 @@ async def test_skip_distill_rows_routed_direct(cm) -> None:
 
     rid = await capture("remember", "user", "sk", "вручную сохранённый факт для проверки", decisions=[{"gate": "mcp_remember", "skip_distill": True}])
     assert rid is not None
+    conn = await cm.get("memory.db")
+    # S5: past the grace the replay runs this row (routed_direct same night) —
+    # a fresh one waits for the next night; age it like production.
+    await conn.execute("UPDATE l0_journal SET ts = ts - 1200 WHERE id=?", (rid,))
+    await conn.commit()  # WriteDispatch holds its own connection: uncommitted rows are invisible to it
     res = await replay(since_days=1)
     assert res["processed"] == 0
-    conn = await cm.get("memory.db")
     row = await (await conn.execute("SELECT status FROM l0_journal WHERE id=?", (rid,))).fetchone()
     assert row[0] == "routed_direct"
