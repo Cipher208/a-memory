@@ -3,8 +3,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import sqlite3
+from dataclasses import replace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -177,12 +181,115 @@ async def test_cursor_saved_once_per_batch_not_per_message(tmp_path: Path) -> No
 
 
 async def test_unknown_event_valueerror_propagates(tmp_path: Path) -> None:
+    """An unknown event type is a programming error, and it must surface.
+
+    The daemon contains DATABASE failures, not programming errors: swallowing a
+    `ValueError` raised for an unknown event type would turn a typo in the
+    dispatch table into a silent retry loop that never makes progress and never
+    says why. Only `sqlite3.Error` is contained.
+    """
+
     async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
         raise ValueError("unknown event: 'bogus'")
 
     src = _FakeSource(batches=[Batch(messages=[Message(sender="u", text="x", ts=None, source_id=1)], cursor=1)])
     with pytest.raises(ValueError, match="unknown event"):
         await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+
+async def test_a_locked_database_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
+    """`database is locked` must not take the daemon process down.
+
+    The daemon had no `except` at all around `dispatch(...)`: a single busy
+    write killed the process, systemd restarted it ten seconds later, and the
+    journal filled with the same failure. The message is retried on the next
+    tick instead, and the cursor does not move past it -- the at-least-once
+    promise this module documents.
+    """
+    attempts: list[int] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        attempts.append(payload["source_msg_id"])
+        if len(attempts) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return {"results": [], "handler_count": 0}
+
+    msgs = [Message(sender="user", text="a message worth keeping", ts=None, source_id=1)]
+    src = _CursorSource(msgs)
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=2, dispatch=_dispatch)
+
+    # The failed message was attempted again on the next tick and then written.
+    assert attempts == [1, 1], "the failed message must be retried, not dropped"
+    assert load_cursor(tmp_path / "cursor.json") == 1, "the cursor must advance only once the message went through"
+
+    warnings = [r.getMessage() for r in caplog.records if "database is locked" in r.getMessage()]
+    assert warnings, "the failure must be reported"
+    line = warnings[0]
+    assert "source_msg_id=1" in line, line
+    assert "OperationalError" in line, line
+
+
+async def test_a_failed_message_does_not_advance_the_cursor(tmp_path: Path, caplog) -> None:
+    """A message that failed is not handled: the cursor stays behind it."""
+    attempts: list[int] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        attempts.append(payload["source_msg_id"])
+        raise sqlite3.OperationalError("database is locked")
+
+    msgs = [Message(sender="user", text="first", ts=None, source_id=1), Message(sender="user", text="second", ts=None, source_id=2)]
+    src = _CursorSource(msgs)
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+    assert attempts == [1], "the batch must stop at the failed message"
+    assert load_cursor(tmp_path / "cursor.json") == 0, "the cursor must not move past a failed message"
+
+
+async def test_a_non_database_error_propagates(tmp_path: Path) -> None:
+    """Only `sqlite3.Error` is contained; every other error surfaces.
+
+    The containment exists for one failure mode -- a busy database -- and it
+    must not become a blanket shield. A `TypeError` from `dispatch(...)` is a
+    programming error: swallowing it would leave the daemon polling forever
+    over a message it can never handle, with the reason buried in a warning.
+    """
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        raise TypeError("dispatch called with the wrong shape")
+
+    src = _FakeSource(batches=[Batch(messages=[Message(sender="u", text="x", ts=None, source_id=1)], cursor=1)])
+    with pytest.raises(TypeError, match="wrong shape"):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+
+async def test_a_resolve_failure_propagates(tmp_path: Path) -> None:
+    """A failure to resolve the target layer is a configuration error.
+
+    `resolve(d_layer)` sits OUTSIDE the containment, on purpose: it reads
+    configuration and opens the per-layer clients, so a failure there is not a
+    busy database but a broken setup. It must surface instead of being retried
+    forever with the cursor held behind an undeliverable message.
+    """
+    from dataclasses import replace
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        return {"results": [], "handler_count": 0}
+
+    def _resolve(layer: str) -> tuple[Any, Any, Any]:
+        raise RuntimeError("no client for layer 'agent'")
+
+    cfg = replace(_cfg(tmp_path), persona_owner=True)
+    src = _CursorSource([Message(sender="assistant", text="a declaration", ts=None, source_id=1)])
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    with pytest.raises(RuntimeError, match="no client for layer"):
+        await run_daemon(cfg, src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch, resolve=_resolve)
 
 
 async def test_poll_sleeps_between_iterations(tmp_path: Path) -> None:
@@ -430,3 +537,248 @@ def test_a_non_integer_cursor_column_is_left_alone() -> None:
     assert source_went_backwards(3, 900) is True
     assert source_went_backwards(900, 3) is False
     assert source_went_backwards(5, 5) is False
+
+
+# --------------------------------------------------------------------------
+# The delivery contract, driven through the REAL dispatch path.
+#
+# The bug these pin lived between two components: `hooks/registry.py` catches
+# a handler's exception and reports it as a result, and the daemon read that
+# result as a delivery. An injected `dispatch=` cannot reproduce it -- the
+# injected callable never sees the swallowed exception -- so the daemon's own
+# `dispatch_event` is used here.
+# --------------------------------------------------------------------------
+
+
+def _real_dispatch_with(monkeypatch: pytest.MonkeyPatch, handler: Any) -> None:
+    """Register a handler for `new_message` and let the daemon dispatch for real.
+
+    The dedup middleware keys on the payload and would swallow the RETRY
+    inside its five-second window. That is a different defect -- a declined
+    event, not a failed delivery -- and it would hide what these tests are
+    about, so the window is switched off for the duration of the test.
+    """
+    from hooks.registry import HookHandler, hook_registry
+    from shared.middleware import DedupMiddleware, default_pipeline
+
+    hook_registry.register(
+        HookHandler(
+            func=handler,
+            name="new_message",
+            layer="user",
+            is_async=True,
+            takes_mem=False,
+            takes_graph=False,
+        )
+    )
+    for mw in default_pipeline._middlewares:
+        if isinstance(mw, DedupMiddleware):
+            monkeypatch.setattr(mw, "_window", 0)
+
+
+async def _no_wait(_seconds: float) -> None:
+    await asyncio.sleep(0)
+
+
+async def test_a_transient_hook_failure_holds_the_cursor(tmp_path: Path, caplog, monkeypatch) -> None:
+    """A failed delivery must leave the cursor BEHIND the message.
+
+    The registry catches the handler's `database is locked` and reports it as
+    a result, so the daemon never saw an exception: it read the result as a
+    delivery, advanced the cursor past the message, and the message was lost
+    for good -- the source is a chat log that cannot be re-read from the
+    middle. The cursor must stay where it was, and the failure must be
+    reported with the source id and the error.
+    """
+    attempts: list[int] = []
+
+    async def _handler(ctx: dict[str, Any]) -> dict[str, Any]:
+        attempts.append(int(ctx.get("source_msg_id", -1)))
+        raise sqlite3.OperationalError("database is locked")
+
+    _real_dispatch_with(monkeypatch, _handler)
+
+    msgs = [Message(sender="user", text="a message worth keeping", ts=None, source_id=1)]
+    src = _CursorSource(msgs)
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    cfg = replace(_cfg(tmp_path), user_id="u-transient-hold")
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(cfg, src, mem=None, graph=None, rag=None, max_iterations=1, poll=_no_wait)
+
+    assert attempts == [1], "the message must reach the handler"
+    assert load_cursor(tmp_path / "cursor.json") == 0, "the cursor must stay behind a message that was not delivered"
+
+    warnings = [r.getMessage() for r in caplog.records if "source_msg_id=1" in r.getMessage()]
+    assert warnings, "the failed delivery must be reported"
+    assert "database is locked" in warnings[0], warnings[0]
+
+
+async def test_a_transient_hook_failure_is_retried_on_the_next_tick(tmp_path: Path, monkeypatch) -> None:
+    """The held cursor must make the next tick pick the same message up again.
+
+    Holding the cursor is only useful if something reads it again: the
+    message is offered once more, and this time the handler works, so the
+    cursor finally moves.
+    """
+    attempts: list[int] = []
+
+    async def _handler(ctx: dict[str, Any]) -> dict[str, Any]:
+        attempts.append(int(ctx.get("source_msg_id", -1)))
+        if len(attempts) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return {"saved": True}
+
+    _real_dispatch_with(monkeypatch, _handler)
+
+    msgs = [Message(sender="user", text="a message worth keeping", ts=None, source_id=1)]
+    src = _CursorSource(msgs)
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    cfg = replace(_cfg(tmp_path), user_id="u-transient-retry")
+    await run_daemon(cfg, src, mem=None, graph=None, rag=None, max_iterations=2, poll=_no_wait)
+
+    assert attempts == [1, 1], "the failed message must be attempted again, not dropped"
+    assert load_cursor(tmp_path / "cursor.json") == 1, "the cursor must advance once the message went through"
+
+
+async def test_a_permanent_hook_failure_still_advances_the_cursor(tmp_path: Path, monkeypatch) -> None:
+    """A handler bug is permanent: the message is handled and the cursor moves on.
+
+    Retrying a bug forever would stall the whole ingestion on one poison
+    message -- the daemon would poll over it silently, forever. The
+    classification the daemon acts on is checked here through the REAL
+    dispatch path, because that is the only place the marker exists: the
+    registry writes it, the daemon reads it.
+    """
+    attempts: list[int] = []
+
+    async def _handler(ctx: dict[str, Any]) -> dict[str, Any]:
+        attempts.append(int(ctx.get("source_msg_id", -1)))
+        raise ValueError("a bug in the handler")
+
+    _real_dispatch_with(monkeypatch, _handler)
+
+    cfg = replace(_cfg(tmp_path), user_id="u-permanent")
+
+    from hooks.external import dispatch_event
+
+    probe = await dispatch_event(
+        "new_message",
+        "user",
+        cfg.user_id,
+        {"text": "a different message", "source_msg_id": 99},
+        None,
+        None,
+    )
+    assert probe["results"][0].get("transient") is False, f"a handler bug must not be transient: {probe}"
+
+    msgs = [Message(sender="user", text="a message worth keeping", ts=None, source_id=1)]
+    src = _CursorSource(msgs)
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    await run_daemon(cfg, src, mem=None, graph=None, rag=None, max_iterations=2, poll=_no_wait)
+
+    assert attempts == [99, 1], "a permanent failure must be attempted once, not retried forever"
+    assert load_cursor(tmp_path / "cursor.json") == 1, "the cursor must move past a message that can never be delivered"
+
+
+async def test_a_locked_source_read_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
+    """A busy SOURCE must not take the daemon process down.
+
+    The source is a chat log written by ANOTHER process, so `database is
+    locked` there is the one place the daemon can plausibly die of exactly
+    this error. It is contained, reported, and retried on the next tick.
+    """
+    calls = {"max_id": 0, "fetch": 0}
+
+    class _LockedSource(SqliteSource):
+        def __init__(self) -> None:
+            self._max = 0
+
+        def max_id(self) -> int:  # type: ignore[override]
+            calls["max_id"] += 1
+            raise sqlite3.OperationalError("database is locked")
+
+        def fetch_after(self, cursor: int, limit: int) -> Batch:  # type: ignore[override]
+            calls["fetch"] += 1
+            raise sqlite3.OperationalError("database is locked")
+
+        def close(self) -> None:
+            pass
+
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(_cfg(tmp_path), _LockedSource(), mem=None, graph=None, rag=None, max_iterations=2, poll=_no_wait)
+
+    assert calls["max_id"] == 2, "the daemon must keep polling after a busy source"
+    warnings = [r.getMessage() for r in caplog.records if "source read failed" in r.getMessage()]
+    assert warnings, "the busy source must be reported"
+    assert "database is locked" in warnings[0], warnings[0]
+
+
+async def test_a_locked_source_fetch_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
+    """The same containment for the READ of the batch itself.
+
+    The baseline read (`max_id`) can succeed while the batch read loses the
+    race: the two are separate statements, and the writer that holds the
+    lock only has to arrive between them.
+    """
+    calls = {"fetch": 0}
+
+    class _LockedFetchSource(_CursorSource):
+        def fetch_after(self, cursor: int, limit: int) -> Batch:  # type: ignore[override]
+            calls["fetch"] += 1
+            raise sqlite3.OperationalError("database is locked")
+
+    src = _LockedFetchSource([Message(sender="user", text="x", ts=None, source_id=1)])
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=2, poll=_no_wait)
+
+    assert calls["fetch"] == 2, "the daemon must keep polling after a busy source"
+    assert load_cursor(tmp_path / "cursor.json") == 0, "a batch that was never read must not move the cursor"
+    warnings = [r.getMessage() for r in caplog.records if "source read failed" in r.getMessage()]
+    assert warnings, "the busy source must be reported"
+
+
+async def test_a_locked_memory_pressure_dispatch_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
+    """The memory-pressure dispatch is a DB write too, and it is contained.
+
+    `memory_pressure` asks the store to shed memory; it runs on the same
+    base as everything else, so a busy database there is the same failure
+    as anywhere else. It must be reported and skipped, not fatal.
+    """
+    events: list[str] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        events.append(event)
+        if event == "memory_pressure":
+            raise sqlite3.OperationalError("database is locked")
+        return {"results": [], "handler_count": 0}
+
+    mem = SimpleNamespace(l1=SimpleNamespace(get_full=lambda: [object()] * 45))
+    src = _CursorSource([Message(sender="user", text="x", ts=None, source_id=1)])
+
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(_cfg(tmp_path), src, mem=mem, graph=None, rag=None, max_iterations=2, dispatch=_dispatch, poll=_no_wait)
+
+    assert events.count("memory_pressure") == 2, "the pressure event must be retried on the next tick"
+    warnings = [r.getMessage() for r in caplog.records if "memory_pressure" in r.getMessage()]
+    assert warnings, "the failed pressure dispatch must be reported"
+    assert "database is locked" in warnings[0], warnings[0]
+
+
+def test_the_daemon_does_not_claim_the_base_dies_of_a_locked_database() -> None:
+    """The narrative must match the live evidence.
+
+    The victim of `database is locked` on the house base is the MCP SERVER's
+    importance sweep; both autohooks units report `NRestarts=0`. The
+    daemon's real failure was not dying -- it was LOSING the message.
+    """
+    import autohooks.daemon as daemon_module
+    from pathlib import Path as _Path
+
+    src = _Path(daemon_module.__file__).read_text(encoding="utf-8")
+    assert "hermes base dies" not in src, "the daemon must not claim the base dies of a locked database"
+    assert "NRestarts=0" in src, "the daemon docstring must state what the live evidence says"

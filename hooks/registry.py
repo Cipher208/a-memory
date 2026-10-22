@@ -6,6 +6,8 @@ from typing import Any, TYPE_CHECKING, TypeVar
 from collections.abc import Callable  # noqa: TC003
 from pydantic import BaseModel, ConfigDict
 
+from shared.sqlite_busy import is_busy
+
 if TYPE_CHECKING:
     F = TypeVar("F", bound=Callable[..., Any])
 
@@ -66,6 +68,37 @@ class HookRegistry:
         return decorator
 
     async def fire(self, hook_name: str, layer: str, context: dict[str, Any], mem: Any | None = None, graph: Any | None = None) -> dict[str, Any]:
+        """Fire every handler of ``hook_name`` and report what each one did.
+
+        A handler that raises does NOT propagate: the exception is logged and
+        reported as a result, so one broken handler cannot take the whole
+        dispatch down. That makes this method the place where a failure has
+        to be CLASSIFIED, because the caller cannot see the exception any
+        more and can only read the result.
+
+        The classification is the ``transient`` key of a failed result:
+
+        * ``{"error": str(e), "transient": True}`` -- the failure is
+          transient, i.e. it clears by itself. A BUSY database (another
+          writer holds the lock, or this connection's read snapshot went
+          stale) is the only such case: the work was not done, and doing
+          it again later is the right thing to do.
+        * ``{"error": str(e), "transient": False}`` -- the failure is
+          permanent, i.e. a bug in the handler or a schema that does not
+          match the code. Retrying it forever would stall the caller on
+          one poison message.
+
+        The boundary is the CODE, not the class: ``sqlite3.Error`` also
+        covers ``ProgrammingError``, ``IntegrityError`` and a missing
+        table, and none of those ever clear. ``shared.sqlite_busy`` is
+        the single place that answers the question.
+
+        The key is ALWAYS present on a failed result, so "not transient" is
+        an explicit False and never a missing key. A caller that has to
+        decide between "retry later" and "give up" reads this value; the
+        autohooks daemon holds its cursor for a transient failure and moves
+        on for a permanent one.
+        """
         # Hot path optimization: check if we should skip
         # Note: In production we use config.is_hook_enabled
         try:
@@ -98,7 +131,12 @@ class HookRegistry:
                 results.append(res)
             except Exception as e:
                 logger.exception(f"Hook {hook_name} failed")
-                results.append({"error": str(e)})
+                # The marker tells the caller whether the work is worth
+                # repeating. A BUSY database clears, and the message was
+                # NOT handled. Everything else -- a handler bug, a missing
+                # column, a broken constraint -- is permanent, and the
+                # caller must not spin on it forever.
+                results.append({"error": str(e), "transient": is_busy(e)})
         return {"results": results, "handler_count": fired_count}
 
     def list_hooks(self) -> dict[str, int]:

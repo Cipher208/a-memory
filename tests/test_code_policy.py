@@ -12,6 +12,24 @@ from pathlib import Path
 
 import pytest
 
+# The database write path. These modules decide who holds the lock, who is
+# allowed to write, and which database failure is worth retrying, so their
+# comments and docstrings are read by operators debugging a live base -- they
+# must be covered by the policy like any other hot file.
+#
+# The list FEEDS the policy list below instead of being checked against it.
+# The old version asserted that one hand-maintained list was a subset of
+# another hand-maintained list in the same file: it passed by construction,
+# it discovered nothing, and it would have kept passing after either list had
+# been edited wrongly. Folding the list into the policy makes the guarantee
+# structural -- there is nothing left to assert, and a file added here is
+# covered the moment it is added.
+REQUIRED_WRITE_PATH_FILES = [
+    "shared/lock_owners.py",
+    "shared/write_dispatch.py",
+    "shared/sqlite_busy.py",
+]
+
 HOT_FILES = [
     "lifecycle/graph_miners.py",
     "rag/edm.py",
@@ -27,6 +45,8 @@ HOT_FILES = [
     "lifecycle/segment_consolidation.py",
     "autohooks/context.py",
     "autohooks/__main__.py",
+    "autohooks/daemon.py",
+    "hooks/registry.py",
     "shared/l0.py",
     "features/wiki_reconciliation.py",
     "features/offload.py",
@@ -69,6 +89,7 @@ HOT_FILES = [
     "lifecycle/graph_builder.py",
     "shared/memory_types.py",
     "shared/importance/signals/tech_signal.py",
+    *REQUIRED_WRITE_PATH_FILES,
 ]
 
 ROOT = Path(__file__).resolve().parents[1]

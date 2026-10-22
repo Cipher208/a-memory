@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 STATUS_RECEIVED = "received"
 STATUS_PARKED = "parked"
 
+#: The close reason for a row the capture path captured but never stamped:
+#: the body returned or raised before the write happened, so NOTHING was
+#: written and the row must be re-enterable. It is the one close reason that
+#: records no (gate, config_hash) decision pair -- see `close_row`.
+UNACCOUNTED_EXIT = "unaccounted_exit"
+
 
 def _dispatch() -> WriteDispatch:
     """Return the process-wide dispatcher; L0 never writes on the shared connection."""
@@ -55,16 +61,64 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
     under that one `raw:<rid>` tag (raw:164 → 120 rows across three days,
     decaying 60/40/20). Pre-migration DB without the content_hash column →
     None (dedup inactive, write as is).
+
+    A ROW WHOSE WRITE NEVER HAPPENED IS NOT A DUPLICATE. The capture commits
+    BEFORE the write, so a failed write leaves the row behind with nothing
+    written next to it. Such a row is closed as `gated_out` with the reason
+    `unaccounted_exit`, and it is skipped here: the retry has to be able to
+    re-enter the write, or the message is lost between the capture and the
+    memory. A row that WAS written (or one the gate refused on purpose) still
+    blocks the duplicate, exactly as before.
     """
     try:
-        prior = await _dispatch().select_one(
+        rows = await _dispatch().query(
             DB_NAME,
-            "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
+            "SELECT id, status, decisions FROM l0_journal WHERE content_hash=? ORDER BY id",
             (_content_hash(layer, user_id, text),),
         )
     except Exception:
-        return None
-    return int(prior["id"]) if prior is not None else None
+        # A pre-migration DB whose journal has no status/decisions columns: the
+        # row cannot be judged, so the old answer stands -- it is a duplicate.
+        # (The dedup key column itself may be missing too, in which case the
+        # dedup is inactive and there is nothing to find.)
+        try:
+            prior = await _dispatch().select_one(
+                DB_NAME,
+                "SELECT id FROM l0_journal WHERE content_hash=? ORDER BY id LIMIT 1",
+                (_content_hash(layer, user_id, text),),
+            )
+        except Exception:
+            return None
+        return int(prior["id"]) if prior is not None else None
+    for row in rows:
+        if _write_never_happened(row):
+            continue
+        return int(row["id"])
+    return None
+
+
+def _write_never_happened(row: Any) -> bool:
+    """Report whether the row was closed because the write never happened.
+
+    The close reason is the marker: `unaccounted_exit` says the pipeline
+    left the row without stamping it, which means the write did not happen.
+    The status has to agree — a row that was later written carries a real
+    terminal status and blocks duplicates again, marker or no marker.
+    """
+    try:
+        status = str(row["status"] or "")
+        decisions_raw = row["decisions"]
+    except (KeyError, IndexError, TypeError):
+        return False
+    if status != "gated_out":
+        return False
+    try:
+        decisions = json.loads(decisions_raw or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(decisions, list):
+        return False
+    return any(isinstance(d, dict) and d.get("reason") == UNACCOUNTED_EXIT for d in decisions)
 
 
 async def capture(
@@ -305,6 +359,15 @@ async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> No
     changed re-opens it — which is the point of `config_hash`, and the reason a
     fixed distiller can reconsider rows a broken one refused.
 
+    THE ONE EXCEPTION IS AN UNACCOUNTED EXIT. That pair means "the gate
+    refused this deliberately", and an unaccounted exit is the opposite: the
+    write never happened, so the row is not a decision at all. Recording the
+    pair would make the nightly replay skip the very row that still needs
+    rescuing — the message would sit in the journal forever, refused by its
+    own failed attempt. So that close records the reason alone, and the reason
+    is what tells the duplicate guard (`find_block`) that the row may be
+    written again.
+
     `gate` is recorded as "g1" to match every `gated_out` row already in the live
     bases and the default of `l0_cli.py replay --gate`. The true cause lives in
     `reason`, because the importance gate is usually what refused these, not the
@@ -332,7 +395,10 @@ async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> No
                     decisions = json.loads((row["decisions"] if row else None) or "[]")
                 except (json.JSONDecodeError, TypeError):
                     decisions = []
-                decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
+                if reason == UNACCOUNTED_EXIT:
+                    decisions.append({"reason": reason, "ts": now})
+                else:
+                    decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
                 await conn.execute(
                     "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
                     (status, now, json.dumps(decisions, ensure_ascii=False), l0_id),
