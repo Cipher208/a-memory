@@ -1188,6 +1188,29 @@ async def _find_or_add_node(conn: Any, layer: str, user_id: str, node_type: str,
     return int(cur.lastrowid or 0)
 
 
+async def _scan_tool_pairs_on(conn: Any, since_ts: float, layer: str | None = None) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Read the L0 tool_use/tool_result pairs on `conn` — one connection, one snapshot.
+
+    `lifecycle.tool_stats.scan_tool_pairs` reads through the write dispatch,
+    which is the right thing for a standalone statistics call but the WRONG
+    thing inside a miner: the borrowed branch of `_maintenance` writes on the
+    shared handle, so a read through the dispatch is a read on another
+    connection, on another snapshot — a journal row that the caller inserted
+    but has not committed is invisible to the miner.
+
+    The rule this function exists to enforce: a miner reads and writes on the
+    SAME connection, so the read sees exactly what the write produced.
+
+    The matching is not re-implemented here: `lifecycle.tool_stats` owns the
+    tool_use/tool_result pairing, and this path and the dispatch read go
+    through the same matcher and the same query.
+    """
+    from lifecycle.tool_stats import read_tool_pairs_on
+
+    pairs, _calls = await read_tool_pairs_on(conn, since_ts, layer)
+    return pairs
+
+
 @_maintenance
 async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str, *, conn: Any = None, borrowed: bool = False) -> dict[str, int]:
     """#10: l0_journal tool_use+tool_result pairs (by tool_use_id) → query→tool→outcome triplets.
@@ -1197,10 +1220,16 @@ async def miner_tool_triplets(cm: AsyncConnectionManager, layer: str, *, conn: A
     node_type='error_outcome'. Edges query_tool / tool_outcome, weight=0.5,
     tags heuristic:triplets (idempotent: INSERT OR IGNORE + find_or_add).
     Dangling/broken blocks are skipped.
-    """
-    from lifecycle.tool_stats import _SNIP, scan_tool_pairs, tool_query_text, tool_result_text
 
-    pairs, _ = await scan_tool_pairs(conn, 0.0, layer=layer)
+    The journal is read on `conn` — the connection this miner writes on. The
+    borrowed branch of `_maintenance` writes on the shared handle, so a read
+    through the dispatch would be a read on ANOTHER connection, on another
+    snapshot: a journal row the caller had inserted but not committed was
+    invisible to the miner.
+    """
+    from lifecycle.tool_stats import _SNIP, tool_query_text, tool_result_text
+
+    pairs = await _scan_tool_pairs_on(conn, 0.0, layer=layer)
     edges = 0
     for use, result in pairs:
         query = tool_query_text(use.get("input"))
