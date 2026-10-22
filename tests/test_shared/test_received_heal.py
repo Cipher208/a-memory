@@ -4,6 +4,7 @@
 """
 
 import json
+import logging
 import time
 
 import pytest
@@ -55,7 +56,8 @@ async def _tag_l4(cm, rid, *, layer="user", user_id="u1"):
 
 async def _status(cm, rid):
     con = await cm.get("memory.db")
-    row = await (await con.execute("SELECT status, decisions FROM l0_journal WHERE id=?", (rid,))).fetchone()
+    cur = await con.execute("SELECT status, decisions FROM l0_journal WHERE id=?", (rid,))
+    row = await cur.fetchone()
     return row[0], json.loads(row[1] or "[]")
 
 
@@ -125,13 +127,18 @@ async def test_classify_evidence_is_scope_bound(cm):
     rid = await _captured(cm, "чужой след не считается", age_s=700)
     await _tag_l3(cm, rid, user_id="other")
     assert await classify_received(rid) == UNACCOUNTED_EXIT
+    # layer — часть scope: чужой layer при СВОЁМ user_id тоже не доказательство
+    rid2 = await _captured(cm, "чужой слой не считается", age_s=700)
+    await _tag_l3(cm, rid2, layer="agent")
+    assert await classify_received(rid2) == UNACCOUNTED_EXIT
 
 
 @pytest.mark.asyncio
-async def test_classify_never_raises_on_a_broken_reader(cm, monkeypatch):
+async def test_classify_never_raises_on_a_broken_reader(cm, monkeypatch, caplog):
     """S3: битое чтение -> None, строка не тронута (WARNING пишет сам хелпер)."""
     from shared.l0 import STATUS_RECEIVED, classify_received
 
+    caplog.set_level(logging.WARNING)
     rid = await _captured(cm, "читатель сломан", age_s=700)
 
     class Boom:
@@ -145,5 +152,34 @@ async def test_classify_never_raises_on_a_broken_reader(cm, monkeypatch):
 
     monkeypatch.setattr(l0_mod, "_dispatch", lambda: Boom())
     assert await classify_received(rid) is None
+    assert "classify_received" in caplog.text  # WARNING пишет сам хелпер
     status, _ = await _status(cm, rid)
     assert status == STATUS_RECEIVED
+
+
+@pytest.mark.asyncio
+async def test_find_block_reenters_after_case_a_heal(cm):
+    """S4: письмо без следа классифицируется прямо в find_block и НЕ блокирует повтор."""
+    from shared.l0 import find_block
+
+    text = "повтор после незакрытой записи"
+    rid = await _captured(cm, text, age_s=700)
+    # RED: сейчас received-строка возвращается как дубль; после фикса — None
+    assert await find_block("user", "u1", text) is None
+    status, _ = await _status(cm, rid)
+    assert status == "gated_out"  # классификация закрыла её unaccounted_exit
+    # и повторная запись проходит: find_block снова её не видит
+    assert await find_block("user", "u1", text) is None
+
+
+@pytest.mark.asyncio
+async def test_find_block_still_blocks_case_b(cm):
+    """S4: текст уже в памяти -> строка остаётся блоком-дублем (плюс терминальный статус)."""
+    from shared.l0 import find_block
+
+    text = "помни: дубль остаётся дублем"
+    rid = await _captured(cm, text, age_s=700)
+    await _tag_l3(cm, rid)
+    assert await find_block("user", "u1", text) == rid
+    status, _ = await _status(cm, rid)
+    assert status == "saved_l3"

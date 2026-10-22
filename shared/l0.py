@@ -91,6 +91,19 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
             return None
         return int(prior["id"]) if prior is not None else None
     for row in rows:
+        if str(row["status"] or "") == STATUS_RECEIVED:
+            # Read-time heal (spec 2026-10-22, S4): the row's status is a
+            # claim, not a fact. Judge it by what memory holds before letting
+            # it block the duplicate: unaccounted -> nothing was written, the
+            # retry re-enters; anything else (saved/promoted/fresh/error)
+            # -> the old answer stands and the block holds. The VERDICT is
+            # authoritative, not a re-read of the status: close_row may fail
+            # to write silently, and the verdict still describes what memory
+            # holds (the row then heals on the next sweep).
+            verdict = await classify_received(int(row["id"]))
+            if verdict == UNACCOUNTED_EXIT:
+                continue
+            return int(row["id"])
         if _write_never_happened(row):
             continue
         return int(row["id"])
