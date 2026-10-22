@@ -513,6 +513,61 @@ def test_nightly_keeps_the_lock_while_abandoned_work_finishes(tmp_path, monkeypa
     assert _free_maintenance(tmp_path), "после завершения работы замок обязан вернуться"
 
 
+def test_nightly_keeps_the_lock_when_a_later_step_is_abandoned(tmp_path, monkeypatch) -> None:
+    """Истёкший бюджет ШАГА ПОСЛЕ хуков тоже обязан удерживать замок, а не только 'running'.
+
+    Все шаги после слоёв (compact, sweep, replay, expiry, tiering, enrich, bridge)
+    зовутся с общим дефолтом 120 с и стоят в `contextlib.suppress(Exception)`:
+    таймаут гасится, проход продолжается и возвращает `'ok'`, а брошенная
+    корутина ещё пишет в базу. `_finish_nightly_lock` решение принимал по вердикту —
+    и в этом случае отдавал замок сразу, то есть 15-минутная уборка и свип лезли
+    писать поверх ещё живой работы. Ведущий кандидат на держателя write-lock.
+    """
+    import concurrent.futures
+    import json as _json
+    import time as _time
+
+    import features.backup_cron as bc
+
+    due = _time.time() - 48 * 3600
+    state = tmp_path / "cycles_state.json"
+    state.write_text(_json.dumps({"last_nightly": due, "calls": []}), encoding="utf-8")
+
+    async def _noop() -> None:
+        return None
+
+    class _Reg:
+        @staticmethod
+        def fire(name, layer, ctx, mem=None, graph=None):
+            return _noop()
+
+    monkeypatch.setattr("hooks.registry.hook_registry", _Reg())
+
+    cron = bc.BackupCron(base_dir=str(tmp_path))
+    live = concurrent.futures.Future()
+    calls: list[int] = []
+    # 1-2 — слои, 3 — compact, 4 — sweep (в `suppress(Exception)`).
+    sweep_call = 4
+
+    def _abandon_sweep(coro, **kwargs):
+        coro.close()
+        calls.append(len(calls) + 1)
+        if len(calls) == sweep_call:
+            cron._pending_futures.append(live)
+            raise TimeoutError("шаг свипа истёк, корутина брошена на основном лупе")
+        return {}
+
+    cron._await_on_main_loop = _abandon_sweep
+
+    verdict = cron._fire_nightly_hooks(state)
+    assert verdict == "ok", f"проход обязан дойти до конца, а не {verdict!r}"
+    assert len(calls) >= sweep_call, "свип не был вызван — тест ничего не проверил"
+    assert not _free_maintenance(tmp_path), "замок отдан, пока брошенный свип ещё пишет в базу — ровно то столкновение, которое чиним"
+
+    live.set_result(None)  # брошенный шаг завершился
+    assert _free_maintenance(tmp_path), "после завершения брошенного шага замок обязан вернуться"
+
+
 def test_stuck_work_does_not_hold_the_lock_forever(tmp_path, monkeypatch) -> None:
     """Отказ от потерянной работы отдаёт и замок.
 
