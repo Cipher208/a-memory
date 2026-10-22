@@ -34,7 +34,7 @@ from shared.constants import DB_NAME
 from shared.write_dispatch import WriteDispatch, get_write_dispatch
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -114,14 +114,25 @@ async def _apply_ops(dispatch: WriteDispatch, ops: list[Op]) -> None:
     await dispatch.atomic(DB_NAME, _run)
 
 
-def _group_chunks(groups: list[Group], limit: int) -> Iterator[list[Group]]:
+def _groups_of_one(ops: Iterable[Op]) -> Iterator[Group]:
+    """Every operation is its own group — one statement per unit of work.
+
+    The phases whose unit of work IS a single statement (NREM's edge update,
+    REM's bridge insert) use this, so the chunker treats them exactly like the
+    phases whose unit of work is several statements.
+    """
+    for op in ops:
+        yield [op]
+
+
+def _chunk_groups(groups: Iterable[Group], limit: int) -> Iterator[list[Group]]:
     """Split groups into batches of at most `limit` operations.
 
-    A group is a set of operations that must land in ONE transaction (the
-    valence phase's DELETE+INSERT for one node), so a batch boundary falls
-    BETWEEN groups and never inside one: a split group leaves the node without
-    its `valence:*` tag when the second half fails — a state the old
-    single-transaction code could not produce.
+    The ONE chunker of this module. A group is a set of operations that must
+    land in ONE transaction (the valence phase's DELETE+INSERT for one node),
+    so a batch boundary falls BETWEEN groups and never inside one: a split
+    group leaves the node without its `valence:*` tag when the second half
+    fails — a state the old single-transaction code could not produce.
 
     A group larger than `limit` is still kept whole — it goes into a batch of
     its own rather than being cut.
@@ -138,14 +149,28 @@ def _group_chunks(groups: list[Group], limit: int) -> Iterator[list[Group]]:
         yield batch
 
 
-async def _apply_ops_in_chunks(dispatch: WriteDispatch, ops: list[Op]) -> None:
-    """Apply the writes in batches, committing between them.
+async def _apply_groups_in_chunks(
+    dispatch: WriteDispatch,
+    groups: Iterable[Group],
+    *,
+    on_batch: Callable[[int], None] | None = None,
+) -> None:
+    """Apply the groups in batches, committing between them.
 
     A single transaction for the whole list would hold the dispatch's write lock
     for the whole phase and stall every other writer in the process behind it.
+
+    Every phase that chunks goes through here, so the boundary rule — a
+    transaction never holds half of a group — holds for all of them.
+
+    `on_batch` is called with the number of groups of a batch AFTER that batch
+    was applied: a caller that counts work must count what was applied, not
+    what was planned.
     """
-    for start in range(0, len(ops), _DREAM_CHUNK):
-        await _apply_ops(dispatch, ops[start : start + _DREAM_CHUNK])
+    for batch in _chunk_groups(groups, _DREAM_CHUNK):
+        await _apply_ops(dispatch, [op for group in batch for op in group])
+        if on_batch is not None:
+            on_batch(len(batch))
 
 
 async def _dream_nrem(dispatch: WriteDispatch, now: float) -> dict[str, int]:
@@ -194,7 +219,7 @@ async def _dream_nrem(dispatch: WriteDispatch, now: float) -> dict[str, int]:
         elif age_days <= NREM_FRESH_DAYS:
             ops.append(("UPDATE epi_edges SET weight=? WHERE source_id=? AND target_id=? AND relation=?", (w + NREM_BOOST, *key)))
             boosted += 1
-    await _apply_ops_in_chunks(dispatch, ops)
+    await _apply_groups_in_chunks(dispatch, _groups_of_one(ops))
     return {"decayed": decayed, "pruned": pruned, "boosted": boosted}
 
 
@@ -252,7 +277,7 @@ async def _dream_rem(dispatch: WriteDispatch, layer: str, now: float) -> int:
                 )
             )
             bridged += 1
-    await _apply_ops_in_chunks(dispatch, ops)
+    await _apply_groups_in_chunks(dispatch, _groups_of_one(ops))
     return bridged
 
 
@@ -522,11 +547,14 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
                         ("INSERT OR IGNORE INTO epi_tags (node_id, tag) VALUES (?, ?)", (nid, f"valence:{bucket}")),
                     ]
                 )
-            for batch in _group_chunks(groups, _DREAM_CHUNK):
-                await _apply_ops(dispatch, [op for group in batch for op in group])
+
+            def _count_applied(count: int) -> None:
                 # Count what was applied, not what was planned: a failing batch
                 # must not leave the report claiming tags that were never written.
-                valence_tagged += len(batch)
+                nonlocal valence_tagged
+                valence_tagged += count
+
+            await _apply_groups_in_chunks(dispatch, groups, on_batch=_count_applied)
     except Exception as exc:
         logger.warning("valence tagging failed: %s", exc)
 

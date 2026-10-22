@@ -1200,30 +1200,14 @@ async def _scan_tool_pairs_on(conn: Any, since_ts: float, layer: str | None = No
 
     The rule this function exists to enforce: a miner reads and writes on the
     SAME connection, so the read sees exactly what the write produced.
-    """
-    from lifecycle.tool_stats import parse_tool_blocks
 
-    where, params = "raw_type IN ('tool_use','tool_result') AND ts >= ?", [since_ts]
-    if layer is not None:
-        where += " AND layer = ?"
-        params.append(layer)  # type: ignore[arg-type]  # sqlite placeholders: float and str in one list
-    cur = await conn.execute(f"SELECT layer, user_id, text FROM l0_journal WHERE {where} ORDER BY ts", tuple(params))
-    try:
-        rows = await cur.fetchall()
-    finally:
-        await cur.close()
-    uses: dict[str, dict[str, Any]] = {}
-    pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    for r in rows:
-        for block in parse_tool_blocks(str(r["text"])):
-            if block["type"] == "tool_use":
-                tid = str(block.get("id") or "")
-                if tid:
-                    uses[tid] = {**block, "_uid": str(r["user_id"]), "_layer": str(r["layer"])}
-            else:
-                use = uses.get(str(block.get("tool_use_id") or ""))
-                if use is not None:
-                    pairs.append((use, block))
+    The matching is not re-implemented here: `lifecycle.tool_stats` owns the
+    tool_use/tool_result pairing, and this path and the dispatch read go
+    through the same matcher and the same query.
+    """
+    from lifecycle.tool_stats import read_tool_pairs_on
+
+    pairs, _calls = await read_tool_pairs_on(conn, since_ts, layer)
     return pairs
 
 
