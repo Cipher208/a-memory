@@ -248,21 +248,27 @@ class BackupCron:
             except Exception:
                 logger.exception("Backup cron step %s failed", step.__name__)
 
-    def _finish_nightly_lock(self, holder: int, verdict: str) -> None:
+    def _finish_nightly_lock(self, holder: int) -> None:
         """Hand the base back — unless work this pass abandoned is still using it.
 
-        The `'running'` verdict means the layer budget expired while the hook kept
-        going: `_await_on_main_loop` abandons the coroutine instead of cancelling it.
-        That work is still writing, so releasing here would put the cleanup straight
-        back into the collision this lock exists to prevent — and that collision is
-        not hypothetical: at 14:44:46 on 14.10.2026 the abandoned `graph_enrich` was
-        still writing when the periodic cleanup tried the same file.
+        The decision is made on LIVE FUTURES, not on the verdict — deliberately.
+        The `'running'` verdict only ever names the layer-budget expiry: it is set
+        when a nightly hook outran `NIGHTLY_LAYER_BUDGET_S` and the coroutine kept
+        going (`_await_on_main_loop` abandons, it does not cancel). But every step
+        AFTER the layers — compact, sweep, replay, expiry, tiering, enrich, bridge
+        — waits with the shared 120 s default inside `contextlib.suppress(Exception)`,
+        so a timeout there is swallowed: the coroutine is abandoned and still writing,
+        the pass moves on and returns `'ok'`. Releasing on the verdict alone put the
+        15-minute cleanup straight back into the collision this lock exists to
+        prevent — and that collision is not hypothetical: at 14:44:46 on 14.10.2026
+        the abandoned `graph_enrich` was still writing when the periodic cleanup
+        tried the same file.
 
-        So the lock outlives the pass in that one case and is handed back by the
-        abandoned work's own completion callback.
+        So the lock outlives the pass whenever any abandoned work is still live,
+        and is handed back by that work's own completion callback.
         """
         live = [f for f in self._pending_futures if not f.done()]
-        if verdict == "running" and live:
+        if live:
             self._nightly_lock_fd = holder
             logger.info(
                 "Holding the maintenance lock until %d abandoned job(s) finish, so housekeeping does not write alongside them",
@@ -583,7 +589,7 @@ class BackupCron:
                 self._await_on_main_loop(ingest_drain("default", "agent"))
             return verdict
         finally:
-            self._finish_nightly_lock(holder, verdict)
+            self._finish_nightly_lock(holder)
 
     def _do_backup(self) -> str:
         import shutil
