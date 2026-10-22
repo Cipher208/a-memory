@@ -69,13 +69,35 @@ HOT_FILES = [
     "lifecycle/graph_builder.py",
     "shared/memory_types.py",
     "shared/importance/signals/tech_signal.py",
+    "shared/lock_owners.py",
+    "shared/write_dispatch.py",
 ]
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The database write path. These modules decide who holds the lock and who is
+# allowed to write, so their comments and docstrings are read by operators
+# debugging a live base -- they must be covered by the policy like any other
+# hot file.
+REQUIRED_WRITE_PATH_FILES = [
+    "shared/lock_owners.py",
+    "shared/write_dispatch.py",
+]
+
 
 def _has_cyrillic(text: str) -> bool:
     return any("\u0400" <= ch <= "\u04ff" for ch in text)
+
+
+@pytest.mark.parametrize("relpath", REQUIRED_WRITE_PATH_FILES)
+def test_write_path_modules_are_covered_by_the_policy(relpath: str) -> None:
+    """A write-path module that is not in HOT_FILES is a module nobody checks.
+
+    The list is curated by hand, so adding a module to the write path without
+    adding it here leaves its comments outside the "English only" rule, and
+    nothing would say so.
+    """
+    assert relpath in HOT_FILES, f"{relpath} is not covered by the English-comment policy"
 
 
 @pytest.mark.parametrize("relpath", HOT_FILES)

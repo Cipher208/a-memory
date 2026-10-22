@@ -8,14 +8,14 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from autohooks.config import AgentConfig, FieldMap, SourceConfig
 from autohooks.daemon import load_cursor, run_daemon, save_cursor, source_went_backwards
 from autohooks.source import Batch, Message, SqliteSource
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 class _FakeSource(SqliteSource):
@@ -177,25 +177,21 @@ async def test_cursor_saved_once_per_batch_not_per_message(tmp_path: Path) -> No
     assert json.loads((tmp_path / "cursor.json").read_text(encoding="utf-8")) == {"cursor": 3}
 
 
-async def test_unknown_event_valueerror_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
-    """A per-message failure is reported and survived, not fatal.
+async def test_unknown_event_valueerror_propagates(tmp_path: Path) -> None:
+    """An unknown event type is a programming error, and it must surface.
 
-    The daemon used to let every exception out of `dispatch(...)`, so one bad
-    message killed the process: systemd restarted it ten seconds later and the
-    ingestion window was lost. The failure is now a WARNING that names the
-    exception, and the poll loop goes on.
+    The daemon contains DATABASE failures, not programming errors: swallowing a
+    `ValueError` raised for an unknown event type would turn a typo in the
+    dispatch table into a silent retry loop that never makes progress and never
+    says why. Only `sqlite3.Error` is contained.
     """
 
     async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
         raise ValueError("unknown event: 'bogus'")
 
     src = _FakeSource(batches=[Batch(messages=[Message(sender="u", text="x", ts=None, source_id=1)], cursor=1)])
-    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+    with pytest.raises(ValueError, match="unknown event"):
         await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
-
-    warnings = [r.getMessage() for r in caplog.records if "ValueError" in r.getMessage()]
-    assert warnings, "the failure must be reported, not swallowed silently"
-    assert "unknown event" in warnings[0], warnings[0]
 
 
 async def test_a_locked_database_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
@@ -250,6 +246,47 @@ async def test_a_failed_message_does_not_advance_the_cursor(tmp_path: Path, capl
 
     assert attempts == [1], "the batch must stop at the failed message"
     assert load_cursor(tmp_path / "cursor.json") == 0, "the cursor must not move past a failed message"
+
+
+async def test_a_non_database_error_propagates(tmp_path: Path) -> None:
+    """Only `sqlite3.Error` is contained; every other error surfaces.
+
+    The containment exists for one failure mode -- a busy database -- and it
+    must not become a blanket shield. A `TypeError` from `dispatch(...)` is a
+    programming error: swallowing it would leave the daemon polling forever
+    over a message it can never handle, with the reason buried in a warning.
+    """
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        raise TypeError("dispatch called with the wrong shape")
+
+    src = _FakeSource(batches=[Batch(messages=[Message(sender="u", text="x", ts=None, source_id=1)], cursor=1)])
+    with pytest.raises(TypeError, match="wrong shape"):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+
+async def test_a_resolve_failure_propagates(tmp_path: Path) -> None:
+    """A failure to resolve the target layer is a configuration error.
+
+    `resolve(d_layer)` sits OUTSIDE the containment, on purpose: it reads
+    configuration and opens the per-layer clients, so a failure there is not a
+    busy database but a broken setup. It must surface instead of being retried
+    forever with the cursor held behind an undeliverable message.
+    """
+    from dataclasses import replace
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        return {"results": [], "handler_count": 0}
+
+    def _resolve(layer: str) -> tuple[Any, Any, Any]:
+        raise RuntimeError("no client for layer 'agent'")
+
+    cfg = replace(_cfg(tmp_path), persona_owner=True)
+    src = _CursorSource([Message(sender="assistant", text="a declaration", ts=None, source_id=1)])
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    with pytest.raises(RuntimeError, match="no client for layer"):
+        await run_daemon(cfg, src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch, resolve=_resolve)
 
 
 async def test_poll_sleeps_between_iterations(tmp_path: Path) -> None:

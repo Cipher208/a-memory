@@ -6,9 +6,11 @@ inside dispatch_event handlers when evaluate_importance crosses the
 configured threshold. At-least-once delivery: cursor persists after each
 batch; a crash may re-dispatch at most one batch.
 
-A per-message failure is not fatal: the daemon reports it and keeps the cursor
+A DATABASE failure is not fatal: the daemon reports it and keeps the cursor
 behind the failed message, so the next tick retries it. The process used to
-die on the first error, which turned a busy database into a restart loop.
+die on the first such error, which turned a busy database into a restart loop.
+A PROGRAMMING error is still fatal by design and propagates: a daemon that
+swallowed it would retry the same message forever without saying why.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import contextlib
 import json
 import logging
 import signal
+import sqlite3
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -253,13 +256,21 @@ async def run_daemon(
                         graph_d,
                         rag_d,
                     )
-                except Exception as exc:
-                    # The daemon used to let every exception out of `dispatch`,
-                    # so ONE bad message killed the process: systemd restarted
-                    # it ten seconds later, the ingestion window was lost, and
-                    # the journal filled with the same failure. The hermes base
-                    # dies of exactly this -- `database is locked`, once per
+                except sqlite3.Error as exc:
+                    # Only DATABASE failures are contained here, and only
+                    # because that one failure mode is a fact of life: the
+                    # hermes base dies of `database is locked`, once per
                     # busy_timeout window, while another writer holds the lock.
+                    # The daemon used to let that exception out of `dispatch`,
+                    # so ONE busy write killed the process: systemd restarted it
+                    # ten seconds later, the ingestion window was lost, and the
+                    # journal filled with the same failure.
+                    #
+                    # Everything else PROPAGATES. A `ValueError` for an unknown
+                    # event type, a `TypeError` from a wrong call shape -- those
+                    # are programming errors, and a daemon that contained them
+                    # would hold the cursor behind a message it can never
+                    # deliver and poll on it forever, silently.
                     #
                     # The message is NOT handled, so the cursor stays behind it
                     # and the next tick tries it again. That is the at-least-once
