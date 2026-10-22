@@ -5,9 +5,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from typing import TYPE_CHECKING, Any
-
-import pytest
 
 from autohooks.config import AgentConfig, FieldMap, SourceConfig
 from autohooks.daemon import load_cursor, run_daemon, save_cursor, source_went_backwards
@@ -15,6 +14,8 @@ from autohooks.source import Batch, Message, SqliteSource
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 class _FakeSource(SqliteSource):
@@ -176,13 +177,79 @@ async def test_cursor_saved_once_per_batch_not_per_message(tmp_path: Path) -> No
     assert json.loads((tmp_path / "cursor.json").read_text(encoding="utf-8")) == {"cursor": 3}
 
 
-async def test_unknown_event_valueerror_propagates(tmp_path: Path) -> None:
+async def test_unknown_event_valueerror_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
+    """A per-message failure is reported and survived, not fatal.
+
+    The daemon used to let every exception out of `dispatch(...)`, so one bad
+    message killed the process: systemd restarted it ten seconds later and the
+    ingestion window was lost. The failure is now a WARNING that names the
+    exception, and the poll loop goes on.
+    """
+
     async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
         raise ValueError("unknown event: 'bogus'")
 
     src = _FakeSource(batches=[Batch(messages=[Message(sender="u", text="x", ts=None, source_id=1)], cursor=1)])
-    with pytest.raises(ValueError, match="unknown event"):
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
         await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+    warnings = [r.getMessage() for r in caplog.records if "ValueError" in r.getMessage()]
+    assert warnings, "the failure must be reported, not swallowed silently"
+    assert "unknown event" in warnings[0], warnings[0]
+
+
+async def test_a_locked_database_does_not_kill_the_daemon(tmp_path: Path, caplog) -> None:
+    """`database is locked` must not take the daemon process down.
+
+    The daemon had no `except` at all around `dispatch(...)`: a single busy
+    write killed the process, systemd restarted it ten seconds later, and the
+    journal filled with the same failure. The message is retried on the next
+    tick instead, and the cursor does not move past it -- the at-least-once
+    promise this module documents.
+    """
+    attempts: list[int] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        attempts.append(payload["source_msg_id"])
+        if len(attempts) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return {"results": [], "handler_count": 0}
+
+    msgs = [Message(sender="user", text="a message worth keeping", ts=None, source_id=1)]
+    src = _CursorSource(msgs)
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=2, dispatch=_dispatch)
+
+    # The failed message was attempted again on the next tick and then written.
+    assert attempts == [1, 1], "the failed message must be retried, not dropped"
+    assert load_cursor(tmp_path / "cursor.json") == 1, "the cursor must advance only once the message went through"
+
+    warnings = [r.getMessage() for r in caplog.records if "database is locked" in r.getMessage()]
+    assert warnings, "the failure must be reported"
+    line = warnings[0]
+    assert "source_msg_id=1" in line, line
+    assert "OperationalError" in line, line
+
+
+async def test_a_failed_message_does_not_advance_the_cursor(tmp_path: Path, caplog) -> None:
+    """A message that failed is not handled: the cursor stays behind it."""
+    attempts: list[int] = []
+
+    async def _dispatch(event, layer, user_id, payload, mem, graph, rag=None):
+        attempts.append(payload["source_msg_id"])
+        raise sqlite3.OperationalError("database is locked")
+
+    msgs = [Message(sender="user", text="first", ts=None, source_id=1), Message(sender="user", text="second", ts=None, source_id=2)]
+    src = _CursorSource(msgs)
+    save_cursor(tmp_path / "cursor.json", 0)
+
+    with caplog.at_level(logging.WARNING, logger="autohooks.daemon"):
+        await run_daemon(_cfg(tmp_path), src, mem=None, graph=None, rag=None, max_iterations=1, dispatch=_dispatch)
+
+    assert attempts == [1], "the batch must stop at the failed message"
+    assert load_cursor(tmp_path / "cursor.json") == 0, "the cursor must not move past a failed message"
 
 
 async def test_poll_sleeps_between_iterations(tmp_path: Path) -> None:

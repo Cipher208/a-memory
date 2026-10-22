@@ -5,6 +5,10 @@ Triggers-not-timers: the poll is only transport. Saves happen server-side
 inside dispatch_event handlers when evaluate_importance crosses the
 configured threshold. At-least-once delivery: cursor persists after each
 batch; a crash may re-dispatch at most one batch.
+
+A per-message failure is not fatal: the daemon reports it and keeps the cursor
+behind the failed message, so the next tick retries it. The process used to
+die on the first error, which turned a busy database into a restart loop.
 """
 
 from __future__ import annotations
@@ -232,22 +236,46 @@ async def run_daemon(
                         if d_layer not in layer_mems:
                             layer_mems[d_layer] = resolve(d_layer)
                         mem_d, graph_d, rag_d = layer_mems[d_layer]
-                result = await dispatch(
-                    "new_message",
-                    d_layer,
-                    cfg.user_id,
-                    {
-                        "text": msg.text,
-                        "sender": msg.sender,
-                        "role": role,
-                        "persona_owner": cfg.persona_owner,
-                        "ts": msg.ts,
-                        "source_msg_id": msg.source_id,
-                    },
-                    mem_d,
-                    graph_d,
-                    rag_d,
-                )
+                try:
+                    result = await dispatch(
+                        "new_message",
+                        d_layer,
+                        cfg.user_id,
+                        {
+                            "text": msg.text,
+                            "sender": msg.sender,
+                            "role": role,
+                            "persona_owner": cfg.persona_owner,
+                            "ts": msg.ts,
+                            "source_msg_id": msg.source_id,
+                        },
+                        mem_d,
+                        graph_d,
+                        rag_d,
+                    )
+                except Exception as exc:
+                    # The daemon used to let every exception out of `dispatch`,
+                    # so ONE bad message killed the process: systemd restarted
+                    # it ten seconds later, the ingestion window was lost, and
+                    # the journal filled with the same failure. The hermes base
+                    # dies of exactly this -- `database is locked`, once per
+                    # busy_timeout window, while another writer holds the lock.
+                    #
+                    # The message is NOT handled, so the cursor stays behind it
+                    # and the next tick tries it again. That is the at-least-once
+                    # promise this module's docstring makes, and it is why the
+                    # batch stops here instead of skipping to the next message:
+                    # skipping would move the cursor past a message that was
+                    # never delivered.
+                    logger.warning(
+                        "dispatch failed at source_msg_id=%s (layer=%s): %s: %s — holding the cursor at %s and retrying",
+                        msg.source_id,
+                        d_layer,
+                        type(exc).__name__,
+                        exc,
+                        handled_upto,
+                    )
+                    break
                 if rate_limited(result):
                     # Retry after the poll interval; the limiter's window is a
                     # minute, so the same message goes through on a later pass.
