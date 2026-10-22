@@ -183,3 +183,22 @@ async def test_find_block_still_blocks_case_b(cm):
     assert await find_block("user", "u1", text) == rid
     status, _ = await _status(cm, rid)
     assert status == "saved_l3"
+
+
+@pytest.mark.asyncio
+async def test_find_block_never_raises_even_if_classifier_does(cm, monkeypatch):
+    """S4: контракт never-raise find_block локален — падающий классификатор не роняет путь."""
+    import shared.l0 as l0_mod
+    from shared.l0 import find_block
+
+    text = "классификатор сломан, но find_block жив"
+    rid = await _captured(cm, text, age_s=700)
+
+    def boom(*a, **k):
+        raise RuntimeError("classifier exploded")
+
+    monkeypatch.setattr(l0_mod, "classify_received", boom)
+    # старый ответ сохраняется: received-строка остаётся дублем
+    assert await find_block("user", "u1", text) == rid
+    status, _ = await _status(cm, rid)
+    assert status == "received"  # классификатор не тронул строку

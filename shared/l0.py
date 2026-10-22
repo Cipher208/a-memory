@@ -100,7 +100,10 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
             # authoritative, not a re-read of the status: close_row may fail
             # to write silently, and the verdict still describes what memory
             # holds (the row then heals on the next sweep).
-            verdict = await classify_received(int(row["id"]))
+            try:
+                verdict = await classify_received(int(row["id"]))
+            except Exception:
+                verdict = None  # classify's contract is never-raise; keep find_block's own guarantee local
             if verdict == UNACCOUNTED_EXIT:
                 continue
             return int(row["id"])
