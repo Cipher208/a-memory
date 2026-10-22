@@ -62,6 +62,37 @@ async def test_capture_replay_returns_original_rid_without_second_row(cm):
 
 
 @pytest.mark.asyncio
+async def test_a_row_closed_as_unaccounted_exit_is_not_a_duplicate(cm):
+    """The retry must be able to re-enter the write.
+
+    The capture COMMITS before the write that may fail. A failed write closes
+    the row as `gated_out`/`unaccounted_exit` — nothing was written, so the
+    row must not be a duplicate: the retry has to be able to write.
+
+    A row that WAS written (or a row the gate refused on purpose) keeps
+    blocking duplicates, exactly as before.
+    """
+    from shared.l0 import UNACCOUNTED_EXIT, capture, close_row, find_block
+
+    text = "помни: wal включён, автовакуум выключен"
+    rid = await capture("new_message", "user", "u1", text)
+    assert rid is not None
+    assert await find_block("user", "u1", text) == rid
+
+    # A deliberate refusal by the gate: still a duplicate, still refused.
+    await close_row(rid, "gated_out", reason="importance_gate_bypass")
+    assert await find_block("user", "u1", text) == rid
+
+    # An unaccounted exit: the write never happened.
+    await close_row(rid, "gated_out", reason=UNACCOUNTED_EXIT)
+    assert await find_block("user", "u1", text) is None, "the retry must be able to re-enter the write"
+
+    # And once the retry HAS written, the row blocks duplicates again.
+    await close_row(rid, "saved_l3", reason=None)
+    assert await find_block("user", "u1", text) == rid
+
+
+@pytest.mark.asyncio
 async def test_auto_save_skips_replay_of_captured_block(cm):
     """capture() dedups the journal, but the caller ran the distiller anyway —
     every replay re-emitted the full clause set under the same `raw:<rid>` tag

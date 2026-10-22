@@ -15,18 +15,33 @@ log that cannot be re-read from the middle.
 
 So the cursor now follows the CLASSIFICATION of the failure:
 
-* a TRANSIENT failure (the registry marks it: a busy database) means the
-  work was not done. The cursor stays behind the message and the next tick
-  offers it again. This is the at-least-once promise.
-* a PERMANENT failure (a bug in the handler) means the message can never be
-  delivered. The cursor moves on: holding it would stall the whole
-  ingestion on one poison message, silently, forever.
+* a TRANSIENT failure (the registry marks it: a BUSY database, another
+  writer holding the lock) means the work was not done. The cursor stays
+  behind the message, the next tick offers it again, and the message is
+  written on the first attempt that gets through. This is the at-least-once
+  promise.
+* a PERMANENT failure (a handler bug, a schema that does not match the
+  code) means the message can never be delivered. The cursor moves on:
+  holding it would stall the whole ingestion on one poison message,
+  silently, forever. The failure is logged at ERROR level, because
+  nothing else will report it again.
+
+AND A DECLINE THAT IS NOT A VERDICT IS NOT A DELIVERY EITHER. A dispatch
+result that carries no handler result at all -- the dedup middleware declines
+with `{"status": "deduped"}` -- means the event never reached a handler.
+Reading that as a delivery advanced the cursor past a message that had not
+been written. The cursor stays behind such a message, the message is offered
+again on the next tick, and the decline is logged so the stall is visible
+instead of silent.
 
 WHAT THE LIVE EVIDENCE SAYS, because the earlier narrative in this file was
-wrong: the victim of `database is locked` on the house base is the MCP
+wrong: the component that LOSES the write lock on the house base is the MCP
 SERVER's importance sweep, not this daemon -- both autohooks units report
-`NRestarts=0`. The daemon's real failure was never dying. It was LOSING the
-message.
+`NRestarts=0`. That is what the architecture points at, NOT an observation:
+the journals of the user units hold no `database is locked` today (the last
+ones are from 18.10, and they are the adaptive-threshold counter write, not
+the delivery path). The daemon's real failure was never dying. It was LOSING
+the message.
 """
 
 from __future__ import annotations
@@ -96,7 +111,12 @@ def transient_failure(result: Any) -> str | None:
 
     None means "no transient failure in this result": the dispatch
     succeeded, it declined the event (a rate limit, an unimportant
-    message), or it failed permanently (a bug in the handler).
+    message), or it failed permanently (a handler bug, a schema that does
+    not match the code).
+
+    A result that is not a registry result at all is a different thing and
+    is asked about separately: `not_delivered` reports an event that never
+    reached a handler.
     """
     if not isinstance(result, dict):
         return None
@@ -107,6 +127,50 @@ def transient_failure(result: Any) -> str | None:
         if isinstance(entry, dict) and entry.get("transient") is True:
             return str(entry.get("error", "unknown error"))
     return None
+
+
+def _busy(exc: BaseException) -> bool:
+    """Report whether a database failure is transient (another writer holds the lock).
+
+    The boundary itself lives in `shared.sqlite_busy`: the registry asks the
+    same question when it classifies a handler's failure, and two copies of
+    it are two answers waiting to diverge. The import is inside the function
+    because importing `shared` at module level resolves the data directory at
+    import time, and this module is imported before the environment is set.
+    """
+    from shared.sqlite_busy import is_busy
+
+    return is_busy(exc)
+
+
+def not_delivered(result: Any) -> str | None:
+    """Return why the event never reached a handler, or None.
+
+    Three shapes reach the daemon, and only one of them means "written":
+
+    * a REGISTRY RESULT carries a `results` list -- the handlers ran. The
+      daemon reads the failure classification out of it.
+    * a VERDICT carries `skipped` -- the pipeline or the registry refused the
+      event on its merits (the hook is disabled, there is no handler for this
+      layer, the event was unimportant). The message has been dealt with and
+      the cursor may move on.
+    * anything else is a DECLINE WITH NO VERDICT. The event was handed to the
+      middleware and dropped on the way to the handler, so nothing was
+      written. The shape that matters is `{"status": "deduped"}` from the
+      dedup middleware: it is not a verdict on the EVENT (the same text is
+      welcome again), it is a verdict on the MOMENT.
+
+    Reading the third shape as a delivery lost the message: the daemon
+    advanced the cursor past a message that had not been written, and the
+    source is a chat log that cannot be re-read from the middle.
+    """
+    if not isinstance(result, dict):
+        return "the dispatch returned no result at all"
+    if isinstance(result.get("results"), list):
+        return None
+    if result.get("skipped") is True:
+        return None
+    return "the event was declined before it reached a handler"
 
 
 def load_cursor(state_file: Path) -> int | None:
@@ -260,8 +324,10 @@ async def run_daemon(
             # die of -- not from its own writes, but from a read that lost the
             # race with the writer that owns the file. It is contained here:
             # the tick is skipped, the reason is reported, and the next tick
-            # reads again. A programming error (a wrong column, a bad type)
-            # still PROPAGATES -- that is a broken setup, not a busy moment.
+            # reads again. A permanent database error (a wrong column, a
+            # missing table) is reported at ERROR level instead -- it is a
+            # broken setup, not a busy moment, but the daemon has no cursor
+            # to hold here and killing it would only produce a restart loop.
             batch: Batch | None = None
             try:
                 if need_baseline:
@@ -284,11 +350,24 @@ async def run_daemon(
                         save_cursor(cfg.state_file, cursor)
                 batch = source.fetch_after(cursor, cfg.batch_limit)
             except sqlite3.Error as exc:
-                logger.warning(
-                    "source read failed (%s: %s) — the source database is busy or unreadable; skipping this tick and reading again on the next one",
-                    type(exc).__name__,
-                    exc,
-                )
+                if _busy(exc):
+                    logger.warning(
+                        "source read failed (%s: %s) — the source database is busy or unreadable; skipping this tick and reading again on the next one",
+                        type(exc).__name__,
+                        exc,
+                    )
+                else:
+                    # A permanent database failure in the SOURCE: a missing
+                    # table, a wrong column. There is no message to hold a
+                    # cursor for here, and killing the daemon would only
+                    # produce a restart loop, so the tick is skipped and the
+                    # operator gets the truth on every tick.
+                    detail = str(exc)
+                    logger.exception(
+                        "source read failed with a PERMANENT database error (%s: %s) — the source database is broken; skipping this tick and reporting it on every tick",
+                        type(exc).__name__,
+                        detail,
+                    )
                 batch = None
 
             if batch is None:
@@ -365,21 +444,39 @@ async def run_daemon(
                     # would hold the cursor behind a message it can never
                     # deliver and poll on it forever, silently.
                     #
-                    # The message is NOT handled, so the cursor stays behind it
-                    # and the next tick tries it again. That is the at-least-once
-                    # promise this module's docstring makes, and it is why the
-                    # batch stops here instead of skipping to the next message:
-                    # skipping would move the cursor past a message that was
-                    # never delivered.
-                    logger.warning(
-                        "dispatch failed at source_msg_id=%s (layer=%s): %s: %s — holding the cursor at %s and retrying",
+                    # A BUSY database is transient: the message is NOT handled,
+                    # so the cursor stays behind it and the next tick tries it
+                    # again. That is the at-least-once promise this module's
+                    # docstring makes, and it is why the batch stops here
+                    # instead of skipping to the next message: skipping would
+                    # move the cursor past a message that was never delivered.
+                    if _busy(exc):
+                        logger.warning(
+                            "dispatch failed at source_msg_id=%s (layer=%s): %s: %s — holding the cursor at %s and retrying",
+                            msg.source_id,
+                            d_layer,
+                            type(exc).__name__,
+                            exc,
+                            handled_upto,
+                        )
+                        break
+                    # A PERMANENT database failure: a missing table, a wrong
+                    # column, a broken constraint. It never clears, so holding
+                    # the cursor would stall the whole ingestion on one
+                    # undeliverable message. The message is treated as
+                    # handled, the cursor moves on, and the failure is logged
+                    # at ERROR level -- loudly, because nothing else will
+                    # report it again.
+                    detail = str(exc)
+                    logger.exception(
+                        "dispatch failed with a PERMANENT database error at source_msg_id=%s (layer=%s): %s: %s — the message cannot be delivered; treating it as handled and moving the cursor on",
                         msg.source_id,
                         d_layer,
                         type(exc).__name__,
-                        exc,
-                        handled_upto,
+                        detail,
                     )
-                    break
+                    handled_upto = msg.source_id
+                    continue
                 failure = transient_failure(result)
                 if failure is not None:
                     # A TRANSIENT failure: the handler raised a database error
@@ -407,6 +504,21 @@ async def run_daemon(
                         handled_upto,
                     )
                     break
+                undelivered = not_delivered(result)
+                if undelivered is not None:
+                    # The event never reached a handler: a middleware declined
+                    # it on the way there. Nothing was written, so the cursor
+                    # stays behind the message and the next tick offers it
+                    # again. The warning is what makes the stall VISIBLE --
+                    # a silent decline is how the message was lost.
+                    logger.warning(
+                        "dispatch at source_msg_id=%s (layer=%s) never reached a handler (%s) — holding the cursor at %s and retrying",
+                        msg.source_id,
+                        d_layer,
+                        undelivered,
+                        handled_upto,
+                    )
+                    break
                 handled_upto = msg.source_id
                 logger.debug("dispatched msg %s (layer=%s): %s", msg.source_id, d_layer, result)
             if handled_upto != cursor:
@@ -423,11 +535,19 @@ async def run_daemon(
                 try:
                     await dispatch("memory_pressure", cfg.layer, cfg.user_id, {"l1_size": size}, mem, graph, rag)
                 except sqlite3.Error as exc:
-                    logger.warning(
-                        "memory_pressure dispatch failed (%s: %s) — skipping the event and retrying on the next tick",
-                        type(exc).__name__,
-                        exc,
-                    )
+                    if _busy(exc):
+                        logger.warning(
+                            "memory_pressure dispatch failed (%s: %s) — skipping the event and retrying on the next tick",
+                            type(exc).__name__,
+                            exc,
+                        )
+                    else:
+                        detail = str(exc)
+                        logger.exception(
+                            "memory_pressure dispatch failed with a PERMANENT database error (%s: %s) — skipping the event",
+                            type(exc).__name__,
+                            detail,
+                        )
                 else:
                     last_pressure = size
             # 2026-09-16: central liveness sweep — a frozen read-snapshot writer

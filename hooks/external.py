@@ -216,19 +216,30 @@ async def _close_unaccounted(tracker: dict[str, Any]) -> None:
     names the bug instead of dressing it as a plausible verdict. WARNING, not debug:
     this should never fire, and a silent one is how the original went unnoticed for
     months.
+
+    THE CLOSE RECORDS NO GATE DECISION, and that is the point. `shared/l0.py`
+    writes the (gate, config_hash) pair for every close with a reason — the
+    nightly replay skips a row that carries the current pair, because the pair
+    means "the gate refused this deliberately". An unaccounted exit is the
+    opposite: the write never happened, so the row is not a decision, and a
+    pair would make the replay skip the very row that still needs rescuing.
+    The reason alone is recorded, and it is what lets the duplicate guard
+    (`find_block`) treat the row as re-enterable: the retry has to be able to
+    re-enter the write.
     """
     l0_id = tracker.get("l0_id")
     if not l0_id:
         return
     try:
         from shared.connection import connection_manager
+        from shared.l0 import UNACCOUNTED_EXIT
 
         conn = await connection_manager.get("memory.db")
         row = await (await conn.execute("SELECT status FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
         if row is None or row[0] != "received":
             return
         logger.warning("auto_save_text left l0 row %s unaccounted for — closing it", l0_id)
-        await _close_l0_row(int(l0_id), "gated_out", reason="unaccounted_exit")
+        await _close_l0_row(int(l0_id), "gated_out", reason=UNACCOUNTED_EXIT)
     except Exception as _e:
         logger.debug("unaccounted-exit close failed: %s", _e)
 
@@ -389,6 +400,14 @@ async def _auto_save_text_body(
     # every replay re-emitted the full clause set under the same `raw:<rid>` tag.
     # capture() guards the journal, not the pipeline; the pipeline guard belongs
     # here, before it.
+    #
+    # A ROW WHOSE WRITE NEVER HAPPENED IS NOT A REPLAY. The capture commits
+    # BEFORE this write, so a write that fails leaves the row behind with
+    # nothing written next to it — and the guard used to call that a
+    # duplicate, which refused the retry of a message that had never been
+    # stored. `find_block` skips such a row (it was closed with the reason
+    # `unaccounted_exit`), so the retry re-enters the write and the row
+    # ends up carrying the status of what really happened.
     if await find_block(l0_layer, user_id, text) is not None:
         return await _refuse("duplicate_l0_block")
 

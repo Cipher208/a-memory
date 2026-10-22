@@ -12,6 +12,24 @@ from pathlib import Path
 
 import pytest
 
+# The database write path. These modules decide who holds the lock, who is
+# allowed to write, and which database failure is worth retrying, so their
+# comments and docstrings are read by operators debugging a live base -- they
+# must be covered by the policy like any other hot file.
+#
+# The list FEEDS the policy list below instead of being checked against it.
+# The old version asserted that one hand-maintained list was a subset of
+# another hand-maintained list in the same file: it passed by construction,
+# it discovered nothing, and it would have kept passing after either list had
+# been edited wrongly. Folding the list into the policy makes the guarantee
+# structural -- there is nothing left to assert, and a file added here is
+# covered the moment it is added.
+REQUIRED_WRITE_PATH_FILES = [
+    "shared/lock_owners.py",
+    "shared/write_dispatch.py",
+    "shared/sqlite_busy.py",
+]
+
 HOT_FILES = [
     "lifecycle/graph_miners.py",
     "rag/edm.py",
@@ -27,6 +45,8 @@ HOT_FILES = [
     "lifecycle/segment_consolidation.py",
     "autohooks/context.py",
     "autohooks/__main__.py",
+    "autohooks/daemon.py",
+    "hooks/registry.py",
     "shared/l0.py",
     "features/wiki_reconciliation.py",
     "features/offload.py",
@@ -69,43 +89,14 @@ HOT_FILES = [
     "lifecycle/graph_builder.py",
     "shared/memory_types.py",
     "shared/importance/signals/tech_signal.py",
-    "shared/lock_owners.py",
-    "shared/write_dispatch.py",
+    *REQUIRED_WRITE_PATH_FILES,
 ]
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The database write path. These modules decide who holds the lock and who is
-# allowed to write, so their comments and docstrings are read by operators
-# debugging a live base -- they must be covered by the policy like any other
-# hot file.
-REQUIRED_WRITE_PATH_FILES = [
-    "shared/lock_owners.py",
-    "shared/write_dispatch.py",
-]
-
 
 def _has_cyrillic(text: str) -> bool:
     return any("\u0400" <= ch <= "\u04ff" for ch in text)
-
-
-@pytest.mark.parametrize("relpath", REQUIRED_WRITE_PATH_FILES)
-def test_write_path_modules_are_covered_by_the_policy(relpath: str) -> None:
-    """A tripwire for hand edits -- NOT a discovery mechanism.
-
-    Both lists are curated by hand, so this test cannot find a write-path
-    module that nobody added to either of them: it passes by construction
-    for everything that IS listed. What it does catch is the hand edit that
-    adds a module to REQUIRED_WRITE_PATH_FILES and forgets HOT_FILES --
-    that module would be a write-path file whose comments and docstrings
-    nobody checks.
-
-    It is deliberately not a new policy rule. Making the test DISCOVER the
-    write path would mean naming the write path somewhere else and
-    comparing two hand-written lists against it: the same construction with
-    one more place to forget.
-    """
-    assert relpath in HOT_FILES, f"{relpath} is not covered by the English-comment policy"
 
 
 @pytest.mark.parametrize("relpath", HOT_FILES)

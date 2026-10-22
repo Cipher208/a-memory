@@ -2,10 +2,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import sqlite3
 from typing import Any, TYPE_CHECKING, TypeVar
 from collections.abc import Callable  # noqa: TC003
 from pydantic import BaseModel, ConfigDict
+
+from shared.sqlite_busy import is_busy
 
 if TYPE_CHECKING:
     F = TypeVar("F", bound=Callable[..., Any])
@@ -78,12 +79,19 @@ class HookRegistry:
         The classification is the ``transient`` key of a failed result:
 
         * ``{"error": str(e), "transient": True}`` -- the failure is
-          transient, i.e. it clears by itself. A ``sqlite3.Error`` (a busy
-          database) is the only such case: the work was not done, and doing
+          transient, i.e. it clears by itself. A BUSY database (another
+          writer holds the lock, or this connection's read snapshot went
+          stale) is the only such case: the work was not done, and doing
           it again later is the right thing to do.
         * ``{"error": str(e), "transient": False}`` -- the failure is
-          permanent, i.e. a bug in the handler. Retrying it forever would
-          stall the caller on one poison message.
+          permanent, i.e. a bug in the handler or a schema that does not
+          match the code. Retrying it forever would stall the caller on
+          one poison message.
+
+        The boundary is the CODE, not the class: ``sqlite3.Error`` also
+        covers ``ProgrammingError``, ``IntegrityError`` and a missing
+        table, and none of those ever clear. ``shared.sqlite_busy`` is
+        the single place that answers the question.
 
         The key is ALWAYS present on a failed result, so "not transient" is
         an explicit False and never a missing key. A caller that has to
@@ -124,11 +132,11 @@ class HookRegistry:
             except Exception as e:
                 logger.exception(f"Hook {hook_name} failed")
                 # The marker tells the caller whether the work is worth
-                # repeating. A sqlite error is transient -- a busy database
-                # clears, and the message was NOT handled. Everything else
-                # is a bug in the handler, and the caller must not spin on
-                # it forever.
-                results.append({"error": str(e), "transient": isinstance(e, sqlite3.Error)})
+                # repeating. A BUSY database clears, and the message was
+                # NOT handled. Everything else -- a handler bug, a missing
+                # column, a broken constraint -- is permanent, and the
+                # caller must not spin on it forever.
+                results.append({"error": str(e), "transient": is_busy(e)})
         return {"results": results, "handler_count": fired_count}
 
     def list_hooks(self) -> dict[str, int]:

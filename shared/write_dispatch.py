@@ -12,6 +12,7 @@ from weakref import WeakKeyDictionary
 
 from shared.connection import AsyncConnectionManager, connection_manager
 from shared.lock_owners import describe_lock_holders
+from shared.sqlite_busy import is_busy
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
@@ -31,11 +32,6 @@ logger = logging.getLogger(__name__)
 #: and that phase is the only thing that names it -- the dispatcher's own
 #: frames name nothing. Tunable: the tests lower it.
 _SLOW_WRITE_WARN_S = 2.0
-
-#: SQLite's "another writer holds the lock" codes: BUSY for a write lock,
-#: BUSY_SNAPSHOT for a stale read snapshot that cannot be upgraded.
-_SQLITE_BUSY = 5
-_SQLITE_BUSY_SNAPSHOT = 517
 
 #: Frames from these stdlib packages never name a caller. A write scheduled
 #: as a task is resumed by the event loop inside the loop's own frames, so
@@ -94,15 +90,6 @@ def _phase_of(frame: FrameType | None) -> str:
         return "unknown:unknown:0"
     module = frame.f_globals.get("__name__", "unknown")
     return f"{module}:{frame.f_code.co_name}:{frame.f_lineno}"
-
-
-def _is_busy(exc: sqlite3.Error) -> bool:
-    """Report whether the error means "another writer holds the lock"."""
-    code = getattr(exc, "sqlite_errorcode", None)
-    if isinstance(code, int):
-        return code in (_SQLITE_BUSY, _SQLITE_BUSY_SNAPSHOT)
-    text = str(exc).lower()
-    return "locked" in text or "busy" in text
 
 
 class WriteDispatch:
@@ -216,7 +203,7 @@ class WriteDispatch:
         try:
             yield
         except sqlite3.OperationalError as exc:
-            if _is_busy(exc):
+            if is_busy(exc):
                 # A diagnostic must never turn a recoverable failure into a
                 # crash, so everything it touches is contained here.
                 with suppress(Exception):
