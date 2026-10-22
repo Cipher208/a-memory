@@ -412,6 +412,70 @@ async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> No
         logging.getLogger(__name__).debug("l0_journal status update failed: %s", exc)
 
 
+async def classify_received(l0_id: int, *, grace_s: float = 600.0) -> str | None:
+    """Judge one stranded `received` row by evidence in MEMORY. Never raises.
+
+    `received` was written by every writer and read by nobody, so rows whose
+    write never happened sat in the journal forever (41 rows on two live
+    bases, the oldest 5.6 days). The verdict comes from what memory HOLDS,
+    not from the row:
+
+      - "promoted_l4"      -- an L4 fact carries metadata.source_raw_id == l0_id
+      - "saved_l3"         -- an L3 episode carries the tag `raw:<id>`
+      - UNACCOUNTED_EXIT   -- no evidence anywhere: nothing was written, the
+                              row is re-enterable (see `close_row`)
+      - None               -- not ours to judge: inside `grace_s`, no longer
+                              `received`, or the reader failed -- the old
+                              answer stands
+
+    Evidence is scoped by (layer, user_id): a raw id from another scope proves
+    nothing (indices exist on both tables for exactly this).
+
+    The exception boundary is HERE, and it logs a WARNING itself: every caller
+    (find_block on the message path, replay, the nightly sweep) must keep its
+    old answer when the reader is broken, and an exception that escapes to the
+    caller would be swallowed silently there.
+    """
+    try:
+        row = await _dispatch().select_one(
+            DB_NAME,
+            "SELECT layer, user_id, ts, status FROM l0_journal WHERE id=?",
+            (l0_id,),
+        )
+        if row is None or str(row["status"] or "") != STATUS_RECEIVED:
+            return None
+        if time.time() - float(row["ts"] or 0) < grace_s:
+            return None
+        layer = str(row["layer"] or "user")
+        user_id = str(row["user_id"] or "")
+        l4_rows = await _dispatch().query(
+            DB_NAME,
+            "SELECT metadata FROM core_memory WHERE layer=? AND user_id=? AND metadata LIKE ?",
+            (layer, user_id, '%"source_raw_id"%'),
+        )
+        for r in l4_rows:
+            try:
+                meta = json.loads(r["metadata"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue  # corrupted metadata is not evidence either way
+            if isinstance(meta, dict) and meta.get("source_raw_id") == l0_id:
+                await close_row(l0_id, "promoted_l4")
+                return "promoted_l4"
+        l3 = await _dispatch().select_one(
+            DB_NAME,
+            "SELECT 1 FROM episodes WHERE layer=? AND user_id=? AND tags LIKE ? LIMIT 1",
+            (layer, user_id, f'%"raw:{l0_id}"%'),
+        )
+        if l3 is not None:
+            await close_row(l0_id, "saved_l3")
+            return "saved_l3"
+        await close_row(l0_id, "gated_out", reason=UNACCOUNTED_EXIT)
+        return UNACCOUNTED_EXIT
+    except Exception as exc:
+        logger.warning("classify_received(%s) failed, row left as is: %s", l0_id, exc)
+        return None
+
+
 def classify_raw(text: str) -> str:
     t = text.strip()
     if t.startswith(("[{", '{"')):
