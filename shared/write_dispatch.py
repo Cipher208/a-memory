@@ -37,22 +37,54 @@ _SLOW_WRITE_WARN_S = 2.0
 _SQLITE_BUSY = 5
 _SQLITE_BUSY_SNAPSHOT = 517
 
+#: Frames from these stdlib packages never name a caller. A write scheduled
+#: as a task is resumed by the event loop inside the loop's own frames, so
+#: the first frame outside this module would be `asyncio.events:_run` -- the
+#: loop, not the code that asked for the write. Measured: an awaited write
+#: reports `__main__:caller:43`, the same write scheduled with
+#: `create_task` reported `asyncio.events:_run:99`.
+_SKIP_FRAME_MODULES = ("asyncio", "concurrent.futures")
+
+
+def _is_skipped_frame(module: str) -> bool:
+    """Report whether a frame's module must not be reported as the caller."""
+    if module == __name__:
+        return True
+    return any(module == package or module.startswith(f"{package}.") for package in _SKIP_FRAME_MODULES)
+
 
 def _caller_frame() -> FrameType | None:
-    """Return the first stack frame outside this module, if there is one.
+    """Return the first stack frame that can name a caller, if there is one.
 
-    The frame is captured while the caller's stack is still live. The phase is
-    only read when a write turns out to be slow, and by then the frames of the
-    resumed coroutine describe the event loop, not the caller.
+    Two kinds of frame are skipped. This module's own frames name the
+    dispatcher, not the caller. The stdlib's event-loop and executor frames
+    name the LOOP: a write scheduled as a task is resumed inside
+    `asyncio.events:_run`, and reporting that would defeat the instrument,
+    which exists to name the code path that held the lock.
+
+    The frame is captured while the caller's stack is still live. The phase
+    is only read when a write turns out to be slow, and by then the frames
+    of the resumed coroutine describe the event loop, not the caller.
     """
     frame = inspect.currentframe()
     try:
         while frame is not None:
-            if frame.f_globals.get("__name__") != __name__:
+            if not _is_skipped_frame(frame.f_globals.get("__name__", "")):
                 return frame
             frame = frame.f_back
     finally:
         del frame
+    return None
+
+
+def _safe_caller_frame() -> FrameType | None:
+    """Return the caller's frame, or None when the capture itself fails.
+
+    A diagnostic must never raise into the write path -- not even while it
+    collects the material for its own report.
+    """
+    with suppress(Exception):
+        return _caller_frame()
     return None
 
 
@@ -164,8 +196,21 @@ class WriteDispatch:
         A write that takes longer than ``_SLOW_WRITE_WARN_S`` is reported with
         the phase of its caller, and a write that fails with SQLITE_BUSY is
         reported with the OS-level holders of the base's locks. Both are
-        diagnostics: the transaction boundaries are exactly what they were, and
-        the only cost on the happy path is one clock read.
+        diagnostics: the transaction boundaries are exactly what they were.
+
+        The cost on the happy path is not a single clock read: it is two
+        clock reads, one frame capture and one asynccontextmanager
+        enter/exit. Measured on the production interpreter (Python 3.14,
+        20 000 iterations each): two clock reads 0.17 µs, frame capture
+        0.92 µs, asynccontextmanager enter/exit 2.1 µs -- about 3.3 µs per
+        write. End to end, a write with the scope and a write without it
+        differ by 7.7 µs on a ~300 µs write (2.6 %), which is inside the
+        run-to-run noise of the write itself (median of 7 x 100 writes:
+        302 µs with the scope, 294 µs without -- the scope is not what
+        decides that difference).
+
+        Neither diagnostic can raise into the write path: the slow-write
+        branch and every helper it calls are contained.
         """
         started = time.monotonic()
         try:
@@ -178,15 +223,16 @@ class WriteDispatch:
                     self._report_busy(kind, db, exc, caller)
             raise
         else:
-            elapsed = time.monotonic() - started
-            if elapsed > _SLOW_WRITE_WARN_S:
-                logger.warning(
-                    "slow write: kind=%s duration=%.3fs phase=%s db=%s",
-                    kind,
-                    elapsed,
-                    _phase_of(caller),
-                    db,
-                )
+            with suppress(Exception):
+                elapsed = time.monotonic() - started
+                if elapsed > _SLOW_WRITE_WARN_S:
+                    logger.warning(
+                        "slow write: kind=%s duration=%.3fs phase=%s db=%s",
+                        kind,
+                        elapsed,
+                        _phase_of(caller),
+                        db,
+                    )
 
     def _report_busy(self, kind: str, db: str, exc: sqlite3.OperationalError, caller: FrameType | None) -> None:
         """Log who holds the lock that just blocked this write.
@@ -211,7 +257,7 @@ class WriteDispatch:
         )
 
     async def write(self, db: str, sql: str, params: Sequence[Any] = ()) -> int:
-        async with self._write_scope("write", db, _caller_frame()), self._borrow(db) as (conn, nested):
+        async with self._write_scope("write", db, _safe_caller_frame()), self._borrow(db) as (conn, nested):
             cur = await conn.execute(sql, params)
             try:
                 rowcount = cur.rowcount
@@ -227,7 +273,7 @@ class WriteDispatch:
         ``write`` reports the rowcount; an INSERT caller usually needs the id
         instead, and reading it outside the cursor is impossible at this API.
         """
-        async with self._write_scope("insert", db, _caller_frame()), self._borrow(db) as (conn, nested):
+        async with self._write_scope("insert", db, _safe_caller_frame()), self._borrow(db) as (conn, nested):
             cur = await conn.execute(sql, params)
             try:
                 lastrowid = cur.lastrowid
@@ -239,7 +285,7 @@ class WriteDispatch:
 
     async def execute_script(self, db: str, script: str) -> None:
         """Run a multi-statement DDL script (schema creation) and commit."""
-        async with self._write_scope("execute_script", db, _caller_frame()), self._borrow(db) as (conn, nested):
+        async with self._write_scope("execute_script", db, _safe_caller_frame()), self._borrow(db) as (conn, nested):
             await conn.executescript(script)
             if not nested:
                 await conn.commit()
@@ -247,7 +293,7 @@ class WriteDispatch:
     async def write_many(self, db: str, ops: Sequence[tuple[str, Sequence[Any]]]) -> None:
         """Execute all ops in one transaction; roll back on any failure."""
         async with (
-            self._write_scope("write_many", db, _caller_frame()),
+            self._write_scope("write_many", db, _safe_caller_frame()),
             self._borrow(db) as (conn, nested),
             conn.cursor() as cur,
         ):
@@ -273,7 +319,7 @@ class WriteDispatch:
         frame commits. This keeps a domain writer callable from a maintenance
         body without a self-deadlock.
         """
-        async with self._write_scope("atomic", db, _caller_frame()), self._borrow(db) as (conn, nested):
+        async with self._write_scope("atomic", db, _safe_caller_frame()), self._borrow(db) as (conn, nested):
             if nested:
                 return await fn(conn)
             try:

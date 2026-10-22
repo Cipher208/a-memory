@@ -6,11 +6,27 @@ inside dispatch_event handlers when evaluate_importance crosses the
 configured threshold. At-least-once delivery: cursor persists after each
 batch; a crash may re-dispatch at most one batch.
 
-A DATABASE failure is not fatal: the daemon reports it and keeps the cursor
-behind the failed message, so the next tick retries it. The process used to
-die on the first such error, which turned a busy database into a restart loop.
-A PROGRAMMING error is still fatal by design and propagates: a daemon that
-swallowed it would retry the same message forever without saying why.
+THE PROMISE IS ABOUT DELIVERY, NOT ABOUT SURVIVAL, and it used to be broken
+in the quietest possible way. The hook registry catches a handler's exception
+and reports it as a result, so the daemon never saw an exception at all: it
+read "one handler failed" as "the message was handled", advanced the cursor
+past the message, and the message was lost for good -- the source is a chat
+log that cannot be re-read from the middle.
+
+So the cursor now follows the CLASSIFICATION of the failure:
+
+* a TRANSIENT failure (the registry marks it: a busy database) means the
+  work was not done. The cursor stays behind the message and the next tick
+  offers it again. This is the at-least-once promise.
+* a PERMANENT failure (a bug in the handler) means the message can never be
+  delivered. The cursor moves on: holding it would stall the whole
+  ingestion on one poison message, silently, forever.
+
+WHAT THE LIVE EVIDENCE SAYS, because the earlier narrative in this file was
+wrong: the victim of `database is locked` on the house base is the MCP
+SERVER's importance sweep, not this daemon -- both autohooks units report
+`NRestarts=0`. The daemon's real failure was never dying. It was LOSING the
+message.
 """
 
 from __future__ import annotations
@@ -40,7 +56,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from autohooks.config import AgentConfig
-    from autohooks.source import SqliteSource
+    from autohooks.source import Batch, SqliteSource
 
 logger = logging.getLogger("autohooks.daemon")
 
@@ -67,6 +83,30 @@ def rate_limited(result: Any) -> bool:
     from shared.middleware import RATE_LIMIT_BLOCK_PREFIX
 
     return isinstance(result, dict) and result.get("skipped") is True and RATE_LIMIT_BLOCK_PREFIX in str(result.get("reason", ""))
+
+
+def transient_failure(result: Any) -> str | None:
+    """Return the error text of the first TRANSIENT failure in a dispatch result.
+
+    The hook registry classifies a failed handler and says so in the result
+    (`{"error": ..., "transient": True}`), because it catches the exception
+    and the caller never sees one. A transient failure means the work was
+    NOT done: the caller must not treat the event as handled, or it will
+    advance the cursor past a message that was never written.
+
+    None means "no transient failure in this result": the dispatch
+    succeeded, it declined the event (a rate limit, an unimportant
+    message), or it failed permanently (a bug in the handler).
+    """
+    if not isinstance(result, dict):
+        return None
+    results = result.get("results")
+    if not isinstance(results, list):
+        return None
+    for entry in results:
+        if isinstance(entry, dict) and entry.get("transient") is True:
+            return str(entry.get("error", "unknown error"))
+    return None
 
 
 def load_cursor(state_file: Path) -> int | None:
@@ -152,11 +192,13 @@ async def run_daemon(
     dispatch = dispatch or dispatch_event
     layer_mems: dict[str, tuple[Any, Any, Any]] = {}
     try:
-        cursor = load_cursor(cfg.state_file)
-        if cursor is None:
-            # First-run baseline: newest existing row, no history replay (S4).
-            cursor = source.max_id()
-            save_cursor(cfg.state_file, cursor)
+        saved = load_cursor(cfg.state_file)
+        # A daemon that has consumed nothing has no cursor yet, and the
+        # baseline (the newest existing row) is read on the first tick that
+        # can read it at all. A busy source must not make that baseline
+        # permanent, so the read is retried rather than assumed.
+        need_baseline = saved is None
+        cursor: int = saved if saved is not None else 0
 
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -171,6 +213,25 @@ async def run_daemon(
         # had been up ≥10 min — it passed on long-lived VPS, failed on fresh CI.
         last_prune: float | None = None
         last_health: float | None = None
+
+        async def _next_tick() -> bool:
+            """Advance the counter, wait for the next tick; False means stop.
+
+            The counter lives here so that a tick which was SKIPPED still
+            counts and still waits. The old inline tail was the only place
+            that advanced the counter, so a skipped tick would have spun.
+            """
+            nonlocal iterations
+            iterations += 1
+            if max_iterations is not None and iterations >= max_iterations:
+                return False
+            if poll is not None:
+                await poll(cfg.poll_seconds)
+            else:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=cfg.poll_seconds)
+            return True
+
         while not stop.is_set():
             # A source can be replaced or renumbered under a running daemon (see
             # `source_went_backwards`). Left unnoticed, `WHERE id > cursor` then
@@ -193,20 +254,48 @@ async def run_daemon(
             # twice. Re-reading a whole source is slow; never reading it again is
             # permanent. The event is logged loudly, because a silent rewind would
             # hide the merge that caused it.
-            source_max = source.max_id()
-            if source_went_backwards(source_max, cursor):
+            #
+            # The SOURCE is a chat database written by ANOTHER process, so
+            # `database is locked` is the one error this daemon can plausibly
+            # die of -- not from its own writes, but from a read that lost the
+            # race with the writer that owns the file. It is contained here:
+            # the tick is skipped, the reason is reported, and the next tick
+            # reads again. A programming error (a wrong column, a bad type)
+            # still PROPAGATES -- that is a broken setup, not a busy moment.
+            batch: Batch | None = None
+            try:
+                if need_baseline:
+                    # First-run baseline: newest existing row, no history replay (S4).
+                    cursor = source.max_id()
+                    save_cursor(cfg.state_file, cursor)
+                    need_baseline = False
+                else:
+                    source_max = source.max_id()
+                    if source_went_backwards(source_max, cursor):
+                        logger.warning(
+                            "source went backwards: max id %s < cursor %s — the source was "
+                            "replaced or renumbered (a multi-agent merge re-issues message ids). "
+                            "Resetting the cursor to 0 and re-reading the whole source; L0 dedups "
+                            "by content hash, so this is slow but lossless.",
+                            source_max,
+                            cursor,
+                        )
+                        cursor = 0
+                        save_cursor(cfg.state_file, cursor)
+                batch = source.fetch_after(cursor, cfg.batch_limit)
+            except sqlite3.Error as exc:
                 logger.warning(
-                    "source went backwards: max id %s < cursor %s — the source was "
-                    "replaced or renumbered (a multi-agent merge re-issues message ids). "
-                    "Resetting the cursor to 0 and re-reading the whole source; L0 dedups "
-                    "by content hash, so this is slow but lossless.",
-                    source_max,
-                    cursor,
+                    "source read failed (%s: %s) — the source database is busy or unreadable; skipping this tick and reading again on the next one",
+                    type(exc).__name__,
+                    exc,
                 )
-                cursor = 0
-                save_cursor(cfg.state_file, cursor)
+                batch = None
 
-            batch = source.fetch_after(cursor, cfg.batch_limit)
+            if batch is None:
+                if not await _next_tick():
+                    return
+                continue
+
             # The cursor advances only past messages that were really handled.
             # `dispatch` can decline one, and the rate limit in particular means
             # "not now": the source is a chat log that cannot be re-read from the
@@ -258,13 +347,17 @@ async def run_daemon(
                     )
                 except sqlite3.Error as exc:
                     # Only DATABASE failures are contained here, and only
-                    # because that one failure mode is a fact of life: the
-                    # hermes base dies of `database is locked`, once per
-                    # busy_timeout window, while another writer holds the lock.
-                    # The daemon used to let that exception out of `dispatch`,
-                    # so ONE busy write killed the process: systemd restarted it
-                    # ten seconds later, the ingestion window was lost, and the
-                    # journal filled with the same failure.
+                    # because that one failure mode is a fact of life: a busy
+                    # database clears by itself, once per busy_timeout
+                    # window, while another writer holds the lock.
+                    #
+                    # NOTE what this catch is NOT. The handler's own
+                    # exception does not arrive here: `hooks/registry.py`
+                    # catches it and reports it as a result. This branch
+                    # only sees a database error raised OUTSIDE a handler --
+                    # in the middleware pipeline, in the dispatch log, in
+                    # the rejection log. The handler's failure is classified
+                    # by the registry and handled by the branch below.
                     #
                     # Everything else PROPAGATES. A `ValueError` for an unknown
                     # event type, a `TypeError` from a wrong call shape -- those
@@ -287,6 +380,23 @@ async def run_daemon(
                         handled_upto,
                     )
                     break
+                failure = transient_failure(result)
+                if failure is not None:
+                    # A TRANSIENT failure: the handler raised a database error
+                    # and the work was NOT done. The registry swallowed the
+                    # exception, so this result is the only trace of it -- and
+                    # before this rule the daemon read the result as a
+                    # delivery, moved the cursor past the message, and lost it
+                    # for good. The cursor stays where it is and the next tick
+                    # offers the same message again.
+                    logger.warning(
+                        "transient delivery failure at source_msg_id=%s (layer=%s): %s — holding the cursor at %s and retrying",
+                        msg.source_id,
+                        d_layer,
+                        failure,
+                        handled_upto,
+                    )
+                    break
                 if rate_limited(result):
                     # Retry after the poll interval; the limiter's window is a
                     # minute, so the same message goes through on a later pass.
@@ -305,8 +415,21 @@ async def run_daemon(
             # E16: memory_pressure — ariel-side emitter (L1 ring growth with hysteresis).
             size = len(mem.l1.get_full()) if mem is not None and hasattr(mem, "l1") and hasattr(mem.l1, "get_full") else 0
             if size > 40 and size - last_pressure >= 10:
-                await dispatch("memory_pressure", cfg.layer, cfg.user_id, {"l1_size": size}, mem, graph, rag)
-                last_pressure = size
+                # The pressure event is a write on the same base as everything
+                # else, so a busy database here is the same failure as
+                # anywhere else: it is reported and skipped, and the event is
+                # retried on a later tick. A programming error still
+                # propagates -- it is a broken setup, not a busy moment.
+                try:
+                    await dispatch("memory_pressure", cfg.layer, cfg.user_id, {"l1_size": size}, mem, graph, rag)
+                except sqlite3.Error as exc:
+                    logger.warning(
+                        "memory_pressure dispatch failed (%s: %s) — skipping the event and retrying on the next tick",
+                        type(exc).__name__,
+                        exc,
+                    )
+                else:
+                    last_pressure = size
             # 2026-09-16: central liveness sweep — a frozen read-snapshot writer
             # (this daemon included) can recreate edges toward purged nodes;
             # housekeeping keeps dangling rows at dust scale. Failures must not
@@ -339,13 +462,7 @@ async def run_daemon(
                         health["open_db_fds"],
                         health["unmanaged_fds"],
                     )
-            iterations += 1
-            if max_iterations is not None and iterations >= max_iterations:
+            if not await _next_tick():
                 return
-            if poll is not None:
-                await poll(cfg.poll_seconds)
-            else:
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(stop.wait(), timeout=cfg.poll_seconds)
     finally:
         source.close()

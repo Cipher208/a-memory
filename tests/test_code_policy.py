@@ -91,11 +91,19 @@ def _has_cyrillic(text: str) -> bool:
 
 @pytest.mark.parametrize("relpath", REQUIRED_WRITE_PATH_FILES)
 def test_write_path_modules_are_covered_by_the_policy(relpath: str) -> None:
-    """A write-path module that is not in HOT_FILES is a module nobody checks.
+    """A tripwire for hand edits -- NOT a discovery mechanism.
 
-    The list is curated by hand, so adding a module to the write path without
-    adding it here leaves its comments outside the "English only" rule, and
-    nothing would say so.
+    Both lists are curated by hand, so this test cannot find a write-path
+    module that nobody added to either of them: it passes by construction
+    for everything that IS listed. What it does catch is the hand edit that
+    adds a module to REQUIRED_WRITE_PATH_FILES and forgets HOT_FILES --
+    that module would be a write-path file whose comments and docstrings
+    nobody checks.
+
+    It is deliberately not a new policy rule. Making the test DISCOVER the
+    write path would mean naming the write path somewhere else and
+    comparing two hand-written lists against it: the same construction with
+    one more place to forget.
     """
     assert relpath in HOT_FILES, f"{relpath} is not covered by the English-comment policy"
 

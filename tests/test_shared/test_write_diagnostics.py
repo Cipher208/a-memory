@@ -1,9 +1,10 @@
 """Diagnostics on the write path: who held the lock, and for how long.
 
-The hermes base loses the importance sweep to `database is locked` every
-15 s (the busy_timeout), and the daemon dies of the same error. Until now the
-journal only said "locked", so the holder was a guess. Two instruments are
-missing and are built here:
+The house base loses the importance sweep to `database is locked` -- the
+MCP server's sweep is the victim, not the autohooks daemon, and both
+autohooks units report `NRestarts=0`. Until now the journal only said
+"locked", so the holder was a guess. Two instruments are missing and are
+built here:
 
 * a slow write reports the CALLER's phase -- the code path that held the
   write lock long enough for another writer to lose the race;
@@ -215,3 +216,66 @@ def test_lock_holders_name_the_process_that_holds_the_write_lock(tmp_path: Path)
     finally:
         conn.execute("ROLLBACK")
         conn.close()
+
+
+@pytest.mark.asyncio
+async def test_a_scheduled_write_does_not_name_the_event_loop(cm, caplog, monkeypatch) -> None:
+    """A write scheduled as a TASK must not report the event loop as its caller.
+
+    The caller of a task is not on the stack when the task runs: the loop
+    resumes the coroutine inside its own frames, so the first frame outside
+    the dispatcher is `asyncio.events:_run`. That names the event loop and
+    not the code path that held the lock -- the exact opposite of what the
+    instrument is for.
+    """
+    from shared import write_dispatch as wd
+
+    monkeypatch.setattr(wd, "_SLOW_WRITE_WARN_S", 0.05)
+    dispatch = WriteDispatch(cm)
+    conn = await dispatch._cm.get(DB_NAME)
+    original_execute = conn.execute
+
+    async def _slow(statement: str, parameters=()):
+        await asyncio.sleep(0.08)
+        return await original_execute(statement, parameters)
+
+    monkeypatch.setattr(conn, "execute", _slow)
+
+    with caplog.at_level(logging.WARNING, logger="shared.write_dispatch"):
+        await asyncio.create_task(dispatch.write(DB_NAME, INSERT, ("u", "k1", "v1", 0.5, "fact", 1000.0, 1000.0)))
+
+    warnings = [r.getMessage() for r in caplog.records if "slow write" in r.getMessage()]
+    assert warnings, "a slow write must be reported"
+    phase = warnings[0].split("phase=", 1)[1].split(" ", 1)[0]
+    module = phase.split(":", 1)[0]
+    assert not (module == "asyncio" or module.startswith("asyncio.")), f"the phase must not name the event loop: {phase}"
+    assert not (module == "concurrent.futures" or module.startswith("concurrent.futures.")), f"the phase must not name the executor: {phase}"
+
+
+def test_the_caller_frame_falls_back_to_unknown(monkeypatch) -> None:
+    """When no usable frame remains, the phase is `unknown:unknown:0`.
+
+    The stdlib frames are skipped because they name the loop, not the
+    caller. When skipping them leaves nothing, the instrument must say so
+    instead of pointing at something else.
+    """
+    from shared import write_dispatch as wd
+
+    monkeypatch.setattr(wd, "_is_skipped_frame", lambda name: True)
+    assert wd._phase_of(wd._caller_frame()) == "unknown:unknown:0"
+
+
+def test_the_happy_path_cost_is_stated_as_measured() -> None:
+    """The docstring must state the MEASURED cost of the instrumentation.
+
+    It claimed "one clock read", which is not what the code does: the scope
+    reads the clock twice, captures a frame, and enters an async context
+    manager. A docstring that understates the cost is a docstring nobody
+    can plan against.
+    """
+    from shared import write_dispatch as wd
+
+    doc = wd.WriteDispatch._write_scope.__doc__ or ""
+    assert "one clock read" not in doc, "the cost of the instrumentation must not be understated"
+    assert "two clock reads" in doc, doc
+    assert "µs" in doc, f"the measured figure must be stated: {doc}"

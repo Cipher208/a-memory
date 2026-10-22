@@ -5,6 +5,16 @@ evidence: "database is locked". That says somebody holds the lock, not who.
 The kernel knows: `/proc/locks` lists every POSIX and OFD lock it tracks,
 with the pid that took it and the file it was taken on.
 
+The kernel prints TWO kinds of lines, and both are parsed here:
+
+    14: POSIX  ADVISORY  WRITE 4025684 00:26:6468432 0 EOF
+    14: -> POSIX  ADVISORY  WRITE 4025685 00:26:6468432 0 EOF
+
+The first line is the lock and its holder. The second carries the same id
+with an arrow in front of it: a process WAITING for that lock. The waiter
+is the process that just lost the race -- the one name a busy write has
+never been able to give -- so it is reported, not dropped.
+
 This module answers one question -- who holds the locks of the base's
 `memory.db` and `memory.db-shm` -- and it answers it with facts only:
 
@@ -14,6 +24,10 @@ This module answers one question -- who holds the locks of the base's
   holders", because those two mean opposite things;
 * the command line is read from `/proc/<pid>/cmdline`, NUL-separated and
   truncated, so a long command cannot flood the journal.
+
+The report leads with the WRITE entries -- the holder is the process an
+operator has to look at -- and labels the READ entries as readers, so the
+two cannot be confused for one another.
 
 Never raises. This runs inside the write path, where a diagnostic that
 throws would turn a recoverable failure into a crash.
@@ -47,42 +61,53 @@ class LockEntry(NamedTuple):
     inode: int
     start: str
     end: str
-    blocked: bool
+    waiting: bool
 
 
 def _parse_entry(line: str) -> LockEntry | None:
     """Parse one `/proc/locks` line, or return None when it is not a file lock.
 
-    The line reads `ID: KIND ACCESS MODE PID MAJOR:MINOR:INODE START END`,
-    with the device numbers in hex and the inode in decimal. A lock that is
-    waiting for another one is followed by `->` and the lock it waits for; only
-    the blocking half is parsed here, and the entry is marked as blocked.
+    A lock reads `ID: KIND ACCESS MODE PID MAJOR:MINOR:INODE START END`,
+    with the device numbers in hex and the inode in decimal.
+
+    A process WAITING for a lock gets a line of its own: the same id, then
+    `->`, then the same fields -- `ID: -> KIND ACCESS MODE PID
+    MAJOR:MINOR:INODE START END`. The waiting line is parsed here and
+    marked, so the report can name the process that lost the race.
     """
-    blocked = "->" in line
-    parts = line.split("->", 1)[0].split()
-    if len(parts) < 8:
+    body = line
+    waiting = False
+    if "->" in body:
+        # The waiting half: the id and the arrow are in front of the fields.
+        _, _, body = body.partition("->")
+        waiting = True
+    else:
+        # Drop the leading "<id>:" token; the fields start after it.
+        _, _, body = body.partition(":")
+    parts = body.split()
+    if len(parts) < 7:
         return None
-    device = parts[5].split(":")
+    device = parts[4].split(":")
     if len(device) != 3:
         return None
     try:
+        pid = int(parts[3])
         major = int(device[0], 16)
         minor = int(device[1], 16)
         inode = int(device[2])
-        pid = int(parts[4])
     except ValueError:
         return None
     return LockEntry(
-        kind=parts[1],
-        access=parts[2],
-        mode=parts[3],
+        kind=parts[0],
+        access=parts[1],
+        mode=parts[2],
         pid=pid,
         major=major,
         minor=minor,
         inode=inode,
-        start=parts[6],
-        end=parts[7],
-        blocked=blocked,
+        start=parts[5],
+        end=parts[6],
+        waiting=waiting,
     )
 
 
@@ -105,7 +130,12 @@ def _read_cmdline(pid: int) -> str:
 
 
 def _format_entry(entry: LockEntry, name: str) -> str:
-    """Render one lock entry as a log line."""
+    """Render one lock entry as a log line.
+
+    The role is stated in words: `writer` for the process that holds a write
+    lock, `reader` for a process that only reads, `waiter` for the process
+    that is waiting for the lock the writer holds.
+    """
     if entry.pid >= 0:
         owner = f"pid={entry.pid}"
         cmd = _read_cmdline(entry.pid)
@@ -113,14 +143,19 @@ def _format_entry(entry: LockEntry, name: str) -> str:
         # OFD locks are not owned by a process: the kernel reports -1.
         owner = "pid=-1 (no owner reported by the kernel)"
         cmd = ""
+    if entry.waiting:
+        role = "waiter"
+    elif entry.mode.upper() == "WRITE":
+        role = "writer"
+    else:
+        role = "reader"
     parts = [
         f"  {entry.kind} {entry.access} {entry.mode}",
+        role,
         owner,
         f"file={name}",
         f"range={entry.start}-{entry.end}",
     ]
-    if entry.blocked:
-        parts.append("blocked")
     if cmd:
         parts.append(f"cmd={cmd}")
     return " ".join(parts)
@@ -153,15 +188,19 @@ def describe_lock_holders(base_dir: str | Path) -> list[str]:
     except OSError as exc:
         return [f"lock holders unavailable: {_PROC_LOCKS} could not be read ({type(exc).__name__}: {exc})"]
 
-    lines: list[str] = []
+    lines: list[tuple[LockEntry, str]] = []
     for raw in text.splitlines():
         entry = _parse_entry(raw)
         if entry is None:
             continue
         for name, major, minor, inode in targets:
             if (entry.major, entry.minor, entry.inode) == (major, minor, inode):
-                lines.append(_format_entry(entry, name))
+                lines.append((entry, name))
                 break
     if not lines:
         return [f"no OS-level lock entry matches {DB_NAME} or {DB_NAME}-shm under {base}"]
-    return lines
+    # The WRITE entries lead the report: the holder is the process an
+    # operator has to look at. The readers are context. The sort is stable,
+    # so the kernel's own order survives inside each group.
+    lines.sort(key=lambda pair: 0 if pair[0].mode.upper() == "WRITE" else 1)
+    return [_format_entry(entry, name) for entry, name in lines]
