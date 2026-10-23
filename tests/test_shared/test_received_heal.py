@@ -272,3 +272,39 @@ async def test_replay_skips_fresh_received(cm, monkeypatch):
     assert out["skipped"] >= 1
     status, _ = await _status(cm, rid)
     assert status == "received"
+
+
+@pytest.mark.asyncio
+async def test_sweep_mixture_and_counters(cm):
+    """S6: sweep лечит смесь вердиктов и точно считает."""
+    from shared.l0 import sweep_received
+
+    b = await _captured(cm, "строка уже в памяти", age_s=700)
+    await _tag_l3(cm, b)
+    a = await _captured(cm, "строка без следа", age_s=700)
+    l4 = await _captured(cm, "строка в L4", age_s=700)
+    await _tag_l4(cm, l4)
+    fresh = await _captured(cm, "свежая строка")
+
+    counts = await sweep_received()
+    assert counts == {"saved_l3": 1, "promoted_l4": 1, "unaccounted_exit": 1, "fresh": 1}
+    assert (await _status(cm, b))[0] == "saved_l3"
+    assert (await _status(cm, a))[0] == "gated_out"
+    assert (await _status(cm, l4))[0] == "promoted_l4"
+    assert (await _status(cm, fresh))[0] == "received"
+
+
+@pytest.mark.asyncio
+async def test_sweep_never_raises_on_a_broken_reader(cm, monkeypatch):
+    """S6: битый чтение -> пустые счётчики, без исключения (ночь не падает)."""
+    from shared.l0 import sweep_received
+
+    class Boom:
+        async def query(self, *a, **k):
+            raise RuntimeError("db down")
+
+    import shared.l0 as l0_mod
+
+    monkeypatch.setattr(l0_mod, "_dispatch", lambda: Boom())
+    counts = await sweep_received()
+    assert counts == {"saved_l3": 0, "promoted_l4": 0, "unaccounted_exit": 0, "fresh": 0}

@@ -612,3 +612,12 @@ def test_a_skipped_pass_does_not_clear_the_failure_ladder(tmp_path, monkeypatch)
 
     assert cron._nightly_failures == 2, "пропуск обнулил лестницу сбоев"
     assert cron._nightly_retry_at == 0.0, "за пропуск бэкофф не начисляется"
+
+
+def test_received_heal_wired_before_replay_in_nightly() -> None:
+    """S6: heal-шаг существует и стоит в ночной цепочке ПЕРЕД реплеем."""
+    src = Path("features/backup_cron.py").read_text(encoding="utf-8")
+    assert "from shared.l0 import sweep_received" in src
+    assert "sweep_received()" in src  # вызов, а не только импорт
+    assert "L0 received-heal" in src  # результат попадает в отчёт
+    assert src.index("sweep_received()") < src.index("from features.replay import replay")

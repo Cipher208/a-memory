@@ -492,6 +492,36 @@ async def classify_received(l0_id: int, *, grace_s: float = 600.0) -> str | None
         return None
 
 
+async def sweep_received(*, grace_s: float = 600.0) -> dict[str, int]:
+    """Classify every stranded `received` row. Never raises.
+
+    Nightly BEFORE the replay (features/backup_cron) and once manually on a
+    live base: case-b becomes a terminal duplicate the replay must not touch,
+    case-a becomes re-enterable and is rescued by the same night's replay.
+    No age window here — `received` is never tiered and never archived, so
+    stranded rows live until someone reads them; `grace_s` still protects
+    rows a writer may be stamping right now.
+    """
+    counts = {"saved_l3": 0, "promoted_l4": 0, "unaccounted_exit": 0, "fresh": 0}
+    try:
+        rows = await _dispatch().query(
+            DB_NAME,
+            "SELECT id FROM l0_journal WHERE status=?",
+            (STATUS_RECEIVED,),
+        )
+    except Exception as exc:
+        logger.warning("sweep_received: cannot read the journal: %s", exc)
+        return counts
+    for r in rows:
+        # classify_received never raises (spec S3), so no per-row guard here.
+        verdict = await classify_received(int(r["id"]), grace_s=grace_s)
+        if verdict is None:
+            counts["fresh"] += 1
+        else:
+            counts[verdict] += 1
+    return counts
+
+
 def classify_raw(text: str) -> str:
     t = text.strip()
     if t.startswith(("[{", '{"')):
