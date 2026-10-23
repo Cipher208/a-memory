@@ -31,6 +31,15 @@ async def _rows(cm: Any) -> list[Any]:
     return list(await (await conn.execute("SELECT id, status, processed_at, decisions FROM l0_journal ORDER BY id")).fetchall())
 
 
+async def _age(cm: Any, *rids: int, seconds: float = 1200.0) -> None:
+    """S5: the nightly replay sees rows past the 600 s classify grace; these
+    tests call replay right after capture, so age the rows like production."""
+    conn = await cm.get("memory.db")
+    placeholders = ",".join("?" for _ in rids)
+    await conn.execute(f"UPDATE l0_journal SET ts = ts - ? WHERE id IN ({placeholders})", (seconds, *rids))
+    await conn.commit()  # WriteDispatch holds its own connection: uncommitted rows are invisible to it
+
+
 @pytest.mark.asyncio
 async def test_replay_processes_window_then_idempotent(cm: Any) -> None:
     from features.replay import replay
@@ -40,6 +49,7 @@ async def test_replay_processes_window_then_idempotent(cm: Any) -> None:
     rid2 = await capture("new_message", "user", "u1", "наблюдение: трафик растёт по пятницам стабильно")
     rid3 = await capture("new_message", "user", "u1", "я решил включить wal режим в базе данных")
     assert None not in (rid1, rid2, rid3)
+    await _age(cm, rid1, rid2, rid3)
 
     # respect_gate=False: тест про МЕХАНИЗМ повторного прогона, а не про отбор.
     res = await replay(since_days=1, respect_gate=False)
@@ -71,6 +81,7 @@ async def test_replay_reruns_only_reset_rows(cm: Any) -> None:
     rid2 = await capture("new_message", "user", "u1", "наблюдение: трафик растёт по пятницам стабильно")
     rid3 = await capture("new_message", "user", "u1", "я решил включить wal режим в базе данных")
     assert None not in (rid1, rid2, rid3)
+    await _age(cm, rid1, rid2, rid3)
     first = await replay(since_days=1, respect_gate=False)
     assert first["processed"] == 3
 
@@ -112,6 +123,7 @@ async def test_replay_by_ids_touches_nothing_else(cm: Any) -> None:
     untouched = await capture("new_message", "user", "u1", "наблюдение: трафик растёт по пятницам стабильно")
     also_untouched = await capture("new_message", "user", "u1", "просто болтовня ни о чём особенном")
     assert None not in (wanted, untouched, also_untouched)
+    await _age(cm, wanted)
 
     res = await replay(since_days=1, ids=[wanted])
     assert res["processed"] == 1, res
@@ -160,6 +172,7 @@ async def test_replay_respects_the_importance_gate(cm: Any) -> None:
 
     chatter = await capture("new_message", "user", "u1", "хихикаю")
     assert chatter is not None
+    await _age(cm, chatter)
 
     res = await replay(since_days=1)
     assert res["gated"] == 1, res
@@ -188,6 +201,7 @@ async def test_naming_a_row_overrides_the_gate_on_the_record(cm: Any) -> None:
 
     rid = await capture("new_message", "user", "u1", "хихикаю")
     assert rid is not None
+    await _age(cm, rid)
 
     res = await replay(since_days=1, ids=[rid])
     assert res["processed"] == 1, res
@@ -210,6 +224,7 @@ async def test_a_window_run_records_no_override(cm: Any) -> None:
         "Важно: я решила перейти на PostgreSQL для проекта X, потому что MySQL не держит нагрузку и падает на 500 rps. Решение окончательное, миграцию делаем до 20.10.",
     )
     assert rid is not None
+    await _age(cm, rid)
     res = await replay(since_days=1)
     assert res["processed"] == 1, res
 
@@ -228,8 +243,9 @@ async def test_replay_is_bounded_by_max_rows(cm: Any) -> None:
     from features.replay import replay
     from shared.l0 import capture
 
-    for i in range(5):
-        await capture("new_message", "user", "u1", f"{PASSING_TEXT} пункт {i}")
+    rids = [await capture("new_message", "user", "u1", f"{PASSING_TEXT} пункт {i}") for i in range(5)]
+    assert None not in rids
+    await _age(cm, *[r for r in rids if r is not None])
     res = await replay(since_days=1, max_rows=2)
     assert res["processed"] == 2, res
     assert res["limit"] == 2

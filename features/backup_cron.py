@@ -546,6 +546,16 @@ class BackupCron:
                 from lifecycle.l0_sweep import sweep_expired
 
                 self._await_on_main_loop(sweep_expired())
+            # Received-heal BEFORE the replay (spec 2026-10-22, S6): classify
+            # every stranded `received` row first — case-b becomes a terminal
+            # duplicate the replay must not touch, case-a becomes re-enterable
+            # and is rescued by the replay in this very pass.
+            with contextlib.suppress(Exception):
+                from shared.l0 import sweep_received
+
+                healed = self._await_on_main_loop(sweep_received())
+                if any(healed.get(k) for k in ("saved_l3", "promoted_l4", "unaccounted_exit")):
+                    logger.info("L0 received-heal: %s", healed)
             # L0 replay: wake rows that were never processed. This is the reader that
             # `received` never had — the status was written by every message and read by
             # nothing automatic, so a row could sit unprocessed indefinitely. Bounded by

@@ -91,6 +91,22 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
             return None
         return int(prior["id"]) if prior is not None else None
     for row in rows:
+        if str(row["status"] or "") == STATUS_RECEIVED:
+            # Read-time heal (spec 2026-10-22, S4): the row's status is a
+            # claim, not a fact. Judge it by what memory holds before letting
+            # it block the duplicate: unaccounted -> nothing was written, the
+            # retry re-enters; anything else (saved/promoted/fresh/error)
+            # -> the old answer stands and the block holds. The VERDICT is
+            # authoritative, not a re-read of the status: close_row may fail
+            # to write silently, and the verdict still describes what memory
+            # holds (the row then heals on the next sweep).
+            try:
+                verdict = await classify_received(int(row["id"]))
+            except Exception:
+                verdict = None  # classify's contract is never-raise; keep find_block's own guarantee local
+            if verdict == UNACCOUNTED_EXIT:
+                continue
+            return int(row["id"])
         if _write_never_happened(row):
             continue
         return int(row["id"])
@@ -410,6 +426,110 @@ async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> No
         # path that already succeeded. Logged at debug because the caller's flow is
         # what matters; the nightly expiry is the backstop that closes the row.
         logging.getLogger(__name__).debug("l0_journal status update failed: %s", exc)
+
+
+async def classify_received(l0_id: int, *, grace_s: float = 600.0) -> str | None:
+    """Judge one stranded `received` row by evidence in MEMORY. Never raises.
+
+    `received` was written by every writer and read by nobody, so rows whose
+    write never happened sat in the journal forever (41 rows on two live
+    bases, the oldest 5.6 days). The verdict comes from what memory HOLDS,
+    not from the row:
+
+      - "promoted_l4"      -- an L4 fact carries metadata.source_raw_id == l0_id
+      - "saved_l3"         -- an L3 episode carries the tag `raw:<id>`
+      - UNACCOUNTED_EXIT   -- no evidence anywhere: nothing was written, the
+                              row is re-enterable (see `close_row`)
+      - None               -- not ours to judge: inside `grace_s`, no longer
+                              `received`, or the reader failed -- the old
+                              answer stands
+
+    Evidence is scoped by (layer, user_id): a raw id from another scope proves
+    nothing (indices exist on both tables for exactly this).
+
+    The exception boundary is HERE, and it logs a WARNING itself: every caller
+    (find_block on the message path, replay, the nightly sweep) must keep its
+    old answer when the reader is broken, and an exception that escapes to the
+    caller would be swallowed silently there.
+    """
+    try:
+        row = await _dispatch().select_one(
+            DB_NAME,
+            "SELECT layer, user_id, ts, status FROM l0_journal WHERE id=?",
+            (l0_id,),
+        )
+        if row is None or str(row["status"] or "") != STATUS_RECEIVED:
+            return None
+        if time.time() - float(row["ts"] or 0) < grace_s:
+            return None
+        layer = str(row["layer"] or "user")
+        user_id = str(row["user_id"] or "")
+        l4_rows = await _dispatch().query(
+            DB_NAME,
+            "SELECT metadata FROM core_memory WHERE layer=? AND user_id=? AND metadata LIKE ?",
+            (layer, user_id, '%"source_raw_id"%'),
+        )
+        for r in l4_rows:
+            try:
+                meta = json.loads(r["metadata"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue  # corrupted metadata is not evidence either way
+            if isinstance(meta, dict) and meta.get("source_raw_id") == l0_id:
+                await close_row(l0_id, "promoted_l4")
+                return "promoted_l4"
+        l3 = await _dispatch().select_one(
+            DB_NAME,
+            "SELECT 1 FROM episodes WHERE layer=? AND user_id=? AND tags LIKE ? LIMIT 1",
+            (layer, user_id, f'%"raw:{l0_id}"%'),
+        )
+        if l3 is not None:
+            await close_row(l0_id, "saved_l3")
+            return "saved_l3"
+        await close_row(l0_id, "gated_out", reason=UNACCOUNTED_EXIT)
+        return UNACCOUNTED_EXIT
+    except Exception as exc:
+        logger.warning("classify_received(%s) failed, row left as is: %s", l0_id, exc)
+        return None
+
+
+async def sweep_received(*, grace_s: float = 600.0) -> dict[str, int]:
+    """Classify every stranded `received` row. Never raises.
+
+    Nightly BEFORE the replay (features/backup_cron) and once manually on a
+    live base: case-b becomes a terminal duplicate the replay must not touch,
+    case-a becomes re-enterable and is rescued by the same night's replay
+    (rows inside replay's 7-day window; older ones stay wakeable via
+    `l0_cli replay --ids`). No age window here — `received` is never tiered
+    and never archived, so stranded rows live until someone reads them;
+    `grace_s` still protects rows a writer may be stamping right now.
+    """
+    counts = {"saved_l3": 0, "promoted_l4": 0, "unaccounted_exit": 0, "fresh": 0}
+    try:
+        rows = await _dispatch().query(
+            DB_NAME,
+            # `raw_type != 'import'` mirrors the second line of defence in
+            # close_overdue_received (lifecycle/l0_tiers.py): migration g27
+            # renames those rows to `parked`, and this sweep — the only closer
+            # with no age window — keeps them safe if that migration has not
+            # run or failed halfway. The cost of being wrong is one
+            # owner-requested history silently closed by tier_l0 the same night.
+            "SELECT id FROM l0_journal WHERE status=? AND raw_type != 'import'",
+            (STATUS_RECEIVED,),
+        )
+    except Exception as exc:
+        logger.warning("sweep_received: cannot read the journal: %s", exc)
+        return counts
+    for r in rows:
+        try:
+            verdict = await classify_received(int(r["id"]), grace_s=grace_s)
+        except Exception as exc:  # classify's contract is never-raise; keep sweep's own guarantee local (mirrors find_block/replay guards)
+            logger.warning("sweep_received: classify failed for row %s: %s", r["id"], exc)
+            continue
+        if verdict is None:
+            counts["fresh"] += 1
+        else:
+            counts[verdict] += 1
+    return counts
 
 
 def classify_raw(text: str) -> str:
