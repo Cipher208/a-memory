@@ -281,7 +281,8 @@ async def test_sweep_mixture_and_counters(cm):
 
     b = await _captured(cm, "строка уже в памяти", age_s=700)
     await _tag_l3(cm, b)
-    a = await _captured(cm, "строка без следа", age_s=700)
+    # no age window: a 6-day-old strand heals (live strands were 5.6 days old)
+    a = await _captured(cm, "строка без следа", age_s=6 * 86400)
     l4 = await _captured(cm, "строка в L4", age_s=700)
     await _tag_l4(cm, l4)
     fresh = await _captured(cm, "свежая строка")
@@ -295,9 +296,11 @@ async def test_sweep_mixture_and_counters(cm):
 
 
 @pytest.mark.asyncio
-async def test_sweep_never_raises_on_a_broken_reader(cm, monkeypatch):
+async def test_sweep_never_raises_on_a_broken_reader(cm, monkeypatch, caplog):
     """S6: битый чтение -> пустые счётчики, без исключения (ночь не падает)."""
     from shared.l0 import sweep_received
+
+    caplog.set_level(logging.WARNING)
 
     class Boom:
         async def query(self, *a, **k):
@@ -308,3 +311,42 @@ async def test_sweep_never_raises_on_a_broken_reader(cm, monkeypatch):
     monkeypatch.setattr(l0_mod, "_dispatch", lambda: Boom())
     counts = await sweep_received()
     assert counts == {"saved_l3": 0, "promoted_l4": 0, "unaccounted_exit": 0, "fresh": 0}
+    assert "sweep_received: cannot read the journal" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sweep_skips_unmigrated_import_rows(cm):
+    """S6: raw_type='import' rows stay received even as received — the sweep
+    carries the same second line of defence as close_overdue_received
+    (lifecycle/l0_tiers.py): on a pre-g27 base their status flip would make
+    them tier-eligible and tier_l0 would archive them the same night."""
+    from shared.l0 import STATUS_RECEIVED, capture, sweep_received
+
+    rid = await capture("new_message", "user", "u1", "импорт истории", raw_type="import")
+    assert rid is not None
+    con = await cm.get("memory.db")
+    await con.execute("UPDATE l0_journal SET ts = ts - 700 WHERE id=?", (rid,))
+    await con.commit()
+
+    counts = await sweep_received()
+    assert counts["unaccounted_exit"] == 0
+    row = await (await con.execute("SELECT status FROM l0_journal WHERE id=?", (rid,))).fetchone()
+    assert row[0] == STATUS_RECEIVED
+
+
+@pytest.mark.asyncio
+async def test_sweep_never_raises_even_if_classify_does(cm, monkeypatch, caplog):
+    """Per-row guard: a classify regression must not kill the sweep."""
+    import shared.l0 as l0_mod
+    from shared.l0 import sweep_received
+
+    caplog.set_level(logging.WARNING)
+    await _captured(cm, "строка для взрыва", age_s=700)
+
+    async def boom(*a, **k):
+        raise RuntimeError("classifier exploded")
+
+    monkeypatch.setattr(l0_mod, "classify_received", boom)
+    counts = await sweep_received()
+    assert counts == {"saved_l3": 0, "promoted_l4": 0, "unaccounted_exit": 0, "fresh": 0}
+    assert "sweep_received: classify failed" in caplog.text

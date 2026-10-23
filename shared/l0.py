@@ -497,24 +497,34 @@ async def sweep_received(*, grace_s: float = 600.0) -> dict[str, int]:
 
     Nightly BEFORE the replay (features/backup_cron) and once manually on a
     live base: case-b becomes a terminal duplicate the replay must not touch,
-    case-a becomes re-enterable and is rescued by the same night's replay.
-    No age window here — `received` is never tiered and never archived, so
-    stranded rows live until someone reads them; `grace_s` still protects
-    rows a writer may be stamping right now.
+    case-a becomes re-enterable and is rescued by the same night's replay
+    (rows inside replay's 7-day window; older ones stay wakeable via
+    `l0_cli replay --ids`). No age window here — `received` is never tiered
+    and never archived, so stranded rows live until someone reads them;
+    `grace_s` still protects rows a writer may be stamping right now.
     """
     counts = {"saved_l3": 0, "promoted_l4": 0, "unaccounted_exit": 0, "fresh": 0}
     try:
         rows = await _dispatch().query(
             DB_NAME,
-            "SELECT id FROM l0_journal WHERE status=?",
+            # `raw_type != 'import'` mirrors the second line of defence in
+            # close_overdue_received (lifecycle/l0_tiers.py): migration g27
+            # renames those rows to `parked`, and this sweep — the only closer
+            # with no age window — keeps them safe if that migration has not
+            # run or failed halfway. The cost of being wrong is one
+            # owner-requested history silently closed by tier_l0 the same night.
+            "SELECT id FROM l0_journal WHERE status=? AND raw_type != 'import'",
             (STATUS_RECEIVED,),
         )
     except Exception as exc:
         logger.warning("sweep_received: cannot read the journal: %s", exc)
         return counts
     for r in rows:
-        # classify_received never raises (spec S3), so no per-row guard here.
-        verdict = await classify_received(int(r["id"]), grace_s=grace_s)
+        try:
+            verdict = await classify_received(int(r["id"]), grace_s=grace_s)
+        except Exception as exc:  # classify's contract is never-raise; keep sweep's own guarantee local (mirrors find_block/replay guards)
+            logger.warning("sweep_received: classify failed for row %s: %s", r["id"], exc)
+            continue
         if verdict is None:
             counts["fresh"] += 1
         else:
