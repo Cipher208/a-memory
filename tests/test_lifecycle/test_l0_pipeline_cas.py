@@ -204,6 +204,70 @@ async def test_claim_refuses_a_gated_out_row_judged_by_the_current_config(cm: An
     assert (await _row(cm, rid))["status"] == "gated_out"
 
 
+async def test_claim_refuses_a_row_closed_between_the_snapshot_and_the_claim(cm: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """F4's core: the snapshot is stale, so only `_claim`'s re-read can refuse.
+
+    The window SELECT runs BEFORE any transaction; the claim re-reads the row
+    inside `BEGIN IMMEDIATE`. A row can be closed by another owner between the
+    two — that is the race F4 describes, and it is deterministic here: the
+    dispatch's `query` is patched to return the snapshot as it was taken, while
+    the real row has moved on.
+
+    The snapshot is taken while the row is `gated_out`/`unaccounted_exit` — the
+    retryable close, which records no config pair and therefore defeats the
+    loop's fast-path `_judged_by` check. A concurrent owner (the live retry)
+    then closes it with a verdict under the CURRENT config. Only the re-read
+    inside `_claim` can see that verdict.
+
+    A `received` snapshot cannot be used to stage this: the loop calls
+    `classify_received` for `received` rows, and that re-reads the real row
+    (now `gated_out`) and returns None — the row is skipped before `_claim`
+    runs, so the test would pass with the refusal branch deleted. Verified by
+    mutation, not assumed.
+    """
+    from features.replay import replay
+    from shared.l0 import UNACCOUNTED_EXIT, capture, close_row
+    from shared.write_dispatch import get_write_dispatch
+
+    rid = await capture("new_message", "user", "u1", PASSING_TEXT)
+    assert rid is not None
+    # The row a retry may re-enter: the write never happened, no config pair.
+    assert await close_row(rid, "gated_out", reason=UNACCOUNTED_EXIT) is True
+
+    conn = await cm.get("memory.db")
+    snapshot = dict(
+        await (await conn.execute("SELECT id, ts, layer, user_id, text, status, decisions FROM l0_journal WHERE id=?", (rid,))).fetchone()
+    )
+    assert snapshot["status"] == "gated_out"
+    assert "config_hash" not in snapshot["decisions"]
+
+    # ── the concurrent owner finishes the row before the claim runs
+    assert await close_row(rid, "gated_out", reason="importance_gate_bypass") is True
+    settled = await _row(cm, rid)
+    assert settled["decisions"] != snapshot["decisions"]
+    assert "config_hash" in settled["decisions"]
+
+    dispatch = get_write_dispatch()
+    real_query = dispatch.query
+
+    async def _stale_query(db: str, sql: str, params: Any = ()) -> list[dict[str, Any]]:
+        """Hand replay the snapshot it would have read before the concurrent close."""
+        if "FROM l0_journal" in sql:
+            return [dict(snapshot)]
+        return await real_query(db, sql, params)
+
+    monkeypatch.setattr(dispatch, "query", _stale_query)
+
+    res = await replay(since_days=1, respect_gate=False)
+
+    assert res["processed"] == 0, res
+    assert res["skipped"] == 1, res
+    row = await _row(cm, rid)
+    assert row["status"] == "gated_out", "the concurrent verdict must stand"
+    assert row["decisions"] == settled["decisions"], "its decisions must be untouched"
+    assert await _episodes(cm) == 0, "a row closed under this config must not be re-distilled"
+
+
 async def test_claim_takes_a_received_row(cm: Any) -> None:
     """The normal nightly path still works: an aged received row is processed."""
     from features.replay import replay
