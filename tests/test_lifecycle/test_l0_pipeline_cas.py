@@ -117,6 +117,125 @@ async def test_close_row_does_not_append_decisions_when_it_loses(cm: Any) -> Non
     assert decisions[0]["reason"] == "importance_gate_bypass"
 
 
+async def test_a_row_with_a_verdict_cannot_be_reclosed_through_the_unaccounted_marker(cm: Any) -> None:
+    """The retryable close is a STATE, not a permanent key.
+
+    `gated_out`/`unaccounted_exit` is stampable because the write never happened.
+    Once a real close has appended a config-pair verdict, the row HAS a verdict:
+    the marker is history, not an exemption, and a third close must lose. A
+    marker that never expires let every later closer through — verified by
+    blind review: three consecutive closes all returned True.
+    """
+    from shared.l0 import UNACCOUNTED_EXIT, capture, close_row, find_block
+
+    text = "помни: wal включён, автовакуум выключен"
+    rid = await capture("new_message", "user", "u1", text)
+    assert rid is not None
+
+    assert await close_row(rid, "gated_out", reason=UNACCOUNTED_EXIT) is True
+    assert await close_row(rid, "gated_out", reason="importance_gate_bypass") is True
+
+    assert await close_row(rid, "promoted_l4") is False
+
+    row = await _row(cm, rid)
+    assert row["status"] == "gated_out"
+    decisions = json.loads(row["decisions"] or "[]")
+    assert len(decisions) == 2, decisions
+    # The same state the duplicate guard reads: the write DID happen, so the
+    # row is a duplicate again and the retry must not re-enter it.
+    assert await find_block("user", "u1", text) == rid
+
+
+async def test_close_row_inside_an_outer_atomic_joins_it(cm: Any) -> None:
+    """A close called from inside a transaction must join it, not begin a second one.
+
+    `BEGIN IMMEDIATE` raises "cannot start a transaction within a transaction".
+    `close_row` guards on `conn.in_transaction` instead of swallowing that error,
+    so a nested close runs on the outer connection and the OUTER commit decides
+    whether it happened — never a silent no-op.
+    """
+    from shared.l0 import capture, close_row
+    from shared.write_dispatch import get_write_dispatch
+
+    rid = await capture("new_message", "user", "u1", "пятая строка журнала")
+    assert rid is not None
+    dispatch = get_write_dispatch()
+
+    async def _outer(conn: Any) -> bool:
+        # A write first: this is what puts the connection in the state where a
+        # nested BEGIN IMMEDIATE raises.
+        await conn.execute("UPDATE l0_journal SET event='outer_write' WHERE id=?", (rid,))
+        assert conn.in_transaction
+        return await close_row(rid, "saved_l3")
+
+    assert await dispatch.atomic("memory.db", _outer) is True
+
+    row = await _row(cm, rid)
+    assert row["status"] == "saved_l3"
+    assert row["processed_at"] is not None
+
+
+async def test_a_busy_begin_does_not_lose_a_concurrent_append(cm: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If BEGIN cannot take the lock, the close must abort — not read outside it.
+
+    `BEGIN IMMEDIATE` failing with SQLITE_BUSY means another writer holds the
+    write lock. Swallowing that error lets the read run outside any transaction:
+    it sees the row BEFORE the other writer commits, the other writer then
+    commits an append, and this closer's UPDATE still matches (the status never
+    changed) and overwrites that append — the loss the CAS exists to prevent.
+
+    Everything here is real: a second connection to the same base holds the
+    write lock, its append is uncommitted while the read runs, and it commits
+    between the read and the update (the only staged part is that timing — it is
+    hooked to the read, because an in-process test cannot otherwise order two
+    writers without threads).
+    """
+    import aiosqlite
+
+    from shared.constants import DB_NAME
+    from shared.l0 import UNACCOUNTED_EXIT, capture, close_row
+    from shared.write_dispatch import get_write_dispatch
+
+    rid = await capture("new_message", "user", "u1", "шестая строка журнала")
+    assert rid is not None
+    assert await close_row(rid, "gated_out", reason=UNACCOUNTED_EXIT) is True
+
+    dispatch = get_write_dispatch()
+    reader_conn = await dispatch._cm.get(DB_NAME)
+    await reader_conn.execute("PRAGMA busy_timeout=50")
+
+    other = await aiosqlite.connect(str(cm.base_dir / DB_NAME))
+    other.row_factory = aiosqlite.Row
+    try:
+        await other.execute("PRAGMA busy_timeout=50")
+        await other.execute("BEGIN IMMEDIATE")
+        await other.execute(
+            "UPDATE l0_journal SET decisions=? WHERE id=?",
+            (json.dumps([{"gate": "g1", "config_hash": "deadbeefdeadbeef", "ts": 0.0}]), rid),
+        )
+        assert other.in_transaction
+
+        real_execute = reader_conn.execute
+
+        async def _commit_after_the_read(sql: str, *args: Any, **kwargs: Any) -> Any:
+            cur = await real_execute(sql, *args, **kwargs)
+            if sql.lstrip().upper().startswith("SELECT STATUS, DECISIONS FROM L0_JOURNAL"):
+                await other.commit()  # the other writer lands between read and update
+            return cur
+
+        monkeypatch.setattr(reader_conn, "execute", _commit_after_the_read)
+
+        won = await close_row(rid, "gated_out", reason="late_writer")
+    finally:
+        if other.in_transaction:
+            await other.commit()
+        await other.close()
+
+    assert won is False, "a close that cannot take the lock must not write"
+    decisions = json.loads((await _row(cm, rid))["decisions"] or "[]")
+    assert any(d.get("config_hash") == "deadbeefdeadbeef" for d in decisions), decisions
+
+
 # --------------------------------------------------------------------------
 # R2 — replay never re-decides a row that already has a verdict
 # --------------------------------------------------------------------------

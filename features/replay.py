@@ -19,7 +19,6 @@ is claimed.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import time
 from typing import Any
@@ -268,8 +267,12 @@ async def replay(
         # decisions are re-read under that lock: the loop's snapshot was taken
         # before the run started and another writer may have closed the row
         # since — that stale snapshot is the race F4 named.
+        #
+        # The guard is `in_transaction`, not a swallowed exception: swallowing a
+        # BEGIN failure (SQLITE_BUSY) would run the re-read outside any lock, and
+        # the CAS would then match a row another writer had already claimed.
         async def _claim(conn: Any, gate_name: str, chash_now: str) -> bool:
-            with contextlib.suppress(Exception):
+            if not conn.in_transaction:
                 await conn.execute("BEGIN IMMEDIATE")
             recheck = await (await conn.execute("SELECT status, processed_at, decisions FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
             if recheck is None:
