@@ -193,16 +193,22 @@ def _seed_dispatch_log(tmp_path: Path, rows: list[tuple]) -> None:
         );
     """)
     for r in rows:
+        if len(r) == 9:
+            event, smid, owner, score, l3, l4, graph, created, preview = r
+            layer = "user"
+        else:
+            event, smid, owner, layer, score, l3, l4, graph, created, preview = r
         conn.execute(
-            "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, score, saved_l3, saved_l4, saved_graph, created_at, text_preview) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            r,
+            "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, layer, score, saved_l3, saved_l4, saved_graph, created_at, text_preview) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (event, smid, owner, layer, score, l3, l4, graph, created, preview),
         )
     conn.commit()
     conn.close()
 
 
 class _FakeL3:
-    def __init__(self) -> None:
+    def __init__(self, layer: str = "user") -> None:
+        self.layer = layer
         self.saved: list[dict] = []
 
     async def save(self, user_id: str, summary: str, weight: float, tags: list[str], created_at: float | None = None) -> int:
@@ -211,8 +217,8 @@ class _FakeL3:
 
 
 class _FakeMem:
-    def __init__(self) -> None:
-        self.l3 = _FakeL3()
+    def __init__(self, layer: str = "user") -> None:
+        self.l3 = _FakeL3(layer)
 
 
 async def test_session_gaps_and_diff_hook_stay_inside_the_callers_user(fresh_dir: Path) -> None:
@@ -225,13 +231,13 @@ async def test_session_gaps_and_diff_hook_stay_inside_the_callers_user(fresh_dir
         ],
     )
 
-    gaps = compute_session_gaps(_FakeMem(), since=0, until=now + 1, user_id="alice")
+    gaps = compute_session_gaps(_FakeMem(), since=0, until=now + 1, user_id="alice", layer="user")
     assert [g["source_msg_id"] for g in gaps] == [1]
     assert all("bob's preview" not in g["text_preview"] for g in gaps)
 
     from mcp_server.context import AppContext
 
-    mem = _FakeMem()
+    mem = _FakeMem(layer="user")
     result = await AppContext().user_hooks._post_session_diff({"user_id": "alice", "since": 0, "until": now + 1}, mem=mem)
 
     assert result["gaps"] == 1
@@ -239,6 +245,46 @@ async def test_session_gaps_and_diff_hook_stay_inside_the_callers_user(fresh_dir
     assert mem.l3.saved[0]["user_id"] == "alice"
     assert "alice's preview" in mem.l3.saved[0]["summary"]
     assert "bob's preview" not in mem.l3.saved[0]["summary"]
+
+
+async def test_session_gaps_do_not_cross_layers_for_the_same_user(fresh_dir: Path) -> None:
+    """One user, two layers: an agent-layer dispatch must not become a user-layer gap.
+
+    The user predicate alone is not the scope: `memory_dispatch_log` carries a
+    `layer` column, and the same user's agent-layer preview is a foreign read for
+    a user-layer caller — it would land in the caller's L3 as a `diff_gap`.
+    """
+    now = time.time()
+    _seed_dispatch_log(
+        fresh_dir,
+        [
+            ("new_message", 11, "alice", "user", 0.9, 1, 0, 1, now, "alice USER-layer preview"),
+            ("new_message", 12, "alice", "agent", 0.9, 1, 0, 1, now, "alice AGENT-layer secret"),
+        ],
+    )
+
+    gaps = compute_session_gaps(_FakeMem(), since=0, until=now + 1, user_id="alice", layer="user")
+    assert [g["source_msg_id"] for g in gaps] == [11]
+    assert all("AGENT-layer" not in g["text_preview"] for g in gaps)
+
+    from mcp_server.context import AppContext
+
+    mem = _FakeMem(layer="user")
+    result = await AppContext().user_hooks._post_session_diff({"user_id": "alice", "since": 0, "until": now + 1}, mem=mem)
+
+    assert result["gaps"] == 1
+    assert len(mem.l3.saved) == 1
+    assert "USER-layer preview" in mem.l3.saved[0]["summary"]
+    assert "AGENT-layer secret" not in mem.l3.saved[0]["summary"]
+
+    # The hook must read the layer off the bound EpisodicMemory, not assume "user":
+    # the agent-layer caller sees the agent row and never the user one.
+    agent_mem = _FakeMem(layer="agent")
+    agent_result = await AppContext().user_hooks._post_session_diff({"user_id": "alice", "since": 0, "until": now + 1}, mem=agent_mem)
+
+    assert agent_result["gaps"] == 1
+    assert "AGENT-layer secret" in agent_mem.l3.saved[0]["summary"]
+    assert "USER-layer preview" not in agent_mem.l3.saved[0]["summary"]
 
 
 # ── 7. episode_get filters the layer ───────────────────────────────────────────
