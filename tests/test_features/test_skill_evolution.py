@@ -88,7 +88,7 @@ async def test_promotion_merges_into_existing_skill(wiki):
     class _FakeMem:
         class l3:  # noqa: N801
             @staticmethod
-            async def get_by_id(eid):
+            async def get_by_id(eid, *, user_id):
                 return ep if eid == 11 else None
 
             @staticmethod

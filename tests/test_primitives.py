@@ -110,10 +110,10 @@ async def test_episodic_delete_by_ids(tmp_path):
     id_b = await l3.save("u", "beta")
     await l3.save("u", "gamma")
 
-    deleted = await l3.delete_by_ids([id_a, id_b])
+    deleted = await l3.delete_by_ids([id_a, id_b], user_id="u")
     assert deleted == 2
     assert len(await l3.get_episodes("u")) == 1
-    assert await l3.delete_by_ids([]) == 0
+    assert await l3.delete_by_ids([], user_id="u") == 0
 
 
 @pytest.mark.asyncio

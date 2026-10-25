@@ -10,7 +10,7 @@ class _FakeL3:
     def __init__(self, episodes):
         self._eps = {e.episode_id: e for e in episodes}
 
-    async def get_by_id(self, episode_id):
+    async def get_by_id(self, episode_id, *, user_id):
         return self._eps.get(episode_id)
 
     async def search_by_tag(self, user_id, tag, limit=10):
@@ -113,11 +113,11 @@ async def test_episodic_add_tag_and_get_by_id_real_db(tmp_path, monkeypatch):
         em = EpisodicMemory(layer="user")
         await em._init_db()
         eid = await em.save("u1", "draft skill content", tags=["dream_skill"])
-        ep = await em.get_by_id(eid)
+        ep = await em.get_by_id(eid, user_id="u1")
         assert ep is not None and ep.summary == "draft skill content"
         assert await em.add_tag(eid, "skill_promoted") is True
         assert await em.add_tag(eid, "skill_promoted") is True  # idempotent
-        ep2 = await em.get_by_id(eid)
+        ep2 = await em.get_by_id(eid, user_id="u1")
         assert ep2 is not None and "skill_promoted" in ep2.tags and "dream_skill" in ep2.tags
         assert await em.add_tag(999, "x") is False
     finally:
