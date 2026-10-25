@@ -85,9 +85,13 @@ async def test_replay_reruns_only_reset_rows(cm: Any) -> None:
     first = await replay(since_days=1, respect_gate=False)
     assert first["processed"] == 3
 
-    # пере-открыть часть окна (сброс watermark): статус + decisions очищены
+    # пере-открыть часть окна: единственный переоткрываемый вердикт — unaccounted_exit
+    # (строку с настоящим вердиктом close_row/CAS и _claim уже не пустят).
     conn = await cm.get("memory.db")
-    await conn.execute("UPDATE l0_journal SET status='gated_out', decisions='[]' WHERE id IN (?, ?)", (rid1, rid2))
+    await conn.execute(
+        "UPDATE l0_journal SET status='gated_out', decisions=? WHERE id IN (?, ?)",
+        (json.dumps([{"reason": "unaccounted_exit", "ts": 0.0}]), rid1, rid2),
+    )
     await conn.commit()
 
     res = await replay(since_days=1, respect_gate=False)
@@ -136,11 +140,12 @@ async def test_replay_by_ids_touches_nothing_else(cm: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_replay_by_ids_ignores_the_status_filter(cm: Any) -> None:
-    """A closed row can be re-opened by id — that is how a deliberate close is undone.
+    """A row the window cannot see can still be reached by id.
 
-    The window filter only accepts 'received'/'gated_out', so a row already closed
-    as `routed_direct` is invisible to it. Naming the id must reach it anyway;
-    otherwise a wrongly-closed row could never be reconsidered.
+    The window filter only accepts 'received'/'gated_out', so a `parked` import
+    (deliberately sleeping, woken by name) is invisible to it. Naming the id must
+    reach it anyway. A row that already HAS a verdict is a different matter:
+    `_claim` refuses those — see tests/test_lifecycle/test_l0_pipeline_cas.py.
     """
     from features.replay import replay
     from shared.connection import connection_manager
@@ -149,7 +154,7 @@ async def test_replay_by_ids_ignores_the_status_filter(cm: Any) -> None:
     rid = await capture("new_message", "user", "u1", "я решила перейти на PostgreSQL для проекта")
     assert rid is not None
     conn = await connection_manager.get("memory.db")
-    await conn.execute("UPDATE l0_journal SET status='routed_direct' WHERE id=?", (rid,))
+    await conn.execute("UPDATE l0_journal SET status='parked' WHERE id=?", (rid,))
     await conn.commit()
 
     res = await replay(since_days=1, ids=[rid])
