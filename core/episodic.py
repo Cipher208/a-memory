@@ -122,9 +122,13 @@ class EpisodicMemory:
         """B7: Specialized tag search (part of search() logic, but kept for API compat)."""
         return await self.search(user_id, tag, limit, use_tag_match=True)
 
-    async def get_by_id(self, episode_id: int) -> Episode | None:
-        """Fetch one episode by id (D2.2 promotion pipeline)."""
-        row = await self._dispatch.select_one(DB_NAME, "SELECT * FROM episodes WHERE episode_id = ?", (episode_id,))
+    async def get_by_id(self, episode_id: int, *, user_id: str) -> Episode | None:
+        """Fetch one episode by id inside the caller's (user_id, layer) scope (D2.2 promotion pipeline)."""
+        row = await self._dispatch.select_one(
+            DB_NAME,
+            "SELECT * FROM episodes WHERE episode_id = ? AND user_id = ? AND layer = ?",
+            (episode_id, user_id, self.layer),
+        )
         return self._row_to_episode(row) if row else None
 
     async def add_tag(self, episode_id: int, tag: str) -> bool:
@@ -225,12 +229,18 @@ class EpisodicMemory:
             )
         )
 
-    async def delete_by_ids(self, episode_ids: list[int]) -> int:
-        """Delete episodes by id. Returns the number of rows removed."""
+    async def delete_by_ids(self, episode_ids: list[int], *, user_id: str) -> int:
+        """Delete episodes by id inside the caller's (user_id, layer) scope. Returns the number of rows removed."""
         if not episode_ids:
             return 0
         placeholders = ",".join(["?"] * len(episode_ids))
-        return int(await self._dispatch.write(DB_NAME, f"DELETE FROM episodes WHERE episode_id IN ({placeholders})", tuple(episode_ids)))
+        return int(
+            await self._dispatch.write(
+                DB_NAME,
+                f"DELETE FROM episodes WHERE episode_id IN ({placeholders}) AND user_id = ? AND layer = ?",
+                (*episode_ids, user_id, self.layer),
+            )
+        )
 
     def _row_to_episode(self, row: dict[str, Any] | Any) -> Episode:
         return Episode(

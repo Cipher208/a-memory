@@ -45,7 +45,6 @@ os.environ["MCP_MEMORY_DATA_DIR"] = DATA_DIR
 os.environ.setdefault("MCP_CONFIG_PATH", str(Path(DATA_DIR) / "config.yaml"))
 
 ARCHIVE_DIR = REPO / "scripts" / "purge-archive"
-LAYER = "user"
 
 SQL = """
 SELECT episode_id, user_id, summary, emotional_weight, tags, created_at,
@@ -233,9 +232,13 @@ async def run(apply: bool) -> int:
                 now,
             ),
         )
-    # API-only delete
-    ep = EpisodicMemory(cm=cm, layer=LAYER)
-    deleted = await ep.delete_by_ids(sorted(doomed))
+    # API-only delete, each row inside its own (user_id, layer) scope
+    by_scope: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for row in drop:
+        by_scope[(row["user_id"], str(row["layer"]))].append(int(row["episode_id"]))
+    deleted = 0
+    for (owner, layer), ids in by_scope.items():
+        deleted += await EpisodicMemory(cm=cm, layer=layer).delete_by_ids(sorted(ids), user_id=owner)
 
     after_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM episodes") or 0
     after_orphans = await dispatch.scalar(DB_NAME, orphans_sql) or 0

@@ -48,6 +48,7 @@ def ensure_schema(fresh_dir: Path) -> Path:
 
 class _FakeL3:
     def __init__(self) -> None:
+        self.layer = "user"
         self.saved: list[dict] = []
 
     async def save(self, user_id: str, summary: str, weight: float, tags: list[str], created_at: float | None = None) -> int:

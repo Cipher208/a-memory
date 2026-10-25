@@ -59,7 +59,7 @@ async def promote_episodes(mem: Any, wiki: Any, user_id: str, episode_ids: list[
     skipped: list[dict[str, Any]] = []
     for eid in episode_ids:
         try:
-            ep = await mem.l3.get_by_id(int(eid))
+            ep = await mem.l3.get_by_id(int(eid), user_id=user_id)
         except Exception:
             ep = None
         if ep is None:

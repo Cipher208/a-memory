@@ -254,7 +254,7 @@ async def _forget_episode_ids(app: AppContext, episode_ids: list[int], user_id: 
     found = []
     not_found = []
     for episode_id in episode_ids:
-        episode = await mem.l3.get_by_id(episode_id)
+        episode = await mem.l3.get_by_id(episode_id, user_id=user_id)
         if episode is None:
             not_found.append(episode_id)
         else:
@@ -275,7 +275,7 @@ async def _forget_episode_ids(app: AppContext, episode_ids: list[int], user_id: 
                 original_id=episode.episode_id,
                 reason="forget_primitive_episode_ids",
             )
-    outcome.deleted_l3 = int(await mem.l3.delete_by_ids([e.episode_id for e in found]))
+    outcome.deleted_l3 = int(await mem.l3.delete_by_ids([e.episode_id for e in found], user_id=user_id))
     return outcome
 
 
@@ -297,7 +297,7 @@ async def _delete_matching_episodes(
                 original_id=episode.episode_id,
                 reason="forget_primitive_fuzzy_l3",
             )
-    return int(await mem.l3.delete_by_ids([e.episode_id for e in episodes])), hits
+    return int(await mem.l3.delete_by_ids([e.episode_id for e in episodes], user_id=user_id)), hits
 
 
 async def _delete_matching_nodes(

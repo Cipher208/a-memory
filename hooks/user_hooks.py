@@ -266,7 +266,7 @@ class UserHooks:
         since = float(ctx.get("since", 0))
         until = float(ctx.get("until", _time.time()))
         user_id = ctx.get("user_id", self.user_id)
-        gaps = compute_session_gaps(mem, since, until)
+        gaps = compute_session_gaps(mem, since, until, user_id=user_id, layer=mem.l3.layer)
         for g in gaps:
             summary = f"diff_gap: msg={g['source_msg_id']} score={g['score']:.2f} missing={','.join(g['missing'])} preview={g['text_preview'][:200]}"
             await mem.l3.save(user_id, summary[:500], 0.5, ["diff_gap", "auto_review"])
