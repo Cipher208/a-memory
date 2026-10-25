@@ -994,7 +994,7 @@ async def memory_report_card(
 
         app = AppContext()
         mem = app.mm.user_memory(user_id) if layer == "user" else app.mm.agent_memory(user_id)
-        gaps = compute_session_gaps(mem, since, _time.time())
+        gaps = compute_session_gaps(mem, since, _time.time(), user_id=user_id)
         card["gaps"] = {"count": len(gaps), "previews": [g["text_preview"][:80] for g in gaps[:5]]}
     except Exception:
         card["gaps"] = {"count": 0, "previews": []}

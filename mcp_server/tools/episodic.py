@@ -99,8 +99,8 @@ async def memory_episode_get(
     mem = _get_memory(app, layer, user_id)
     row = await get_write_dispatch(mem.l3._cm).select_one(
         DB_NAME,
-        "SELECT * FROM episodes WHERE episode_id=? AND user_id=?",
-        (episode_id, user_id),
+        "SELECT * FROM episodes WHERE episode_id=? AND user_id=? AND layer=?",
+        (episode_id, user_id, layer),
     )
     if not row:
         return {"error": "episode_not_found", "episode_id": episode_id}

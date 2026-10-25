@@ -234,7 +234,7 @@ async def main() -> int:
     section("6. post_session_diff chain")
     from features.diff import compute_session_gaps
 
-    gaps = compute_session_gaps(mem, time.time() - 3600, time.time() + 60)
+    gaps = compute_session_gaps(mem, time.time() - 3600, time.time() + 60, user_id="verify")
     check("gaps computed from dispatch log", isinstance(gaps, list))
     r = await dispatch_event("post_session_diff", "user", "verify", {"since": time.time() - 3600, "until": time.time() + 60}, mem, graph, rag)
     check("post_session_diff fires", "results" in r)

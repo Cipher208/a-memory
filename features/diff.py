@@ -56,7 +56,7 @@ def _declared_thresholds(conn: sqlite3.Connection) -> dict[str, tuple[float, flo
     return out
 
 
-def compute_session_gaps(mem: Any, since: float, until: float) -> list[dict[str, Any]]:
+def compute_session_gaps(mem: Any, since: float, until: float, *, user_id: str) -> list[dict[str, Any]]:
     """Return high-importance message ids dispatched but not persisted as expected.
 
     "Gap" definitions (v1, conservative — OR, not AND, between the two rules), each
@@ -64,7 +64,9 @@ def compute_session_gaps(mem: Any, since: float, until: float) -> list[dict[str,
       - score >= min_importance     and saved_l3 == 0 → missing includes 'l3'
       - score >= l4_min_importance  and saved_l4 == 0 → missing includes 'l4'
 
-    Read-only over memory_dispatch_log. No DB writes.
+    Read-only over memory_dispatch_log. No DB writes. Only the caller's own
+    dispatches are read: an id addressed by scope carries (user_id, layer) from
+    the caller, never from the row.
 
     Preview source (fixed 2026-09-12): the dispatch log's own text_preview,
     written at dispatch time when the text is in hand. The old retroactive
@@ -84,14 +86,14 @@ def compute_session_gaps(mem: Any, since: float, until: float) -> list[dict[str,
     sql = (
         f"SELECT id, event, source_msg_id, user_id, score, saved_l3, saved_l4, text_preview "
         f"FROM memory_dispatch_log "
-        f"WHERE event IN ({placeholders}) AND created_at >= ? AND created_at < ? "
+        f"WHERE event IN ({placeholders}) AND created_at >= ? AND created_at < ? AND user_id = ? "
         f"ORDER BY id"
     )
     gaps: list[dict[str, Any]] = []
     try:
         with open_db(db_path) as conn:
             thresholds = _declared_thresholds(conn)
-            rows = conn.execute(sql, (*_GAP_EVENTS, since, until)).fetchall()
+            rows = conn.execute(sql, (*_GAP_EVENTS, since, until, user_id)).fetchall()
     except sqlite3.OperationalError:
         # Pre-migration DB (no text_preview column): legacy rows are all the
         # empty-preview noise class anyway — no gaps rather than 13k markers.
