@@ -18,6 +18,9 @@ _CREDENTIAL_PATTERNS: list[Pattern[str]] = [
     re.compile(r"\b(sk_test_[0-9a-zA-Z]{24,})\b"),
     re.compile(r"\b([0-9]{10}:[A-Za-z0-9_-]{35})\b"),
     re.compile(r"\b(Bearer\s+[A-Za-z0-9_\-\.]{20,})\b", re.IGNORECASE),
+    # PEM private-key block, whole: the base64 body is the key material and the
+    # header alone is not a secret.
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
     re.compile(r"<private>.*?</private>", re.DOTALL),
     re.compile(r"<secret>.*?</secret>", re.DOTALL),
     re.compile(r"<credentials>.*?</credentials>", re.DOTALL),
@@ -149,6 +152,13 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
         return key
 
     out = text
+    # F1: the credential tier is FIRST. The PHONE regex below mangles a token
+    # such as `ghp_…1234567890` into `ghp_…⟨PHONE_1⟩`; after that the credential
+    # pattern no longer matches and a fragment of the secret survives into
+    # whatever storage the caller is about to write.
+    for pattern in _CREDENTIAL_PATTERNS:
+        out = pattern.sub(lambda match: _placeholder("CREDENTIAL", match.group(0)), out)
+
     for kind, pattern in _PII_PATTERNS:
 
         def _sub(match: re.Match[str], _kind: str = kind) -> str:

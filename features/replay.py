@@ -278,11 +278,20 @@ async def replay(
         # measured: 1937 agent-layer episodes spanning 15.09..04.10, all reading
         # 04.10 09:15..13:42. The journal's ts is the original capture time, which
         # `l0_import_source.py` and `import_chat.py` carry through as `ts_override`.
+        #
+        # F1 defence in depth: rows captured before the door sanitized its input
+        # are still raw in the journal, and the replay is the last step before
+        # they become memory. The gate above was judged on the raw text on
+        # purpose — masking must not change admission — but what reaches the
+        # distiller (and therefore episodes and L4) is the masked text.
+        from mcp_server.utils.privacy import sanitize
+
+        stored_text, _priv_map = sanitize(row["text"])
         route = await distill_and_route(
             mem,
             graph,
             row["user_id"],
-            row["text"],
+            stored_text,
             score_text(row["text"], event=gate),
             event=gate,
             source_rid=int(row["id"]),

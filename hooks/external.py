@@ -366,15 +366,23 @@ async def _auto_save_text_body(
         repository came from one value being written in two places and diverging;
         the refusal verdict and its record must not be the seventh.
         """
+        from mcp_server.utils.privacy import sanitize
         from shared.door_log import record_rejection
 
+        # The guards must keep seeing the RAW text — that is how a transcript
+        # dump or a system injection is recognised — but the preview is stored,
+        # so it is masked first. `use_ner=False`: this path runs on messages
+        # just refused (dumps included), and loading spaCy for a 160-char
+        # preview would put NER on the refusal path; the credential and PII
+        # regex tiers are what the invariant needs.
+        preview, _priv_map = sanitize(text, use_ner=False)
         await record_rejection(
             reason,
             layer=l0_layer,
             user_id=user_id,
             event=event,
             source_msg_id=source_msg_id,
-            text=text,
+            text=preview,
         )
         return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": reason}
 
@@ -390,10 +398,29 @@ async def _auto_save_text_body(
     if _looks_like_system_injection(text):
         return await _refuse("system_injection")
 
-    # L0 intake (F): append-only raw journal BEFORE sanitize — the journal is
-    # the raw door of the pipeline. Best-effort (capture never raises); the id
-    # drives the status watermark after distillation.
+    # L0 intake (F): append-only journal of what will be stored. Best-effort
+    # (capture never raises); the id drives the status watermark after
+    # distillation.
     from shared.l0 import capture, find_block
+
+    # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
+    # NER unavailable/crashed → the regex tier inside sanitize still ran.
+    #
+    # BEFORE capture and BEFORE the duplicate guard, because the journal is
+    # persistent storage: `ghp_…`, `AKIA…` and `hunter2` used to land in
+    # `l0_journal.text` verbatim, sanitized twelve lines later — after the write.
+    # The consequence is stated once and accepted: `content_hash` is computed
+    # over the sanitized text now, so a message identical to a pre-fix row is
+    # captured once more. No migration.
+    from mcp_server.utils.privacy import sanitize
+
+    # Admission is judged on the RAW text, like the replay does. Masking replaces
+    # a credential with a shorter placeholder, and `structure_score` pays +0.2
+    # above 100 characters — so scoring the masked text demoted messages that had
+    # passed the gate (measured 118 chars → 0.4 vs 69 chars → 0.2). Everything
+    # that is STORED (capture, find_block, distill) uses the masked `text`.
+    raw_text = text
+    text, _priv_map = sanitize(text)
 
     # A replay of an already-captured block. capture() would return the original
     # rid and stop there — but the distiller ran unconditionally after it, so
@@ -419,13 +446,7 @@ async def _auto_save_text_body(
     if tracker is not None and l0_id is not None:
         tracker["l0_id"] = l0_id
 
-    # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
-    # NER unavailable/crashed → the regex tier inside sanitize still ran.
-    from mcp_server.utils.privacy import sanitize
-
-    text, _priv_map = sanitize(text)
-
-    score = evaluate_importance(text)
+    score = evaluate_importance(raw_text)
     result: dict[str, Any] = {"score": score, "saved_l3": False, "saved_l4": False, "saved_graph": False}
 
     # S10+S4: persona-owner declared canon — origin certifies content, so it
