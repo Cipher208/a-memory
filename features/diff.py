@@ -56,7 +56,7 @@ def _declared_thresholds(conn: sqlite3.Connection) -> dict[str, tuple[float, flo
     return out
 
 
-def compute_session_gaps(mem: Any, since: float, until: float, *, user_id: str) -> list[dict[str, Any]]:
+def compute_session_gaps(mem: Any, since: float, until: float, *, user_id: str, layer: str) -> list[dict[str, Any]]:
     """Return high-importance message ids dispatched but not persisted as expected.
 
     "Gap" definitions (v1, conservative — OR, not AND, between the two rules), each
@@ -86,14 +86,14 @@ def compute_session_gaps(mem: Any, since: float, until: float, *, user_id: str) 
     sql = (
         f"SELECT id, event, source_msg_id, user_id, score, saved_l3, saved_l4, text_preview "
         f"FROM memory_dispatch_log "
-        f"WHERE event IN ({placeholders}) AND created_at >= ? AND created_at < ? AND user_id = ? "
+        f"WHERE event IN ({placeholders}) AND created_at >= ? AND created_at < ? AND user_id = ? AND layer = ? "
         f"ORDER BY id"
     )
     gaps: list[dict[str, Any]] = []
     try:
         with open_db(db_path) as conn:
             thresholds = _declared_thresholds(conn)
-            rows = conn.execute(sql, (*_GAP_EVENTS, since, until, user_id)).fetchall()
+            rows = conn.execute(sql, (*_GAP_EVENTS, since, until, user_id, layer)).fetchall()
     except sqlite3.OperationalError:
         # Pre-migration DB (no text_preview column): legacy rows are all the
         # empty-preview noise class anyway — no gaps rather than 13k markers.
