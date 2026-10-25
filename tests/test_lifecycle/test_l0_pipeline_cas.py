@@ -20,8 +20,11 @@ import pytest
 from shared.connection import connection_manager
 from shared.migrations import MigrationManager
 
-#: The statuses that mean "this row already has a verdict".
-TERMINAL = ("promoted_l4", "saved_l3", "gated_out", "routed_direct", "foreign_agent")
+#: The statuses that mean the content was WRITTEN (or deliberately routed), so
+#: re-distilling it would duplicate memory. `gated_out` is not here: a refusal is
+#: a verdict only under the configuration that made it — see the two
+#: `gated_out` tests below.
+WRITTEN = ("promoted_l4", "saved_l3", "routed_direct", "foreign_agent")
 
 #: Text the distiller actually turns into memory, so "processed" is observable.
 PASSING_TEXT = "я решила перейти на PostgreSQL для проекта X, потому что MySQL не держит нагрузку"
@@ -119,12 +122,18 @@ async def test_close_row_does_not_append_decisions_when_it_loses(cm: Any) -> Non
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("terminal", TERMINAL)
+@pytest.mark.parametrize("terminal", WRITTEN)
 async def test_claim_refuses_terminal_statuses(cm: Any, terminal: str) -> None:
-    """Naming a closed row by id must not re-open it.
+    """Naming a written row by id must not re-open it.
 
     `replay(ids=...)` ignores the window's status filter, so it is the only
-    path that can reach `_claim` with a terminal row — the defect F4 describes.
+    path that can reach `_claim` with a written row — the defect F4 describes.
+
+    `gated_out` is deliberately NOT in this list. It is not unconditionally
+    terminal: a refusal is a verdict only under the configuration that made it,
+    so a `gated_out` row is refused when its decisions carry the CURRENT
+    (gate, config_hash) pair and claimed otherwise. That rule has its own two
+    tests below; including it here would assert the very bug F5 describes.
     """
     from features.replay import replay
     from shared.l0 import capture, close_row
@@ -140,6 +149,59 @@ async def test_claim_refuses_terminal_statuses(cm: Any, terminal: str) -> None:
     assert res["processed"] == 0, res
     assert res["skipped"] == 1, res
     assert (await _row(cm, rid))["status"] == terminal
+
+
+async def test_claim_takes_a_gated_out_row_after_the_config_changed(cm: Any) -> None:
+    """A row refused under a CHANGED config must be reconsidered.
+
+    That is the whole point of `config_hash`: a fixed distiller (or a corrected
+    threshold) has to be able to re-judge what the old one refused. The row
+    below was refused under `deadbeefdeadbeef`, which is not the current key,
+    so it still awaits a verdict and the window run must process it.
+    """
+    from features.replay import config_hash, replay
+    from shared.l0 import capture
+
+    rid = await capture("new_message", "user", "u1", PASSING_TEXT)
+    assert rid is not None
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "UPDATE l0_journal SET status='gated_out', processed_at=?, decisions=? WHERE id=?",
+        (time.time(), json.dumps([{"gate": "g1", "config_hash": "deadbeefdeadbeef", "ts": 0.0}]), rid),
+    )
+    await conn.commit()
+    assert config_hash() != "deadbeefdeadbeef"
+
+    res = await replay(since_days=1, respect_gate=False)
+
+    assert res["processed"] == 1, res
+    assert res["skipped"] == 0, res
+    assert (await _row(cm, rid))["status"] in {"saved_l3", "promoted_l4"}
+
+
+async def test_claim_refuses_a_gated_out_row_judged_by_the_current_config(cm: Any) -> None:
+    """The same configuration already refused this row: re-judging it is a loop.
+
+    Without this the nightly pass would re-distil every refusal under an
+    unchanged config — the config-hash skip exists to prevent exactly that.
+    """
+    from features.replay import config_hash, replay
+    from shared.l0 import capture
+
+    rid = await capture("new_message", "user", "u1", PASSING_TEXT)
+    assert rid is not None
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "UPDATE l0_journal SET status='gated_out', processed_at=?, decisions=? WHERE id=?",
+        (time.time(), json.dumps([{"gate": "g1", "config_hash": config_hash(), "ts": 0.0}]), rid),
+    )
+    await conn.commit()
+
+    res = await replay(since_days=1, respect_gate=False)
+
+    assert res["processed"] == 0, res
+    assert res["skipped"] == 1, res
+    assert (await _row(cm, rid))["status"] == "gated_out"
 
 
 async def test_claim_takes_a_received_row(cm: Any) -> None:

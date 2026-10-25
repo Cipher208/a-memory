@@ -10,9 +10,11 @@ window (Complementary Learning Systems: hippocampal replay consolidates
 reactivated traces into neocortex).
 replay (L0, Task F6): re-runs the G1 distiller over the l0_journal window.
 Idempotency: each processed row records {'gate', 'config_hash', 'ts'} in its
-decisions JSON; a row is skipped when the current config-hash is already
-recorded for that gate. A row closed as an unaccounted exit records no such
-pair — the write never happened — and is re-processed.
+decisions JSON, and a row is skipped only when the CURRENT (gate, config_hash)
+pair is already recorded for it — the same configuration already judged it.
+A row refused under an older configuration, or closed as an unaccounted exit
+(which records no pair: the write never happened), still awaits a verdict and
+is claimed.
 """
 
 from __future__ import annotations
@@ -27,17 +29,35 @@ from shared.connection import connection_manager
 from shared.constants import DB_NAME
 from shared.write_dispatch import get_write_dispatch
 
-#: Statuses that mean the row already HAS a verdict: replay must never claim
-#: one again. `parked` is deliberately absent — it is out of scope by the
-#: window SELECT, and naming it by id is how an import is woken.
+#: Statuses that mean the CONTENT was written (or deliberately routed): replay
+#: must never claim one again, or it would duplicate what memory already holds.
+#: `parked` is deliberately absent — it is out of scope by the window SELECT,
+#: and naming it by id is how an import is woken.
 #:
-#: `gated_out` has exactly one exception, handled in `_claim`: a row closed
-#: with `unaccounted_exit` carries no verdict at all (the write never
-#: happened). That marker is the retryable close — and it is load-bearing:
-#: `classify_received` closes every evidence-less `received` row as exactly
-#: that in the same pass, so refusing it would leave replay with nothing to
-#: process and strand the message for good.
-TERMINAL_STATUSES = frozenset({"promoted_l4", "saved_l3", "gated_out", "routed_direct", "foreign_agent"})
+#: `gated_out` is NOT here. A refusal is a verdict only under the configuration
+#: that made it, so `gated_out` is refused by `_claim` when its decisions carry
+#: the current (gate, config_hash) pair and claimed otherwise. That one rule
+#: covers both the changed-config re-open (a fixed distiller must be able to
+#: reconsider what the old one refused) and the `unaccounted_exit` close (no
+#: pair, so the write never happened and the row still needs rescuing —
+#: load-bearing, because `classify_received` closes every evidence-less
+#: `received` row exactly that way in the same pass).
+WRITTEN_STATUSES = frozenset({"promoted_l4", "saved_l3", "routed_direct", "foreign_agent"})
+
+
+def _judged_by(decisions_raw: Any, gate: str, chash: str) -> bool:
+    """Report whether `decisions` already record a verdict for this (gate, config).
+
+    This is the ONE rule that decides whether a row still awaits a verdict. A
+    pair under an older config is not a verdict: the configuration that made it
+    no longer exists, so the row is re-judgeable. A malformed blob proves
+    nothing and is treated as no verdict.
+    """
+    try:
+        decisions = json.loads(decisions_raw or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(decisions, list) and any(isinstance(d, dict) and d.get("gate") == gate and d.get("config_hash") == chash for d in decisions)
 
 
 async def record_recall_useful(cm: Any, layer: str, user_id: str, entries: list[tuple[int, str]]) -> int:
@@ -180,7 +200,7 @@ async def replay(
     from core import MemoryManager
     from graph.epistemic import EpistemicGraph
     from lifecycle.distiller import distill_and_route, score_text
-    from shared.l0 import STATUS_RECEIVED, _closed_unaccounted, classify_received
+    from shared.l0 import STATUS_RECEIVED, classify_received
 
     dispatch = get_write_dispatch()
     cutoff = time.time() - since_days * 86400
@@ -228,7 +248,7 @@ async def replay(
                 skipped += 1
                 continue
         decisions: list[dict[str, Any]] = json.loads(row["decisions"] or "[]")
-        if any(d.get("gate") == gate and d.get("config_hash") == chash for d in decisions):
+        if _judged_by(row["decisions"], gate, chash):
             skipped += 1
             continue
         # S6a-1 single entry: rows with skip_distill (remember/think) were
@@ -241,17 +261,23 @@ async def replay(
         # Audit 05.09 (P1) replay race: claim by status — a second concurrent
         # replay sees the status already 'processing' with a fresh processed_at
         # and skips the row; a stuck 'processing' (grace 10m) is re-processed.
-        # F4: a row that already HAS a verdict is never claimed. The read and
-        # the write share one BEGIN IMMEDIATE, and the write is a CAS on the
-        # status just read, so two claimers cannot both win.
-        async def _claim(conn: Any) -> bool:
+        # F4: a row is claimed only when it still AWAITS a verdict — its content
+        # was not written, and no verdict under the CURRENT config is recorded.
+        # The read and the write share one BEGIN IMMEDIATE, and the write is a
+        # CAS on the status just read, so two claimers cannot both win. The
+        # decisions are re-read under that lock: the loop's snapshot was taken
+        # before the run started and another writer may have closed the row
+        # since — that stale snapshot is the race F4 named.
+        async def _claim(conn: Any, gate_name: str, chash_now: str) -> bool:
             with contextlib.suppress(Exception):
                 await conn.execute("BEGIN IMMEDIATE")
             recheck = await (await conn.execute("SELECT status, processed_at, decisions FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
             if recheck is None:
                 return False
             current = str(recheck[0] or "")
-            if current in TERMINAL_STATUSES and not (current == "gated_out" and _closed_unaccounted(recheck[2])):
+            if current in WRITTEN_STATUSES:
+                return False
+            if current == "gated_out" and _judged_by(recheck[2], gate_name, chash_now):
                 return False
             if current == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
                 return False
@@ -262,7 +288,7 @@ async def replay(
             return int(cur.rowcount or 0) == 1
 
         # The claim is committed before distillation, so the next tick sees it.
-        if not await dispatch.atomic(DB_NAME, _claim):
+        if not await dispatch.atomic(DB_NAME, lambda conn: _claim(conn, gate, chash)):
             skipped += 1
             continue
 
