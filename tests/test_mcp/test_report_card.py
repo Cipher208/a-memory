@@ -88,6 +88,35 @@ async def test_report_card_counts(ensure_schema: Path) -> None:
     assert out["gaps"]["count"] == 1
 
 
+async def test_report_card_gaps_do_not_cross_layers_for_the_same_user(ensure_schema: Path) -> None:
+    """The card's gap block is scoped by (user_id, layer), not user alone.
+
+    `memory_report_card(layer="agent")` must read the agent-layer dispatch rows
+    only: the same user's user-layer preview is a foreign read for that caller.
+    """
+    conn = sqlite3.connect(ensure_schema / "memory.db")
+    now = time.time()
+    conn.execute(
+        "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, layer, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
+        " VALUES ('new_message', 21, 'layered', 'user', 0.9, 1, 0, 1, 'layered USER-layer preview', ?)",
+        (now - 100,),
+    )
+    conn.execute(
+        "INSERT INTO memory_dispatch_log (event, source_msg_id, user_id, layer, score, saved_l3, saved_l4, saved_graph, text_preview, created_at)"
+        " VALUES ('new_message', 22, 'layered', 'agent', 0.9, 1, 0, 1, 'layered AGENT-layer preview', ?)",
+        (now - 90,),
+    )
+    conn.commit()
+    conn.close()
+
+    from mcp_server.tools.ops import memory_report_card
+
+    card = await memory_report_card(period_hours=24, layer="agent", user_id="layered", ctx=_Ctx())
+
+    assert card["gaps"]["count"] == 1
+    assert card["gaps"]["previews"] == ["layered AGENT-layer preview"]
+
+
 async def test_report_card_empty_db_zeroed(tmp_path: Path) -> None:
     original = connection_manager.base_dir
     connection_manager.base_dir = tmp_path
