@@ -11,12 +11,13 @@ reactivated traces into neocortex).
 replay (L0, Task F6): re-runs the G1 distiller over the l0_journal window.
 Idempotency: each processed row records {'gate', 'config_hash', 'ts'} in its
 decisions JSON; a row is skipped when the current config-hash is already
-recorded for that gate. Rows reset to 'gated_out' (decisions cleared) are
-re-processed.
+recorded for that gate. A row closed as an unaccounted exit records no such
+pair — the write never happened — and is re-processed.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from typing import Any
@@ -25,6 +26,18 @@ from config import config
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 from shared.write_dispatch import get_write_dispatch
+
+#: Statuses that mean the row already HAS a verdict: replay must never claim
+#: one again. `parked` is deliberately absent — it is out of scope by the
+#: window SELECT, and naming it by id is how an import is woken.
+#:
+#: `gated_out` has exactly one exception, handled in `_claim`: a row closed
+#: with `unaccounted_exit` carries no verdict at all (the write never
+#: happened). That marker is the retryable close — and it is load-bearing:
+#: `classify_received` closes every evidence-less `received` row as exactly
+#: that in the same pass, so refusing it would leave replay with nothing to
+#: process and strand the message for good.
+TERMINAL_STATUSES = frozenset({"promoted_l4", "saved_l3", "gated_out", "routed_direct", "foreign_agent"})
 
 
 async def record_recall_useful(cm: Any, layer: str, user_id: str, entries: list[tuple[int, str]]) -> int:
@@ -89,23 +102,27 @@ async def cls_replay(cm: Any, user_id: str, layer: str = "user", window_hours: i
 
 
 def config_hash() -> str:
-    """Hash of the gate config that determines G1 routing decisions.
+    """Hash of the gate CONFIGURATION that determines G1 routing decisions.
 
-    Covers the EMA importance threshold (S17 F2: adaptive gate in auto_save),
-    the static fallback (hooks.auto_save_threshold) and the rules.yaml content
-    (D1.9 boosts/tags). Replay skips rows already processed under the same
-    hash; a changed hash re-opens the window.
+    Covers the static fallback (hooks.auto_save_threshold) and the rules.yaml
+    content (D1.9 boosts/tags). Replay skips rows already processed under the
+    same hash; a changed hash re-opens the window.
+
+    RUNTIME STATE MUST NOT ENTER THIS KEY. It used to hash the EMA threshold
+    (`adaptive_threshold._current_value`), which `gate()` rewrites on every
+    message it judges: measured live, that produced 2295 distinct hashes over
+    2319 rows, so the "already processed under this config" skip almost never
+    fired and the idempotency mechanism was effectively dead. A key is a pure
+    function of what an operator configured, not of what the pipeline has seen.
     """
     import hashlib
 
     from config import config
     from features.rules import load_rules
-    from shared.adaptive import adaptive_threshold
 
     payload = json.dumps(
         {
             "threshold": float(config.get("hooks", "auto_save_threshold", default=0.5)),
-            "ema_threshold": adaptive_threshold._current_value,
             "rules": load_rules(force=True),
         },
         sort_keys=True,
@@ -163,7 +180,7 @@ async def replay(
     from core import MemoryManager
     from graph.epistemic import EpistemicGraph
     from lifecycle.distiller import distill_and_route, score_text
-    from shared.l0 import STATUS_RECEIVED, classify_received
+    from shared.l0 import STATUS_RECEIVED, _closed_unaccounted, classify_received
 
     dispatch = get_write_dispatch()
     cutoff = time.time() - since_days * 86400
@@ -224,15 +241,25 @@ async def replay(
         # Audit 05.09 (P1) replay race: claim by status — a second concurrent
         # replay sees the status already 'processing' with a fresh processed_at
         # and skips the row; a stuck 'processing' (grace 10m) is re-processed.
-        # aiosqlite rowcount after UPDATE is unreliable → check-then-update.
+        # F4: a row that already HAS a verdict is never claimed. The read and
+        # the write share one BEGIN IMMEDIATE, and the write is a CAS on the
+        # status just read, so two claimers cannot both win.
         async def _claim(conn: Any) -> bool:
-            recheck = await (await conn.execute("SELECT status, processed_at FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
+            with contextlib.suppress(Exception):
+                await conn.execute("BEGIN IMMEDIATE")
+            recheck = await (await conn.execute("SELECT status, processed_at, decisions FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
             if recheck is None:
                 return False
-            if recheck[0] == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
+            current = str(recheck[0] or "")
+            if current in TERMINAL_STATUSES and not (current == "gated_out" and _closed_unaccounted(recheck[2])):
                 return False
-            await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time(), row["id"]))
-            return True
+            if current == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
+                return False
+            cur = await conn.execute(
+                "UPDATE l0_journal SET status='processing', processed_at=? WHERE id=? AND status=?",
+                (time.time(), row["id"], current),
+            )
+            return int(cur.rowcount or 0) == 1
 
         # The claim is committed before distillation, so the next tick sees it.
         if not await dispatch.atomic(DB_NAME, _claim):
