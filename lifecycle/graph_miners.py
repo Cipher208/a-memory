@@ -1416,7 +1416,10 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) 
         # A single live vector has nothing to be centred against: the mean
         # would be the vector itself and the junk flag would fire on it.
         centred[signal] = raw[signal]
-    binary = [embed_to_binary(v, dim=len(v)) for v in centred]
+    # `tolist()`: numpy 2.5 stubs type an ndarray row as not-a-Sequence, and
+    # `embed_to_binary` promises Sequence[float]. A list is also what the
+    # pure-python path expects, so this costs nothing on the hot path.
+    binary = [embed_to_binary(v.tolist(), dim=len(v)) for v in centred]
     bits = [_bits_int(b) for b in binary]
 
     # S17 addendum 10: bit-degenerate vectors (0 bits — text without significant
