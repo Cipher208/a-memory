@@ -34,6 +34,12 @@ _COMMON_NORM = 0.9
 _COMMON = _COMMON_NORM / math.sqrt(_BITS)
 # The rest of a unit vector after the common component: sqrt(1 - 0.81).
 _UNIQUE = math.sqrt(1.0 - _COMMON_NORM**2)
+# Per-dimension amplitude of the meaning part: 384 * _AMP**2 = 1 - 0.81, so a
+# balanced pattern is a unit vector whose mean over the batch is exactly the
+# common component. This is the real e5 geometry: ||mean|| / ||row|| = 0.90.
+# (An amplitude of 0.5 per dimension would make the rows ~10 long and the ratio
+# 0.09 — a fixture that is NOT in the e5 cone and must not be centred.)
+_AMP = math.sqrt((1.0 - _COMMON_NORM**2) / _BITS)
 
 
 @pytest.fixture
@@ -159,7 +165,17 @@ def _pattern(rnd: Any, ones: int = _BITS // 2) -> int:
 
 
 def _raw(bits: int) -> list[float]:
-    return [_COMMON + (0.5 if (bits >> i) & 1 else -0.5) for i in range(_BITS)]
+    return [_COMMON + (_AMP if (bits >> i) & 1 else -_AMP) for i in range(_BITS)]
+
+
+def _common_ratio(rows: list[list[float]]) -> float:
+    """The guard's own quantity: ||mean|| / median(||row||), over non-zero rows."""
+    import numpy as np
+
+    arr = np.asarray(rows, dtype=np.float32)
+    arr = arr[np.any(arr != 0.0, axis=1)]
+    typical = float(np.median(np.linalg.norm(arr, axis=1)))
+    return float(np.linalg.norm(arr.mean(axis=0))) / typical if typical > 0 else 0.0
 
 
 # --- 1 ---------------------------------------------------------------------
@@ -324,41 +340,89 @@ async def test_the_bound_still_protects_a_pathological_corpus(db, capture):
 # --- 6: hash fallback ------------------------------------------------------
 
 
+FALLBACK_TEXTS = [
+    "рецепт капустного пирога с дрожжевым тестом",
+    "деплой сервиса через systemd юнит",
+    "кот спит на подоконнике весь день",
+    "курс доллара вырос на бирже утром",
+    "упражнения для спины после сидячей работы",
+    "настройка tailscale на впс",
+    "погода в городе обещает дождь к вечеру",
+    "книга про историю рима",
+    "замена масла в двигателе",
+    "таблица умножения для школьника",
+    "выбор подарка на день рождения",
+    "пересадка фикуса в больший горшок",
+]
+
+
 @pytest.mark.asyncio
 async def test_a_hash_fallback_batch_is_not_centred(db, capture):
-    """No model → hash-fallback vectors → centring must be skipped.
+    """No model → hash-fallback vectors → centring must be skipped, on EVERY run.
 
-    The fallback vector lives in 16 dimensions and pads the other 368 with
-    zeros, which is not the e5 cone. Subtracting the mean lifts those 368 zeros
-    off zero, so `sign()` encodes the (identical) padding in every vector and
-    unrelated texts correlate: measured 12 unrelated texts gave 0 edges on base
-    and 22 on the centring-only version. The miner detects the fallback through
-    `hash_fallback_stats()` and keeps `sign(raw)` for the whole batch.
+    The fallback vector carries signal in ~16 dimensions and zeros in the rest,
+    which is not the e5 cone. Subtracting the mean lifts that identical padding
+    off zero, so `sign()` encodes the padding in every vector and unrelated
+    texts correlate: measured 12 unrelated texts gave 0 edges on base and 22 on
+    the centring-only version.
+
+    The second run is the load-bearing one. A provenance guard
+    (`hash_fallback_stats()` rising) only fires when vectors are COMPUTED, and
+    the fallback rows are cached under `hash-fallback/<model>` — so run 2 reads
+    them from cache, the counter stays 0 → 0, and the defect came back. That is
+    why the guard is geometry: it measures the vectors it is about to centre.
     """
     import lifecycle.graph_miners as gm
 
-    texts = [
-        "рецепт капустного пирога с дрожжевым тестом",
-        "деплой сервиса через systemd юнит",
-        "кот спит на подоконнике весь день",
-        "курс доллара вырос на бирже утром",
-        "упражнения для спины после сидячей работы",
-        "настройка tailscale на впс",
-        "погода в городе обещает дождь к вечеру",
-        "книга про историю рима",
-        "замена масла в двигателе",
-        "таблица умножения для школьника",
-        "выбор подарка на день рождения",
-        "пересадка фикуса в больший горшок",
-    ]
-    for text in texts:
+    for text in FALLBACK_TEXTS:
         await _node(text)
 
-    await gm.miner_embedding(db, "user")
-
-    assert capture.binary is not None
+    first = await gm.miner_embedding(db, "user")
+    assert first["edges"] == 0, f"run 1 centred the fallback: {first}"
     assert await _edges() == [], "hash-fallback vectors were centred: unrelated texts correlate"
-    assert _max_pair_jaccard(capture.binary) < gm._EMBED_JACCARD
+    assert _max_pair_jaccard(capture.binary or []) < gm._EMBED_JACCARD
+
+    second = await gm.miner_embedding(db, "user")
+    assert second["edges"] == 0, f"run 2 (cache hit) centred the fallback: {second}"
+    assert await _edges() == [], "run 2 read the fallback from cache and centred it"
+    assert _max_pair_jaccard(capture.binary or []) < gm._EMBED_JACCARD
+
+
+# --- 6b: the guard measures the geometry -----------------------------------
+
+
+def test_the_ratio_separates_e5_from_the_fallback():
+    """The guard's quantity, measured on both geometries at the batch size used here.
+
+    Measured 2026-10-26 (400 draws each, live hermes cache + `_hash_embedding`):
+
+        n     e5 median   e5 min   fallback median   fallback max
+        5       0.929      0.768        0.447            0.665
+        12      0.917      0.904        0.279            0.439
+        50      0.912      0.891        0.138            0.214
+        1000    0.910      0.907        0.027            0.042
+
+    The whole live batch (14 774 rows) scores 0.910. The constant sits in the
+    gap: 0.7. 0.5 was rejected — the n=5 fallback tail reaches 0.665 (p99
+    0.601), so at 0.5 about a fifth of small fallback batches would still be
+    centred.
+    """
+    import random
+
+    from lifecycle.graph_miners import _CENTRE_COMMON_RATIO
+    from shared.embeddings import _hash_embedding
+
+    rnd = random.Random(23)
+    e5_like = [_raw(_pattern(rnd)) for _ in range(12)]
+    fallback = [_hash_embedding(text) for text in FALLBACK_TEXTS]
+
+    e5_ratio = _common_ratio(e5_like)
+    fb_ratio = _common_ratio(fallback)
+
+    assert 0.85 <= e5_ratio <= 0.95, f"e5-like batch ratio {e5_ratio:.3f} is not the measured ~0.91"
+    assert 0.15 <= fb_ratio <= 0.45, f"fallback batch ratio {fb_ratio:.3f} is not the measured ~0.28"
+    assert e5_ratio > _CENTRE_COMMON_RATIO, f"e5 would not be centred: {e5_ratio:.3f} < {_CENTRE_COMMON_RATIO}"
+    assert fb_ratio < _CENTRE_COMMON_RATIO, f"fallback would be centred: {fb_ratio:.3f} >= {_CENTRE_COMMON_RATIO}"
 
 
 # --- 7: zero vectors -------------------------------------------------------

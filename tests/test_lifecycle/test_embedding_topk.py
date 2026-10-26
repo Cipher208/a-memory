@@ -88,11 +88,15 @@ def _all_on() -> int:
 # that carries the meaning. Centring cancels the shared part exactly, so the
 # oracle sees the intended bit patterns rather than a degenerate corpus.
 _COMMON = 0.9 / math.sqrt(_BITS)
+# Meaning part per dimension: 384 * _AMP**2 = 1 - 0.9**2, so a balanced pattern
+# is a unit vector and ||mean|| / ||row|| = 0.9 — the real e5 geometry, which is
+# what the miner's centring guard looks for.
+_AMP = math.sqrt((1.0 - 0.9**2) / _BITS)
 
 
 def _raw(bits: int) -> list[float]:
-    """Vector whose centred form is the ±0.5 pattern `bits` (common part added)."""
-    return [_COMMON + (0.5 if (bits >> i) & 1 else -0.5) for i in range(_BITS)]
+    """Vector whose centred form is the ±_AMP pattern `bits` (common part added)."""
+    return [_COMMON + (_AMP if (bits >> i) & 1 else -_AMP) for i in range(_BITS)]
 
 
 def _centred_binary(vecs: list[list[float]]) -> list[bytes]:
