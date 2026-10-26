@@ -10,14 +10,18 @@ window (Complementary Learning Systems: hippocampal replay consolidates
 reactivated traces into neocortex).
 replay (L0, Task F6): re-runs the G1 distiller over the l0_journal window.
 Idempotency: each processed row records {'gate', 'config_hash', 'ts'} in its
-decisions JSON; a row is skipped when the current config-hash is already
-recorded for that gate. Rows reset to 'gated_out' (decisions cleared) are
-re-processed.
+decisions JSON, and a row is skipped only when the CURRENT (gate, config_hash)
+pair is already recorded for it — the same configuration already judged it.
+A row refused under an older configuration, or closed as an unaccounted exit
+(which records no pair: the write never happened), still awaits a verdict and
+is claimed.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import sqlite3
 import time
 from typing import Any
 
@@ -25,6 +29,38 @@ from config import config
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 from shared.write_dispatch import get_write_dispatch
+
+logger = logging.getLogger(__name__)
+
+#: Statuses that mean the CONTENT was written (or deliberately routed): replay
+#: must never claim one again, or it would duplicate what memory already holds.
+#: `parked` is deliberately absent — it is out of scope by the window SELECT,
+#: and naming it by id is how an import is woken.
+#:
+#: `gated_out` is NOT here. A refusal is a verdict only under the configuration
+#: that made it, so `gated_out` is refused by `_claim` when its decisions carry
+#: the current (gate, config_hash) pair and claimed otherwise. That one rule
+#: covers both the changed-config re-open (a fixed distiller must be able to
+#: reconsider what the old one refused) and the `unaccounted_exit` close (no
+#: pair, so the write never happened and the row still needs rescuing —
+#: load-bearing, because `classify_received` closes every evidence-less
+#: `received` row exactly that way in the same pass).
+WRITTEN_STATUSES = frozenset({"promoted_l4", "saved_l3", "routed_direct", "foreign_agent"})
+
+
+def _judged_by(decisions_raw: Any, gate: str, chash: str) -> bool:
+    """Report whether `decisions` already record a verdict for this (gate, config).
+
+    This is the ONE rule that decides whether a row still awaits a verdict. A
+    pair under an older config is not a verdict: the configuration that made it
+    no longer exists, so the row is re-judgeable. A malformed blob proves
+    nothing and is treated as no verdict.
+    """
+    try:
+        decisions = json.loads(decisions_raw or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(decisions, list) and any(isinstance(d, dict) and d.get("gate") == gate and d.get("config_hash") == chash for d in decisions)
 
 
 async def record_recall_useful(cm: Any, layer: str, user_id: str, entries: list[tuple[int, str]]) -> int:
@@ -89,23 +125,27 @@ async def cls_replay(cm: Any, user_id: str, layer: str = "user", window_hours: i
 
 
 def config_hash() -> str:
-    """Hash of the gate config that determines G1 routing decisions.
+    """Hash of the gate CONFIGURATION that determines G1 routing decisions.
 
-    Covers the EMA importance threshold (S17 F2: adaptive gate in auto_save),
-    the static fallback (hooks.auto_save_threshold) and the rules.yaml content
-    (D1.9 boosts/tags). Replay skips rows already processed under the same
-    hash; a changed hash re-opens the window.
+    Covers the static fallback (hooks.auto_save_threshold) and the rules.yaml
+    content (D1.9 boosts/tags). Replay skips rows already processed under the
+    same hash; a changed hash re-opens the window.
+
+    RUNTIME STATE MUST NOT ENTER THIS KEY. It used to hash the EMA threshold
+    (`adaptive_threshold._current_value`), which `gate()` rewrites on every
+    message it judges: measured live, that produced 2295 distinct hashes over
+    2319 rows, so the "already processed under this config" skip almost never
+    fired and the idempotency mechanism was effectively dead. A key is a pure
+    function of what an operator configured, not of what the pipeline has seen.
     """
     import hashlib
 
     from config import config
     from features.rules import load_rules
-    from shared.adaptive import adaptive_threshold
 
     payload = json.dumps(
         {
             "threshold": float(config.get("hooks", "auto_save_threshold", default=0.5)),
-            "ema_threshold": adaptive_threshold._current_value,
             "rules": load_rules(force=True),
         },
         sort_keys=True,
@@ -211,7 +251,7 @@ async def replay(
                 skipped += 1
                 continue
         decisions: list[dict[str, Any]] = json.loads(row["decisions"] or "[]")
-        if any(d.get("gate") == gate and d.get("config_hash") == chash for d in decisions):
+        if _judged_by(row["decisions"], gate, chash):
             skipped += 1
             continue
         # S6a-1 single entry: rows with skip_distill (remember/think) were
@@ -224,18 +264,61 @@ async def replay(
         # Audit 05.09 (P1) replay race: claim by status — a second concurrent
         # replay sees the status already 'processing' with a fresh processed_at
         # and skips the row; a stuck 'processing' (grace 10m) is re-processed.
-        # aiosqlite rowcount after UPDATE is unreliable → check-then-update.
-        async def _claim(conn: Any) -> bool:
-            recheck = await (await conn.execute("SELECT status, processed_at FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
+        # F4: a row is claimed only when it still AWAITS a verdict — its content
+        # was not written, and no verdict under the CURRENT config is recorded.
+        # The read and the write share one BEGIN IMMEDIATE, and the write is a
+        # CAS on the status just read, so two claimers cannot both win. The
+        # decisions are re-read under that lock: the loop's snapshot was taken
+        # before the run started and another writer may have closed the row
+        # since — that stale snapshot is the race F4 named.
+        #
+        # The guard is `in_transaction`, not a swallowed exception: swallowing a
+        # BEGIN failure (SQLITE_BUSY) would run the re-read outside any lock, and
+        # the CAS would then match a row another writer had already claimed.
+        async def _claim(conn: Any, gate_name: str, chash_now: str) -> bool:
+            if not conn.in_transaction:
+                await conn.execute("BEGIN IMMEDIATE")
+            recheck = await (await conn.execute("SELECT status, processed_at, decisions FROM l0_journal WHERE id=?", (row["id"],))).fetchone()
             if recheck is None:
                 return False
-            if recheck[0] == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
+            current = str(recheck[0] or "")
+            if current in WRITTEN_STATUSES:
                 return False
-            await conn.execute("UPDATE l0_journal SET status='processing', processed_at=? WHERE id=?", (time.time(), row["id"]))
-            return True
+            if current == "gated_out" and _judged_by(recheck[2], gate_name, chash_now):
+                return False
+            if current == "processing" and float(recheck[1] or 0) > time.time() - 600.0:
+                return False
+            cur = await conn.execute(
+                "UPDATE l0_journal SET status='processing', processed_at=? WHERE id=? AND status=?",
+                (time.time(), row["id"], current),
+            )
+            return int(cur.rowcount or 0) == 1
 
         # The claim is committed before distillation, so the next tick sees it.
-        if not await dispatch.atomic(DB_NAME, _claim):
+        #
+        # A claim that cannot take the write lock is ONE row's problem, not the
+        # pass's: it must be skipped and visible, never propagate. The nightly
+        # caller wraps `replay()` in a bare `contextlib.suppress(Exception)` with
+        # no log, so a BUSY escaping from here would abandon the whole night's
+        # replay silently — the exact silence class this package removes. Only
+        # the claim is contained: a failure while DISTILLING is a different,
+        # louder problem and stays the caller's business.
+        try:
+            claimed = await dispatch.atomic(DB_NAME, lambda conn: _claim(conn, gate, chash))
+        except sqlite3.OperationalError as exc:
+            # Only a BUSY means "another writer holds the lock, try later". The
+            # same exception class carries permanent failures — a malformed image,
+            # a corrupt file — and skipping one of those silently would hide a
+            # broken base behind a warning per row. Anything that is not busy is
+            # re-raised: it is the caller's business, and it must be loud.
+            from shared.sqlite_busy import is_busy
+
+            if not is_busy(exc):
+                raise
+            logger.warning("replay: claim of l0 row %s hit %s — left for the next pass", row["id"], exc)
+            skipped += 1
+            continue
+        if not claimed:
             skipped += 1
             continue
 

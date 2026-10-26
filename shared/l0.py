@@ -118,8 +118,9 @@ def _write_never_happened(row: Any) -> bool:
 
     The close reason is the marker: `unaccounted_exit` says the pipeline
     left the row without stamping it, which means the write did not happen.
-    The status has to agree — a row that was later written carries a real
-    terminal status and blocks duplicates again, marker or no marker.
+    The status has to agree, and the marker only holds while no real verdict
+    exists: once a close has recorded a (gate, config_hash) pair, the write
+    DID happen and the row blocks duplicates again.
     """
     try:
         status = str(row["status"] or "")
@@ -128,13 +129,36 @@ def _write_never_happened(row: Any) -> bool:
         return False
     if status != "gated_out":
         return False
+    return _awaiting_verdict(decisions_raw)
+
+
+def _awaiting_verdict(decisions_raw: Any) -> bool:
+    """Report whether a closed row still awaits a verdict. One predicate, two readers.
+
+    A row closed as an unaccounted exit with NO config-pair verdict still awaits
+    one: the write never happened, so there is nothing to skip and nothing to
+    block. That is the retryable state, and it is a STATE — not a permanent key.
+    Once any close has appended `{"gate", "config_hash"}`, the row HAS a verdict:
+    the marker is history, and both readers must stop honouring it.
+
+    The defect this closes: the marker was never cleared, so a row carrying BOTH
+    `unaccounted_exit` and a real verdict kept the exemption. Every later closer
+    won (verified: three consecutive closes all returned True), and the
+    duplicate guard re-entered a row whose write had already happened.
+
+    Both readers are here because they must agree. `_write_never_happened` asks
+    "may a retry re-enter the write?"; `close_row` asks "may this close still
+    stamp the row?". They are the same question about the same state.
+    """
     try:
         decisions = json.loads(decisions_raw or "[]")
     except (json.JSONDecodeError, TypeError):
         return False
     if not isinstance(decisions, list):
         return False
-    return any(isinstance(d, dict) and d.get("reason") == UNACCOUNTED_EXIT for d in decisions)
+    has_marker = any(isinstance(d, dict) and d.get("reason") == UNACCOUNTED_EXIT for d in decisions)
+    has_verdict = any(isinstance(d, dict) and d.get("gate") and d.get("config_hash") for d in decisions)
+    return has_marker and not has_verdict
 
 
 async def capture(
@@ -354,8 +378,14 @@ async def verify_chain() -> list[dict[str, Any]]:
     return broken
 
 
-async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> None:
-    """Give one captured row a terminal status. Never raises.
+async def close_row(
+    l0_id: int,
+    status: str,
+    *,
+    reason: str | None = None,
+    expect_status: str = STATUS_RECEIVED,
+) -> bool:
+    """Give one captured row a terminal status, from the status it expects. Never raises.
 
     WHY THIS IS HERE AND NOT IN THE HOOK. `capture` writes `received` and six
     different call sites are responsible for stamping it afterwards — the external
@@ -393,39 +423,90 @@ async def close_row(l0_id: int, status: str, *, reason: str | None = None) -> No
     addressably (a save, a `routed_direct`) — there is then no refusal to explain,
     and adding a decision entry would make an unchanged config treat a legitimate
     save as skippable.
+
+    WHY THIS IS A COMPARE-AND-SET. Two owners close the same row: the live hook
+    right after capture, and the nightly sweep/replay. Without a status
+    precondition, whichever wrote last won — a row already saved to L3 could be
+    overwritten with `gated_out` by a later sweep, and the record then claimed a
+    refusal that never happened. The update therefore applies only while the row
+    still carries `expect_status` (default `received`) and the result says
+    whether this caller won. A lost CAS is not an error — the row belongs to
+    another writer — so it returns `False` and logs at debug.
+
+    AN UNACCOUNTED EXIT STILL AWAITS ITS VERDICT — UNTIL ONE EXISTS. The one
+    caller that does not close a freshly captured row is the retry: `capture`
+    hands back the dedup row, `find_block` lets the retry re-enter the write, and
+    the close then arrives at a row already stamped `gated_out`/`unaccounted_exit`.
+    That row carries no verdict — the write never happened — so it is treated
+    exactly like `received` for the default `expect_status`. Without this the
+    retry would write the memory and leave the journal claiming a refusal
+    (measured: the delivery-contract retry test).
+
+    The exemption is the STATE, not the marker: it holds only while the decisions
+    carry no (gate, config_hash) pair (`_awaiting_verdict`). Once a close has
+    recorded a real verdict, the row belongs to that verdict and a later close
+    loses like any other — otherwise the marker would be a permanent skeleton key.
+
+    The read and the write share ONE `BEGIN IMMEDIATE`, so two closers cannot
+    both read the same decisions list and append to it. The guard is
+    `conn.in_transaction`, NOT a swallowed exception: a BEGIN that fails with
+    SQLITE_BUSY leaves the read outside any transaction, where it can see the
+    pre-commit state of the writer that holds the lock — that writer then
+    commits, the status never changed, and this UPDATE would overwrite its
+    append. A failed BEGIN must abort the close, not silently continue.
     """
     try:
         now = time.time()
-        if reason is None:
-            await _dispatch().write(
-                DB_NAME,
-                "UPDATE l0_journal SET status=?, processed_at=? WHERE id=?",
-                (status, now, l0_id),
+        from features.replay import config_hash
+
+        async def _txn(conn: Any) -> bool:
+            # BEGIN IMMEDIATE: take the write lock before reading the row, so two
+            # closers cannot append to the same base list. `in_transaction` is the
+            # repo's nesting check: when the caller already holds a transaction
+            # this joins it instead of raising "cannot start a transaction within
+            # a transaction". Swallowing that error would also swallow a real
+            # SQLITE_BUSY and read outside any lock — see the docstring.
+            if not conn.in_transaction:
+                await conn.execute("BEGIN IMMEDIATE")
+            row = await (await conn.execute("SELECT status, decisions FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
+            if row is None:
+                return False
+            current = str(row["status"] or "")
+            awaiting = current == expect_status or (
+                expect_status == STATUS_RECEIVED and current == "gated_out" and _awaiting_verdict(row["decisions"])
             )
-        else:
-            from features.replay import config_hash
-
-            async def _txn(conn: Any) -> None:
-                row = await (await conn.execute("SELECT decisions FROM l0_journal WHERE id=?", (l0_id,))).fetchone()
-                try:
-                    decisions = json.loads((row["decisions"] if row else None) or "[]")
-                except (json.JSONDecodeError, TypeError):
-                    decisions = []
-                if reason == UNACCOUNTED_EXIT:
-                    decisions.append({"reason": reason, "ts": now})
-                else:
-                    decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
-                await conn.execute(
-                    "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=?",
-                    (status, now, json.dumps(decisions, ensure_ascii=False), l0_id),
+            if not awaiting:
+                return False
+            if reason is None:
+                cur = await conn.execute(
+                    "UPDATE l0_journal SET status=?, processed_at=? WHERE id=? AND status=?",
+                    (status, now, l0_id, current),
                 )
+                return int(cur.rowcount or 0) == 1
+            try:
+                decisions = json.loads(row["decisions"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                decisions = []
+            if reason == UNACCOUNTED_EXIT:
+                decisions.append({"reason": reason, "ts": now})
+            else:
+                decisions.append({"gate": "g1", "config_hash": config_hash(), "ts": now, "reason": reason})
+            cur = await conn.execute(
+                "UPDATE l0_journal SET status=?, processed_at=?, decisions=? WHERE id=? AND status=?",
+                (status, now, json.dumps(decisions, ensure_ascii=False), l0_id, current),
+            )
+            return int(cur.rowcount or 0) == 1
 
-            await _dispatch().atomic(DB_NAME, _txn)
+        won = await _dispatch().atomic(DB_NAME, _txn)
+        if not won:
+            logger.debug("close_row(%s, %s): row is not %s any more, left alone", l0_id, status, expect_status)
+        return won
     except Exception as exc:
         # Best-effort, like `capture`: a watermark failure must not break the write
         # path that already succeeded. Logged at debug because the caller's flow is
         # what matters; the nightly expiry is the backstop that closes the row.
         logging.getLogger(__name__).debug("l0_journal status update failed: %s", exc)
+        return False
 
 
 async def classify_received(l0_id: int, *, grace_s: float = 600.0) -> str | None:

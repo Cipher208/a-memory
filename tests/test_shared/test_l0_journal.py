@@ -83,13 +83,18 @@ async def test_a_row_closed_as_unaccounted_exit_is_not_a_duplicate(cm):
     await close_row(rid, "gated_out", reason="importance_gate_bypass")
     assert await find_block("user", "u1", text) == rid
 
-    # An unaccounted exit: the write never happened.
-    await close_row(rid, "gated_out", reason=UNACCOUNTED_EXIT)
-    assert await find_block("user", "u1", text) is None, "the retry must be able to re-enter the write"
+    # An unaccounted exit: the write never happened. A separate row, because a
+    # row that already carries a verdict cannot be re-closed (close_row is a CAS)
+    # — and this is the only state that is not a verdict.
+    exit_text = "помни: autovacuum выключен, wal включён"
+    exit_rid = await capture("new_message", "user", "u1", exit_text)
+    assert exit_rid is not None
+    assert await close_row(exit_rid, "gated_out", reason=UNACCOUNTED_EXIT) is True
+    assert await find_block("user", "u1", exit_text) is None, "the retry must be able to re-enter the write"
 
     # And once the retry HAS written, the row blocks duplicates again.
-    await close_row(rid, "saved_l3", reason=None)
-    assert await find_block("user", "u1", text) == rid
+    assert await close_row(exit_rid, "saved_l3", reason=None) is True
+    assert await find_block("user", "u1", exit_text) == exit_rid
 
 
 @pytest.mark.asyncio
