@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+from bisect import bisect_left, bisect_right
 import hashlib
 import json
 import logging
@@ -318,16 +319,27 @@ async def miner_tokens(cm: AsyncConnectionManager, layer: str, *, read: Any) -> 
             syn = load_synonyms()
         toks[int(r["node_id"])] = _canon_tokens(str(r["content"]), syn)
     ids = sorted(toks)
+    postings: dict[str, list[int]] = {}
+    for nid in ids:
+        for tok in toks[nid]:
+            postings.setdefault(tok, []).append(nid)
     cands: list[tuple[int, int, float]] = []
-    for i, a in enumerate(ids):
+    for a in ids:
         ta = toks[a]
         if not ta:
             continue
-        for b in ids[i + 1 :]:
-            shared = ta & toks[b]
-            jaccard = len(shared) / len(ta | toks[b])
-            if len(shared) >= 2:
-                cands.append((a, b, jaccard))
+        counts: dict[int, int] = {}
+        for tok in ta:
+            for b in postings[tok]:
+                if b > a:
+                    counts[b] = counts.get(b, 0) + 1
+        for b in sorted(counts):
+            shared = counts[b]
+            if shared < 2:
+                continue
+            tb = toks[b]
+            jaccard = shared / (len(ta) + len(tb) - shared)
+            cands.append((a, b, jaccard))
     tau = max(0.3, mad_threshold([c[2] for c in cands])) if cands else 0.3
     wanted = [(a, b, jaccard) for a, b, jaccard in cands if jaccard >= tau]
 
@@ -384,18 +396,54 @@ async def miner_sessions(cm: AsyncConnectionManager, layer: str, *, read: Any) -
             merged.append(c)
 
     nodes = await (await read.execute("SELECT node_id, content, created_at FROM epi_nodes WHERE layer=?", (layer,))).fetchall()
-    assigned: dict[int, set[int]] = {}  # node_id → cluster indexes
-    for idx, c in enumerate(merged):
+    node_toks: dict[int, set[str]] = {}
+    node_ts: dict[int, float] = {}
+    if merged:
+        from rag.synonyms import load_synonyms
+
+        syn = load_synonyms()
         for r in nodes:
-            nid, ts = int(r["node_id"]), float(r["created_at"])
-            near = any(abs(ts - t) <= _NODE_WINDOW for t in c["rows"])
-            if near or len(_canon_tokens(str(r["content"])) & c["toks"]) >= _BIND_SHARED:
-                assigned.setdefault(nid, set()).add(idx)
+            nid = int(r["node_id"])
+            node_toks[nid] = _canon_tokens(str(r["content"]), syn)
+            node_ts[nid] = float(r["created_at"])
+
+    time_index: list[tuple[float, int]] = []
+    tok_index: dict[str, list[int]] = {}
+    for idx, c in enumerate(merged):
+        c["rows"].sort()
+        for t in c["rows"]:
+            time_index.append((t, idx))
+        for tok in c["toks"]:
+            tok_index.setdefault(tok, []).append(idx)
+    time_index.sort()
+    times = [t for t, _ in time_index]
+
+    assigned: dict[int, set[int]] = {}  # node_id → cluster indexes
+    for nid, toks in node_toks.items():
+        ts = node_ts[nid]
+        bound: set[int] = set()
+        lo = bisect_left(times, ts - _NODE_WINDOW)
+        hi = bisect_right(times, ts + _NODE_WINDOW)
+        bound.update(idx for _, idx in time_index[lo:hi])
+        counts: dict[int, int] = {}
+        for tok in toks:
+            for idx in tok_index.get(tok, ()):
+                counts[idx] = counts.get(idx, 0) + 1
+        bound.update(idx for idx, shared in counts.items() if shared >= _BIND_SHARED)
+        if bound:
+            assigned[nid] = bound
+
+    by_cluster: dict[int, list[int]] = {}
+    for nid, cs in assigned.items():
+        for idx in cs:
+            by_cluster.setdefault(idx, []).append(nid)
+    for members in by_cluster.values():
+        members.sort()
 
     wanted: list[tuple[int, int]] = []
     degree: dict[int, int] = {}
     for idx in range(len(merged)):
-        members = sorted(nid for nid, cs in assigned.items() if idx in cs)
+        members = by_cluster.get(idx, [])
         for i, a in enumerate(members):
             for b in members[i + 1 :]:
                 if degree.get(a, 0) >= _SESSION_TOPK or degree.get(b, 0) >= _SESSION_TOPK:
