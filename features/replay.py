@@ -20,6 +20,8 @@ is claimed.
 from __future__ import annotations
 
 import json
+import logging
+import sqlite3
 import time
 from typing import Any
 
@@ -27,6 +29,8 @@ from config import config
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 from shared.write_dispatch import get_write_dispatch
+
+logger = logging.getLogger(__name__)
 
 #: Statuses that mean the CONTENT was written (or deliberately routed): replay
 #: must never claim one again, or it would duplicate what memory already holds.
@@ -291,7 +295,21 @@ async def replay(
             return int(cur.rowcount or 0) == 1
 
         # The claim is committed before distillation, so the next tick sees it.
-        if not await dispatch.atomic(DB_NAME, lambda conn: _claim(conn, gate, chash)):
+        #
+        # A claim that cannot take the write lock is ONE row's problem, not the
+        # pass's: it must be skipped and visible, never propagate. The nightly
+        # caller wraps `replay()` in a bare `contextlib.suppress(Exception)` with
+        # no log, so a BUSY escaping from here would abandon the whole night's
+        # replay silently — the exact silence class this package removes. Only
+        # the claim is contained: a failure while DISTILLING is a different,
+        # louder problem and stays the caller's business.
+        try:
+            claimed = await dispatch.atomic(DB_NAME, lambda conn: _claim(conn, gate, chash))
+        except sqlite3.OperationalError as exc:
+            logger.warning("replay: claim of l0 row %s hit %s — left for the next pass", row["id"], exc)
+            skipped += 1
+            continue
+        if not claimed:
             skipped += 1
             continue
 

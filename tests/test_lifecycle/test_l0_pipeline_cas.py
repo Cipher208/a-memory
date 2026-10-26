@@ -387,7 +387,7 @@ async def test_claim_refuses_a_row_closed_between_the_snapshot_and_the_claim(cm:
     assert await _episodes(cm) == 0, "a row closed under this config must not be re-distilled"
 
 
-async def test_a_busy_begin_does_not_reopen_a_judged_row(cm: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_busy_begin_does_not_reopen_a_judged_row(cm: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """`_claim`'s BEGIN guard: a lock it cannot take must abort, not read unlocked.
 
     Two owners are on the same row. The other one has ALREADY decided it — its
@@ -403,8 +403,14 @@ async def test_a_busy_begin_does_not_reopen_a_judged_row(cm: Any, monkeypatch: p
     two writers without threads). The window SELECT is patched to the stale
     snapshot so the loop's fast path cannot be what refuses the row — otherwise
     this test would never reach the guard.
+
+    AND THE PASS MUST NOT ABORT. A BUSY here is one row's problem: `replay()`
+    returns normally with that row skipped and a WARNING naming it. Letting it
+    propagate would reach the nightly caller's bare `suppress(Exception)` and
+    abandon the whole night's replay with no log — the silence class this
+    package exists to remove.
     """
-    import sqlite3
+    import logging
 
     import aiosqlite
 
@@ -459,14 +465,8 @@ async def test_a_busy_begin_does_not_reopen_a_judged_row(cm: Any, monkeypatch: p
 
         monkeypatch.setattr(claim_conn, "execute", _commit_after_the_recheck)
 
-        try:
+        with caplog.at_level(logging.WARNING, logger="features.replay"):
             res = await replay(since_days=1, respect_gate=False)
-        except sqlite3.OperationalError as exc:
-            # The guard's abort surfaces here: `_claim` does not swallow a BEGIN
-            # that cannot take the lock, and `replay` has no boundary of its own
-            # (the nightly caller has). Nothing was processed.
-            assert "lock" in str(exc).lower(), exc
-            res = {"processed": 0, "skipped": 1}
     finally:
         monkeypatch.setattr(claim_conn, "execute", real_execute)
         if other.in_transaction:
@@ -474,9 +474,91 @@ async def test_a_busy_begin_does_not_reopen_a_judged_row(cm: Any, monkeypatch: p
         await other.close()
 
     assert res["processed"] == 0, res
+    assert res["skipped"] >= 1, res
     row = await _row(cm, rid)
     assert row["status"] == "gated_out", "the verdict written under this config must stand"
     assert await _episodes(cm) == 0, "a judged row must not be re-distilled"
+    assert any(r.levelno == logging.WARNING and str(rid) in r.getMessage() for r in caplog.records), (
+        f"a skipped claim must be visible, not silent: {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+async def test_a_busy_claim_does_not_abort_the_rest_of_the_pass(cm: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """One row whose claim cannot take the lock must not cost the other rows.
+
+    The nightly caller wraps `replay()` in a bare `suppress(Exception)`, so an
+    exception escaping the loop abandons every remaining row AND leaves no log.
+    The claim is therefore contained per row: the first row is refused (the lock
+    is held), the pass moves on, and the second row is processed normally.
+
+    Both rows are staged as `gated_out` with EMPTY decisions: no config pair, so
+    the fast path lets them through, and not `received`, so `classify_received`
+    does not run and no close contends for the lock ahead of the claims.
+
+    The lock is released when the FIRST claim's `BEGIN IMMEDIATE` fails — the
+    only ordering an in-process test can impose without threads. Nothing about
+    the loop itself is staged.
+    """
+    import logging
+
+    import aiosqlite
+
+    from features.replay import replay
+    from shared.constants import DB_NAME
+    from shared.l0 import capture
+    from shared.write_dispatch import get_write_dispatch
+
+    first = await capture("new_message", "user", "u1", PASSING_TEXT + ", первый пункт")
+    second = await capture("new_message", "user", "u1", PASSING_TEXT + ", второй пункт")
+    assert None not in (first, second)
+    conn = await cm.get("memory.db")
+    await conn.execute("UPDATE l0_journal SET status='gated_out', processed_at=?, decisions='[]' WHERE id IN (?, ?)", (time.time(), first, second))
+    await conn.commit()
+
+    dispatch = get_write_dispatch()
+    claim_conn = await dispatch._cm.get(DB_NAME)
+    await claim_conn.execute("PRAGMA busy_timeout=50")
+    real_execute = claim_conn.execute
+
+    other = await aiosqlite.connect(str(cm.base_dir / DB_NAME))
+    other.row_factory = aiosqlite.Row
+    held = True
+    try:
+        await other.execute("PRAGMA busy_timeout=50")
+        await other.execute("BEGIN IMMEDIATE")
+        assert other.in_transaction
+
+        async def _release_on_the_first_failed_begin(sql: str, *args: Any, **kwargs: Any) -> Any:
+            nonlocal held
+            try:
+                return await real_execute(sql, *args, **kwargs)
+            except Exception:
+                if held and sql.lstrip().upper().startswith("BEGIN IMMEDIATE"):
+                    # The first claim is meant to lose this lock; every later one
+                    # runs against a free database.
+                    held = False
+                    await other.rollback()
+                    await other.close()
+                raise
+
+        monkeypatch.setattr(claim_conn, "execute", _release_on_the_first_failed_begin)
+
+        with caplog.at_level(logging.WARNING, logger="features.replay"):
+            res = await replay(since_days=1, respect_gate=False)
+    finally:
+        monkeypatch.setattr(claim_conn, "execute", real_execute)
+        if held:
+            if other.in_transaction:
+                await other.rollback()
+            await other.close()
+
+    assert res["processed"] == 1, res
+    assert res["skipped"] >= 1, res
+    first_row = await _row(cm, int(first))
+    second_row = await _row(cm, int(second))
+    assert second_row["status"] in {"saved_l3", "promoted_l4"}, second_row
+    assert first_row["status"] == "gated_out", "the refused row stays for the next pass"
+    assert any(r.levelno == logging.WARNING and str(first) in r.getMessage() for r in caplog.records), "the skipped claim must be logged"
 
 
 async def test_claim_takes_a_received_row(cm: Any) -> None:
