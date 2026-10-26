@@ -306,6 +306,15 @@ async def replay(
         try:
             claimed = await dispatch.atomic(DB_NAME, lambda conn: _claim(conn, gate, chash))
         except sqlite3.OperationalError as exc:
+            # Only a BUSY means "another writer holds the lock, try later". The
+            # same exception class carries permanent failures — a malformed image,
+            # a corrupt file — and skipping one of those silently would hide a
+            # broken base behind a warning per row. Anything that is not busy is
+            # re-raised: it is the caller's business, and it must be loud.
+            from shared.sqlite_busy import is_busy
+
+            if not is_busy(exc):
+                raise
             logger.warning("replay: claim of l0 row %s hit %s — left for the next pass", row["id"], exc)
             skipped += 1
             continue

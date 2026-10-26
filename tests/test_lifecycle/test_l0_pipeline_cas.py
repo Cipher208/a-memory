@@ -11,6 +11,7 @@ Each test drives the entry point the invariant lives on: `close_row` and
 """
 
 import json
+import sqlite3
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -661,3 +662,34 @@ async def test_config_hash_changes_with_the_static_threshold(cm: Any, monkeypatc
     after = config_hash()
 
     assert after != before
+
+
+async def test_a_non_busy_operational_error_is_not_swallowed(cm: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a BUSY means "try again later"; the same class carries permanent failures.
+
+    `sqlite3.OperationalError` is raised both by a held write lock and by a
+    malformed database image. Skipping the second with a warning would hide a
+    broken base behind one log line per row, so the claim's handler re-raises
+    anything `shared.sqlite_busy.is_busy` does not recognise.
+    """
+    from features.replay import replay
+    from shared.l0 import UNACCOUNTED_EXIT, capture, close_row
+    from shared.write_dispatch import get_write_dispatch
+
+    # A row that REACHES the claim: `gated_out`/unaccounted_exit records no
+    # config pair, so the loop's fast path lets it through. A fresh `received`
+    # row would be consumed by `classify_received` before any claim runs.
+    rid = await capture("new_message", "user", "u1", PASSING_TEXT)
+    assert rid is not None
+    assert await close_row(rid, "gated_out", reason=UNACCOUNTED_EXIT) is True
+
+    dispatch = get_write_dispatch()
+    real_atomic = dispatch.atomic
+
+    async def _broken_atomic(db: str, fn: Any) -> Any:
+        raise sqlite3.OperationalError("database disk image is malformed")
+
+    monkeypatch.setattr(dispatch, "atomic", _broken_atomic)
+    with pytest.raises(sqlite3.OperationalError, match="malformed"):
+        await replay(since_days=1, respect_gate=False)
+    monkeypatch.setattr(dispatch, "atomic", real_atomic)
