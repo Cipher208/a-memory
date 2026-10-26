@@ -11,9 +11,16 @@ accepts. A fixture where the bound is not binding (every node has fewer than
 `_EMBED_TOPK * CANDIDATE_FACTOR` partners) is therefore an exact oracle: any
 difference is a semantic change, not a rounding of the candidate list.
 
+Round 2 added centring before quantisation, so the fixtures now model the e5
+geometry (a 0.9 common component plus the ±0.5 meaning pattern) and the oracle
+centres with the same float32 arithmetic the miner uses. Without that, centring
+would collapse these synthetic corpora to zero bits and the oracle would compare
+two empty sets.
+
 The tests drive `miner_embedding` (the door), not the candidate helper alone.
 """
 
+import math
 import random
 import struct
 from collections import Counter
@@ -74,6 +81,45 @@ def _vec(bits: int) -> list[float]:
 
 def _all_on() -> int:
     return (1 << _BITS) - 1
+
+
+# The miner centres before quantising (F2b round 2). Every fixture therefore
+# models the real e5 geometry: a large shared component plus the ±0.5 pattern
+# that carries the meaning. Centring cancels the shared part exactly, so the
+# oracle sees the intended bit patterns rather than a degenerate corpus.
+_COMMON = 0.9 / math.sqrt(_BITS)
+
+
+def _raw(bits: int) -> list[float]:
+    """Vector whose centred form is the ±0.5 pattern `bits` (common part added)."""
+    return [_COMMON + (0.5 if (bits >> i) & 1 else -0.5) for i in range(_BITS)]
+
+
+def _centred_binary(vecs: list[list[float]]) -> list[bytes]:
+    """Exactly what `miner_embedding` now does: centre, then binarise."""
+    import numpy as np
+
+    from rag.quantize import embed_to_binary
+
+    arr = np.asarray(vecs, dtype=np.float32)
+    return [embed_to_binary(v, dim=len(v)) for v in arr - arr.mean(axis=0)]
+
+
+def _balanced(rnd: Any, ones: int = _BITS // 2) -> int:
+    """Random bit pattern with exactly `ones` bits, so the set mean stays ~0."""
+    dims = list(range(_BITS))
+    rnd.shuffle(dims)
+    bits = 0
+    for d in dims[:ones]:
+        bits |= 1 << d
+    return bits
+
+
+def _cluster_bits(rnd: Any, centers: list[int], flips: int) -> int:
+    bits = centers[rnd.randrange(len(centers))]
+    for _ in range(rnd.randrange(0, flips + 1)):
+        bits ^= 1 << rnd.randrange(_BITS)
+    return bits
 
 
 # --- reference: the base algorithm, verbatim -------------------------------
@@ -158,12 +204,14 @@ def _reference_accepted(binary: list[bytes], threshold: float = 0.7, topk: int =
 def test_candidates_are_bounded():
     """Each node keeps at most TOPK * FACTOR partners, so the union is O(n * M).
 
-    On this fixture every pair qualifies (200 identical vectors = 19 900 pairs),
-    so an unbounded candidate structure is observable: it exceeds n * M.
+    Every pair qualifies on this fixture (600 identical vectors = 179 700
+    pairs), so an unbounded candidate structure is observable: it exceeds n * M.
+    n must be well above 2 * M, otherwise the per-node lists still cover every
+    pair and the bound cannot bind.
     """
     import lifecycle.graph_miners as gm
 
-    n = 200
+    n = 600
     m = gm._EMBED_TOPK * gm._CANDIDATE_FACTOR
     binary = [b"\xff" * 48] * n
     ii, _jj = gm._semantic_candidate_order(binary, 0.7)
@@ -177,17 +225,13 @@ def test_candidates_are_bounded():
 async def test_greedy_result_matches_the_full_pair_reference(db):
     """Dense fixture: the accepted edge set equals the full-pair reference."""
     import lifecycle.graph_miners as gm
-    from rag.quantize import embed_to_binary
 
     rnd = random.Random(7)
-    base = _all_on()
+    centers = [_balanced(rnd) for _ in range(4)]
     vecs: dict[str, list[float]] = {}
     for idx in range(30):
-        bits = base
-        for _ in range(rnd.randrange(0, 41)):
-            bits ^= 1 << rnd.randrange(_BITS)
         text = f"плотный узел {idx}"
-        vecs[text] = _vec(bits)
+        vecs[text] = _raw(_cluster_bits(rnd, centers, 20))
 
     for text in vecs:
         await _node(text)
@@ -196,9 +240,10 @@ async def test_greedy_result_matches_the_full_pair_reference(db):
 
     conn = await connection_manager.get(DB_NAME)
     nodes = await gm._layer_nodes(conn, "user")
-    binary = [embed_to_binary(vecs[content], dim=len(vecs[content])) for _, content in nodes]
+    binary = _centred_binary([vecs[content] for _, content in nodes])
     expected_idx = _reference_accepted(binary)
     expected = {(nodes[i][0], nodes[j][0]) for i, j in expected_idx}
+    assert expected_idx, "the fixture must produce pairs above the threshold"
 
     result = await gm.miner_embedding(db, "user")
     got = {(int(r["source_id"]), int(r["target_id"])) for r in await _edges()}
@@ -213,6 +258,12 @@ async def test_greedy_result_matches_the_full_pair_reference(db):
 # them and leave the tied partners with unequal budgets. Shuffled so the tie
 # class is not index-symmetric (found by search over seeds; dropping `j desc`
 # moves 9 edges).
+#
+# Centring removes any shared component, so each pattern is paired with its
+# bitwise complement: the set mean is then exactly zero and centring is a
+# no-op, leaving the tie structure intact. Without the complements the core
+# would be cancelled by the mean and every vector would collapse to its unique
+# bits, where all pairs tie at 0.
 _TIE_CORE = 250
 _TIE_U = [2, 12, 8, 12, 6, 10, 2, 10, 8, 4, 2, 12, 2, 10, 2, 2, 12, 6]
 
@@ -233,9 +284,10 @@ def _tie_bits() -> list[int]:
 async def test_order_is_preserved_under_ties(db):
     """Equal Jaccard values: the accepted set follows (i desc, j desc)."""
     import lifecycle.graph_miners as gm
-    from rag.quantize import embed_to_binary
 
-    vecs = {f"ничейный узел {idx}": _vec(bits) for idx, bits in enumerate(_tie_bits())}
+    patterns = _tie_bits()
+    patterns += [bits ^ _all_on() for bits in patterns]
+    vecs = {f"ничейный узел {idx}": _raw(bits) for idx, bits in enumerate(patterns)}
     for text in vecs:
         await _node(text)
     for text, vec in vecs.items():
@@ -243,8 +295,10 @@ async def test_order_is_preserved_under_ties(db):
 
     conn = await connection_manager.get(DB_NAME)
     nodes = await gm._layer_nodes(conn, "user")
-    binary = [embed_to_binary(vecs[content], dim=len(vecs[content])) for _, content in nodes]
-    expected = {(nodes[i][0], nodes[j][0]) for i, j in _reference_accepted(binary)}
+    binary = _centred_binary([vecs[content] for _, content in nodes])
+    expected_idx = _reference_accepted(binary)
+    assert expected_idx, "the fixture must produce pairs above the threshold"
+    expected = {(nodes[i][0], nodes[j][0]) for i, j in expected_idx}
 
     await gm.miner_embedding(db, "user")
     got = {(int(r["source_id"]), int(r["target_id"])) for r in await _edges()}
@@ -262,9 +316,9 @@ async def test_a_node_with_no_candidates_is_untouched(db):
     for text in zero_texts:
         await _node(text)
         await _seed_vector(text, [0.0] * _BITS)
-    for idx, text in enumerate(real_texts):
+    for text in real_texts:
         await _node(text)
-        await _seed_vector(text, _vec(_all_on() ^ (1 << idx)))
+        await _seed_vector(text, _raw(_all_on()))
 
     conn = await connection_manager.get(DB_NAME)
     rows = await (await conn.execute("SELECT node_id FROM epi_nodes WHERE content LIKE 'пустой вектор%'")).fetchall()
@@ -287,14 +341,11 @@ async def test_budget_is_still_per_node_topk(db):
     import lifecycle.graph_miners as gm
 
     rnd = random.Random(3)
-    base = _all_on()
+    centers = [_balanced(rnd) for _ in range(2)]
     vecs: dict[str, list[float]] = {}
     for idx in range(40):
-        bits = base
-        for _ in range(rnd.randrange(0, 20)):
-            bits ^= 1 << rnd.randrange(_BITS)
         text = f"бюджетный узел {idx}"
-        vecs[text] = _vec(bits)
+        vecs[text] = _raw(_cluster_bits(rnd, centers, 15))
     for text in vecs:
         await _node(text)
     for text, vec in vecs.items():

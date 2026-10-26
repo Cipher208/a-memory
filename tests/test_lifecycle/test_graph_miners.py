@@ -452,6 +452,25 @@ _V_ALL_ON = [0.5] * 384  # все 384 бита = 1
 _V_NEAR = [(-0.5 if i < 30 else 0.5) for i in range(384)]  # 354 общих бита с _V_ALL_ON, J≈0.92
 _V_HALF = [(0.5 if i % 2 == 0 else -0.5) for i in range(384)]  # J≈0.5 со всеми — ниже порога
 
+# Минер центрирует векторы перед квантованием (F2b): sign() сырого e5-вектора
+# кодирует общую компоненту, а не смысл. Фикстуры ниже поэтому моделируют
+# реальную геометрию — общая компонента 0.9 плюс сбалансированный (±0.5) узор.
+# Сбалансированный узор переживает вычитание среднего, «все единицы» — нет.
+_V_COMMON = 0.9 / 384**0.5
+_CLIQUE_BITS = frozenset(range(0, 384, 2))  # 192 бита: половина, среднее ≈ 0
+
+
+def _clique_vec(flips: int, seed: int) -> list[float]:
+    """Вектор из плотного кластера: база 192 бита плюс `flips` случайных правок."""
+    import random
+
+    rnd = random.Random(seed)
+    bits = set(_CLIQUE_BITS)
+    for _ in range(flips):
+        b = rnd.randrange(384)
+        bits.symmetric_difference_update({b})
+    return [_V_COMMON + (0.5 if i in bits else -0.5) for i in range(384)]
+
 
 @pytest.mark.asyncio
 async def test_miner_embedding_jaccard_threshold_creates_semantic_overlap(db):
@@ -479,9 +498,11 @@ async def test_miner_embedding_jaccard_threshold_creates_semantic_overlap(db):
 async def test_miner_embedding_topk_cap_fifteen_per_node(db):
     from collections import Counter
 
-    for _ in range(20):
-        await _node("однотипный индикатор синхронизации очередей", T)
-    await _seed_vector("однотипный индикатор синхронизации очередей", _V_ALL_ON)
+    # 20 узлов одного плотного кластера: каждый хочет 19 партнёров, потолок — 15.
+    for i in range(20):
+        text = f"однотипный индикатор синхронизации очередей {i}"
+        await _node(text, T)
+        await _seed_vector(text, _clique_vec(6, i))
 
     from lifecycle.graph_miners import miner_embedding
 
@@ -489,6 +510,7 @@ async def test_miner_embedding_topk_cap_fifteen_per_node(db):
 
     rows = await _edges("semantic_overlap")
     assert result["edges"] == len(rows)
+    assert rows, "фикстура обязана дать рёбра"
     degree: Counter[int] = Counter()
     for r in rows:
         degree[r["source_id"]] += 1
@@ -506,9 +528,12 @@ async def test_miner_embedding_crosscheck_confirms_and_drops(db, monkeypatch):
         "пирог рецепт капуста духовка",
         "очередь событий воркера починена",
     )
-    await _seed_vector(t_confirm, _V_ALL_ON)
-    await _seed_vector(t_drop, _V_NEAR)  # далёкий текст с близким вектором = шум-пара
-    await _seed_vector(t_far, _V_NEAR)
+    # Три вектора одного кластера: после центрирования все три пары выше порога,
+    # а лексика решает только голос crosscheck. «Все единицы» центрирование
+    # обнулило бы — фикстура обязана быть сбалансированной.
+    await _seed_vector(t_confirm, _clique_vec(4, 1))
+    await _seed_vector(t_drop, _clique_vec(4, 2))  # далёкий текст с близким вектором = шум-пара
+    await _seed_vector(t_far, _clique_vec(4, 3))
     await _node(t_confirm, T)
     _n_drop, n_far = await _node(t_drop, T), await _node(t_far, T)
 

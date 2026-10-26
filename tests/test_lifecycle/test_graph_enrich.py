@@ -40,6 +40,7 @@ async def graph(tmp_path) -> AsyncIterator[Any]:
 
 async def _seed(graph: Any) -> dict[str, int]:
     """5 чистых fact-узлов + 3 JSON-мусорных + одно ребро в мусор."""
+    await _seed_clean_vectors()
     ids = {"clean": {}, "junk": {}}
     for i, text in enumerate(CLEAN):
         ids["clean"][i] = await graph.add_node("gu", text, "fact")
@@ -47,6 +48,38 @@ async def _seed(graph: Any) -> dict[str, int]:
         ids["junk"][i] = await graph.add_node("gu", text, "fact")
     await graph.add_edge(ids["junk"][0], ids["clean"][0], "mentions")
     return ids
+
+
+async def _seed_clean_vectors() -> None:
+    """Реалистичные 384-мерные векторы: общая компонента e5 + свой узор.
+
+    Хэш-фолбэк живёт в 16 измерениях; центрирование такого маленького набора
+    делает векторы антикоррелированными (их сумма — ноль), и между посторонними
+    узлами появляется ложное ребро. Это артефакт фолбэка, не минера, поэтому
+    тест задаёт векторы явно.
+    """
+    import math
+    import random
+    import struct
+
+    from shared.embeddings import EmbeddingCache, _get_model
+
+    cache = EmbeddingCache()
+    await cache.ensure()
+    tag = cache._cache_model_tag(_get_model())
+    conn = await connection_manager.get("memory.db")
+    common = 0.9 / math.sqrt(384)
+    rnd = random.Random(9)
+    for text in CLEAN:
+        dims = list(range(384))
+        rnd.shuffle(dims)
+        bits = set(dims[:192])
+        vec = [common + (0.5 if i in bits else -0.5) for i in range(384)]
+        await conn.execute(
+            "INSERT OR REPLACE INTO embedding_cache (text_hash, embedding, model_name) VALUES (?, ?, ?)",
+            (cache._hash_text(text), struct.pack("384f", *vec), tag),
+        )
+    await conn.commit()
 
 
 @pytest.mark.asyncio
