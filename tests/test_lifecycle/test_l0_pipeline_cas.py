@@ -387,6 +387,98 @@ async def test_claim_refuses_a_row_closed_between_the_snapshot_and_the_claim(cm:
     assert await _episodes(cm) == 0, "a row closed under this config must not be re-distilled"
 
 
+async def test_a_busy_begin_does_not_reopen_a_judged_row(cm: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_claim`'s BEGIN guard: a lock it cannot take must abort, not read unlocked.
+
+    Two owners are on the same row. The other one has ALREADY decided it — its
+    verdict (`gated_out` under the current config) is written but not yet
+    committed. `_claim` must not claim it: the re-read has to happen under the
+    write lock, or it reads the pre-commit state, sees no verdict, and the CAS
+    matches on the unchanged status once the other writer commits — the row is
+    then re-distilled and a refusal becomes `promoted_l4`.
+
+    Staged with real locks, as in the `close_row` BUSY test: a second
+    connection holds the write lock with the verdict uncommitted, and its commit
+    is hooked to `_claim`'s re-read (an in-process test cannot otherwise order
+    two writers without threads). The window SELECT is patched to the stale
+    snapshot so the loop's fast path cannot be what refuses the row — otherwise
+    this test would never reach the guard.
+    """
+    import sqlite3
+
+    import aiosqlite
+
+    from features.replay import config_hash, replay
+    from shared.constants import DB_NAME
+    from shared.l0 import UNACCOUNTED_EXIT, capture, close_row
+    from shared.write_dispatch import get_write_dispatch
+
+    rid = await capture("new_message", "user", "u1", PASSING_TEXT)
+    assert rid is not None
+    # The state a retry may re-enter, so the snapshot carries no config pair.
+    assert await close_row(rid, "gated_out", reason=UNACCOUNTED_EXIT) is True
+
+    conn = await cm.get("memory.db")
+    snapshot = dict(
+        await (await conn.execute("SELECT id, ts, layer, user_id, text, status, decisions FROM l0_journal WHERE id=?", (rid,))).fetchone()
+    )
+    assert snapshot["status"] == "gated_out"
+    assert "config_hash" not in snapshot["decisions"]
+
+    dispatch = get_write_dispatch()
+    claim_conn = await dispatch._cm.get(DB_NAME)
+    await claim_conn.execute("PRAGMA busy_timeout=50")
+    real_execute = claim_conn.execute
+
+    other = await aiosqlite.connect(str(cm.base_dir / DB_NAME))
+    other.row_factory = aiosqlite.Row
+    try:
+        await other.execute("PRAGMA busy_timeout=50")
+        # The other owner's verdict: gated_out under the CURRENT config, uncommitted.
+        await other.execute("BEGIN IMMEDIATE")
+        await other.execute(
+            "UPDATE l0_journal SET decisions=? WHERE id=?",
+            (json.dumps([{"gate": "g1", "config_hash": config_hash(), "ts": 0.0}]), rid),
+        )
+        assert other.in_transaction
+
+        real_query = dispatch.query
+
+        async def _stale_query(db: str, sql: str, params: Any = ()) -> list[dict[str, Any]]:
+            if "FROM l0_journal" in sql:
+                return [dict(snapshot)]
+            return await real_query(db, sql, params)
+
+        monkeypatch.setattr(dispatch, "query", _stale_query)
+
+        async def _commit_after_the_recheck(sql: str, *args: Any, **kwargs: Any) -> Any:
+            cur = await real_execute(sql, *args, **kwargs)
+            if sql.lstrip().upper().startswith("SELECT STATUS, PROCESSED_AT, DECISIONS FROM L0_JOURNAL"):
+                await other.commit()  # the verdict lands between the re-read and the claim
+            return cur
+
+        monkeypatch.setattr(claim_conn, "execute", _commit_after_the_recheck)
+
+        try:
+            res = await replay(since_days=1, respect_gate=False)
+        except sqlite3.OperationalError as exc:
+            # The guard's abort surfaces here: `_claim` does not swallow a BEGIN
+            # that cannot take the lock, and `replay` has no boundary of its own
+            # (the nightly caller has). Nothing was processed.
+            assert "lock" in str(exc).lower(), exc
+            res = {"processed": 0, "skipped": 1}
+    finally:
+        monkeypatch.setattr(claim_conn, "execute", real_execute)
+        if other.in_transaction:
+            await other.commit()
+        await other.close()
+
+    assert res["processed"] == 0, res
+    row = await _row(cm, rid)
+    assert row["status"] == "gated_out", "the verdict written under this config must stand"
+    assert await _episodes(cm) == 0, "a judged row must not be re-distilled"
+
+
 async def test_claim_takes_a_received_row(cm: Any) -> None:
     """The normal nightly path still works: an aged received row is processed."""
     from features.replay import replay
