@@ -944,10 +944,12 @@ _EMBED_JACCARD = 0.7
 _EMBED_TOPK = 15  # at most 15 semantic_overlap edges per node from this miner
 # Slack over `_EMBED_TOPK` in the per-node candidate list. The greedy can skip
 # a high-ranked pair because its partner is already full and still accept a
-# lower-ranked one, so the candidate list must be wider than the budget. 4
-# (60 candidates for a 15-edge budget) is the measured value — see the F2b
-# divergence table in the fix report.
-_CANDIDATE_FACTOR = 4
+# lower-ranked one, so the candidate list must be wider than the budget.
+# With centring (see `miner_embedding`) the pool collapses to a few thousand
+# pairs, so 16 (240 candidates for a 15-edge budget) never binds on real data:
+# it is a safety net for a pathological corpus (a huge duplicate clique), not a
+# sampling policy. Measured in the F2b round-2 report.
+_CANDIDATE_FACTOR = 16
 _SEMANTIC_BLOCK = 512  # rows per numpy block in the pairwise scan
 _SEMANTIC_CHUNK = 1 << 16  # candidates per bulk-skip step in the greedy
 _SEMANTIC_WEIGHT = 0.5
@@ -1274,12 +1276,34 @@ def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[An
 
 @_maintenance_split
 async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) -> Callable[[Any], Awaitable[dict[str, int]]]:
-    """#9: rich embedding (content+tags) → MIB bits → pairwise Jaccard >=0.7 → `semantic_overlap`.
+    """#9: rich embedding (content+tags) → centred MIB bits → pairwise Jaccard → `semantic_overlap`.
 
     A-MEM rich embedding: encodes "content + tags from epi_tags" with synonym
     token canonicalization (_canon from T2). Junk filter — same as graph_enrich
-    ([{…-JSON / tool_use_id). O(n²) is fine at the current scale
-    (~200 nodes = 20k pairs); top-k=15 per node.
+    ([{…-JSON / tool_use_id). top-k=15 per node.
+
+    The vectors are CENTRED before quantisation. `embed_to_binary` binarises by
+    `sign(emb)`, and e5 embeddings share a large common component: measured on
+    the live hermes layer, the mean vector has norm 0.91 while each text vector
+    has norm 1.0. `sign()` therefore encoded the common component — median
+    Jaccard was 0.81 and 100 % of pairs cleared `_EMBED_JACCARD`, so the
+    threshold sat below the noise floor and this miner built 101 M candidates.
+    Subtracting the mean drops the median to 0.33 (0.01 % of pairs above 0.7)
+    and restores meaning: duplicate texts score 1.0, random pairs 0.27–0.36.
+
+    The centring lives HERE and not in `rag/quantize.py` on purpose: the binary
+    RAG path (`searcher`, `engine`, `ablation`) and `embedding_clusters` must
+    keep their current semantics.
+
+    Consequence to accept: the mean is computed per run over the current node
+    set, so an edge can shift slightly as the corpus changes. That is
+    acceptable for a heuristic graph and is the price of making the bits
+    discriminative.
+
+    The candidate set is bounded per node (`_EMBED_TOPK * _CANDIDATE_FACTOR`),
+    so memory is O(n * M) instead of O(pairs). With centring the bound never
+    binds on real data; it exists so a pathological corpus cannot reproduce the
+    multi-gigabyte spike.
 
     Two phases: the embedding SERVICE call (network) and the whole pairwise
     scan run outside any transaction — this is the miner whose compute phase
@@ -1329,7 +1353,12 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) 
     # anomaly:* tags (addendum 10) never enter the text — a flag does not
     # change the node's vector.
     vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
-    binary = [embed_to_binary(v, dim=len(v)) for v in vecs]
+    # Centre before quantising: sign() of a raw e5 vector encodes the shared
+    # component (norm 0.91 of 1.0), not the meaning — see the docstring.
+    import numpy as np
+
+    raw = np.asarray(vecs, dtype=np.float32)
+    binary = [embed_to_binary(v, dim=len(v)) for v in raw - raw.mean(axis=0)]
     bits = [_bits_int(b) for b in binary]
 
     # S17 addendum 10: bit-degenerate vectors (0 bits — text without significant
