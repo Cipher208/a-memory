@@ -319,3 +319,103 @@ async def test_the_bound_still_protects_a_pathological_corpus(db, capture):
 
     assert total <= n * bound, f"candidate structure is not bounded: {total} pairs, n*M={n * bound}"
     assert total < available, f"no pair was dropped ({total} of {available}): the bound is inactive"
+
+
+# --- 6: hash fallback ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_hash_fallback_batch_is_not_centred(db, capture):
+    """No model → hash-fallback vectors → centring must be skipped.
+
+    The fallback vector lives in 16 dimensions and pads the other 368 with
+    zeros, which is not the e5 cone. Subtracting the mean lifts those 368 zeros
+    off zero, so `sign()` encodes the (identical) padding in every vector and
+    unrelated texts correlate: measured 12 unrelated texts gave 0 edges on base
+    and 22 on the centring-only version. The miner detects the fallback through
+    `hash_fallback_stats()` and keeps `sign(raw)` for the whole batch.
+    """
+    import lifecycle.graph_miners as gm
+
+    texts = [
+        "рецепт капустного пирога с дрожжевым тестом",
+        "деплой сервиса через systemd юнит",
+        "кот спит на подоконнике весь день",
+        "курс доллара вырос на бирже утром",
+        "упражнения для спины после сидячей работы",
+        "настройка tailscale на впс",
+        "погода в городе обещает дождь к вечеру",
+        "книга про историю рима",
+        "замена масла в двигателе",
+        "таблица умножения для школьника",
+        "выбор подарка на день рождения",
+        "пересадка фикуса в больший горшок",
+    ]
+    for text in texts:
+        await _node(text)
+
+    await gm.miner_embedding(db, "user")
+
+    assert capture.binary is not None
+    assert await _edges() == [], "hash-fallback vectors were centred: unrelated texts correlate"
+    assert _max_pair_jaccard(capture.binary) < gm._EMBED_JACCARD
+
+
+# --- 7: zero vectors -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_zero_vector_stays_junk(db, capture, monkeypatch):
+    """A zero embedding is "no signal": it must stay bit-degenerate.
+
+    Centring a zero row turns it into `0 - mean`, ~190 bits, which is not only
+    unflagged but identical for every zero row — a Jaccard 1.0 clique. The mean
+    is therefore taken over the non-zero vectors only and zero rows stay zero,
+    so the junk flag still fires while the real vectors are centred normally.
+    """
+    import random
+
+    import lifecycle.graph_miners as gm
+
+    rnd = random.Random(17)
+    # Two nodes with the SAME meaning vector (they must still find each other
+    # after centring) plus two unrelated ones, which keep the corpus mean away
+    # from that vector.
+    real = ["живой текст раз", "живой текст два", "посторонний текст", "ещё один посторонний"]
+    shared = _pattern(rnd)
+    vecs = {
+        real[0]: _raw(shared),
+        real[1]: _raw(shared),
+        real[2]: _raw(_pattern(rnd)),
+        real[3]: _raw(_pattern(rnd)),
+    }
+    zero_text = "текст без сигнала"
+    vecs[zero_text] = [0.0] * _BITS
+    _fake_embed(monkeypatch, vecs)
+
+    ids = {}
+    for text in (*real, zero_text):
+        ids[text] = await _node(text)
+
+    result = await gm.miner_embedding(db, "user")
+
+    assert result["anomalies"] == 1, f"ровно один junk-узел: {result}"
+    conn = await connection_manager.get(DB_NAME)
+    tagged = await (await conn.execute("SELECT node_id FROM epi_tags WHERE tag='anomaly:junk_vector'")).fetchall()
+    assert {int(r["node_id"]) for r in tagged} == {ids[zero_text]}, "флаг обязан стоять на нулевом векторе"
+
+    rows = await _edges()
+    zero_id = ids[zero_text]
+    assert rows, "живые векторы обязаны по-прежнему давать рёбра"
+    assert all(zero_id not in (int(r["source_id"]), int(r["target_id"])) for r in rows), "нулевой узел в рёбрах"
+
+    assert capture.binary is not None
+    zero_pos = next(i for i, (nid, _) in enumerate(await _layer_nodes()) if nid == zero_id)
+    assert int.from_bytes(capture.binary[zero_pos], "big") == 0, "нулевой вектор обязан остаться нулевым"
+
+
+async def _layer_nodes() -> list[Any]:
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    return await gm._layer_nodes(conn, "user")

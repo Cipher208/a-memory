@@ -316,9 +316,11 @@ async def test_a_node_with_no_candidates_is_untouched(db):
     for text in zero_texts:
         await _node(text)
         await _seed_vector(text, [0.0] * _BITS)
-    for text in real_texts:
+    for idx, text in enumerate(real_texts):
         await _node(text)
-        await _seed_vector(text, _raw(_all_on()))
+        # Distinct live vectors: three identical ones would BE the corpus mean
+        # and centre to zero, which is a property of centring, not of this test.
+        await _seed_vector(text, _raw(_all_on() ^ (1 << idx)))
 
     conn = await connection_manager.get(DB_NAME)
     rows = await (await conn.execute("SELECT node_id FROM epi_nodes WHERE content LIKE 'пустой вектор%'")).fetchall()
