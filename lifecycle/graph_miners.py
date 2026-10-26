@@ -942,6 +942,30 @@ async def _f_pair_edges(conn: Any, layer: str, rows: list[Any]) -> int:
 
 _EMBED_JACCARD = 0.7
 _EMBED_TOPK = 15  # at most 15 semantic_overlap edges per node from this miner
+# Slack over `_EMBED_TOPK` in the per-node candidate list. The greedy can skip
+# a high-ranked pair because its partner is already full and still accept a
+# lower-ranked one, so the candidate list must be wider than the budget.
+# With centring (see `miner_embedding`) the pool collapses to a few thousand
+# pairs, so 16 (240 candidates for a 15-edge budget) never binds on real data:
+# it is a safety net for a pathological corpus (a huge duplicate clique), not a
+# sampling policy. Measured in the F2b round-2 report.
+_CANDIDATE_FACTOR = 16
+# Centring is only meaningful when the vectors share a dominant common
+# component: that component is what `sign()` encodes instead of the meaning.
+# The guard measures it directly — `||mean|| / median(||row||)` over the live
+# rows of the batch. Measured 2026-10-26 (400 draws per size, live hermes cache
+# for e5 and `_hash_embedding` for the fallback):
+#
+#     n      e5 median  e5 min  fallback median  fallback max
+#     5        0.929     0.768       0.447           0.665
+#     12       0.917     0.904       0.279           0.439
+#     50       0.912     0.891       0.138           0.214
+#     1000     0.910     0.907       0.027           0.042
+#
+# The whole live batch (14 774 rows) scores 0.910. 0.7 sits inside the gap at
+# every size; 0.5 does not — the n=5 fallback tail reaches 0.665, so a fifth of
+# small fallback batches would still be centred.
+_CENTRE_COMMON_RATIO = 0.7
 _SEMANTIC_BLOCK = 512  # rows per numpy block in the pairwise scan
 _SEMANTIC_CHUNK = 1 << 16  # candidates per bulk-skip step in the greedy
 _SEMANTIC_WEIGHT = 0.5
@@ -1152,20 +1176,28 @@ def _packed_words(binary: list[bytes]) -> Any | None:
 
 
 def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[Any, Any] | None:
-    """Candidate pairs in the exact order the greedy loop below expects.
+    """Bounded candidate pairs in the exact order the greedy loop below expects.
 
-    The previous shape — append every qualifying pair as a `(jacc, i, j)` tuple,
-    then `sorted(..., reverse=True)` — is what made this miner expensive: on
-    hermes it built 15 907 509 tuples and peaked at 2.4 GB RSS.
+    The previous shape — append every qualifying pair, then one global
+    `lexsort` over all of them — materialised 101 551 346 pairs and 5.9 GB on
+    hermes. This keeps at most `_EMBED_TOPK * _CANDIDATE_FACTOR` partners per
+    node instead, so memory is O(n * M), not O(pairs). The O(n²) popcount
+    compute is untouched: that cost is inherent to exact pairwise comparison
+    and this function does not pretend to remove it.
 
     The ordering is load-bearing, not cosmetic. Jaccard here is a ratio of two
-    small integer popcounts, so equal values are common (13 446 distinct values
-    across the 22 271 possible fractions above the threshold), and
-    `sorted(cands, reverse=True)` breaks those ties by `i` descending and then by
+    small integer popcounts, so equal values are common, and the old
+    `sorted(cands, reverse=True)` broke those ties by `i` descending and then by
     `j` descending. Reproducing that only approximately changes which pairs the
-    greedy accepts: an earlier version of this function ordered ties per block
-    and produced 39 431 edges where the original produced 38 593. Hence one
-    global `lexsort` over (value desc, i desc, j desc).
+    greedy accepts: an earlier version ordered ties per block and produced
+    39 431 edges where the original produced 38 593. So the union of the
+    per-node lists is still sorted once, globally, by (value desc, i desc,
+    j desc).
+
+    The per-node selection uses the same comparator: `key = value + index * eps`
+    with `eps` smaller than the gap between any two distinct Jaccard values
+    (`p/q` with `q <= width`), so distinct values are never reordered and exact
+    ties are broken by the larger index.
 
     `union` is `|a| + |b| - inter`, so one popcount per pair suffices instead of
     two, and the per-vector counts are computed once.
@@ -1178,13 +1210,26 @@ def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[An
     if words is None:
         return None
     n = len(binary)
+    if n < 2:
+        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
     counts = np.bitwise_count(words).sum(axis=1).astype(np.int32)
     active = np.flatnonzero(counts > 0)  # a zero vector has no bits to share
+    if active.size == 0:
+        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
     cols = np.arange(n)
+    width = words.shape[1] * 64
+    keep = min(_EMBED_TOPK * _CANDIDATE_FACTOR, max(n - 1, 1))
+    eps = 1.0 / (2.0 * width * max(width - 1, 1) * (n + 1))
 
-    row_parts: list[Any] = []
-    col_parts: list[Any] = []
-    val_parts: list[Any] = []
+    # Per-node candidate lists. `low_*` holds pairs where the node is the lower
+    # endpoint (filled once, from its own row); `up_*` where it is the upper
+    # endpoint (merged block by block).
+    low_val = np.full((n, keep), -np.inf, dtype=np.float64)
+    low_i = np.full((n, keep), -1, dtype=np.int32)
+    low_j = np.full((n, keep), -1, dtype=np.int32)
+    up_val = np.full((n, keep), -np.inf, dtype=np.float64)
+    up_i = np.full((n, keep), -1, dtype=np.int32)
+
     for start in range(0, len(active), _SEMANTIC_BLOCK):
         rows = active[start : start + _SEMANTIC_BLOCK]
         block = words[rows]
@@ -1198,29 +1243,105 @@ def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[An
             out=np.zeros(inter.shape, dtype=np.float64),
             where=union > 0,
         )
-        bi, bj = np.nonzero((jac >= threshold) & (cols[None, :] > rows[:, None]))
-        row_parts.append(rows[bi].astype(np.int32))
-        col_parts.append(bj.astype(np.int32))
-        val_parts.append(jac[bi, bj])
+        valid = (jac >= threshold) & (cols[None, :] > rows[:, None])
+        masked = np.where(valid, jac, -np.inf)
 
-    if not row_parts:
-        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
-    values = np.concatenate(val_parts)
-    ii = np.concatenate(row_parts)
-    jj = np.concatenate(col_parts)
+        # Lower endpoint: top `keep` per row by (value desc, j desc).
+        idx = np.argpartition(-(masked + cols[None, :] * eps), keep - 1, axis=1)[:, :keep]
+        low_val[rows] = np.take_along_axis(masked, idx, axis=1)
+        low_i[rows] = rows[:, None]
+        low_j[rows] = idx
+
+        # Upper endpoint: top `keep` per column by (value desc, i desc), then
+        # merge with what earlier blocks already contributed for that node.
+        k_up = min(keep, len(rows))
+        cidx = np.argpartition(-(masked + rows[:, None] * eps), k_up - 1, axis=0)[:k_up, :]
+        comb_val = np.concatenate([up_val, np.take_along_axis(masked, cidx, axis=0).T], axis=1)
+        comb_i = np.concatenate([up_i, rows[cidx].T.astype(np.int32)], axis=1)
+        order = np.lexsort((-comb_i, -comb_val), axis=1)[:, :keep]
+        up_val = np.take_along_axis(comb_val, order, axis=1)
+        up_i = np.take_along_axis(comb_i, order, axis=1)
+
+    # One candidate list per node: merge its lower- and upper-endpoint lists by
+    # the global comparator (value desc, i desc, j desc).
+    val = np.concatenate([low_val, up_val], axis=1)
+    ii = np.concatenate([low_i, up_i], axis=1)
+    jj = np.concatenate([low_j, np.broadcast_to(cols[:, None], (n, keep))], axis=1)
+    order = np.lexsort((-jj, -ii, -val), axis=1)[:, :keep]
+    val = np.take_along_axis(val, order, axis=1)
+    ii = np.take_along_axis(ii, order, axis=1)
+    jj = np.take_along_axis(jj, order, axis=1)
+
+    flat_val = val.ravel()
+    flat_i = ii.ravel()
+    flat_j = jj.ravel()
+    ok = flat_val > -np.inf
+    flat_val = flat_val[ok]
+    flat_i = flat_i[ok]
+    flat_j = flat_j[ok]
+    # Every pair appears in both endpoints' lists — keep one copy.
+    pkey = flat_i.astype(np.int64) * n + flat_j
+    _, first = np.unique(pkey, return_index=True)
+    flat_val = flat_val[first]
+    flat_i = flat_i[first]
+    flat_j = flat_j[first]
     # lexsort's LAST key is primary: jaccard desc, then i desc, then j desc
-    order = np.lexsort((-jj, -ii, -values))
-    return ii[order], jj[order]
+    order = np.lexsort((-flat_j, -flat_i, -flat_val))
+    return flat_i[order].astype(np.int32), flat_j[order].astype(np.int32)
 
 
 @_maintenance_split
 async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) -> Callable[[Any], Awaitable[dict[str, int]]]:
-    """#9: rich embedding (content+tags) → MIB bits → pairwise Jaccard >=0.7 → `semantic_overlap`.
+    """#9: rich embedding (content+tags) → centred MIB bits → pairwise Jaccard → `semantic_overlap`.
 
     A-MEM rich embedding: encodes "content + tags from epi_tags" with synonym
     token canonicalization (_canon from T2). Junk filter — same as graph_enrich
-    ([{…-JSON / tool_use_id). O(n²) is fine at the current scale
-    (~200 nodes = 20k pairs); top-k=15 per node.
+    ([{…-JSON / tool_use_id). top-k=15 per node.
+
+    The vectors are CENTRED before quantisation. `embed_to_binary` binarises by
+    `sign(emb)`, and e5 embeddings share a large common component: measured on
+    the live hermes layer, the mean vector has norm 0.91 while each text vector
+    has norm 1.0. `sign()` therefore encoded the common component — median
+    Jaccard was 0.81 and 100 % of pairs cleared `_EMBED_JACCARD`, so the
+    threshold sat below the noise floor and this miner built 101 M candidates.
+    Subtracting the mean drops the median to 0.33 (0.01 % of pairs above 0.7)
+    and restores meaning: duplicate texts score 1.0, random pairs 0.27–0.36.
+
+    The centring lives HERE and not in `rag/quantize.py` on purpose: the binary
+    RAG path (`searcher`, `engine`, `ablation`) and `embedding_clusters` must
+    keep their current semantics.
+
+    Consequence to accept: the mean is computed per run over the current node
+    set, so an edge can shift slightly as the corpus changes. That is
+    acceptable for a heuristic graph and is the price of making the bits
+    discriminative.
+
+    Two cases must NOT be centred, and both are geometry, not taste:
+
+    * **Hash fallback.** With no model and no remote, `embed_texts` returns
+      `_hash_embedding` vectors: ~16 signal dims padded with zeros. That is not
+      the e5 cone — subtracting the mean lifts the identical padding off zero,
+      so `sign()` encodes the padding in every vector and unrelated texts
+      correlate (measured: 12 unrelated texts, 0 edges uncentred, 22 centred).
+    * **Any batch without a dominant common component.** Which is decided by
+      measuring the batch, not by asking where it came from: a provenance flag
+      can lie after a cache hit (fallback rows are cached under
+      `hash-fallback/<model>`, so a rerun reads them back with the fallback
+      counter unmoved and would centre them again). The geometry cannot — if
+      the vectors do not share a common component, centring has nothing to
+      remove and must not run. The test is
+      `||mean|| / median(||row||) >= _CENTRE_COMMON_RATIO` over the live rows:
+      ~0.91 for e5, 0.03–0.67 for the fallback depending on batch size.
+    * **Zero vectors.** A zero row means "no signal" and must stay
+      bit-degenerate so the `anomaly:junk_vector` flag still fires. Centring it
+      gives `0 - mean`, ~190 bits, unflagged — and identical for every zero row,
+      i.e. a Jaccard 1.0 clique. The mean is therefore taken over the non-zero
+      vectors only; zero rows stay zero.
+
+    The candidate set is bounded per node (`_EMBED_TOPK * _CANDIDATE_FACTOR`),
+    so memory is O(n * M) instead of O(pairs). With centring the bound never
+    binds on real data; it exists so a pathological corpus cannot reproduce the
+    multi-gigabyte spike.
 
     Two phases: the embedding SERVICE call (network) and the whole pairwise
     scan run outside any transaction — this is the miner whose compute phase
@@ -1270,7 +1391,35 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) 
     # anomaly:* tags (addendum 10) never enter the text — a flag does not
     # change the node's vector.
     vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
-    binary = [embed_to_binary(v, dim=len(v)) for v in vecs]
+    # Centre before quantising: sign() of a raw e5 vector encodes the shared
+    # component (norm 0.91 of 1.0), not the meaning — see the docstring.
+    import numpy as np
+
+    raw = np.asarray(vecs, dtype=np.float32)
+    signal = np.any(raw != 0.0, axis=1)
+    centred = np.zeros_like(raw)
+    if int(signal.sum()) > 1:
+        live = raw[signal]
+        # Centre only when the batch actually HAS a dominant common component.
+        # A provenance flag (did the fallback counter move?) cannot answer this:
+        # fallback rows are cached under `hash-fallback/<model>`, so a rerun
+        # reads them back with the counter unmoved and would centre them again.
+        # The geometry cannot lie — if the vectors do not share a common
+        # component, centring has nothing to remove and must not run.
+        common = float(np.linalg.norm(live.mean(axis=0)))
+        typical = float(np.median(np.linalg.norm(live, axis=1)))
+        if typical > 0 and common / typical >= _CENTRE_COMMON_RATIO:
+            centred[signal] = live - live.mean(axis=0)
+        else:
+            centred[signal] = live
+    else:
+        # A single live vector has nothing to be centred against: the mean
+        # would be the vector itself and the junk flag would fire on it.
+        centred[signal] = raw[signal]
+    # `tolist()`: numpy 2.5 stubs type an ndarray row as not-a-Sequence, and
+    # `embed_to_binary` promises Sequence[float]. A list is also what the
+    # pure-python path expects, so this costs nothing on the hot path.
+    binary = [embed_to_binary(v.tolist(), dim=len(v)) for v in centred]
     bits = [_bits_int(b) for b in binary]
 
     # S17 addendum 10: bit-degenerate vectors (0 bits — text without significant
