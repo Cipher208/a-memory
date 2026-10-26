@@ -1300,6 +1300,22 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) 
     acceptable for a heuristic graph and is the price of making the bits
     discriminative.
 
+    Two cases must NOT be centred, and both are geometry, not taste:
+
+    * **Hash fallback.** With no model and no remote, `embed_texts` returns
+      `_hash_embedding` vectors: 16 signal dims padded with 368 zeros. That is
+      not the e5 cone — subtracting the mean lifts the identical padding off
+      zero, so `sign()` encodes the padding in every vector and unrelated texts
+      correlate (measured: 12 unrelated texts, 0 edges uncentred, 22 centred).
+      The batch is detected through `hash_fallback_stats()` and left as
+      `sign(raw)`. Whole-batch, not per-vector: mixing centred real vectors with
+      uncentred fallback vectors in one comparison space is worse than either.
+    * **Zero vectors.** A zero row means "no signal" and must stay
+      bit-degenerate so the `anomaly:junk_vector` flag still fires. Centring it
+      gives `0 - mean`, ~190 bits, unflagged — and identical for every zero row,
+      i.e. a Jaccard 1.0 clique. The mean is therefore taken over the non-zero
+      vectors only; zero rows stay zero.
+
     The candidate set is bounded per node (`_EMBED_TOPK * _CANDIDATE_FACTOR`),
     so memory is O(n * M) instead of O(pairs). With centring the bound never
     binds on real data; it exists so a pathological corpus cannot reproduce the
@@ -1315,7 +1331,7 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) 
         return _noop({"edges": 0})
     from rag.quantize import embed_to_binary
     from rag.synonyms import load_synonyms
-    from shared.embeddings import embed_texts
+    from shared.embeddings import embed_texts, hash_fallback_stats
 
     syn = load_synonyms()
     tag_rows = await (
@@ -1352,13 +1368,27 @@ async def miner_embedding(cm: AsyncConnectionManager, layer: str, *, read: Any) 
     # cache key. Cache key = raw content — reuses vectors seeded by the ingestor.
     # anomaly:* tags (addendum 10) never enter the text — a flag does not
     # change the node's vector.
+    fallback_before = hash_fallback_stats()["hash_fallback"]
     vecs = await embed_texts([f"{c} {' '.join(sorted(t for t in tags.get(nid, []) if not t.startswith('anomaly:')))}" for nid, c in nodes])
     # Centre before quantising: sign() of a raw e5 vector encodes the shared
     # component (norm 0.91 of 1.0), not the meaning — see the docstring.
     import numpy as np
 
     raw = np.asarray(vecs, dtype=np.float32)
-    binary = [embed_to_binary(v, dim=len(v)) for v in raw - raw.mean(axis=0)]
+    if hash_fallback_stats()["hash_fallback"] > fallback_before:
+        # Fallback geometry is not the e5 cone; centring it manufactures
+        # similarity between unrelated texts (see the docstring).
+        binary = [embed_to_binary(v, dim=len(v)) for v in raw]
+    else:
+        signal = np.any(raw != 0.0, axis=1)
+        centred = np.zeros_like(raw)
+        if int(signal.sum()) > 1:
+            centred[signal] = raw[signal] - raw[signal].mean(axis=0)
+        else:
+            # A single live vector has nothing to be centred against: the mean
+            # would be the vector itself and the junk flag would fire on it.
+            centred[signal] = raw[signal]
+        binary = [embed_to_binary(v, dim=len(v)) for v in centred]
     bits = [_bits_int(b) for b in binary]
 
     # S17 addendum 10: bit-degenerate vectors (0 bits — text without significant
