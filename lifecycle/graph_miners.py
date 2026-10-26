@@ -942,6 +942,12 @@ async def _f_pair_edges(conn: Any, layer: str, rows: list[Any]) -> int:
 
 _EMBED_JACCARD = 0.7
 _EMBED_TOPK = 15  # at most 15 semantic_overlap edges per node from this miner
+# Slack over `_EMBED_TOPK` in the per-node candidate list. The greedy can skip
+# a high-ranked pair because its partner is already full and still accept a
+# lower-ranked one, so the candidate list must be wider than the budget. 4
+# (60 candidates for a 15-edge budget) is the measured value — see the F2b
+# divergence table in the fix report.
+_CANDIDATE_FACTOR = 4
 _SEMANTIC_BLOCK = 512  # rows per numpy block in the pairwise scan
 _SEMANTIC_CHUNK = 1 << 16  # candidates per bulk-skip step in the greedy
 _SEMANTIC_WEIGHT = 0.5
@@ -1152,20 +1158,28 @@ def _packed_words(binary: list[bytes]) -> Any | None:
 
 
 def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[Any, Any] | None:
-    """Candidate pairs in the exact order the greedy loop below expects.
+    """Bounded candidate pairs in the exact order the greedy loop below expects.
 
-    The previous shape — append every qualifying pair as a `(jacc, i, j)` tuple,
-    then `sorted(..., reverse=True)` — is what made this miner expensive: on
-    hermes it built 15 907 509 tuples and peaked at 2.4 GB RSS.
+    The previous shape — append every qualifying pair, then one global
+    `lexsort` over all of them — materialised 101 551 346 pairs and 5.9 GB on
+    hermes. This keeps at most `_EMBED_TOPK * _CANDIDATE_FACTOR` partners per
+    node instead, so memory is O(n * M), not O(pairs). The O(n²) popcount
+    compute is untouched: that cost is inherent to exact pairwise comparison
+    and this function does not pretend to remove it.
 
     The ordering is load-bearing, not cosmetic. Jaccard here is a ratio of two
-    small integer popcounts, so equal values are common (13 446 distinct values
-    across the 22 271 possible fractions above the threshold), and
-    `sorted(cands, reverse=True)` breaks those ties by `i` descending and then by
+    small integer popcounts, so equal values are common, and the old
+    `sorted(cands, reverse=True)` broke those ties by `i` descending and then by
     `j` descending. Reproducing that only approximately changes which pairs the
-    greedy accepts: an earlier version of this function ordered ties per block
-    and produced 39 431 edges where the original produced 38 593. Hence one
-    global `lexsort` over (value desc, i desc, j desc).
+    greedy accepts: an earlier version ordered ties per block and produced
+    39 431 edges where the original produced 38 593. So the union of the
+    per-node lists is still sorted once, globally, by (value desc, i desc,
+    j desc).
+
+    The per-node selection uses the same comparator: `key = value + index * eps`
+    with `eps` smaller than the gap between any two distinct Jaccard values
+    (`p/q` with `q <= width`), so distinct values are never reordered and exact
+    ties are broken by the larger index.
 
     `union` is `|a| + |b| - inter`, so one popcount per pair suffices instead of
     two, and the per-vector counts are computed once.
@@ -1178,13 +1192,26 @@ def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[An
     if words is None:
         return None
     n = len(binary)
+    if n < 2:
+        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
     counts = np.bitwise_count(words).sum(axis=1).astype(np.int32)
     active = np.flatnonzero(counts > 0)  # a zero vector has no bits to share
+    if active.size == 0:
+        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
     cols = np.arange(n)
+    width = words.shape[1] * 64
+    keep = min(_EMBED_TOPK * _CANDIDATE_FACTOR, max(n - 1, 1))
+    eps = 1.0 / (2.0 * width * max(width - 1, 1) * (n + 1))
 
-    row_parts: list[Any] = []
-    col_parts: list[Any] = []
-    val_parts: list[Any] = []
+    # Per-node candidate lists. `low_*` holds pairs where the node is the lower
+    # endpoint (filled once, from its own row); `up_*` where it is the upper
+    # endpoint (merged block by block).
+    low_val = np.full((n, keep), -np.inf, dtype=np.float64)
+    low_i = np.full((n, keep), -1, dtype=np.int32)
+    low_j = np.full((n, keep), -1, dtype=np.int32)
+    up_val = np.full((n, keep), -np.inf, dtype=np.float64)
+    up_i = np.full((n, keep), -1, dtype=np.int32)
+
     for start in range(0, len(active), _SEMANTIC_BLOCK):
         rows = active[start : start + _SEMANTIC_BLOCK]
         block = words[rows]
@@ -1198,19 +1225,51 @@ def _semantic_candidate_order(binary: list[bytes], threshold: float) -> tuple[An
             out=np.zeros(inter.shape, dtype=np.float64),
             where=union > 0,
         )
-        bi, bj = np.nonzero((jac >= threshold) & (cols[None, :] > rows[:, None]))
-        row_parts.append(rows[bi].astype(np.int32))
-        col_parts.append(bj.astype(np.int32))
-        val_parts.append(jac[bi, bj])
+        valid = (jac >= threshold) & (cols[None, :] > rows[:, None])
+        masked = np.where(valid, jac, -np.inf)
 
-    if not row_parts:
-        return np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)
-    values = np.concatenate(val_parts)
-    ii = np.concatenate(row_parts)
-    jj = np.concatenate(col_parts)
+        # Lower endpoint: top `keep` per row by (value desc, j desc).
+        idx = np.argpartition(-(masked + cols[None, :] * eps), keep - 1, axis=1)[:, :keep]
+        low_val[rows] = np.take_along_axis(masked, idx, axis=1)
+        low_i[rows] = rows[:, None]
+        low_j[rows] = idx
+
+        # Upper endpoint: top `keep` per column by (value desc, i desc), then
+        # merge with what earlier blocks already contributed for that node.
+        k_up = min(keep, len(rows))
+        cidx = np.argpartition(-(masked + rows[:, None] * eps), k_up - 1, axis=0)[:k_up, :]
+        comb_val = np.concatenate([up_val, np.take_along_axis(masked, cidx, axis=0).T], axis=1)
+        comb_i = np.concatenate([up_i, rows[cidx].T.astype(np.int32)], axis=1)
+        order = np.lexsort((-comb_i, -comb_val), axis=1)[:, :keep]
+        up_val = np.take_along_axis(comb_val, order, axis=1)
+        up_i = np.take_along_axis(comb_i, order, axis=1)
+
+    # One candidate list per node: merge its lower- and upper-endpoint lists by
+    # the global comparator (value desc, i desc, j desc).
+    val = np.concatenate([low_val, up_val], axis=1)
+    ii = np.concatenate([low_i, up_i], axis=1)
+    jj = np.concatenate([low_j, np.broadcast_to(cols[:, None], (n, keep))], axis=1)
+    order = np.lexsort((-jj, -ii, -val), axis=1)[:, :keep]
+    val = np.take_along_axis(val, order, axis=1)
+    ii = np.take_along_axis(ii, order, axis=1)
+    jj = np.take_along_axis(jj, order, axis=1)
+
+    flat_val = val.ravel()
+    flat_i = ii.ravel()
+    flat_j = jj.ravel()
+    ok = flat_val > -np.inf
+    flat_val = flat_val[ok]
+    flat_i = flat_i[ok]
+    flat_j = flat_j[ok]
+    # Every pair appears in both endpoints' lists — keep one copy.
+    pkey = flat_i.astype(np.int64) * n + flat_j
+    _, first = np.unique(pkey, return_index=True)
+    flat_val = flat_val[first]
+    flat_i = flat_i[first]
+    flat_j = flat_j[first]
     # lexsort's LAST key is primary: jaccard desc, then i desc, then j desc
-    order = np.lexsort((-jj, -ii, -values))
-    return ii[order], jj[order]
+    order = np.lexsort((-flat_j, -flat_i, -flat_val))
+    return flat_i[order].astype(np.int32), flat_j[order].astype(np.int32)
 
 
 @_maintenance_split
