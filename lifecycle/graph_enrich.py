@@ -85,7 +85,7 @@ NREM_STALE_DAYS = 30.0
 NREM_FRESH_DAYS = 1.0
 REM_SIM_THRESHOLD = 0.7  # similarity of an isolated node to a similar one
 REM_WEIGHT_SCALE = 0.3  # bridge weight = sim × 0.3
-INSIGHT_MAX = 10  # abstractions per sleep
+INSIGHT_MAX = 10  # insight nodes per layer — a total, not a per-pass allowance
 
 
 #: Rows per write transaction in the writing phases of this module.
@@ -309,10 +309,35 @@ async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
 
     Connected components become node_type='insight' nodes with a top-token
     frequency summary, linked to their members via 'insight_of' edges.
+
+    An insight is a SNAPSHOT of the current graph, not a history: every existing
+    `insight` node of this layer is deleted before the pass writes what it
+    computes. `INSIGHT_MAX` is therefore the total per layer, not a per-pass
+    allowance — that bound is what keeps the nightly cost stable as the graph
+    grows. A layer with no qualifying component ends with zero insights.
+
+    The delete and the inserts belong to the same phase, but not to one
+    transaction: each insert commits on its own (`_insert_insight`). Wrapping the
+    phase in a single transaction would reintroduce the long write lock the
+    `_DREAM_CHUNK` comment exists to avoid. A crash between the delete and the
+    inserts leaves the layer with fewer insights; the next pass corrects it.
+
+    Identity is the top-token signature: two components that produce the same
+    signature yield one node. `len(members)` stays in the human-readable content
+    but does not decide duplication.
     """
     from collections import Counter
 
+    from graph.epistemic import EpistemicGraph
     from rag.edm import tokens
+
+    existing = await dispatch.query(
+        DB_NAME,
+        "SELECT node_id FROM epi_nodes WHERE layer=? AND node_type='insight'",
+        (layer,),
+    )
+    if existing:
+        await EpistemicGraph(cm=connection_manager, layer=layer).delete_nodes([int(r["node_id"]) for r in existing])
 
     nodes = [
         (int(r["node_id"]), str(r["user_id"]), str(r["content"]))
@@ -330,20 +355,21 @@ async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
             adj.setdefault(a, set()).add(b)
             adj.setdefault(b, set()).add(a)
 
-    seen: set[int] = set()
+    visited: set[int] = set()
+    seen: set[str] = set()
     created = 0
     for start in member_ids:
-        if start in seen:
+        if start in visited:
             continue
         community: list[int] = []
         queue = [start]
-        seen.add(start)
+        visited.add(start)
         while queue:
             cur = queue.pop()
             community.append(cur)
             for nb in adj.get(cur, ()):
-                if nb not in seen:
-                    seen.add(nb)
+                if nb not in visited:
+                    visited.add(nb)
                     queue.append(nb)
         if len(community) < 3 or created >= INSIGHT_MAX:
             continue
@@ -353,14 +379,10 @@ async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
         for nid in members:
             freq.update(tokens(contents[nid]))
         top = ", ".join(t for t, _ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:3])
-        summary = f"insight ({len(members)} узлов): {top}"
-        dup = await dispatch.select_one(
-            DB_NAME,
-            "SELECT node_id FROM epi_nodes WHERE layer=? AND node_type='insight' AND content=? LIMIT 1",
-            (layer, summary),
-        )
-        if dup:
+        if top in seen:
             continue
+        seen.add(top)
+        summary = f"insight ({len(members)} узлов): {top}"
         user_id = next(u for nid, u, _ in nodes if nid == members[0])
         await _insert_insight(dispatch, layer, summary, user_id, members)
         created += 1
