@@ -30,6 +30,22 @@ async def _pending_proposals(user_id: str = "default", limit: int = 5) -> list[A
         return []
 
 
+async def _top_insights(user_id: str, layer: str = "user", limit: int = 3) -> list[str]:
+    """Indirection for tests: top insights of the layer by member count."""
+    from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
+
+    rows = await get_write_dispatch().query(
+        DB_NAME,
+        "SELECT n.content FROM epi_nodes n WHERE n.layer=? AND n.user_id=? AND n.node_type='insight'"
+        " ORDER BY (SELECT COUNT(*) FROM epi_edges e WHERE e.source_id=n.node_id"
+        "           AND e.relation='insight_of') DESC, n.node_id"
+        " LIMIT ?",
+        (layer, user_id, limit),
+    )
+    return [str(r["content"]) for r in rows]
+
+
 def _apply_kind_policy(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Per-kind caps + precedence (G6, deferred from F).
 
@@ -241,11 +257,27 @@ async def build_inject_blocks(
         if cost <= remaining:
             blocks.append({"kind": "pinned", "content": content, "score": 1.0})
 
+    # [S5] Insight: the top-3 themes of the current snapshot (refreshed by the
+    # nightly phase). This block DEBITS the budget — important/pinned above do
+    # not (audit finding F6) — but that defect must not be copied into the
+    # new block.
+    try:
+        insight_lines = await _top_insights(user_id, layer="user", limit=3)
+    except Exception as exc:
+        logger.debug("insight block skipped: %s", exc)
+        insight_lines = []
+    if insight_lines:
+        content = _cap("\n".join(insight_lines))
+        cost = estimate_tokens(content)
+        if cost <= remaining:
+            blocks.append({"kind": "insight", "content": content, "score": 0.4})
+            remaining -= cost
+
     # E9: prompt-cache-friendly ordering — query-independent blocks (stable
     # across calls) form the prefix; a <cache:break> marker separates them
     # from per-query dynamics so provider prompt caches hit the prefix.
-    stable = [b for b in blocks if b["kind"] in ("rehydrate", "important", "pinned")]
-    dynamic = [b for b in blocks if b["kind"] not in ("rehydrate", "important", "pinned")]
+    stable = [b for b in blocks if b["kind"] in ("rehydrate", "important", "pinned", "insight")]
+    dynamic = [b for b in blocks if b["kind"] not in ("rehydrate", "important", "pinned", "insight")]
     if stable and dynamic:
         marker = {"kind": "cache_break", "content": "<cache:break>", "score": 0.0}
         blocks = [*stable, marker, *dynamic]
