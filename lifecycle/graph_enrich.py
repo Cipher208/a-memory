@@ -86,6 +86,7 @@ NREM_FRESH_DAYS = 1.0
 REM_SIM_THRESHOLD = 0.7  # similarity of an isolated node to a similar one
 REM_WEIGHT_SCALE = 0.3  # bridge weight = sim × 0.3
 INSIGHT_MAX = 10  # insight nodes per layer — a total, not a per-pass allowance
+_INSIGHT_SEED = 42  # fixed Louvain seed: the nightly run is reproducible
 
 
 #: Rows per write transaction in the writing phases of this module.
@@ -305,16 +306,21 @@ async def _insert_insight(dispatch: WriteDispatch, layer: str, summary: str, use
 
 
 async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
-    """Build insight abstractions from BFS communities.
+    """Build insight abstractions from Louvain communities (S3).
 
-    Connected components become node_type='insight' nodes with a top-token
-    frequency summary, linked to their members via 'insight_of' edges.
+    The layer's live non-insight nodes form a weighted graph (edges with
+    weight > 0, `insight_of` excluded — a hub edge would fuse every community
+    around one abstraction); `louvain_communities` cuts it with the fixed
+    `_INSIGHT_SEED`, and the top `INSIGHT_MAX` communities by size become
+    node_type='insight' nodes whose summary lists the three most DISTINGUISHING
+    tokens (ratio to the global document frequency, not raw frequency),
+    linked to their members via 'insight_of' edges.
 
     An insight is a SNAPSHOT of the current graph, not a history: every existing
     `insight` node of this layer is deleted before the pass writes what it
     computes. `INSIGHT_MAX` is therefore the total per layer, not a per-pass
     allowance — that bound is what keeps the nightly cost stable as the graph
-    grows. A layer with no qualifying component ends with zero insights.
+    grows. A layer with no qualifying community ends with zero insights.
 
     The delete and the inserts belong to the same phase, but not to one
     transaction: each insert commits on its own (`_insert_insight`). Wrapping the
@@ -322,10 +328,12 @@ async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
     `_DREAM_CHUNK` comment exists to avoid. A crash between the delete and the
     inserts leaves the layer with fewer insights; the next pass corrects it.
 
-    Identity is the top-token signature: two components that produce the same
+    Identity is the top-token signature: two communities that produce the same
     signature yield one node. `len(members)` stays in the human-readable content
     but does not decide duplication.
     """
+    import networkx as nx  # type: ignore[import-untyped]
+
     from collections import Counter
 
     from graph.epistemic import EpistemicGraph
@@ -348,41 +356,54 @@ async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
         )
     ]
     member_ids = {nid for nid, _, _ in nodes}
-    adj: dict[int, set[int]] = {}
-    for r in await dispatch.query(DB_NAME, "SELECT source_id, target_id FROM epi_edges"):
-        a, b = int(r["source_id"]), int(r["target_id"])
-        if a in member_ids and b in member_ids:
-            adj.setdefault(a, set()).add(b)
-            adj.setdefault(b, set()).add(a)
+    contents = {nid: content for nid, _, content in nodes}
+    total = len(member_ids)
+    if not total:
+        return 0
 
-    visited: set[int] = set()
+    # [S3] Input: only live edges of NON-insight nodes. An `insight_of` edge is
+    # a hub that fuses every community around one abstraction (audit: 30.7% of
+    # the edges were insight_of).
+    graph = nx.Graph()
+    graph.add_nodes_from(member_ids)
+    for r in await dispatch.query(
+        DB_NAME,
+        "SELECT source_id, target_id, weight FROM epi_edges WHERE weight > 0 AND relation != 'insight_of'",
+    ):
+        a, b, w = int(r["source_id"]), int(r["target_id"]), float(r["weight"])
+        if a in member_ids and b in member_ids:
+            graph.add_edge(a, b, weight=w)
+
+    # [S3] Connected components gave one giant (89.6% of the live hermes
+    # layer). Louvain with a fixed seed: the run is reproducible, and the
+    # content is rewritten by the snapshot anyway (F40).
+    communities = nx.community.louvain_communities(graph, weight="weight", seed=_INSIGHT_SEED)
+    communities = sorted((c for c in communities if len(c) >= 3), key=len, reverse=True)[:INSIGHT_MAX]
+
+    df: Counter[str] = Counter()
+    for nid in member_ids:
+        df.update(set(tokens(contents[nid])))
+
     seen: set[str] = set()
     created = 0
-    for start in member_ids:
-        if start in visited:
-            continue
-        community: list[int] = []
-        queue = [start]
-        visited.add(start)
-        while queue:
-            cur = queue.pop()
-            community.append(cur)
-            for nb in adj.get(cur, ()):
-                if nb not in visited:
-                    visited.add(nb)
-                    queue.append(nb)
-        if len(community) < 3 or created >= INSIGHT_MAX:
-            continue
-        contents = {nid: content for nid, _, content in nodes if nid in set(community)}
-        members = sorted(community)
+    for community in communities:
         freq: Counter[str] = Counter()
-        for nid in members:
+        for nid in community:
             freq.update(tokens(contents[nid]))
-        top = ", ".join(t for t, _ in sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))[:3])
+        nc = len(community)
+        scored = [
+            (freq[t] / nc / (df[t] / total), t)
+            for t in freq
+            if df[t] >= 0.1 * nc  # antinoise: a one-off token (typo) has ratio ~nc
+        ]
+        if not scored:
+            continue
+        top = ", ".join(t for _, t in sorted(scored, key=lambda kv: (-kv[0], kv[1]))[:3])
         if top in seen:
             continue
         seen.add(top)
-        summary = f"insight ({len(members)} узлов): {top}"
+        members = sorted(community)
+        summary = f"insight ({nc} узлов): {top}"
         user_id = next(u for nid, u, _ in nodes if nid == members[0])
         await _insert_insight(dispatch, layer, summary, user_id, members)
         created += 1
