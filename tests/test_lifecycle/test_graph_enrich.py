@@ -285,7 +285,13 @@ async def test_dream_rem_bridges_isolated_duplicates(graph, no_miners):
 
 @pytest.mark.asyncio
 async def test_dream_insight_materializes_abstraction(graph, no_miners):
-    await _dream_graph(graph)
+    ids = await _dream_graph(graph)
+    # REM оставил бы изолированный дубль мостом к `a` → голый путь из 4 узлов,
+    # который Louvain (S3) режет на пары ниже min-size — ничего не квалифицирует.
+    # Связываем iso с ЦЕНТРОМ сообщества: фикстура остаётся одним сообществом
+    # Louvain. Инвариант теста не меняется: абстракция материализуется,
+    # "redis" в её summary (REM-покрытие проверяет отдельный тест ниже).
+    await graph.add_edge(ids["b"], ids["iso"], "mentions")
     conn = await connection_manager.get("memory.db")
 
     from lifecycle.graph_enrich import graph_enrich
