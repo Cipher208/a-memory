@@ -28,8 +28,9 @@ class APIKeyAuth:
             keys[key] = model.model_dump()
 
         state = self.store.update(add)
-        if state is not None:
-            self._keys = state
+        if state is None:
+            raise RuntimeError(f"Could not persist new API key: {self.store.file_path} is unreadable")
+        self._keys = state
         return key
 
     def verify(self, key: str) -> dict[str, Any] | None:
@@ -81,12 +82,19 @@ class APIKeyAuth:
         return revoked
 
     def delete_key(self, key: str) -> bool:
-        """Remove key from store."""
-        if key in self._keys:
-            del self._keys[key]
-            self.store.save(self._keys)
-            return True
-        return False
+        """Remove key from the current on-disk state."""
+        removed = False
+
+        def remove(keys: dict[str, Any]) -> None:
+            nonlocal removed
+            if key in keys:
+                del keys[key]
+                removed = True
+
+        state = self.store.update(remove)
+        if state is not None:
+            self._keys = state
+        return removed
 
     def list_keys(self) -> list[dict[str, Any]]:
         """Return masked keys with metadata."""
