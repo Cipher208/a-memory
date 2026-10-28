@@ -24,15 +24,22 @@ async def seeded(tmp_path) -> AsyncIterator[Any]:
     g = EpistemicGraph(cm=connection_manager, layer="user")
     nid = await g.add_node("gu", "injected theme node", "fact")
     await g.add_edge(nid, nid, "mentions")
-    # один insight с известным content, привязанный к user gu
+    # Three current insights for gu; a different scope must not leak in.
     from shared.constants import DB_NAME
     from shared.write_dispatch import get_write_dispatch
 
-    await get_write_dispatch().write(
-        DB_NAME,
-        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at)"
-        " VALUES ('user', 'gu', 'insight (9 узлов): бэкап, master', 'insight', '[]', 0.6, 0.0)",
-    )
+    dispatch = get_write_dispatch()
+    for layer, user_id, content in (
+        ("user", "gu", "insight (9 узлов): бэкап, master"),
+        ("user", "gu", "insight (7 узлов): postgres, phone"),
+        ("user", "gu", "insight (5 узлов): прогулка, парк"),
+        ("agent", "gu", "insight (99 узлов): чужой слой"),
+    ):
+        await dispatch.write(
+            DB_NAME,
+            "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, 'insight', '[]', 0.6, 0.0)",
+            (layer, user_id, content),
+        )
     yield connection_manager
     connection_manager._conns.clear()
 
@@ -63,16 +70,27 @@ class _FakeMem:
     l4 = _L4()
 
 
-async def test_insight_block_present_and_debits_budget(seeded: Any) -> None:
+async def test_insight_blocks_debit_budget_per_line(seeded: Any) -> None:
     from features.inject import build_inject_blocks
+    from shared.tokens import estimate_tokens
 
     mem = _FakeMem()
-    blocks = await build_inject_blocks(mem, None, "gu", budget=10_000)
-    kinds = [b["kind"] for b in blocks]
-    assert "insight" in kinds, blocks
-    content = next(b["content"] for b in blocks if b["kind"] == "insight")
-    assert "бэкап, master" in content
-    # бюджет списан: used = budget - остатка (через return-значение невозможно,
-    # проверяем прямым вызовом хелпера инварианта: маленький бюджет → нет блока)
+    lines = [
+        "insight (9 узлов): бэкап, master",
+        "insight (7 узлов): postgres, phone",
+        "insight (5 узлов): прогулка, парк",
+    ]
+    costs = [estimate_tokens(line) for line in lines]
+
+    two_fit = await build_inject_blocks(mem, None, "gu", budget=sum(costs[:2]))
+    two_insights = [b for b in two_fit if b["kind"] == "insight"]
+    assert len(two_insights) == 2, two_fit
+    assert [b["content"] for b in two_insights] == lines[:2]
+
+    all_fit = await build_inject_blocks(mem, None, "gu", budget=sum(costs))
+    all_insights = [b for b in all_fit if b["kind"] == "insight"]
+    assert len(all_insights) == 3, all_fit
+    assert [b["content"] for b in all_insights] == lines
+
     small = await build_inject_blocks(mem, None, "gu", budget=1)
-    assert "insight" not in [b["kind"] for b in small], small
+    assert not any(b["kind"] == "insight" for b in small), small

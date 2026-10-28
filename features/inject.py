@@ -266,12 +266,13 @@ async def build_inject_blocks(
     except Exception as exc:
         logger.debug("insight block skipped: %s", exc)
         insight_lines = []
-    if insight_lines:
-        content = _cap("\n".join(insight_lines))
+    for line in insight_lines:
+        content = _cap(line)
         cost = estimate_tokens(content)
-        if cost <= remaining:
-            blocks.append({"kind": "insight", "content": content, "score": 0.4})
-            remaining -= cost
+        if cost > remaining:
+            break
+        blocks.append({"kind": "insight", "content": content, "score": 0.4})
+        remaining -= cost
 
     # E9: prompt-cache-friendly ordering — query-independent blocks (stable
     # across calls) form the prefix; a <cache:break> marker separates them
