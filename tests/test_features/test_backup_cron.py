@@ -621,3 +621,59 @@ def test_received_heal_wired_before_replay_in_nightly() -> None:
     assert "sweep_received()" in src  # вызов, а не только импорт
     assert "L0 received-heal" in src  # результат попадает в отчёт
     assert src.index("sweep_received()") < src.index("from features.replay import replay")
+
+
+def test_the_nightly_prune_uses_the_configured_limits(tmp_path, monkeypatch) -> None:
+    """F107: ночная чистка журнала отказов берёт границы из config, а не из литералов.
+
+    Мутация `config.get("door_log", ...)` → `30` / `5000` не ломала ни один тест:
+    проводка была ничем не закреплена. Здесь значения из конфига заведомо
+    отличаются от дефолтов, а прогоняется настоящий ночной проход.
+    """
+    import json as _json
+    import time as _time
+
+    import features.backup_cron as bc
+    import shared.door_log as door_log
+
+    due = _time.time() - 48 * 3600
+    state = tmp_path / "cycles_state.json"
+    state.write_text(_json.dumps({"last_nightly": due, "calls": []}), encoding="utf-8")
+
+    cron = bc.BackupCron(base_dir=str(tmp_path))
+
+    class _Cfg:
+        def get(self, *keys, default=None):
+            configured = {
+                ("door_log", "rejections_retention_days"): 7,
+                ("door_log", "rejections_max_rows"): 11,
+            }
+            return configured.get(keys, default)
+
+    monkeypatch.setattr(bc, "config", _Cfg())
+
+    async def _noop() -> None:
+        return None
+
+    class _Reg:
+        @staticmethod
+        def fire(name, layer, ctx, mem=None, graph=None):
+            return _noop()
+
+    monkeypatch.setattr("hooks.registry.hook_registry", _Reg())
+
+    seen: list[dict] = []
+
+    def _spy(**kwargs):
+        seen.append(kwargs)
+        return _noop()
+
+    # Сайт вызова импортирует символ ВНУТРИ функции — патчим источник.
+    monkeypatch.setattr(door_log, "prune_rejections", _spy)
+
+    cron._await_on_main_loop = lambda coro, **kwargs: (coro.close(), {})[1]
+
+    assert cron._fire_nightly_hooks(state) == "ok"
+    assert seen, "ночная чистка отказов не вызвалась — тест ничего не проверил"
+    assert seen[-1]["retention_days"] == 7, f"ретенция не из config: {seen[-1]}"
+    assert seen[-1]["max_rows"] == 11, f"кап не из config: {seen[-1]}"

@@ -54,6 +54,7 @@ from typing import Any
 from shared.connection import connection_manager
 from shared.constants import DB_NAME
 from shared.sync_db import open_db
+from shared.write_dispatch import get_write_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,56 @@ async def record_rejection(
             )
     except Exception as exc:
         logger.debug("rejection log write failed: %s", exc)
+
+
+async def prune_rejections(*, retention_days: float = 30.0, max_rows: int = 5000, batch: int = 2000) -> dict[str, int]:
+    """Bound the refusal log: age retention first, then a hard cap.
+
+    A bound exists because the log is evidence, not a journal — it records what
+    the guards refused so an operator can judge the guards, and the reasons that
+    keep firing (`rate_limit`, `transcript`, `machine_report`) must stay visible
+    without the table growing forever. The age pass is the retention policy:
+    refusals older than `retention_days` are history. The cap pass is the hard
+    bound: if the table is still larger than `max_rows`, the oldest rows go
+    first. Both run in batches so the write lock is held per batch, never for
+    the whole table.
+
+    Never raises, like `record_rejection`: observability must not break the flow
+    it observes. On failure the counts reached so far are logged and returned.
+    """
+    deleted_old = 0
+    deleted_over_cap = 0
+    remaining = 0
+    try:
+        dispatch = get_write_dispatch()
+        cutoff = time.time() - retention_days * 86400
+        age_sql = (
+            "DELETE FROM memory_dispatch_rejections WHERE id IN (SELECT id FROM memory_dispatch_rejections WHERE created_at < ? ORDER BY id LIMIT ?)"
+        )
+        while True:
+            deleted = await dispatch.write(DB_NAME, age_sql, (cutoff, batch))
+            if deleted <= 0:
+                break
+            deleted_old += deleted
+
+        cap_sql = "DELETE FROM memory_dispatch_rejections WHERE id IN (SELECT id FROM memory_dispatch_rejections ORDER BY id LIMIT ?)"
+        remaining = int(await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM memory_dispatch_rejections") or 0)
+        while remaining > max_rows:
+            take = min(batch, remaining - max_rows)
+            deleted = await dispatch.write(DB_NAME, cap_sql, (take,))
+            if deleted <= 0:
+                break
+            deleted_over_cap += deleted
+            remaining -= deleted
+    except Exception as exc:
+        logger.warning(
+            "rejection prune failed after deleted_old=%d deleted_over_cap=%d remaining=%d: %s",
+            deleted_old,
+            deleted_over_cap,
+            remaining,
+            exc,
+        )
+    return {"deleted_old": deleted_old, "deleted_over_cap": deleted_over_cap, "remaining": remaining}
 
 
 async def rejection_summary(*, user_id: str | None = None, since: float | None = None) -> dict[str, Any]:

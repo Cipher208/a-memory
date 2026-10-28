@@ -586,6 +586,20 @@ class BackupCron:
 
                 tiers = self._await_on_main_loop(tier_l0())
                 logger.info("L0 tiering: %s", tiers)
+            # F107: bound the refusal log — age retention, then a hard cap. The
+            # nightly already holds the maintenance lock; the prune still takes its
+            # writes through the dispatcher.
+            with contextlib.suppress(Exception):
+                from shared.door_log import prune_rejections
+
+                pruned = self._await_on_main_loop(
+                    prune_rejections(
+                        retention_days=float(config.get("door_log", "rejections_retention_days", default=30)),
+                        max_rows=int(config.get("door_log", "rejections_max_rows", default=5000)),
+                    )
+                )
+                if any(pruned.get(k) for k in ("deleted_old", "deleted_over_cap")):
+                    logger.info("L0 rejection prune: %s", pruned)
             # F-T7 (S3): rebuild session summaries from L0 texts (was dead code).
             with contextlib.suppress(Exception):
                 from features.l2_enrich import enrich_sessions

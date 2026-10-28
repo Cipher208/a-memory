@@ -279,6 +279,13 @@ backup:
   jitter_seconds: 3600              # random 0-3600s delay before each backup
   wiki_sync_interval_minutes: 30    # wiki sync cadence
 
+# === Door log ===
+door_log:
+  # Refusals older than this are deleted nightly.
+  rejections_retention_days: 30
+  # Hard bound: if the table is still larger, the oldest rows go first.
+  rejections_max_rows: 5000
+
 # === Dashboard (HTTP transport only) ===
 # Synced with --dashboard CLI flag: flag OR this section enables it.
 dashboard:
