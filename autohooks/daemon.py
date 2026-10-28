@@ -407,6 +407,27 @@ async def run_daemon(
                         if d_layer not in layer_mems:
                             layer_mems[d_layer] = resolve(d_layer)
                         mem_d, graph_d, rag_d = layer_mems[d_layer]
+                # F96: the Hermes plugin pushes the same source message and
+                # usually wins the race, without a `source_msg_id`. Dispatching
+                # into a `duplicate_l0_block` refusal only writes a rejection
+                # and loses provenance. Find the row that already holds this
+                # block, stamp the id it lacks, and move the cursor on. The
+                # duplicate path never reaches the dispatcher's own
+                # `find_block`; a NEW message falls through to the normal
+                # dispatch.
+                from shared.l0 import find_block, stamp_source_msg_id
+
+                prior = await find_block(d_layer, cfg.user_id, msg.text)
+                if prior is not None:
+                    stamped = await stamp_source_msg_id(prior, msg.source_id)
+                    logger.debug(
+                        "source_msg_id=%s already captured as l0 id %s (stamped=%s) — skipping dispatch",
+                        msg.source_id,
+                        prior,
+                        stamped,
+                    )
+                    handled_upto = msg.source_id
+                    continue
                 try:
                     result = await dispatch(
                         "new_message",

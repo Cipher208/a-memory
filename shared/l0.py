@@ -113,6 +113,30 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
     return None
 
 
+async def stamp_source_msg_id(rid: int, source_msg_id: int) -> bool:
+    """Record the source row a captured block came from. Never raises.
+
+    F96: two paths capture one source message — the plugin push and the daemon
+    tail — and the plugin, which usually wins the race, cannot name the source
+    row. This fills that hole in the winning row. It is provenance, not dedup:
+    the WHERE clause keeps an id the row already carries, and a row that is
+    already stamped is left alone. Two different source rows with identical
+    text stay two blocks; only the one whose rid was found is stamped.
+    """
+    try:
+        rowcount = await _dispatch().write(
+            DB_NAME,
+            "UPDATE l0_journal SET source_msg_id=? WHERE id=? AND source_msg_id IS NULL",
+            (source_msg_id, rid),
+        )
+    except Exception as exc:
+        # Best-effort, like the rest of the L0 journal writes: losing the
+        # provenance must not break the delivery that already happened.
+        logger.debug("l0_journal source stamp failed: %s", exc)
+        return False
+    return rowcount == 1
+
+
 def _write_never_happened(row: Any) -> bool:
     """Report whether the row was closed because the write never happened.
 

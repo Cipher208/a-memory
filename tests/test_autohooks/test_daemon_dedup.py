@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 TEXT = "решение по архитектуре: мост остаётся синхронным"
 SOURCE_ID = 5
 
+
 @pytest.fixture
 async def base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A private memory base; never the live one (role F6)."""
@@ -42,6 +43,7 @@ async def base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     yield data_dir
     connection_manager._conns.clear()
     connection_manager.base_dir = original
+
 
 def _cfg(tmp_path: Path) -> AgentConfig:
     return AgentConfig(
@@ -63,6 +65,7 @@ def _cfg(tmp_path: Path) -> AgentConfig:
         state_file=tmp_path / "cursor.json",
     )
 
+
 def _source_db(tmp_path: Path) -> Path:
     path = tmp_path / "conv.db"
     conn = sqlite3.connect(path)
@@ -71,6 +74,7 @@ def _source_db(tmp_path: Path) -> Path:
     conn.commit()
     conn.close()
     return path
+
 
 def _journal_row(data_dir: Path, rid: int) -> tuple[Any, ...]:
     conn = sqlite3.connect(data_dir / "memory.db")
@@ -81,6 +85,7 @@ def _journal_row(data_dir: Path, rid: int) -> tuple[Any, ...]:
     assert row is not None
     return row
 
+
 def _rejections(data_dir: Path) -> int:
     conn = sqlite3.connect(data_dir / "memory.db")
     try:
@@ -89,6 +94,7 @@ def _rejections(data_dir: Path) -> int:
         conn.close()
     assert row is not None
     return int(row[0])
+
 
 async def test_a_tick_over_an_already_captured_row_stamps_and_skips(tmp_path: Path, base: Path) -> None:
     """The plugin won the race; the daemon must neither refuse nor duplicate."""
@@ -113,6 +119,7 @@ async def test_a_tick_over_an_already_captured_row_stamps_and_skips(tmp_path: Pa
     assert _journal_row(base, rid)[0] == SOURCE_ID, "the winning row must carry the source id it came from"
     assert _rejections(base) == 0, "the losing path writes no rejection"
 
+
 async def test_a_tick_over_a_new_row_delivers_normally(tmp_path: Path, base: Path) -> None:
     """No prior row: the daemon is the winning path and dispatches as before."""
     dispatched: list[dict[str, Any]] = []
@@ -130,6 +137,7 @@ async def test_a_tick_over_a_new_row_delivers_normally(tmp_path: Path, base: Pat
     assert dispatched[0]["source_msg_id"] == SOURCE_ID
     assert load_cursor(tmp_path / "cursor.json") == SOURCE_ID
     assert _rejections(base) == 0
+
 
 async def test_stamping_does_not_overwrite_an_existing_source_id(tmp_path: Path, base: Path) -> None:
     """A row that already names its source keeps that name."""
@@ -152,6 +160,7 @@ async def test_stamping_does_not_overwrite_an_existing_source_id(tmp_path: Path,
     assert dispatched == []
     assert load_cursor(tmp_path / "cursor.json") == SOURCE_ID
     assert _journal_row(base, rid)[0] == 99, "the existing provenance must win"
+
 
 async def test_a_second_tick_over_the_same_row_is_a_no_op(tmp_path: Path, base: Path) -> None:
     """Re-reading the same source row (a rewound cursor) changes nothing."""
