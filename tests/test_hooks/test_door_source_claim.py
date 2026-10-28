@@ -213,6 +213,67 @@ async def test_a_third_delivery_of_the_same_source_message_is_silent(db: Any) ->
     assert result["skipped"] == "duplicate_l0_block", result
 
 
+async def test_the_plugin_lag_does_not_defeat_the_claim(db: Any) -> None:
+    """The live regression: the plugin captures LATER than the message was written.
+
+    Measured on 204 live plugin-captured rows: `row.ts - message.timestamp` is
+    never negative and reaches 615.8s (p50 4.7s, p90 13.7s, p99 116.8s). The
+    symmetric 1s window therefore matched none of them: the daemon tail arrived
+    15s after the plugin's capture and `_refuse("duplicate_l0_block")` wrote a
+    rejection for a message it had not lost. The window must be causal — a
+    capture can only follow its message.
+    """
+    from hooks.external import auto_save_text
+
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-lag", text=TEXT, event="new_message", ts=TS)
+    result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-lag", text=TEXT, event="new_message", source_msg_id=5, ts=TS - 15)
+
+    rows = _journal()
+    assert len(rows) == 1, f"a lagging delivery wrote a second row: {rows}"
+    assert rows[0][2] == 5, f"the plugin-captured row was never claimed: {rows}"
+    assert _rejections() == [], "a message the plugin captured 15s late was refused as a duplicate"
+    assert result["skipped"] == "duplicate_l0_block", result
+
+
+async def test_a_message_older_than_the_capture_lag_is_still_a_duplicate(db: Any) -> None:
+    """Beyond the measured lag the causal window separates two messages again.
+
+    Same text 3600s after the capture is a different source message. The claim
+    must fail, the refusal must be recorded, and the first row must keep the
+    provenance it has.
+    """
+    from hooks.external import auto_save_text
+
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-lag-over", text=TEXT, event="new_message", ts=TS)
+    result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-lag-over", text=TEXT, event="new_message", source_msg_id=6, ts=TS + 3600)
+
+    assert result["skipped"] == "duplicate_l0_block", result
+    assert len(_rejections()) == 1, "a message beyond the capture lag must still be refused, and recorded"
+    rows = _journal()
+    assert len(rows) == 1, rows
+    assert rows[0][2] is None, f"a later message stole the row's provenance: {rows}"
+
+
+async def test_a_capture_never_precedes_its_message(db: Any) -> None:
+    """The window has a direction: a capture cannot come before the message.
+
+    A message written 5s AFTER the capture is impossible in reality (the plugin
+    only sees messages that already exist), so it is not the same message and
+    must not be claimed. This pins the causal half of the window — without it a
+    wide symmetric window would swallow the case.
+    """
+    from hooks.external import auto_save_text
+
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-precedes", text=TEXT, event="new_message", ts=TS)
+    result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-precedes", text=TEXT, event="new_message", source_msg_id=7, ts=TS + 5)
+
+    assert result["skipped"] == "duplicate_l0_block", result
+    assert len(_rejections()) == 1, "a message written after the capture must be refused, and recorded"
+    rows = _journal()
+    assert len(rows) == 1, rows
+    assert rows[0][2] is None, f"an impossible message claimed the row: {rows}"
+
+
 async def test_a_different_source_id_is_never_stamped_over_the_owner(db: Any) -> None:
     """The claim accepts its own id, not any id.
 
