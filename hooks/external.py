@@ -401,7 +401,7 @@ async def _auto_save_text_body(
     # L0 intake (F): append-only journal of what will be stored. Best-effort
     # (capture never raises); the id drives the status watermark after
     # distillation.
-    from shared.l0 import capture, find_block
+    from shared.l0 import capture, claim_source_msg_id, find_block
 
     # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
     # NER unavailable/crashed → the regex tier inside sanitize still ran.
@@ -435,7 +435,27 @@ async def _auto_save_text_body(
     # stored. `find_block` skips such a row (it was closed with the reason
     # `unaccounted_exit`), so the retry re-enters the write and the row
     # ends up carrying the status of what really happened.
-    if await find_block(l0_layer, user_id, text) is not None:
+    prior = await find_block(l0_layer, user_id, text)
+    if prior is not None:
+        # F96: two paths deliver one source message — the plugin push and the
+        # daemon tail — and the plugin, which usually wins the race, cannot name
+        # the source row. This branch is the losing path arriving second, so it
+        # CLAIMS the winning row instead of refusing it: the refusal would be
+        # true (nothing new was written) and useless (it would also throw away
+        # the provenance the second path is the only one able to supply).
+        #
+        # The claim lives HERE, at the door, because this is where the text is
+        # already masked and both facts it needs exist: the rid `find_block`
+        # resolved, and the timestamp the capture used. A content match alone
+        # cannot tell one source row from another — the same words an hour
+        # later are a different message — and a lookup on the RAW text misses
+        # every message whose stored hash is over the masked one. `ts` is that
+        # capture timestamp, not the clock: a missing one leaves the old
+        # refusal in place, because without it there is no way to tell the two
+        # apart.
+        if source_msg_id is not None and ts is not None and await claim_source_msg_id(prior, source_msg_id, ts):
+            logger.debug("source_msg_id=%s claimed l0 row %s — same message, skipping dispatch", source_msg_id, prior)
+            return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "duplicate_l0_block"}
         return await _refuse("duplicate_l0_block")
 
     l0_id: int | None = await capture(event, l0_layer, user_id, text, source_msg_id=source_msg_id, ts_override=ts)
