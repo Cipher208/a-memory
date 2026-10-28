@@ -28,7 +28,7 @@ from shared.connection import connection_manager
 from shared.migrations import MigrationManager
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
     from pathlib import Path
 
 TEXT = "решение по архитектуре: мост остаётся синхронным и не тянет лишние зависимости"
@@ -45,6 +45,25 @@ async def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[A
     yield connection_manager
     connection_manager._conns.clear()
 
+
+@pytest.fixture()
+def door() -> "Iterator[None]":
+    """Register the production `new_message` handler on the global registry.
+
+    The tests below drive `dispatch_event` — the real door the plugin push and
+    the daemon tail both enter — so the registry has to hold the real
+    `UserHooks`. The registry is a module-level singleton and its handlers
+    outlive a test, so the previous table is restored afterwards.
+    """
+    from hooks.registry import hook_registry
+    from hooks.user_hooks import UserHooks
+
+    saved = {name: list(handlers) for name, handlers in hook_registry._hooks.items()}
+    hook_registry.register_instance(UserHooks("door"))
+    try:
+        yield
+    finally:
+        hook_registry._hooks = saved
 
 class _FakeL3:
     def __init__(self) -> None:
@@ -292,3 +311,66 @@ async def test_a_different_source_id_is_never_stamped_over_the_owner(db: Any) ->
     rows = _journal()
     assert len(rows) == 1, rows
     assert rows[0][2] == 11, f"a different source id stole the row's provenance: {rows}"
+
+async def _deliver(user_id: str, text: str, **payload: Any) -> dict[str, Any]:
+    """Deliver one message through the REAL door (`dispatch_event` + `UserHooks`)."""
+    from hooks.external import dispatch_event
+
+    return await dispatch_event("new_message", "user", user_id, {"text": text, **payload}, _FakeMem(), _FakeGraph())
+
+async def test_the_plugin_losing_without_an_id_writes_no_rejection(db: Any, door: None) -> None:
+    """The live case: the loser cannot name the source row, only its timestamp.
+
+    Journal row 5095 was captured at 17:59:43 by the daemon and carries
+    `sid=159292`; at 18:00:07 the plugin pushed the same text WITHOUT an id.
+    `find_block` resolved row 5095, the claim had nothing to claim it with, and
+    the door wrote `duplicate_l0_block` with `source_msg_id IS NULL` — pure log
+    noise, ~10/hour, while the message was already stored.
+
+    The losing path must be silent whichever side it is. Timestamp proximity is
+    the only evidence left when the loser cannot name the row, so the door reads
+    it: the capture is recent, therefore this is the message already stored.
+    """
+    first = await _deliver("f96-r6-plugin-loses", TEXT, source_msg_id=159292, ts=TS)
+    assert first["results"][0]["auto_save"].get("skipped") is None, first
+
+    result = await _deliver("f96-r6-plugin-loses", TEXT, ts=TS)
+
+    rows = _journal()
+    assert len(rows) == 1, f"the losing delivery wrote a second row: {rows}"
+    assert rows[0][2] == 159292, f"the winning row lost its source id: {rows}"
+    assert _rejections() == [], "the plugin losing without an id wrote a rejection row"
+    assert result["results"][0]["auto_save"]["skipped"] == "duplicate_l0_block", result
+
+async def test_a_repeat_far_outside_the_window_is_still_logged(db: Any, door: None) -> None:
+    """A genuine repeat keeps its refusal: proximity is what makes it the same message.
+
+    Same text an hour after the capture is another source message with the same
+    words. It is refused exactly as before (`find_block` has no time window), and
+    because it is outside the capture window the refusal is still recorded.
+    """
+    await _deliver("f96-r6-far-out", TEXT, source_msg_id=159292, ts=TS)
+    result = await _deliver("f96-r6-far-out", TEXT, ts=TS + 3600)
+
+    assert result["results"][0]["auto_save"]["skipped"] == "duplicate_l0_block", result
+    rejections = _rejections()
+    assert len(rejections) == 1, f"a repeat outside the window must still be recorded: {rejections}"
+    rows = _journal()
+    assert len(rows) == 1, rows
+    assert rows[0][2] == 159292, f"a later message stole the row's provenance: {rows}"
+
+async def test_a_loser_without_a_timestamp_still_refuses(db: Any, door: None) -> None:
+    """No id and no timestamp: the two deliveries cannot be told apart.
+
+    Timestamp proximity is the only evidence the losing path has. Without it the
+    door must refuse loudly rather than assume, so the refusal stays recorded.
+    """
+    await _deliver("f96-r6-no-ts", TEXT, source_msg_id=159292, ts=TS)
+    result = await _deliver("f96-r6-no-ts", TEXT)
+
+    assert result["results"][0]["auto_save"]["skipped"] == "duplicate_l0_block", result
+    rejections = _rejections()
+    assert len(rejections) == 1, f"a loser with no timestamp must still be recorded: {rejections}"
+    rows = _journal()
+    assert len(rows) == 1, rows
+    assert rows[0][2] == 159292, f"an unidentifiable delivery stole the row's provenance: {rows}"
