@@ -29,19 +29,37 @@ def no_miners(monkeypatch):
     monkeypatch.setattr("lifecycle.graph_miners.MINERS", {})
 
 
-async def _theme(graph: Any, filler: str, distinct: str, count: int) -> list[int]:
-    """Кластер: несколько узлов с общим словом + различительное слово, плотная связность."""
+async def _theme(graph: Any, filler: str, distinct: str | list[str], count: int) -> list[int]:
+    """Кластер: несколько узлов с общим словом + различительные слова, плотная связность."""
+    words = [distinct] if isinstance(distinct, str) else distinct
     ids = []
     for i in range(count):
-        # distinct в ПОЛОВИНЕ узлов: по частоте он уступает общим словам
-        # (запись/ещё/заполнитель — в 100%), по различительности ratio=2 он
-        # занимает первое место. Это и есть инвариант S4.
-        verb = f"обсуждает {distinct}" if i % 2 == 0 else "обсуждает детали"
+        # различительное слово — в ПОЛОВИНЕ узлов (при списке — по паре на слово):
+        # по частоте оно уступает общим словам (запись/ещё/заполнитель — в 100%),
+        # по различительности ratio=2 оно занимает первые места. Это и есть
+        # инвариант S4.
+        word = words[min(i // 2, len(words) - 1)]
+        verb = f"обсуждает {word}" if i % 2 == 0 else "обсуждает детали"
         text = f"запись {i} {filler} {verb} и ещё {filler}"
         ids.append(await graph.add_node("gu", text, "fact"))
     for left, right in pairwise(ids):
         await graph.add_edge(left, right, "mentions")
     await graph.add_edge(ids[0], ids[-1], "mentions")
+    return ids
+
+
+async def _path_theme(graph: Any, filler: str, distinct: str, count: int) -> list[int]:
+    """Тема-цепочка: без плотного ядра, поэтому один тяжёлый мост её сливает.
+
+    Нужна [S6(3)]: на плотном кластере один мост Louvain игнорирует, и тест
+    не отличил бы «ребро отфильтровано» от «мост слишком слаб, чтобы слить».
+    """
+    ids = []
+    for i in range(count):
+        verb = f"обсуждает {distinct}" if i % 2 == 0 else "обсуждает детали"
+        ids.append(await graph.add_node("gu", f"запись {i} {filler} {verb} и ещё {filler}", "fact"))
+    for left, right in pairwise(ids):
+        await graph.add_edge(left, right, "mentions")
     return ids
 
 
@@ -69,17 +87,40 @@ async def test_communities_split_two_themes(graph: Any, no_miners: None) -> None
     assert "бэкап" in joined and "прогулка" in joined
 
 
-async def test_tokens_are_distinguishing_not_frequent(graph: Any, no_miners: None) -> None:
-    """Общий токен не попадает в топ-3; различающий — попадает."""
-    await _theme(graph, "общиймаркер", "уникальноесловода", 8)
-    await _theme(graph, "общиймаркер", "уникальноесловоб", 8)
+async def test_insight_of_and_nonpositive_edges_do_not_fuse_communities(graph: Any, no_miners: None) -> None:
+    """[S6(3)] insight_of и weight<=0 — мёртвые рёбра: они не сливают сообщества."""
+    a = await _path_theme(graph, "бэкап", "postgres", 3)
+    b = await _path_theme(graph, "прогулка", "парк", 3)
+    # Натуральный insight_of всегда имеет insight на одном конце, и снимок
+    # удаляет такие рёбра до чтения входа. Здесь ребро между двумя НЕ-insight
+    # узлами создаётся напрямую: только так фильтр входа вообще проверяется.
+    await graph.add_edge(a[1], b[1], "insight_of", weight=3.0)
+    await graph.add_edge(a[0], b[0], "mentions", weight=-50.0)
     contents = await _pass()
+    assert len(contents) == 2, contents
     joined = " | ".join(contents)
-    assert "уникальноесловода" in joined and "уникальноесловоб" in joined
-    # общеграфовой маркер встречается в 100% узлов — по частоте он занимает
-    # топ в ОБОИХ сообществах; по различительности ratio=2 он не выбивает
-    # различительные слова из топ-3
-    assert joined.count("общиймаркер") <= 3
+    assert "postgres" in joined and "парк" in joined
+    assert "бэкап" in joined and "прогулка" in joined
+
+
+async def test_tokens_are_distinguishing_not_frequent(graph: Any, no_miners: None) -> None:
+    """[S6(2)] Общий токен не попадает в топ-3; различительные — попадают."""
+    from rag.edm import tokens
+
+    a_words = ["уникальноесловоальфа", "уникальноесловобета", "уникальноесловогамма", "уникальноесловодельта"]
+    b_words = ["уникальноесловое", "уникальноесловожэ", "уникальноесловозий", "уникальноесловоий"]
+    await _theme(graph, "общиймаркер", a_words, 8)
+    await _theme(graph, "общиймаркер", b_words, 8)
+    contents = await _pass()
+    assert len(contents) == 2, contents
+    # Общий маркер встречается в 100% узлов (ratio=1) и в каждом сообществе
+    # проигрывает любому различительному слову (ratio=2): в топ-3 он не входит.
+    per_insight = [tokens(c) for c in contents]
+    assert all("общиймаркер" not in t for t in per_insight), contents
+    # Топ-3 — три из четырёх различительных слов каждой темы (четвёртому
+    # слотов нет), т.е. все три слота заняты различительными, а не частотными.
+    assert any(len(t & set(a_words)) >= 3 for t in per_insight), contents
+    assert any(len(t & set(b_words)) >= 3 for t in per_insight), contents
 
 
 async def test_second_pass_recomputes_communities_without_history(graph: Any, no_miners: None) -> None:

@@ -94,3 +94,42 @@ async def test_insight_blocks_debit_budget_per_line(seeded: Any) -> None:
 
     small = await build_inject_blocks(mem, None, "gu", budget=1)
     assert not any(b["kind"] == "insight" for b in small), small
+
+
+@pytest.fixture
+async def ranked(tmp_path) -> AsyncIterator[Any]:
+    """Four insights for one scope; member counts 5/3/2/0, node ids reversed.
+
+    Node ids ascend with the counts, so ordering by node_id yields 0/2/3 while
+    ordering by member count yields 5/3/2 — the two orders cannot be confused.
+    """
+    from shared.connection import connection_manager
+
+    connection_manager.base_dir = tmp_path
+    connection_manager._conns.clear()
+    from shared.migrations import MigrationManager
+
+    await MigrationManager(cm=connection_manager).migrate()
+    from graph.epistemic import EpistemicGraph
+
+    g = EpistemicGraph(cm=connection_manager, layer="user")
+    for count in (0, 2, 3, 5):
+        insight_id = await g.add_node("gu", f"insight ({count} узлов): тема{count}", "insight")
+        for _ in range(count):
+            member = await g.add_node("gu", f"member {count}", "fact")
+            await g.add_edge(insight_id, member, "insight_of")
+    yield connection_manager
+    connection_manager._conns.clear()
+
+
+async def test_insight_ranking_is_by_member_count(ranked: Any) -> None:
+    """[S5] top-3 идут по числу insight_of, а не по node_id."""
+    from features.inject import build_inject_blocks
+
+    blocks = await build_inject_blocks(_FakeMem(), None, "gu", budget=2000)
+    insights = [b["content"] for b in blocks if b["kind"] == "insight"]
+    assert insights == [
+        "insight (5 узлов): тема5",
+        "insight (3 узлов): тема3",
+        "insight (2 узлов): тема2",
+    ], insights

@@ -394,7 +394,7 @@ async def _dream_insight(dispatch: WriteDispatch, layer: str) -> int:
         scored = [
             (freq[t] / nc / (df[t] / total), t)
             for t in freq
-            if df[t] >= 0.1 * nc  # antinoise: a one-off token (typo) has ratio ~nc
+            if df[t] >= 0.1 * nc  # antinoise: a one-off token (typo, df=1) has ratio N/nc — rejects low-df noise
         ]
         if not scored:
             continue
