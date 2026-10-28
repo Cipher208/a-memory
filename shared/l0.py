@@ -113,7 +113,16 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
     return None
 
 
-async def claim_source_msg_id(l0_id: int, source_msg_id: int, ts: float, tolerance_s: float = 1.0) -> bool:
+#: How far a plugin capture may trail the message it captured, in seconds.
+#: Measured over 204 live plugin-captured rows (`row.ts - message.timestamp`):
+#: min 3.9s, p50 4.7s, p90 13.7s, p99 116.8s, max 615.8s. The window has to
+#: cover the max, not the median: a symmetric 1s window covered none of it.
+CAPTURE_LAG_S = 900.0
+#: A capture cannot precede its message; this only absorbs clock skew.
+CLOCK_SLACK_S = 1.0
+
+
+async def claim_source_msg_id(l0_id: int, source_msg_id: int, ts: float) -> bool:
     """Claim a captured row for the source message that produced it. Never raises.
 
     F96: two paths capture one source message — the plugin push and the daemon
@@ -125,10 +134,21 @@ async def claim_source_msg_id(l0_id: int, source_msg_id: int, ts: float, toleran
       THIS source is the same message arriving again, so it may be claimed
       again; a row that names a DIFFERENT source belongs to that message and a
       later delivery must not overwrite it.
-    * `ABS(ts - ?) <= tolerance_s` — identical text is not identical identity.
-      A different message with the same words an hour later is another row, and
-      the timestamp the capture used is what tells the two apart. The tolerance
-      absorbs the small drift between the two paths delivering one message.
+    * `ts - CLOCK_SLACK_S <= row.ts <= ts + CAPTURE_LAG_S` — identical text is
+      not identical identity. The window is CAUSAL, not symmetric: the plugin
+      captures the message AFTER it was written, so the capture lag is never
+      negative and reaches 615.8s on live data (204 rows: p50 4.7s, p90 13.7s,
+      p99 116.8s). The old `ABS(ts - ?) <= 1.0` matched 0% of those rows, so
+      the daemon tail refused every message the plugin had won and wrote a
+      rejection for each. Beyond `CAPTURE_LAG_S` a different message with the
+      same words is correctly another row.
+
+    ACCEPTED CONSEQUENCE: two genuinely different source messages with identical
+    text arriving within ~15 minutes of each other are claimed as one. This
+    cannot lose a message — the second is refused at capture anyway (`find_block`
+    has no time window), so the journal only ever holds one row per text — but
+    its provenance would name the later id. Beyond 15 minutes the causal window
+    separates them correctly.
 
     Returns True only when a row was updated: the caller treats True as "this is
     the same source message, skip without a refusal".
@@ -136,8 +156,8 @@ async def claim_source_msg_id(l0_id: int, source_msg_id: int, ts: float, toleran
     try:
         rowcount = await _dispatch().write(
             DB_NAME,
-            "UPDATE l0_journal SET source_msg_id=? WHERE id=? AND (source_msg_id IS NULL OR source_msg_id=?) AND ABS(ts - ?) <= ?",
-            (source_msg_id, l0_id, source_msg_id, ts, tolerance_s),
+            "UPDATE l0_journal SET source_msg_id=? WHERE id=? AND (source_msg_id IS NULL OR source_msg_id=?) AND ts >= ? AND ts <= ?",
+            (source_msg_id, l0_id, source_msg_id, ts - CLOCK_SLACK_S, ts + CAPTURE_LAG_S),
         )
     except Exception as exc:
         # Best-effort, like the rest of the L0 journal writes: losing the
