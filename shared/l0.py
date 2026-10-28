@@ -167,6 +167,44 @@ async def claim_source_msg_id(l0_id: int, source_msg_id: int, ts: float) -> bool
     return rowcount == 1
 
 
+async def is_recent_capture(l0_id: int, ts: float, window_s: float = CAPTURE_LAG_S) -> bool:
+    """Report whether a journal row was captured close to `ts`. Never raises.
+
+    F96b: the OTHER direction of the same race. The claim above closes the case
+    where the loser can name its source row; the plugin push cannot, and its
+    losing delivery then wrote a `duplicate_l0_block` rejection for a message
+    that was already stored (measured live: journal row 5095 captured at
+    17:59:43 by the daemon, the plugin arriving at 18:00:07 without an id,
+    ~10 rows/hour of pure log noise).
+
+    When the loser cannot name the source, timestamp proximity is the only
+    evidence that the two deliveries are one message, so it is what the door
+    reads. The window is symmetric here, unlike the claim's causal one: this
+    answer is not written anywhere, it only decides whether a log line is worth
+    writing, and the loser's timestamp may sit on either side of the capture.
+
+    ACCEPTED CONSEQUENCE: a genuine repeat of the same text within the window is
+    still refused (the message is not stored either way — `find_block` has no
+    time window), but it is no longer LOGGED as a rejection. The only thing lost
+    is the log line, and the alternative was a rejection for every plugin
+    delivery of a message the daemon had already captured.
+
+    A missing row, an unreadable timestamp or a failed read returns False: the
+    caller keeps its refusal, which is the honest answer when nothing is known.
+    """
+    try:
+        row = await _dispatch().select_one(DB_NAME, "SELECT ts FROM l0_journal WHERE id=?", (l0_id,))
+    except Exception as exc:
+        logger.debug("l0_journal capture-time read failed: %s", exc)
+        return False
+    if row is None:
+        return False
+    try:
+        return abs(float(row["ts"]) - ts) <= window_s
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+
+
 def _write_never_happened(row: Any) -> bool:
     """Report whether the row was closed because the write never happened.
 

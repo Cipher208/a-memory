@@ -401,7 +401,7 @@ async def _auto_save_text_body(
     # L0 intake (F): append-only journal of what will be stored. Best-effort
     # (capture never raises); the id drives the status watermark after
     # distillation.
-    from shared.l0 import capture, claim_source_msg_id, find_block
+    from shared.l0 import capture, claim_source_msg_id, find_block, is_recent_capture
 
     # G0 privacy: secrets/PII → typed placeholders (the reverse map is not persisted).
     # NER unavailable/crashed → the regex tier inside sanitize still ran.
@@ -455,6 +455,21 @@ async def _auto_save_text_body(
         # apart.
         if source_msg_id is not None and ts is not None and await claim_source_msg_id(prior, source_msg_id, ts):
             logger.debug("source_msg_id=%s claimed l0 row %s — same message, skipping dispatch", source_msg_id, prior)
+            return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "duplicate_l0_block"}
+        # F96b: the loser's OTHER shape. The plugin push cannot name the source
+        # row, so the claim above has nothing to claim it with, and its losing
+        # delivery used to write a `duplicate_l0_block` rejection for a message
+        # the daemon had already captured (live: row 5095 at 17:59:43, the plugin
+        # at 18:00:07, ~10 rows/hour of noise). The message is stored either way;
+        # only the log line was wrong.
+        #
+        # ACCEPTED CONSEQUENCE: a genuine repeat of the same text within the
+        # capture window is still refused — `find_block` has no time window, so
+        # it is not stored — but it is no longer logged as a rejection. Without
+        # a `ts`, or with a row older than the window, there is no evidence that
+        # the two deliveries are one message, so the refusal stays loud.
+        if ts is not None and await is_recent_capture(prior, ts):
+            logger.debug("l0 row %s was captured at ts=%s — the other path already stored this message, skipping dispatch", prior, ts)
             return {"score": 0.0, "saved_l3": False, "saved_l4": False, "saved_graph": False, "skipped": "duplicate_l0_block"}
         return await _refuse("duplicate_l0_block")
 
