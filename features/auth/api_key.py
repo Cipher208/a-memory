@@ -24,50 +24,77 @@ class APIKeyAuth:
 
         model = APIKeyModel(user_id=user_id, label=label, created_at=time.time(), enabled=True)
 
-        self._keys[key] = model.model_dump()
-        self.store.save(self._keys)
+        def add(keys: dict[str, Any]) -> None:
+            keys[key] = model.model_dump()
+
+        state = self.store.update(add)
+        if state is None:
+            raise RuntimeError(f"Could not persist new API key: {self.store.file_path} is unreadable")
+        self._keys = state
         return key
 
     def verify(self, key: str) -> dict[str, Any] | None:
-        """Check key validity and enabled status.
+        """Check key validity and enabled status against the current state.
 
         Update last_used timestamp and save() on success.
         Return {"user_id": ..., "label": ...}.
         """
-        data = self._keys.get(key)
-        if not data:
+        result: dict[str, Any] | None = None
+
+        def touch(keys: dict[str, Any]) -> None:
+            nonlocal result
+            data = keys.get(key)
+            if not data:
+                return
+
+            model = APIKeyModel(**data)
+            if not model.enabled:
+                return
+
+            model.last_used = time.time()
+            keys[key] = model.model_dump()
+            result = {"user_id": model.user_id, "label": model.label}
+
+        state = self.store.update(touch)
+        if state is None:
             return None
-
-        model = APIKeyModel(**data)
-        if not model.enabled:
-            return None
-
-        # Update last_used
-        model.last_used = time.time()
-        self._keys[key] = model.model_dump()
-        self.store.save(self._keys)
-
-        return {"user_id": model.user_id, "label": model.label}
+        self._keys = state
+        return result
 
     def revoke(self, key: str) -> bool:
         """Set enabled=False, save."""
-        data = self._keys.get(key)
-        if not data:
-            return False
+        revoked = False
 
-        model = APIKeyModel(**data)
-        model.enabled = False
-        self._keys[key] = model.model_dump()
-        self.store.save(self._keys)
-        return True
+        def disable(keys: dict[str, Any]) -> None:
+            nonlocal revoked
+            data = keys.get(key)
+            if not data:
+                return
+
+            model = APIKeyModel(**data)
+            model.enabled = False
+            keys[key] = model.model_dump()
+            revoked = True
+
+        state = self.store.update(disable)
+        if state is not None:
+            self._keys = state
+        return revoked
 
     def delete_key(self, key: str) -> bool:
-        """Remove key from store."""
-        if key in self._keys:
-            del self._keys[key]
-            self.store.save(self._keys)
-            return True
-        return False
+        """Remove key from the current on-disk state."""
+        removed = False
+
+        def remove(keys: dict[str, Any]) -> None:
+            nonlocal removed
+            if key in keys:
+                del keys[key]
+                removed = True
+
+        state = self.store.update(remove)
+        if state is not None:
+            self._keys = state
+        return removed
 
     def list_keys(self) -> list[dict[str, Any]]:
         """Return masked keys with metadata."""
