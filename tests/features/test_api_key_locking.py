@@ -84,6 +84,50 @@ def test_concurrent_create_key_does_not_lose_keys(keys_file):
         assert fresh.verify(key) is not None
 
 
+def test_delete_key_does_not_resurrect_a_revoked_key(keys_file):
+    """A delete holding a pre-revoke snapshot must not restore the revoked key."""
+    auth = APIKeyAuth(keys_file)
+    revoked = auth.create_key(user_id="user_1", label="revoked")
+    doomed = auth.create_key(user_id="user_1", label="doomed")
+
+    stale = APIKeyAuth(keys_file)
+    assert auth.revoke(revoked) is True
+
+    assert stale.delete_key(doomed) is True
+
+    fresh = APIKeyAuth(keys_file)
+    assert fresh.verify(revoked) is None
+    assert fresh.verify(doomed) is None
+
+
+def test_delete_key_removes_a_key_created_by_another_instance(keys_file):
+    """A delete must remove the target from the current state, not a stale snapshot."""
+    auth = APIKeyAuth(keys_file)
+    survivor = auth.create_key(user_id="user_1", label="survivor")
+
+    stale = APIKeyAuth(keys_file)
+    doomed = auth.create_key(user_id="user_1", label="doomed")
+
+    assert stale.delete_key(doomed) is True
+
+    fresh = APIKeyAuth(keys_file)
+    assert fresh.verify(doomed) is None
+    assert fresh.verify(survivor) is not None
+
+
+def test_create_key_refuses_an_unreadable_store(keys_file):
+    """An unreadable store must fail loudly instead of handing out an unpersisted key."""
+    auth = APIKeyAuth(keys_file)
+    keys_file.write_bytes(b"not encrypted, not json")
+    before = keys_file.read_bytes()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        auth.create_key(user_id="user_1", label="unpersisted")
+
+    assert str(keys_file) in str(excinfo.value)
+    assert keys_file.read_bytes() == before
+
+
 def test_update_does_not_save_after_failed_load(keys_file):
     """An unreadable store must be left untouched, never overwritten with {}."""
     store = EncryptedStore(keys_file, APIKeyModel)
