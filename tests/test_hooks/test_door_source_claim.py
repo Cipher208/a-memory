@@ -166,3 +166,45 @@ async def test_an_attributed_row_is_never_restamped(db: Any) -> None:
     rows = _journal()
     assert len(rows) == 1, rows
     assert rows[0][2] == 99, f"the existing provenance was overwritten: {rows}"
+
+
+async def test_a_third_delivery_of_the_same_source_message_is_silent(db: Any) -> None:
+    """A repeat delivery is a loser too: it writes no refusal and keeps the claim.
+
+    The plugin push captures the row without a source id; the daemon tail then
+    claims it for source 5. A THIRD delivery of that same source message finds
+    the row already stamped — the old `source_msg_id IS NULL` guard read that as
+    "someone else owns it" and wrote a refusal for a message already accounted
+    for. A row may accept its own id again.
+    """
+    from hooks.external import auto_save_text
+
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-third", text=TEXT, event="new_message", ts=TS)
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-third", text=TEXT, event="new_message", source_msg_id=5, ts=TS)
+    result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-third", text=TEXT, event="new_message", source_msg_id=5, ts=TS)
+
+    rows = _journal()
+    assert len(rows) == 1, f"a repeat delivery wrote a second row: {rows}"
+    assert rows[0][2] == 5, f"the row lost its source id: {rows}"
+    assert _rejections() == [], "a repeat delivery wrote a refusal for a message already accounted for"
+    assert result["skipped"] == "duplicate_l0_block", result
+
+
+async def test_a_different_source_id_is_never_stamped_over_the_owner(db: Any) -> None:
+    """The claim accepts its own id, not any id.
+
+    A row claimed by source A is offered again with source B and the same ts:
+    the widened predicate must still refuse, the row must keep A, and the
+    refusal path must be taken.
+    """
+    from hooks.external import auto_save_text
+
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-other", text=TEXT, event="new_message", ts=TS)
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-other", text=TEXT, event="new_message", source_msg_id=11, ts=TS)
+    result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-other", text=TEXT, event="new_message", source_msg_id=12, ts=TS)
+
+    assert result["skipped"] == "duplicate_l0_block", result
+    assert len(_rejections()) == 1, "a different source id must still be refused, and recorded"
+    rows = _journal()
+    assert len(rows) == 1, rows
+    assert rows[0][2] == 11, f"a different source id stole the row's provenance: {rows}"
