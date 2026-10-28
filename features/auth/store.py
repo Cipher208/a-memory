@@ -10,8 +10,9 @@ from typing import Any, cast, TYPE_CHECKING
 from features.secrets import decrypt_json, encrypt_json
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel
+    from collections.abc import Callable
 
+    from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
@@ -41,8 +42,8 @@ class EncryptedStore:
         with contextlib.suppress(OSError):
             os.chmod(self.file_path, 0o600)
 
-    def load(self) -> dict[str, Any]:
-        """Load data, decrypting it. Supports rotation from legacy JSON."""
+    def _load(self) -> dict[str, Any] | None:
+        """Load data; None means an existing file could not be read or decoded."""
         if not self.file_path.exists():
             return {}
 
@@ -51,7 +52,7 @@ class EncryptedStore:
                 blob = f.read()
         except Exception as e:
             logger.warning("Failed to read %s: %s", self.file_path, e)
-            return {}
+            return None
 
         # 1. Try decrypt
         with contextlib.suppress(Exception):
@@ -66,4 +67,39 @@ class EncryptedStore:
             return legacy_data
         except Exception:
             logger.exception("Failed to load %s as encrypted or legacy JSON", self.file_path)
-            return {}
+            return None
+
+    def load(self) -> dict[str, Any]:
+        """Load data, decrypting it. Supports rotation from legacy JSON."""
+        return self._load() or {}
+
+    def update(self, mutator: Callable[[dict[str, Any]], object]) -> dict[str, Any] | None:
+        """Read-modify-write the current on-disk state under an exclusive lock.
+
+        The mutator receives a fresh copy of the current state and mutates it in
+        place. Returns the saved state, or None when an existing file could not
+        be loaded — nothing is written in that case, so a failed read never
+        replaces the store with an empty dict.
+
+        fcntl is POSIX-only and is imported locally so Windows keeps importing
+        this module. Without it the lock is skipped: the fresh read right before
+        the save narrows the race window but does not close it.
+        """
+        fcntl_module: Any = None
+        with contextlib.suppress(ImportError):
+            import fcntl as fcntl_module
+
+        lock_path = self.file_path.with_name(self.file_path.name + ".lock")
+        with lock_path.open("a+b") as lock_file:
+            if fcntl_module is not None:
+                fcntl_module.flock(lock_file.fileno(), fcntl_module.LOCK_EX)
+            try:
+                data = self._load()
+                if data is None:
+                    return None
+                mutator(data)
+                self.save(data)
+                return data
+            finally:
+                if fcntl_module is not None:
+                    fcntl_module.flock(lock_file.fileno(), fcntl_module.LOCK_UN)

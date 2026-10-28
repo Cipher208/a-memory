@@ -71,10 +71,7 @@ def test_concurrent_create_key_does_not_lose_keys(keys_file):
         for index in range(keys_per_thread):
             created.append(auth.create_key(user_id="user", label=f"k{index}"))
 
-    threads = [
-        threading.Thread(target=worker, args=(instance,))
-        for instance in instances
-    ]
+    threads = [threading.Thread(target=worker, args=(instance,)) for instance in instances]
     for thread in threads:
         thread.start()
     for thread in threads:
