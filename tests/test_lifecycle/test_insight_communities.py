@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from itertools import pairwise
+from itertools import combinations, pairwise
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -45,6 +45,21 @@ async def _theme(graph: Any, filler: str, distinct: str | list[str], count: int)
     for left, right in pairwise(ids):
         await graph.add_edge(left, right, "mentions")
     await graph.add_edge(ids[0], ids[-1], "mentions")
+    return ids
+
+
+async def _profile_theme(graph: Any, marker: str, words: list[str], counts: list[int]) -> list[int]:
+    """Кластер с заданным профилем частот: marker — во всех узлах, words[i] — в counts[i].
+
+    Текст содержит ТОЛЬКО заданные слова: посторонние токены сдвинули бы и
+    частотный, и различительный рейтинг, и тест перестал бы различать их.
+    """
+    ids = []
+    for i in range(counts[0]):
+        present = [marker] + [w for w, c in zip(words, counts, strict=True) if i < c]
+        ids.append(await graph.add_node("gu", " ".join(present), "fact"))
+    for left, right in combinations(ids, 2):
+        await graph.add_edge(left, right, "mentions")
     return ids
 
 
@@ -104,13 +119,20 @@ async def test_insight_of_and_nonpositive_edges_do_not_fuse_communities(graph: A
 
 
 async def test_tokens_are_distinguishing_not_frequent(graph: Any, no_miners: None) -> None:
-    """[S6(2)] Общий токен не попадает в топ-3; различительные — попадают."""
+    """[S6(2)] Общий токен не попадает в топ-3; различительные — попадают.
+
+    Профили частот у тем разные намеренно: при частотном рейтинге подписи
+    расходятся, иначе in-pass dedup оставил бы один insight, и проверка маркера
+    не выполнилась бы вовсе (len(contents) упал бы раньше).
+    """
     from rag.edm import tokens
 
     a_words = ["уникальноесловоальфа", "уникальноесловобета", "уникальноесловогамма", "уникальноесловодельта"]
     b_words = ["уникальноесловое", "уникальноесловожэ", "уникальноесловозий", "уникальноесловоий"]
-    await _theme(graph, "общиймаркер", a_words, 8)
-    await _theme(graph, "общиймаркер", b_words, 8)
+    a = await _profile_theme(graph, "общиймаркер", a_words, [8, 6, 4, 2])
+    b = await _profile_theme(graph, "общиймаркер", b_words, [8, 7, 3, 1])
+    # Слабый мост: компонента одна — расщепить её обязан Louvain, не BFS.
+    await graph.add_edge(a[-1], b[0], "mentions")
     contents = await _pass()
     assert len(contents) == 2, contents
     # Общий маркер встречается в 100% узлов (ratio=1) и в каждом сообществе
