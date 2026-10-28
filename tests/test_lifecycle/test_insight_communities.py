@@ -82,14 +82,13 @@ async def test_tokens_are_distinguishing_not_frequent(graph: Any, no_miners: Non
     assert joined.count("общиймаркер") <= 3
 
 
-async def test_insight_edges_do_not_influence_decomposition(graph: Any, no_miners: None) -> None:
-    """Повторный проход: предыдущие insight_of не сшивают сообщества."""
+async def test_second_pass_recomputes_communities_without_history(graph: Any, no_miners: None) -> None:
+    """Повторный проход пересчитывает текущие сообщества, а не историю снимка."""
     await _theme(graph, "темаодин", "словоодин", 6)
     await _theme(graph, "темадва", "словодва", 6)
     first = await _pass()
     assert len(first) == 2, first
-    # второй проход: снимок удаляет старые узлы, но вход тоже должен быть чист —
-    # если исключить фильтр relation != 'insight_of', хаб снова сшивает всё в 1
+    # второй проход заменяет снимок и снова получает две тематические группы.
     second = await _pass()
     assert len(second) == 2, second
     assert any("словоодин" in c for c in second)
