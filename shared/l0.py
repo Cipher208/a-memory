@@ -113,26 +113,34 @@ async def find_block(layer: str, user_id: str, text: str) -> int | None:
     return None
 
 
-async def stamp_source_msg_id(rid: int, source_msg_id: int) -> bool:
-    """Record the source row a captured block came from. Never raises.
+async def claim_source_msg_id(l0_id: int, source_msg_id: int, ts: float, tolerance_s: float = 1.0) -> bool:
+    """Claim a captured row for the source message that produced it. Never raises.
 
     F96: two paths capture one source message — the plugin push and the daemon
     tail — and the plugin, which usually wins the race, cannot name the source
-    row. This fills that hole in the winning row. It is provenance, not dedup:
-    the WHERE clause keeps an id the row already carries, and a row that is
-    already stamped is left alone. Two different source rows with identical
-    text stay two blocks; only the one whose rid was found is stamped.
+    row. This fills that hole in the winning row. It is provenance, not dedup,
+    and the WHERE clause is what keeps the two apart:
+
+    * `source_msg_id IS NULL` — a row that already names a source belongs to
+      that message; a later delivery must not overwrite it.
+    * `ABS(ts - ?) <= tolerance_s` — identical text is not identical identity.
+      A different message with the same words an hour later is another row, and
+      the timestamp the capture used is what tells the two apart. The tolerance
+      absorbs the small drift between the two paths delivering one message.
+
+    Returns True only when a row was updated: the caller treats True as "this is
+    the same source message, skip without a refusal".
     """
     try:
         rowcount = await _dispatch().write(
             DB_NAME,
-            "UPDATE l0_journal SET source_msg_id=? WHERE id=? AND source_msg_id IS NULL",
-            (source_msg_id, rid),
+            "UPDATE l0_journal SET source_msg_id=? WHERE id=? AND source_msg_id IS NULL AND ABS(ts - ?) <= ?",
+            (source_msg_id, l0_id, ts, tolerance_s),
         )
     except Exception as exc:
         # Best-effort, like the rest of the L0 journal writes: losing the
         # provenance must not break the delivery that already happened.
-        logger.debug("l0_journal source stamp failed: %s", exc)
+        logger.debug("l0_journal source claim failed: %s", exc)
         return False
     return rowcount == 1
 
