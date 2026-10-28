@@ -47,7 +47,7 @@ async def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[A
 
 
 @pytest.fixture()
-def door() -> "Iterator[None]":
+def door() -> Iterator[None]:
     """Register the production `new_message` handler on the global registry.
 
     The tests below drive `dispatch_event` — the real door the plugin push and
@@ -64,6 +64,7 @@ def door() -> "Iterator[None]":
         yield
     finally:
         hook_registry._hooks = saved
+
 
 class _FakeL3:
     def __init__(self) -> None:
@@ -196,7 +197,9 @@ async def test_an_attributed_row_is_never_restamped(db: Any) -> None:
 
     The claim's WHERE clause is the guard: `source_msg_id IS NULL`. An
     attributed row belongs to the message that won it, and a later delivery must
-    take the refusal path rather than overwrite it.
+    not overwrite it. Same text, same ts, a different source id: F96b's accepted
+    consequence is that this genuine repeat is still refused (not stored) but no
+    longer recorded — the row keeps 99 and nothing is written to the log.
     """
     from hooks.external import auto_save_text
 
@@ -204,7 +207,7 @@ async def test_an_attributed_row_is_never_restamped(db: Any) -> None:
     result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-attributed", text=TEXT, event="new_message", source_msg_id=100, ts=TS)
 
     assert result["skipped"] == "duplicate_l0_block", result
-    assert len(_rejections()) == 1
+    assert _rejections() == [], "a same-window repeat is refused silently (F96b accepted consequence)"
     rows = _journal()
     assert len(rows) == 1, rows
     assert rows[0][2] == 99, f"the existing provenance was overwritten: {rows}"
@@ -279,7 +282,9 @@ async def test_a_capture_never_precedes_its_message(db: Any) -> None:
     A message written 5s AFTER the capture is impossible in reality (the plugin
     only sees messages that already exist), so it is not the same message and
     must not be claimed. This pins the causal half of the window — without it a
-    wide symmetric window would swallow the case.
+    wide symmetric window would swallow the case. F96b's symmetric proximity
+    check only decides whether the refusal is LOGGED, so this case is refused
+    silently while the row keeps its unattributed state.
     """
     from hooks.external import auto_save_text
 
@@ -287,7 +292,7 @@ async def test_a_capture_never_precedes_its_message(db: Any) -> None:
     result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-precedes", text=TEXT, event="new_message", source_msg_id=7, ts=TS + 5)
 
     assert result["skipped"] == "duplicate_l0_block", result
-    assert len(_rejections()) == 1, "a message written after the capture must be refused, and recorded"
+    assert _rejections() == [], "a same-window refusal is silent (F96b accepted consequence)"
     rows = _journal()
     assert len(rows) == 1, rows
     assert rows[0][2] is None, f"an impossible message claimed the row: {rows}"
@@ -297,8 +302,9 @@ async def test_a_different_source_id_is_never_stamped_over_the_owner(db: Any) ->
     """The claim accepts its own id, not any id.
 
     A row claimed by source A is offered again with source B and the same ts:
-    the widened predicate must still refuse, the row must keep A, and the
-    refusal path must be taken.
+    the widened predicate must still refuse and the row must keep A. The refusal
+    itself is no longer recorded — F96b treats a same-window repeat as the
+    message already stored, and only the log line is gone.
     """
     from hooks.external import auto_save_text
 
@@ -307,16 +313,18 @@ async def test_a_different_source_id_is_never_stamped_over_the_owner(db: Any) ->
     result = await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-other", text=TEXT, event="new_message", source_msg_id=12, ts=TS)
 
     assert result["skipped"] == "duplicate_l0_block", result
-    assert len(_rejections()) == 1, "a different source id must still be refused, and recorded"
+    assert _rejections() == [], "a same-window repeat is refused silently (F96b accepted consequence)"
     rows = _journal()
     assert len(rows) == 1, rows
     assert rows[0][2] == 11, f"a different source id stole the row's provenance: {rows}"
+
 
 async def _deliver(user_id: str, text: str, **payload: Any) -> dict[str, Any]:
     """Deliver one message through the REAL door (`dispatch_event` + `UserHooks`)."""
     from hooks.external import dispatch_event
 
     return await dispatch_event("new_message", "user", user_id, {"text": text, **payload}, _FakeMem(), _FakeGraph())
+
 
 async def test_the_plugin_losing_without_an_id_writes_no_rejection(db: Any, door: None) -> None:
     """The live case: the loser cannot name the source row, only its timestamp.
@@ -342,6 +350,7 @@ async def test_the_plugin_losing_without_an_id_writes_no_rejection(db: Any, door
     assert _rejections() == [], "the plugin losing without an id wrote a rejection row"
     assert result["results"][0]["auto_save"]["skipped"] == "duplicate_l0_block", result
 
+
 async def test_a_repeat_far_outside_the_window_is_still_logged(db: Any, door: None) -> None:
     """A genuine repeat keeps its refusal: proximity is what makes it the same message.
 
@@ -358,6 +367,7 @@ async def test_a_repeat_far_outside_the_window_is_still_logged(db: Any, door: No
     rows = _journal()
     assert len(rows) == 1, rows
     assert rows[0][2] == 159292, f"a later message stole the row's provenance: {rows}"
+
 
 async def test_a_loser_without_a_timestamp_still_refuses(db: Any, door: None) -> None:
     """No id and no timestamp: the two deliveries cannot be told apart.
