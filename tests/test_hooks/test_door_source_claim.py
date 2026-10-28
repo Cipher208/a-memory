@@ -149,6 +149,29 @@ async def test_the_same_text_an_hour_later_is_still_a_duplicate(db: Any) -> None
     assert rows[0][2] is None, f"a different message stole the first row's provenance: {rows}"
 
 
+async def test_an_unstamped_row_is_not_claimed_by_a_later_message_with_the_same_text(db: Any) -> None:
+    """The id guard alone cannot tell one source row from another.
+
+    The plugin push captures the row and cannot name its source, so the row is
+    born unstamped. An hour later a DIFFERENT source message carries the same
+    words: `source_msg_id IS NULL` opens the id guard, and only the capture
+    timestamp tells the two apart. Without `ABS(ts - ?) <= ?` the later message
+    walks away with another message's provenance.
+    """
+    from hooks.external import auto_save_text
+
+    await auto_save_text(_FakeMem(), _FakeGraph(), user_id="f96-unstamped-later", text=TEXT, event="new_message", ts=TS)
+    result = await auto_save_text(
+        _FakeMem(), _FakeGraph(), user_id="f96-unstamped-later", text=TEXT, event="new_message", source_msg_id=6, ts=TS + 3600
+    )
+
+    rows = _journal()
+    assert len(rows) == 1, f"a later message with the same text wrote a second row: {rows}"
+    assert rows[0][2] is None, f"a later message claimed an unstamped row: {rows}"
+    assert [r[0] for r in _rejections()] == ["duplicate_l0_block"], f"the refusal path was not taken exactly once: {_rejections()}"
+    assert result["skipped"] == "duplicate_l0_block", result
+
+
 async def test_an_attributed_row_is_never_restamped(db: Any) -> None:
     """A row that already names its source keeps that name.
 
