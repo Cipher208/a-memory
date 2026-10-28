@@ -76,7 +76,13 @@ async def test_a_second_pass_replaces_the_first(graph, no_miners):
     first_id = first[0]
 
     d = await graph.add_node("gu", "очередь задач растёт вечером", "fact")
-    await graph.add_edge(c, d, "mentions")
+    # Grown toward the MIDDLE of the chain: appending to the tail would leave a
+    # bare 4-path, which Louvain (S3) cuts into two pairs — both below the
+    # min-size gate, so nothing qualifies and this test could not observe the
+    # snapshot invariant it exists for. Star growth keeps the grown component
+    # ONE community (assertions below are unchanged: one insight, new id,
+    # coverage of {a, b, c, d}).
+    await graph.add_edge(b, d, "mentions")
 
     await _run_pass()
 
