@@ -24,16 +24,25 @@ from shared.path_safety import safe_resolve
 logger = logging.getLogger(__name__)
 
 
-def _has_escaping_symlink(root: Path) -> bool:
-    """Return True if a symlink under root resolves outside it. os.walk does not follow links."""
-    base = root.resolve()
+def _has_escaping_symlink(root: Path, base: Path) -> bool:
+    """Return True if `root` or a link under it resolves outside `base`, or cannot be resolved.
+
+    `base` is the backup the entry came from, never `root` itself: anchoring on the
+    entry would make a symlinked parent (`wiki -> /outside`, manifest `wiki/user/`)
+    look self-contained, and the outside tree would be walked as if it were the backup.
+    """
+    base_resolved = base.resolve()
+    try:
+        root.resolve().relative_to(base_resolved)
+    except (ValueError, OSError, RuntimeError):
+        return True
     for current, dirs, files in os.walk(root):
         for name in dirs + files:
             candidate = Path(current) / name
             if candidate.is_symlink():
                 try:
-                    candidate.resolve().relative_to(base)
-                except ValueError:
+                    candidate.resolve().relative_to(base_resolved)
+                except (ValueError, OSError, RuntimeError):
                     return True
     return False
 
@@ -787,10 +796,14 @@ class BackupCron:
         if db_file.endswith("/"):
             src_wiki = src / db_file
             if src_wiki.exists() and not src_wiki.is_symlink():
-                if _has_escaping_symlink(src_wiki):
+                if _has_escaping_symlink(src_wiki, src):
                     logger.error("Refusing to restore wiki entry with escaping symlink: %s", db_file)
                     return
-                shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True)
+                # `symlinks=True`: every link that could leave the backup was refused
+                # above, so what remains points inside it. Copying it as a link keeps
+                # the tree's shape and stops a broken in-tree link from raising
+                # shutil.Error out of restore().
+                shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True, symlinks=True)
                 restored.append(db_file)
             return
 

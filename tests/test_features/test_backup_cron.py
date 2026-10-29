@@ -788,3 +788,52 @@ def test_restore_still_copies_a_wiki_directory(tmp_path) -> None:
 
     assert result.get("restored") == ["wiki/"], result
     assert (tmp_path / "wiki" / "user" / "page.md").read_text(encoding="utf-8") == "# page"
+
+
+def test_restore_refuses_a_wiki_entry_reached_through_a_symlinked_parent(tmp_path) -> None:
+    """Kills: anchoring the symlink scan on the entry instead of the backup.
+
+    `wiki -> <outside>` with manifest `wiki/user/` makes the entry root resolve
+    outside the backup, so a scan anchored on the entry walks the outside tree,
+    finds no escaping link and lets the copy through.
+    """
+    outside = tmp_path / "outside"
+    (outside / "user").mkdir(parents=True)
+    (outside / "user" / "secret.txt").write_text("SECRET", encoding="utf-8")
+
+    backup = tmp_path / "backups" / "crafted"
+    backup.mkdir(parents=True)
+    (backup / "wiki").symlink_to(outside, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/user/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"a symlinked parent let the entry through: {result}"
+    assert not (tmp_path / "wiki" / "user" / "secret.txt").exists(), "content copied from outside the backup"
+
+
+def test_restore_survives_a_broken_link_inside_the_backup(tmp_path) -> None:
+    """Kills: copytree dereferencing an in-tree link and raising shutil.Error."""
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "wiki" / "user" / "page.md").write_text("page", encoding="utf-8")
+    (backup / "wiki" / "user" / "dead").symlink_to("./missing")
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == ["wiki/"], f"a broken in-tree link broke the restore: {result}"
+    assert (tmp_path / "wiki" / "user" / "page.md").read_text(encoding="utf-8") == "page"
+
+
+def test_restore_survives_a_symlink_loop_inside_the_backup(tmp_path) -> None:
+    """Kills: an unresolvable link escaping the scan and reaching copytree."""
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "wiki" / "user" / "a").symlink_to("b")
+    (backup / "wiki" / "user" / "b").symlink_to("a")
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert "error" not in result or result.get("restored") == [], f"a link loop broke the restore: {result}"
