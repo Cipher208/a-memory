@@ -1,6 +1,11 @@
 """Wire-тест: tier_l0 должен стоять в ночной цепочке backup_cron (S6, живой вызов)."""
 
+import json
 from pathlib import Path
+
+import pytest
+
+from features.backup_cron import BackupCron
 
 
 def test_tier_l0_wired_into_nightly_hooks() -> None:
@@ -677,3 +682,51 @@ def test_the_nightly_prune_uses_the_configured_limits(tmp_path, monkeypatch) -> 
     assert seen, "ночная чистка отказов не вызвалась — тест ничего не проверил"
     assert seen[-1]["retention_days"] == 7, f"ретенция не из config: {seen[-1]}"
     assert seen[-1]["max_rows"] == 11, f"кап не из config: {seen[-1]}"
+
+
+# ── F103: restore() must not concatenate an unsanitised backup_name ──
+
+
+@pytest.mark.parametrize("name", ["../../outside", "../../etc", "../", "/etc"])
+def test_restore_rejects_a_traversing_backup_name(tmp_path, name) -> None:
+    """Kills: `src = self.backup_dir / backup_name` without safe_resolve.
+
+    Red before: "../../outside" resolves to a decoy dir whose manifest is read
+    and whose memory.db is copied into base_dir.
+    """
+    decoy = tmp_path.parent / "outside"
+    decoy.mkdir(exist_ok=True)
+    (decoy / "manifest.json").write_text(json.dumps({"files": ["memory.db"]}), encoding="utf-8")
+    (decoy / "memory.db").write_text("pwned", encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore(name)
+
+    assert "error" in result, f"traversing name accepted: {result}"
+    assert not (tmp_path / "memory.db").exists(), "file copied out of a traversing backup name"
+
+
+def test_restore_rejects_a_manifest_entry_that_escapes(tmp_path) -> None:
+    """Kills: probing/using dest_path for a manifest entry before safe_resolve."""
+    backup = tmp_path / "backups" / "crafted"
+    backup.mkdir(parents=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["../../etc/crontab"]}), encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="escapes base directory"):
+        cron.restore("crafted")
+    assert not (tmp_path / "memory.db").exists()
+
+
+def test_restore_still_works_for_a_valid_backup(tmp_path) -> None:
+    """The guard must not block the legitimate path."""
+    backup = tmp_path / "backups" / "good"
+    backup.mkdir(parents=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["memory.db"]}), encoding="utf-8")
+    (backup / "memory.db").write_text("payload", encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore("good")
+
+    assert result.get("restored") == ["memory.db"], result
+    assert (tmp_path / "memory.db").read_text(encoding="utf-8") == "payload"

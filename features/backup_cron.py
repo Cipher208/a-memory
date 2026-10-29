@@ -739,7 +739,10 @@ class BackupCron:
         return self._do_backup()
 
     def restore(self, backup_name: str) -> dict[str, Any]:
-        src = self.backup_dir / backup_name
+        try:
+            src = safe_resolve(self.backup_dir, backup_name)
+        except ValueError as exc:
+            return {"error": str(exc)}
         if not src.exists() or src.is_symlink():
             return {"error": f"Backup not found or invalid: {backup_name}"}
 
@@ -751,6 +754,7 @@ class BackupCron:
 
         restored: list[str] = []
         for db_file in manifest.get("files", []):
+            safe_resolve(self.base_dir, db_file)  # raises ValueError if traversal
             dest_path = self.base_dir / db_file
             if dest_path.exists() and dest_path.is_symlink():
                 logger.error("Refusing to restore over symlink: %s", dest_path)
