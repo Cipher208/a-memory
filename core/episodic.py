@@ -182,27 +182,33 @@ class EpisodicMemory:
 
         from shared.archived_memories import ArchivedMemories
 
-        am = ArchivedMemories()
-        archived_count = 0
-        for row in rows:
-            await am.archive(
-                user_id=user_id,
-                content=str(row["summary"]),
-                memory_type="episode",
-                importance=float(row["emotional_weight"]),
-                original_id=int(row["episode_id"]),
-                reason=f"inactive_{days}d",
-            )
-            archived_count += 1
-
         ids = [int(row["episode_id"]) for row in rows]
-        if not ids:
-            return archived_count
-
         placeholders = ",".join(["?"] * len(ids))
         sql = f"DELETE FROM episodes WHERE episode_id IN ({placeholders})"
-        await self._dispatch.write(DB_NAME, sql, tuple(ids))
-        return archived_count
+
+        # The bin must live in the caller's base, not the global one, and its
+        # table is brought up outside the transaction: DDL commits implicitly.
+        am = ArchivedMemories(cm=self._cm)
+        await am.ensure()
+
+        async def _run(conn: Any) -> int:
+            archived_count = 0
+            for row in rows:
+                await am.archive(
+                    user_id=user_id,
+                    content=str(row["summary"]),
+                    memory_type="episode",
+                    importance=float(row["emotional_weight"]),
+                    original_id=int(row["episode_id"]),
+                    reason=f"inactive_{days}d",
+                )
+                archived_count += 1
+
+            cur = await conn.execute(sql, tuple(ids))
+            await cur.close()
+            return archived_count
+
+        return int(await self._dispatch.atomic(DB_NAME, _run))
 
     async def count(self, user_id: str) -> int:
         """Count episodes for a user (fast COUNT query)."""
