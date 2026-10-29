@@ -30,15 +30,15 @@ async def cm(tmp_path):
     return m
 
 
-async def _insert(cm, user_id, key, value, imp, kind, days_ago, expires_in=None):
+async def _insert(cm, user_id, key, value, imp, kind, days_ago, expires_in=None, layer="user"):
     conn = await cm.get("memory.db")
     now = time.time()
     await conn.execute(
         """INSERT INTO core_memory
-           (user_id, "key", value, importance, memory_kind,
+           (layer, user_id, "key", value, importance, memory_kind,
             expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (user_id, key, value, imp, kind, (now + expires_in * 86400) if expires_in else None, now - days_ago * 86400, now - days_ago * 86400),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (layer, user_id, key, value, imp, kind, (now + expires_in * 86400) if expires_in else None, now - days_ago * 86400, now - days_ago * 86400),
     )
     await conn.commit()
 
@@ -221,3 +221,80 @@ async def test_compress_and_archive_survive_stale_read_snapshot_on_shared_conn(c
         assert archived >= 1, "archive_old_entries must not be wedged by a stale shared snapshot"
     finally:
         await cur.close()
+
+
+@pytest.mark.asyncio
+async def test_archive_expired_commitment_is_never_archived(cm):
+    """Kills: the `expired` branch selecting `commitment` despite never_archive.
+
+    The expired branch hardcoded `memory_kind IN ('goal','todo','commitment')`
+    while the policy says commitment.never_archive is True, so an expired
+    commitment was archived — 13 such rows sat in the mimocode bin with reason
+    `expired`. The protected list must come from the policy, not a second list.
+    """
+    await _insert(cm, "u", "c", "обещал", 0.5, "commitment", days_ago=1, expires_in=-1)
+    await _insert(cm, "u", "g", "цель", 0.5, "goal", days_ago=1, expires_in=-1)
+    await _insert(cm, "u", "t", "дело", 0.5, "todo", days_ago=1, expires_in=-1)
+    fs = ForgettingSystem(cm=cm)
+    n = await fs.archive_old_entries()
+    assert n == 2, "goal and todo expire into the archive, commitment does not"
+    conn = await cm.get("memory.db")
+    left = {r["key"] for r in await (await conn.execute('SELECT "key" FROM core_memory')).fetchall()}
+    assert left == {"c"}, f"commitment must survive the archive, left={left}"
+    kinds = {r["memory_type"] for r in await (await conn.execute("SELECT memory_type FROM archived_memories")).fetchall()}
+    assert "commitment" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_archive_old_entries_scopes_to_owner(cm):
+    """Kills: dropping the `AND user_id=?` predicate from either select."""
+    await _insert(cm, "u1", "mine", "v", 0.5, "goal", days_ago=1, expires_in=-1)
+    await _insert(cm, "u2", "theirs", "v", 0.5, "goal", days_ago=1, expires_in=-1)
+    fs = ForgettingSystem(cm=cm)
+    n = await fs.archive_old_entries(user_id="u1")
+    assert n == 1, "only u1's expired row may be archived"
+    conn = await cm.get("memory.db")
+    left = {r["key"] for r in await (await conn.execute('SELECT "key" FROM core_memory')).fetchall()}
+    assert left == {"theirs"}, f"another owner's row was taken, left={left}"
+
+
+@pytest.mark.asyncio
+async def test_archive_old_entries_scopes_to_layer(cm):
+    """Kills: dropping the `AND layer=?` predicate from either select."""
+    await _insert(cm, "u1", "user_row", "v", 0.5, "goal", days_ago=1, expires_in=-1, layer="user")
+    await _insert(cm, "u1", "agent_row", "v", 0.5, "goal", days_ago=1, expires_in=-1, layer="agent")
+    fs = ForgettingSystem(cm=cm)
+    n = await fs.archive_old_entries(user_id="u1", layer="user")
+    assert n == 1, "a layer-scoped archive must take only that layer"
+    conn = await cm.get("memory.db")
+    left = {r["key"] for r in await (await conn.execute('SELECT "key" FROM core_memory')).fetchall()}
+    assert left == {"agent_row"}, f"the agent layer was raided by a user-layer archive, left={left}"
+
+
+@pytest.mark.asyncio
+async def test_archivable_entries_preview_is_read_only(cm):
+    """Kills: a preview that writes, or that ignores the owner scope."""
+    await _insert(cm, "u1", "mine", "v", 0.5, "goal", days_ago=1, expires_in=-1)
+    await _insert(cm, "u2", "theirs1", "v", 0.5, "goal", days_ago=1, expires_in=-1)
+    await _insert(cm, "u2", "theirs2", "v", 0.1, "fact", days_ago=400)
+    fs = ForgettingSystem(cm=cm)
+    rows = await fs.archivable_entries(user_id="u2")
+    assert {r["key"] for r in rows} == {"theirs1", "theirs2"}, f"preview scoped wrong: {[r['key'] for r in rows]}"
+    conn = await cm.get("memory.db")
+    total = await (await conn.execute("SELECT COUNT(*) AS n FROM core_memory")).fetchone()
+    assert total["n"] == 3, "a preview must not delete anything"
+
+
+@pytest.mark.asyncio
+async def test_archive_max_rows_takes_expired_first(cm):
+    """Kills: no LIMIT (all four go), and a cap that keeps old rows over expired."""
+    await _insert(cm, "u", "old1", "v", 0.05, "fact", days_ago=400)
+    await _insert(cm, "u", "old2", "v", 0.05, "fact", days_ago=400)
+    await _insert(cm, "u", "exp1", "v", 0.5, "goal", days_ago=1, expires_in=-1)
+    await _insert(cm, "u", "exp2", "v", 0.5, "todo", days_ago=1, expires_in=-1)
+    fs = ForgettingSystem(cm=cm)
+    n = await fs.archive_old_entries(user_id="u", max_rows=2)
+    assert n == 2, "max_rows must bound the batch"
+    conn = await cm.get("memory.db")
+    left = {r["key"] for r in await (await conn.execute('SELECT "key" FROM core_memory')).fetchall()}
+    assert left == {"old1", "old2"}, f"expired rows must be taken first, left={left}"

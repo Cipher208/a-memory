@@ -67,3 +67,55 @@ async def test_sweep_consolidates_staging_into_l4(cm):
     l4 = CoreMemory(cm=cm, layer="user")
     hits = await l4.search("su", "wal mode", limit=5)
     assert any("wal mode" in h["value"] for h in hits)
+
+
+@pytest.mark.asyncio
+async def test_clear_staging_leaves_other_layer_intact(cm):
+    """Kills: clear_staging deleting both layers for the user.
+
+    `lifespan.py` consolidates per layer, then calls `clear_staging(uid)`; with no
+    `layer` in the WHERE the first layer to run wiped the other layer's
+    un-consolidated staging. Irreversible.
+    """
+    user_buf = DreamBuffer(cm=cm, layer="user")
+    agent_buf = DreamBuffer(cm=cm, layer="agent")
+    await user_buf.ensure()
+    await user_buf.add("u", session_id="dream", content="user staged")
+    await agent_buf.add("u", session_id="dream", content="agent staged")
+
+    await user_buf.clear_staging("u")
+
+    assert await user_buf.get_staging("u") == [], "the user layer must be drained"
+    assert [i["content"] for i in await agent_buf.get_staging("u")] == ["agent staged"], "agent staging was wiped by the user-layer clear"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_is_layer_scoped(cm):
+    """Kills: cleanup_old deleting by age, or capping, across layers."""
+    await DreamBuffer(cm=cm, layer="user").ensure()
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO staging_memories (layer, user_id, session_id, content, created_at)"
+        " VALUES ('agent', 'u', 's', 'agent old', datetime('now', '-48 hours'))"
+    )
+    await conn.execute(
+        "INSERT INTO staging_memories (layer, user_id, session_id, content, created_at)"
+        " VALUES ('user', 'u', 's', 'user old', datetime('now', '-48 hours'))"
+    )
+    await conn.commit()
+
+    res = await DreamBuffer(cm=cm, layer="user").cleanup_old(max_age_hours=24)
+    assert res["by_age"] == 1, f"the user-layer age delete must take its own row, got {res}"
+    left = [r["content"] for r in await (await conn.execute("SELECT content FROM staging_memories")).fetchall()]
+    assert left == ["agent old"], f"cleanup_old reached into the agent layer, left={left}"
+
+    # Cap branch: 3 fresh agent rows, no user rows. A user-layer cap must not trim them.
+    for i in range(3):
+        await conn.execute(
+            "INSERT INTO staging_memories (layer, user_id, session_id, content) VALUES ('agent', 'u', 's', ?)",
+            (f"agent fresh {i}",),
+        )
+    await conn.commit()
+    res = await DreamBuffer(cm=cm, layer="user").cleanup_old(max_age_hours=10**6, max_count=1)
+    assert res["by_count"] == 0, f"the user-layer cap trimmed the agent layer, got {res}"
+    assert len(await (await conn.execute("SELECT id FROM staging_memories")).fetchall()) == 4

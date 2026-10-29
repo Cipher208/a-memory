@@ -154,8 +154,68 @@ async def test_sweep_never_touches_never_archive(app):
     await _insert("na", "commit1", "commitment", now - 10)
     for i in range(3):
         await _insert("na", f"old_{i}", "fact", now - 10)
+    # Fresh sweepable rows keep this test about never_archive, not about the
+    # mass-expiry guard: since F83 the guard measures expired against the
+    # sweepable population, and 3-of-3 expired would (correctly) refuse the sweep.
+    for i in range(10):
+        await _insert("na", f"fresh_{i}", "fact", None)
 
     result = await sweep_expired(min_remain=1)
     assert result["deleted"] == 3
     keys = await _keys("na")
     assert "rule1" in keys and "commit1" in keys
+
+
+@pytest.mark.asyncio
+async def test_sweep_mass_expiry_guard_counts_only_sweepable(app):
+    """Kills: dividing `expired` by `total`, which includes never-archive rows.
+
+    With protected kinds at 30% of the layer and every non-protected row expired,
+    the real expired share of the sweepable population is 100% — the guard must
+    fire. Against `total` the ratio is 0.7 and never reaches 0.8, so the sweep ran
+    and deleted the whole evictable layer.
+    """
+    from lifecycle.l0_sweep import sweep_expired
+
+    now = time.time()
+    for i in range(30):
+        await _insert("mxp", f"rule_{i}", "rule", now - 10)
+    for i in range(70):
+        await _insert("mxp", f"old_{i}", "fact", now - 10)
+
+    result = await sweep_expired()
+    assert result == {"skipped": "mass_expiry"}, f"guard must measure the sweepable population, got {result}"
+    assert len(await _keys("mxp")) == 100, "a refused sweep deletes nothing"
+
+
+@pytest.mark.asyncio
+async def test_sweep_scopes_to_the_named_layer(app):
+    """Kills: binding the timestamp instead of the layer name to `layer=?`.
+
+    `where_layer` is `layer=?` but the parameter used to be `now`, so a
+    layer-scoped sweep matched no rows and reported "0 deleted" — a silent no-op
+    rather than a sweep. The layer name is the bound value.
+    """
+    from lifecycle.l0_sweep import sweep_expired
+
+    now = time.time()
+    conn = await connection_manager.get("memory.db")
+    await conn.execute(
+        "INSERT INTO core_memory (user_id, layer, key, value, importance, created_at, updated_at, memory_kind, expires_at)"
+        " VALUES ('lay', 'user', 'user_exp', 'v', 0.5, ?, ?, 'fact', ?)",
+        (now, now, now - 10),
+    )
+    await conn.execute(
+        "INSERT INTO core_memory (user_id, layer, key, value, importance, created_at, updated_at, memory_kind, expires_at)"
+        " VALUES ('lay', 'agent', 'agent_exp', 'v', 0.5, ?, ?, 'fact', ?)",
+        (now, now, now - 10),
+    )
+    for i in range(10):
+        await _insert("lay", f"fresh_{i}", "fact", None)
+    await conn.commit()
+
+    result = await sweep_expired(layer="user", min_remain=1)
+    assert result["deleted"] == 1, f"a user-layer sweep must take the user-layer row, got {result}"
+    left = {r["key"] for r in await (await conn.execute("SELECT key FROM core_memory WHERE user_id='lay'")).fetchall()}
+    assert "agent_exp" in left, "a user-layer sweep reached into the agent layer"
+    assert "user_exp" not in left

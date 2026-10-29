@@ -39,7 +39,9 @@ async def sweep_expired(
     now = time.time()
 
     where_layer = "layer=?" if layer else "1=1"
-    params: tuple[object, ...] = (now,) if layer else ()
+    # The bound value is the layer name. It used to be `now` — a float epoch — so a
+    # layer-scoped sweep matched nothing and returned "0 deleted" instead of running.
+    params: tuple[object, ...] = (layer,) if layer else ()
 
     total = int(await dispatch.scalar(DB_NAME, f"SELECT COUNT(*) FROM core_memory WHERE {where_layer}", params) or 0)
 
@@ -60,7 +62,22 @@ async def sweep_expired(
         or 0
     )
 
-    if total > 0 and expired / total > stop_pct:
+    # The denominator is the sweepable population, not the whole layer: protected
+    # kinds sit in `total` but can never appear in `expired`, so once they exceed
+    # 20% of the table the ratio could never reach 0.8 and the guard went dead
+    # (cowagent measured 18% protected, one release away). With nothing sweepable
+    # there is no ratio to judge — fall through to the `batch <= 0` early return.
+    protected_total = int(
+        await dispatch.scalar(
+            DB_NAME,
+            f"SELECT COUNT(*) FROM core_memory WHERE {where_layer} AND memory_kind IN ({placeholders})",
+            (*params, *protected),
+        )
+        or 0
+    )
+    sweepable = total - protected_total
+
+    if sweepable > 0 and expired / sweepable > stop_pct:
         summary: dict[str, int | str | None] = {"deleted": 0, "skipped_reason": "mass_expiry", "remaining": total}
         await _journal(summary, layer)
         return {"skipped": "mass_expiry"}
