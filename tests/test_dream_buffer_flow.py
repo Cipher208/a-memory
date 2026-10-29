@@ -156,6 +156,7 @@ async def test_emergency_purge_clears_both_staging_layers(tmp_path):
     """
     from shared import connection
 
+    previous_base = connection.connection_manager.base_dir
     connection.connection_manager.base_dir = tmp_path
     connection.connection_manager._conns.clear()
     await MigrationManager(cm=connection.connection_manager).migrate()
@@ -172,3 +173,4 @@ async def test_emergency_purge_clears_both_staging_layers(tmp_path):
             assert left == [], f"{layer} staging survived the purge: {left}"
     finally:
         connection.connection_manager._conns.clear()
+        connection.connection_manager.base_dir = previous_base
