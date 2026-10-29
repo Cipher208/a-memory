@@ -298,3 +298,35 @@ async def test_archive_max_rows_takes_expired_first(cm):
     conn = await cm.get("memory.db")
     left = {r["key"] for r in await (await conn.execute('SELECT "key" FROM core_memory')).fetchall()}
     assert left == {"old1", "old2"}, f"expired rows must be taken first, left={left}"
+
+
+@pytest.mark.asyncio
+async def test_archive_excludes_every_never_archive_kind(cm):
+    """Kills: a hardcoded protected list instead of the policy's.
+
+    `procedural` is `never_archive` but was archivable before this package: the
+    `old` branch hardcoded ('instruction','rule','commitment'). The list now comes
+    from `get_policy`, so a kind the audit never named is protected too.
+    """
+    await _insert(cm, "u", "proc", "как деплоить", 0.05, "procedural", days_ago=400)
+    await _insert(cm, "u", "f", "старый факт", 0.05, "fact", days_ago=400)
+    fs = ForgettingSystem(cm=cm)
+    n = await fs.archive_old_entries()
+    assert n == 1, "only the fact is archivable"
+    conn = await cm.get("memory.db")
+    left = {r["key"] for r in await (await conn.execute('SELECT "key" FROM core_memory')).fetchall()}
+    assert left == {"proc"}, f"a never_archive kind was archived, left={left}"
+
+
+@pytest.mark.asyncio
+async def test_run_cleanup_forwards_owner_and_layer(cm):
+    """Kills: run_cleanup dropping user_id, or ignoring the instance's layer."""
+    await _insert(cm, "u1", "mine", "v", 0.5, "goal", days_ago=1, expires_in=-1, layer="user")
+    await _insert(cm, "u1", "mine_agent", "v", 0.5, "goal", days_ago=1, expires_in=-1, layer="agent")
+    await _insert(cm, "u2", "theirs", "v", 0.5, "goal", days_ago=1, expires_in=-1, layer="user")
+    fs = ForgettingSystem(cm=cm, layer="user")
+    res = await fs.run_cleanup("u1")
+    assert res == {"archived": 1}, f"run_cleanup must scope to the owner and the layer, got {res}"
+    conn = await cm.get("memory.db")
+    left = {r["key"] for r in await (await conn.execute('SELECT "key" FROM core_memory')).fetchall()}
+    assert left == {"mine_agent", "theirs"}, f"run_cleanup raided another owner or layer, left={left}"

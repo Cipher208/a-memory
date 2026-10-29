@@ -735,7 +735,7 @@ class ForgettingSystem:
         """Alias for archive_old_entries to satisfy legacy compactor interface."""
         # ForgettingSystem defaults are used, user_id can override if needed
         # (though ForgettingSystem is currently layer-scoped)
-        count = await self.archive_old_entries(user_id=user_id)
+        count = await self.archive_old_entries(user_id=user_id, layer=self.layer)
         return {"archived": count}
 
 

@@ -415,20 +415,18 @@ async def memory_cleanup(
     from features.audit_trail import AuditTrail
     from features.backup_cron import backup_cron
     from features.compression import MemoryCompressor
-    from shared.dream_buffer import DreamBuffer
     from shared.saga import saga_watchdog
     from lifecycle.forgetting import forgetting_system
 
     mc = MemoryCompressor()
     at = AuditTrail()
-    dream_buf = DreamBuffer()
     archive_dir = str(Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".mcp-ariel-memory")) / "archives")
 
     # Parallel dispatch
     results = await asyncio.gather(
         mc.deduplicate_core(user_id),
         mc.compress_episodes(user_id, 0.3),
-        dream_buf.cleanup_old(24, 500),
+        _cleanup_staging(),
         at.archive_and_prune(retention_days, archive_dir),
         asyncio.to_thread(backup_cron._cleanup_old),
         forgetting_system.run_cleanup(user_id),
@@ -501,8 +499,25 @@ async def _purge_table(cm: Any, table: str, user_id: str, cutoff: float, timesta
 async def _purge_staging(user_id: str) -> int:
     from shared.dream_buffer import DreamBuffer
 
-    db = DreamBuffer()
-    return await db.clear_staging(user_id)
+    # An emergency purge is per owner, not per layer. `clear_staging` is now
+    # layer-scoped, so clearing only the default layer would leave that owner's
+    # agent-layer staging behind — the opposite of what a purge promises.
+    total = 0
+    for layer in ("user", "agent"):
+        total += await DreamBuffer(layer=layer).clear_staging(user_id)
+    return total
+
+
+async def _cleanup_staging(max_age_hours: int = 24, max_count: int = 500) -> dict[str, int]:
+    """Housekeeping over both layers — `cleanup_old` itself is layer-scoped."""
+    from shared.dream_buffer import DreamBuffer
+
+    total = {"by_age": 0, "by_count": 0}
+    for layer in ("user", "agent"):
+        res = await DreamBuffer(layer=layer).cleanup_old(max_age_hours, max_count)
+        total["by_age"] += res["by_age"]
+        total["by_count"] += res["by_count"]
+    return total
 
 
 async def memory_search(

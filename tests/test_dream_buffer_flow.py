@@ -109,13 +109,66 @@ async def test_cleanup_old_is_layer_scoped(cm):
     left = [r["content"] for r in await (await conn.execute("SELECT content FROM staging_memories")).fetchall()]
     assert left == ["agent old"], f"cleanup_old reached into the agent layer, left={left}"
 
-    # Cap branch: 3 fresh agent rows, no user rows. A user-layer cap must not trim them.
+    # Cap branch: the user layer must be over its own cap, otherwise the GROUP BY
+    # loop never runs and `by_count == 0` proves nothing. Agent rows must survive.
     for i in range(3):
         await conn.execute(
             "INSERT INTO staging_memories (layer, user_id, session_id, content) VALUES ('agent', 'u', 's', ?)",
             (f"agent fresh {i}",),
         )
+    for i in range(3):
+        await conn.execute(
+            "INSERT INTO staging_memories (layer, user_id, session_id, content) VALUES ('user', 'u', 's', ?)",
+            (f"user fresh {i}",),
+        )
     await conn.commit()
     res = await DreamBuffer(cm=cm, layer="user").cleanup_old(max_age_hours=10**6, max_count=1)
-    assert res["by_count"] == 0, f"the user-layer cap trimmed the agent layer, got {res}"
-    assert len(await (await conn.execute("SELECT id FROM staging_memories")).fetchall()) == 4
+    assert res["by_count"] == 2, f"the user-layer cap must trim its own layer, got {res}"
+    rows = await (await conn.execute("SELECT layer, content FROM staging_memories")).fetchall()
+    agent_left = [r["content"] for r in rows if r["layer"] == "agent"]
+    assert len(agent_left) == 4, f"the user-layer cap trimmed the agent layer, agent_left={agent_left}"
+    assert len([r for r in rows if r["layer"] == "user"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_clear_staging_session_is_layer_scoped(cm):
+    """Kills: the session branch of clear_staging losing its `layer` predicate."""
+    user_buf = DreamBuffer(cm=cm, layer="user")
+    agent_buf = DreamBuffer(cm=cm, layer="agent")
+    await user_buf.ensure()
+    await user_buf.add("u", session_id="s1", content="user s1")
+    await user_buf.add("u", session_id="s2", content="user s2")
+    await agent_buf.add("u", session_id="s1", content="agent s1")
+
+    removed = await user_buf.clear_staging("u", session_id="s1")
+    assert removed == 1
+    assert [i["content"] for i in await agent_buf.get_staging("u")] == ["agent s1"], "the session clear crossed layers"
+    assert [i["content"] for i in await user_buf.get_staging("u")] == ["user s2"], "the session clear took another session"
+
+
+@pytest.mark.asyncio
+async def test_emergency_purge_clears_both_staging_layers(tmp_path):
+    """Kills: a purge that only clears the default layer.
+
+    `clear_staging` became layer-scoped in this package, so a purge built on a
+    default `DreamBuffer()` would silently leave the agent layer behind — the
+    opposite of what an emergency purge promises.
+    """
+    from shared import connection
+
+    connection.connection_manager.base_dir = tmp_path
+    connection.connection_manager._conns.clear()
+    await MigrationManager(cm=connection.connection_manager).migrate()
+    try:
+        for layer in ("user", "agent"):
+            await DreamBuffer(cm=connection.connection_manager, layer=layer).add("pu", session_id="s", content=f"{layer} staged")
+
+        from mcp_server.tools.ops import _purge_staging
+
+        removed = await _purge_staging("pu")
+        assert removed == 2, f"the purge must clear every layer, removed={removed}"
+        for layer in ("user", "agent"):
+            left = await DreamBuffer(cm=connection.connection_manager, layer=layer).get_staging("pu")
+            assert left == [], f"{layer} staging survived the purge: {left}"
+    finally:
+        connection.connection_manager._conns.clear()
