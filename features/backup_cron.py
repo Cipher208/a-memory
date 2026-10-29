@@ -23,6 +23,60 @@ from shared.path_safety import safe_resolve
 
 logger = logging.getLogger(__name__)
 
+
+def _resolves_inside(path: Path, root: Path) -> bool:
+    """Return True if `path` lands inside `root` once links are followed.
+
+    `os.path.realpath(strict=True)` is the only resolver that behaves the same
+    across versions here: `Path.resolve()` raised `RuntimeError` on a symlink loop
+    up to 3.12 and silently returns the unresolved path from 3.13, so a loop read
+    as "inside" there and the guard let it through.
+
+    A broken link raises under `strict=True` as well; it is then resolved without
+    strictness to learn the target it was written for. A loop resolves to itself —
+    realpath refused to follow it — and that counts as not inside.
+    """
+    root_resolved = Path(os.path.realpath(root))
+    try:
+        target = Path(os.path.realpath(path, strict=True))
+    except OSError:
+        target = Path(os.path.realpath(path))
+        if target == path:
+            return False
+    try:
+        target.relative_to(root_resolved)
+    except ValueError:
+        return False
+    return True
+
+
+def _has_escaping_symlink(root: Path, base: Path) -> bool:
+    """Return True if `root` leaves `base`, or a link under it leaves `root`.
+
+    Two anchors, for two different questions:
+
+    * `base` (the backup) answers "does the entry itself stay in the backup" — a
+      symlinked parent (`wiki -> /outside`, manifest `wiki/user/`) resolves outside
+      it, and anchoring on the entry would walk the outside tree as if it were the
+      backup.
+    * `root` (the entry) answers "does a link stay in the entry" — a link to the
+      backup root or to a sibling backup is inside `base` but is not this entry,
+      and restoring it as a live link would hand a reader of the base every file
+      of the backup.
+
+    An unresolvable link (a loop) counts as escaping, so it is refused here rather
+    than reaching `copytree`.
+    """
+    if not _resolves_inside(root, base):
+        return True
+    for current, dirs, files in os.walk(root):
+        for name in dirs + files:
+            candidate = Path(current) / name
+            if candidate.is_symlink() and not _resolves_inside(candidate, root):
+                return True
+    return False
+
+
 # Retry policy for the nightly pass, deliberately decoupled from the 24 h backup
 # window. The pass used to be reachable only from inside `_check_backup`, which
 # returns early until a full day has passed since the last backup, while
@@ -739,8 +793,11 @@ class BackupCron:
         return self._do_backup()
 
     def restore(self, backup_name: str) -> dict[str, Any]:
-        src = self.backup_dir / backup_name
-        if not src.exists() or src.is_symlink():
+        try:
+            src = safe_resolve(self.backup_dir, backup_name)
+        except ValueError as exc:
+            return {"error": str(exc)}
+        if not src.exists() or src.is_symlink() or src == self.backup_dir.resolve() or not src.is_dir():
             return {"error": f"Backup not found or invalid: {backup_name}"}
 
         manifest_path = src / "manifest.json"
@@ -768,12 +825,26 @@ class BackupCron:
         if db_file.endswith("/"):
             src_wiki = src / db_file
             if src_wiki.exists() and not src_wiki.is_symlink():
-                shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True)
+                if _has_escaping_symlink(src_wiki, src):
+                    logger.error("Refusing to restore wiki entry with escaping symlink: %s", db_file)
+                    return
+                # `symlinks=True`: every link that could leave the backup was refused
+                # above, so what remains points inside it. Copying it as a link keeps
+                # the tree's shape and stops a broken in-tree link from raising
+                # shutil.Error out of restore().
+                shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True, symlinks=True)
                 restored.append(db_file)
             return
 
         backup_file = src / db_file
         if backup_file.exists() and not backup_file.is_symlink():
+            # `copy2` follows a symlinked *parent*, so a backup carrying
+            # `wiki -> /outside` plus a manifest entry `wiki/user/stolen.db` reads
+            # the file from outside the backup while every name stays legal. The
+            # entry must resolve inside the backup, not merely under base_dir.
+            if not _resolves_inside(backup_file, src):
+                logger.warning("Refusing to restore an entry that resolves outside the backup: %s", db_file)
+                return
             # skylos: ignore [SKY-D215, SKY-D325] - Safe via safe_resolve and symlink checks
             shutil.copy2(backup_file, dest_path)
             restored.append(db_file)

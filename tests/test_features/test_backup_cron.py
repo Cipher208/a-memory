@@ -1,6 +1,11 @@
 """Wire-тест: tier_l0 должен стоять в ночной цепочке backup_cron (S6, живой вызов)."""
 
+import json
 from pathlib import Path
+
+import pytest
+
+from features.backup_cron import BackupCron
 
 
 def test_tier_l0_wired_into_nightly_hooks() -> None:
@@ -677,3 +682,235 @@ def test_the_nightly_prune_uses_the_configured_limits(tmp_path, monkeypatch) -> 
     assert seen, "ночная чистка отказов не вызвалась — тест ничего не проверил"
     assert seen[-1]["retention_days"] == 7, f"ретенция не из config: {seen[-1]}"
     assert seen[-1]["max_rows"] == 11, f"кап не из config: {seen[-1]}"
+
+
+# ── F103: restore() must not concatenate an unsanitised backup_name ──
+
+
+@pytest.mark.parametrize("name", ["../../outside", "../", "/etc"])
+def test_restore_rejects_a_traversing_backup_name(tmp_path, name) -> None:
+    """Kills: `src = self.backup_dir / backup_name` without safe_resolve.
+
+    Red before: "../../outside" resolves to a decoy dir whose manifest is read
+    and whose memory.db is copied into base_dir.
+    """
+    decoy = tmp_path.parent / "outside"
+    decoy.mkdir(exist_ok=True)
+    (decoy / "manifest.json").write_text(json.dumps({"files": ["memory.db"]}), encoding="utf-8")
+    (decoy / "memory.db").write_text("pwned", encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore(name)
+
+    assert "error" in result, f"traversing name accepted: {result}"
+    assert not (tmp_path / "memory.db").exists(), "file copied out of a traversing backup name"
+
+
+def test_restore_rejects_a_manifest_entry_that_escapes(tmp_path) -> None:
+    """Kills: probing/using dest_path for a manifest entry before safe_resolve."""
+    backup = tmp_path / "backups" / "crafted"
+    backup.mkdir(parents=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["../../etc/crontab"]}), encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="escapes base directory"):
+        cron.restore("crafted")
+    assert not (tmp_path / "memory.db").exists()
+
+
+def test_restore_still_works_for_a_valid_backup(tmp_path) -> None:
+    """The guard must not block the legitimate path."""
+    backup = tmp_path / "backups" / "good"
+    backup.mkdir(parents=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["memory.db"]}), encoding="utf-8")
+    (backup / "memory.db").write_text("payload", encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore("good")
+
+    assert result.get("restored") == ["memory.db"], result
+    assert (tmp_path / "memory.db").read_text(encoding="utf-8") == "payload"
+
+
+# ── F103-A: restore() must refuse a name that is not a backup ──
+
+
+@pytest.mark.parametrize("name", [".", "", "./"])
+def test_restore_refuses_a_name_that_is_not_a_backup(tmp_path, name) -> None:
+    """Kills: accepting `backup_dir` itself as a backup.
+
+    Red before: "." resolves to backup_dir, the manifest fallback picks every
+    *.db lying directly in backups/, and stray.db lands in base_dir.
+    """
+    cron = BackupCron(base_dir=str(tmp_path))
+    (cron.backup_dir / "stray.db").write_text("stray", encoding="utf-8")
+
+    result = cron.restore(name)
+
+    assert "error" in result, f"non-backup name accepted: {result}"
+    assert not (tmp_path / "stray.db").exists(), "stray db copied out of backups/"
+
+
+def test_restore_refuses_a_name_that_is_a_file(tmp_path) -> None:
+    """Kills: the is_dir() arm of the non-backup guard.
+
+    A manifest is not required to sit in a directory: `backup_name` naming a
+    regular file resolves inside backups/ and would then be treated as a backup.
+    """
+    cron = BackupCron(base_dir=str(tmp_path))
+    (cron.backup_dir / "notabackup").write_text("x", encoding="utf-8")
+
+    result = cron.restore("notabackup")
+
+    assert "error" in result, f"a file was accepted as a backup: {result}"
+
+
+# ── F103-B: the wiki branch must not copy through an escaping symlink ──
+
+
+def test_restore_does_not_follow_a_symlink_out_of_a_backup(tmp_path) -> None:
+    """Kills: copytree(symlinks=False) dereferencing a link that leaves the backup.
+
+    Outcome asserted: the whole "wiki/" entry is refused (nothing restored), so
+    no escaping link and no outside content reaches base_dir. Red before:
+    base_dir/wiki/user/linkdir/secret.txt exists with the outside content.
+    """
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "secret.txt").write_text("SECRET", encoding="utf-8")
+    (backup / "wiki" / "user" / "linkdir").symlink_to(secret, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore("crafted")
+
+    assert result.get("restored") == [], f"escaping wiki entry was restored: {result}"
+    assert not (tmp_path / "wiki" / "user" / "linkdir" / "secret.txt").exists(), "outside content copied in"
+
+
+def test_restore_still_copies_a_wiki_directory(tmp_path) -> None:
+    """Kills: a guard that blocks the legitimate wiki path. The guard must not."""
+    backup = tmp_path / "backups" / "good"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "wiki" / "user" / "page.md").write_text("# page", encoding="utf-8")
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore("good")
+
+    assert result.get("restored") == ["wiki/"], result
+    assert (tmp_path / "wiki" / "user" / "page.md").read_text(encoding="utf-8") == "# page"
+
+
+def test_restore_refuses_a_wiki_entry_reached_through_a_symlinked_parent(tmp_path) -> None:
+    """Kills: anchoring the symlink scan on the entry instead of the backup.
+
+    `wiki -> <outside>` with manifest `wiki/user/` makes the entry root resolve
+    outside the backup, so a scan anchored on the entry walks the outside tree,
+    finds no escaping link and lets the copy through.
+    """
+    outside = tmp_path / "outside"
+    (outside / "user").mkdir(parents=True)
+    (outside / "user" / "secret.txt").write_text("SECRET", encoding="utf-8")
+
+    backup = tmp_path / "backups" / "crafted"
+    backup.mkdir(parents=True)
+    (backup / "wiki").symlink_to(outside, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/user/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"a symlinked parent let the entry through: {result}"
+    assert not (tmp_path / "wiki" / "user" / "secret.txt").exists(), "content copied from outside the backup"
+
+
+def test_restore_survives_a_broken_link_inside_the_backup(tmp_path) -> None:
+    """Kills: copytree dereferencing an in-tree link and raising shutil.Error."""
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "wiki" / "user" / "page.md").write_text("page", encoding="utf-8")
+    (backup / "wiki" / "user" / "dead").symlink_to("./missing")
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == ["wiki/"], f"a broken in-tree link broke the restore: {result}"
+    assert (tmp_path / "wiki" / "user" / "page.md").read_text(encoding="utf-8") == "page"
+
+
+def test_restore_survives_a_symlink_loop_inside_the_backup(tmp_path) -> None:
+    """Kills: an unresolvable link escaping the scan and reaching copytree."""
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "wiki" / "user" / "a").symlink_to("b")
+    (backup / "wiki" / "user" / "b").symlink_to("a")
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"a link loop must refuse the entry, got {result}"
+    assert not (tmp_path / "wiki" / "user" / "a").exists(), "a looped link was restored"
+
+
+def test_restore_refuses_a_db_entry_read_through_a_symlinked_parent(tmp_path) -> None:
+    """Kills: the db branch copying via a symlinked parent without resolving it.
+
+    A manifest entry does not have to end in "/" to be a path: with
+    `wiki -> <outside>` and an entry `wiki/user/stolen.db`, every name stays
+    legal and copy2 reads the file from outside the backup.
+    """
+    outside = tmp_path / "outside"
+    (outside / "user").mkdir(parents=True)
+    (outside / "user" / "stolen.db").write_text("SECRET-FROM-OUTSIDE", encoding="utf-8")
+
+    backup = tmp_path / "backups" / "crafted"
+    backup.mkdir(parents=True)
+    (backup / "wiki").symlink_to(outside, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/user/stolen.db"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"an entry read through a symlinked parent was restored: {result}"
+    assert not (tmp_path / "wiki" / "user" / "stolen.db").exists(), "content copied from outside the backup"
+
+
+def test_restore_refuses_a_link_to_the_backup_root(tmp_path) -> None:
+    """Kills: allowing a link that stays inside the backup but outside the entry.
+
+    Restoring it as a live link would hand a reader of the base every file of the
+    backup, including ones written after the restore.
+    """
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "other.db").write_text("OTHER", encoding="utf-8")
+    (backup / "wiki" / "user" / "page.md").write_text("page", encoding="utf-8")
+    (backup / "wiki" / "user" / "up").symlink_to(backup, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"a link to the backup root was restored: {result}"
+    assert not (tmp_path / "wiki" / "user" / "up" / "other.db").exists()
+
+
+def test_restore_over_a_symlinked_destination_skips_instead_of_raising(tmp_path) -> None:
+    """Kills: resolving the manifest entry before the destination-symlink skip.
+
+    A live base whose `wiki` is a symlink is refused entry by entry today. An
+    earlier version of this branch resolved the entry first and raised ValueError
+    out of restore(), turning a silent skip into a tool error.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki").mkdir(parents=True)
+    (backup / "wiki" / "page.md").write_text("page", encoding="utf-8")
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+    (tmp_path / "wiki").symlink_to(outside, target_is_directory=True)
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"a symlinked destination was written through: {result}"
+    assert not (outside / "page.md").exists()
