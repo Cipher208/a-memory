@@ -220,3 +220,24 @@ async def test_scope_tool_binds_on_real_remember(monkeypatch, tmp_path):
     # the attacker's namespace is untouched
     assert await app.mm.user_memory("attacker").l4.get("attacker", "k") is None
     await cm.close_all()
+
+
+@pytest.mark.asyncio
+async def test_resolve_unreadable_store_refuses_instead_of_passing_through(monkeypatch):
+    """Kills: falling back to `requested_user_id` when the key cannot be checked.
+
+    The fallback would let a caller name any user_id the moment the store is
+    unreadable, which is exactly what this function exists to prevent.
+    """
+    from features.auth.store import StoreUnreadable
+    from mcp_server.tools.base import _resolve_user_id
+
+    class _FakeAuth:
+        def verify(self, key: str) -> dict | None:
+            raise StoreUnreadable("store is unreadable")
+
+    monkeypatch.setattr("features.auth.api_key_auth", _FakeAuth())
+    ctx = _ctx_with_request("Bearer ak_1234")
+
+    with pytest.raises(StoreUnreadable):
+        _resolve_user_id(ctx, "attacker")

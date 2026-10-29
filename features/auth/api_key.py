@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import secrets
 import time
 from pathlib import Path
 from typing import Any
 
 from features.auth.models import APIKeyModel
-from features.auth.store import EncryptedStore
+from features.auth.store import EncryptedStore, StoreUnreadable
 
 
 class APIKeyAuth:
@@ -16,7 +17,12 @@ class APIKeyAuth:
             keys_file = Path("data/auth/keys.enc")
 
         self.store = EncryptedStore(keys_file, APIKeyModel)
-        self._keys: dict[str, dict[str, Any]] = self.store.load()
+        self._keys: dict[str, dict[str, Any]] = {}
+        # Construction stays tolerant: the module-level singleton is built at import
+        # time, and an unreadable file must not take the server down. Every
+        # operation below re-reads and raises, so the tolerance stops here.
+        with contextlib.suppress(StoreUnreadable):
+            self._keys = self.store.load_strict()
 
     def create_key(self, user_id: str, label: str) -> str:
         """Generate ak_... key, save state."""
@@ -29,7 +35,7 @@ class APIKeyAuth:
 
         state = self.store.update(add)
         if state is None:
-            raise RuntimeError(f"Could not persist new API key: {self.store.file_path} is unreadable")
+            raise StoreUnreadable(f"Could not persist new API key: {self.store.file_path} is unreadable")
         self._keys = state
         return key
 
@@ -57,7 +63,7 @@ class APIKeyAuth:
 
         state = self.store.update(touch)
         if state is None:
-            return None
+            raise StoreUnreadable(f"Could not check API key: {self.store.file_path} is unreadable")
         self._keys = state
         return result
 
@@ -77,8 +83,9 @@ class APIKeyAuth:
             revoked = True
 
         state = self.store.update(disable)
-        if state is not None:
-            self._keys = state
+        if state is None:
+            raise StoreUnreadable(f"Could not revoke API key: {self.store.file_path} is unreadable")
+        self._keys = state
         return revoked
 
     def delete_key(self, key: str) -> bool:
@@ -92,12 +99,14 @@ class APIKeyAuth:
                 removed = True
 
         state = self.store.update(remove)
-        if state is not None:
-            self._keys = state
+        if state is None:
+            raise StoreUnreadable(f"Could not delete API key: {self.store.file_path} is unreadable")
+        self._keys = state
         return removed
 
     def list_keys(self) -> list[dict[str, Any]]:
-        """Return masked keys with metadata."""
+        """Return masked keys with metadata, read from the current on-disk state."""
+        self._keys = self.store.load_strict()
         result = []
         for key, data in self._keys.items():
             model = APIKeyModel(**data)

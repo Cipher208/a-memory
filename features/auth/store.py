@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class StoreUnreadable(RuntimeError):  # noqa: N818 — name mandated by the auth API
+    """The store file exists but could not be read or decoded."""
+
+
 class EncryptedStore:
     def __init__(self, file_path: Path, model_class: type[BaseModel]):
         self.file_path = Path(file_path)
@@ -72,6 +76,19 @@ class EncryptedStore:
     def load(self) -> dict[str, Any]:
         """Load data, decrypting it. Supports rotation from legacy JSON."""
         return self._load() or {}
+
+    def load_strict(self) -> dict[str, Any]:
+        """Load data, raising StoreUnreadable when an existing file cannot be read.
+
+        The tolerant `load()` collapses "no file" and "unreadable file" into the
+        same `{}` — fine for callers that only want a default (bearer.py), but a
+        lie for callers that must not mistake an unreadable store for an absent
+        key. Those callers use this variant.
+        """
+        data = self._load()
+        if data is None:
+            raise StoreUnreadable(f"Store {self.file_path} is unreadable")
+        return data
 
     def update(self, mutator: Callable[[dict[str, Any]], object]) -> dict[str, Any] | None:
         """Read-modify-write the current on-disk state under an exclusive lock.

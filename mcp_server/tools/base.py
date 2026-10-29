@@ -229,6 +229,17 @@ def _resolve_user_id(ctx: Any, requested_user_id: str) -> str:
     if not header.startswith("Bearer ak_"):
         return requested_user_id
     from features.auth import api_key_auth
+    from features.auth.store import StoreUnreadable
 
-    data = api_key_auth.verify(header[7:])
+    try:
+        data = api_key_auth.verify(header[7:])
+    except StoreUnreadable:
+        # An unreadable store must deny the call, not fall back to the requested
+        # value: this function exists to stop a caller naming another user's
+        # user_id, and the fallback would hand them exactly that. The path is read
+        # defensively so a logging failure can never turn the denial into another
+        # exception.
+        store_path = getattr(getattr(api_key_auth, "store", None), "file_path", "?")
+        logger.error("API key store %s is unreadable; refusing the call", store_path)  # noqa: TRY400 — one line, no traceback needed
+        raise
     return data["user_id"] if data else requested_user_id
