@@ -24,6 +24,32 @@ from shared.path_safety import safe_resolve
 logger = logging.getLogger(__name__)
 
 
+def _resolves_inside(path: Path, root: Path) -> bool:
+    """Return True if `path` lands inside `root` once links are followed.
+
+    `os.path.realpath(strict=True)` is the only resolver that behaves the same
+    across versions here: `Path.resolve()` raised `RuntimeError` on a symlink loop
+    up to 3.12 and silently returns the unresolved path from 3.13, so a loop read
+    as "inside" there and the guard let it through.
+
+    A broken link raises under `strict=True` as well; it is then resolved without
+    strictness to learn the target it was written for. A loop resolves to itself —
+    realpath refused to follow it — and that counts as not inside.
+    """
+    root_resolved = Path(os.path.realpath(root))
+    try:
+        target = Path(os.path.realpath(path, strict=True))
+    except OSError:
+        target = Path(os.path.realpath(path))
+        if target == path:
+            return False
+    try:
+        target.relative_to(root_resolved)
+    except ValueError:
+        return False
+    return True
+
+
 def _has_escaping_symlink(root: Path, base: Path) -> bool:
     """Return True if `root` leaves `base`, or a link under it leaves `root`.
 
@@ -38,24 +64,16 @@ def _has_escaping_symlink(root: Path, base: Path) -> bool:
       and restoring it as a live link would hand a reader of the base every file
       of the backup.
 
-    Unresolvable links (a loop, a missing target) count as escaping: `resolve()`
-    raises `RuntimeError`/`OSError` there, and letting those reach `copytree` turns
-    a refusal into a crash.
+    An unresolvable link (a loop) counts as escaping, so it is refused here rather
+    than reaching `copytree`.
     """
-    base_resolved = base.resolve()
-    try:
-        root_resolved = root.resolve()
-        root_resolved.relative_to(base_resolved)
-    except (ValueError, OSError, RuntimeError):
+    if not _resolves_inside(root, base):
         return True
     for current, dirs, files in os.walk(root):
         for name in dirs + files:
             candidate = Path(current) / name
-            if candidate.is_symlink():
-                try:
-                    candidate.resolve().relative_to(root_resolved)
-                except (ValueError, OSError, RuntimeError):
-                    return True
+            if candidate.is_symlink() and not _resolves_inside(candidate, root):
+                return True
     return False
 
 
@@ -824,9 +842,7 @@ class BackupCron:
             # `wiki -> /outside` plus a manifest entry `wiki/user/stolen.db` reads
             # the file from outside the backup while every name stays legal. The
             # entry must resolve inside the backup, not merely under base_dir.
-            try:
-                backup_file.resolve().relative_to(src.resolve())
-            except (ValueError, OSError, RuntimeError):
+            if not _resolves_inside(backup_file, src):
                 logger.warning("Refusing to restore an entry that resolves outside the backup: %s", db_file)
                 return
             # skylos: ignore [SKY-D215, SKY-D325] - Safe via safe_resolve and symlink checks
