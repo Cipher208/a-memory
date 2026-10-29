@@ -730,3 +730,61 @@ def test_restore_still_works_for_a_valid_backup(tmp_path) -> None:
 
     assert result.get("restored") == ["memory.db"], result
     assert (tmp_path / "memory.db").read_text(encoding="utf-8") == "payload"
+
+
+# ── F103-A: restore() must refuse a name that is not a backup ──
+
+
+@pytest.mark.parametrize("name", [".", "", "./"])
+def test_restore_refuses_a_name_that_is_not_a_backup(tmp_path, name) -> None:
+    """Kills: accepting `backup_dir` itself as a backup.
+
+    Red before: "." resolves to backup_dir, the manifest fallback picks every
+    *.db lying directly in backups/, and stray.db lands in base_dir.
+    """
+    cron = BackupCron(base_dir=str(tmp_path))
+    (cron.backup_dir / "stray.db").write_text("stray", encoding="utf-8")
+
+    result = cron.restore(name)
+
+    assert "error" in result, f"non-backup name accepted: {result}"
+    assert not (tmp_path / "stray.db").exists(), "stray db copied out of backups/"
+
+
+# ── F103-B: the wiki branch must not copy through an escaping symlink ──
+
+
+def test_restore_does_not_follow_a_symlink_out_of_a_backup(tmp_path) -> None:
+    """Kills: copytree(symlinks=False) dereferencing a link that leaves the backup.
+
+    Outcome asserted: the whole "wiki/" entry is refused (nothing restored), so
+    no escaping link and no outside content reaches base_dir. Red before:
+    base_dir/wiki/user/linkdir/secret.txt exists with the outside content.
+    """
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    (secret / "secret.txt").write_text("SECRET", encoding="utf-8")
+    (backup / "wiki" / "user" / "linkdir").symlink_to(secret, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore("crafted")
+
+    assert result.get("restored") == [], f"escaping wiki entry was restored: {result}"
+    assert not (tmp_path / "wiki" / "user" / "linkdir" / "secret.txt").exists(), "outside content copied in"
+
+
+def test_restore_still_copies_a_wiki_directory(tmp_path) -> None:
+    """Kills: a guard that blocks the legitimate wiki path. The guard must not."""
+    backup = tmp_path / "backups" / "good"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "wiki" / "user" / "page.md").write_text("# page", encoding="utf-8")
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    cron = BackupCron(base_dir=str(tmp_path))
+    result = cron.restore("good")
+
+    assert result.get("restored") == ["wiki/"], result
+    assert (tmp_path / "wiki" / "user" / "page.md").read_text(encoding="utf-8") == "# page"

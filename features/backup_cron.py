@@ -23,6 +23,21 @@ from shared.path_safety import safe_resolve
 
 logger = logging.getLogger(__name__)
 
+
+def _has_escaping_symlink(root: Path) -> bool:
+    """Return True if a symlink under root resolves outside it. os.walk does not follow links."""
+    base = root.resolve()
+    for current, dirs, files in os.walk(root):
+        for name in dirs + files:
+            candidate = Path(current) / name
+            if candidate.is_symlink():
+                try:
+                    candidate.resolve().relative_to(base)
+                except ValueError:
+                    return True
+    return False
+
+
 # Retry policy for the nightly pass, deliberately decoupled from the 24 h backup
 # window. The pass used to be reachable only from inside `_check_backup`, which
 # returns early until a full day has passed since the last backup, while
@@ -743,7 +758,7 @@ class BackupCron:
             src = safe_resolve(self.backup_dir, backup_name)
         except ValueError as exc:
             return {"error": str(exc)}
-        if not src.exists() or src.is_symlink():
+        if not src.exists() or src.is_symlink() or src == self.backup_dir.resolve() or not src.is_dir():
             return {"error": f"Backup not found or invalid: {backup_name}"}
 
         manifest_path = src / "manifest.json"
@@ -772,6 +787,9 @@ class BackupCron:
         if db_file.endswith("/"):
             src_wiki = src / db_file
             if src_wiki.exists() and not src_wiki.is_symlink():
+                if _has_escaping_symlink(src_wiki):
+                    logger.error("Refusing to restore wiki entry with escaping symlink: %s", db_file)
+                    return
                 shutil.copytree(src_wiki, dest_path, dirs_exist_ok=True)
                 restored.append(db_file)
             return
