@@ -837,3 +837,44 @@ def test_restore_survives_a_symlink_loop_inside_the_backup(tmp_path) -> None:
     result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
 
     assert "error" not in result or result.get("restored") == [], f"a link loop broke the restore: {result}"
+
+
+def test_restore_refuses_a_db_entry_read_through_a_symlinked_parent(tmp_path) -> None:
+    """Kills: the db branch copying via a symlinked parent without resolving it.
+
+    A manifest entry does not have to end in "/" to be a path: with
+    `wiki -> <outside>` and an entry `wiki/user/stolen.db`, every name stays
+    legal and copy2 reads the file from outside the backup.
+    """
+    outside = tmp_path / "outside"
+    (outside / "user").mkdir(parents=True)
+    (outside / "user" / "stolen.db").write_text("SECRET-FROM-OUTSIDE", encoding="utf-8")
+
+    backup = tmp_path / "backups" / "crafted"
+    backup.mkdir(parents=True)
+    (backup / "wiki").symlink_to(outside, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/user/stolen.db"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"an entry read through a symlinked parent was restored: {result}"
+    assert not (tmp_path / "wiki" / "user" / "stolen.db").exists(), "content copied from outside the backup"
+
+
+def test_restore_refuses_a_link_to_the_backup_root(tmp_path) -> None:
+    """Kills: allowing a link that stays inside the backup but outside the entry.
+
+    Restoring it as a live link would hand a reader of the base every file of the
+    backup, including ones written after the restore.
+    """
+    backup = tmp_path / "backups" / "crafted"
+    (backup / "wiki" / "user").mkdir(parents=True)
+    (backup / "other.db").write_text("OTHER", encoding="utf-8")
+    (backup / "wiki" / "user" / "page.md").write_text("page", encoding="utf-8")
+    (backup / "wiki" / "user" / "up").symlink_to(backup, target_is_directory=True)
+    (backup / "manifest.json").write_text(json.dumps({"files": ["wiki/"]}), encoding="utf-8")
+
+    result = BackupCron(base_dir=str(tmp_path)).restore("crafted")
+
+    assert result.get("restored") == [], f"a link to the backup root was restored: {result}"
+    assert not (tmp_path / "wiki" / "user" / "up" / "other.db").exists()
