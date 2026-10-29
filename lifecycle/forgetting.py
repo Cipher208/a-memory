@@ -21,6 +21,7 @@ from repositories.memory_repo import MemoryRepo
 from shared.memory_types import (
     MemoryKind,
     apply_decay,
+    get_policy,
     validate_kind,
 )
 
@@ -34,6 +35,13 @@ ARCHIVE_DIR = Path(os.environ.get("MCP_MEMORY_DATA_DIR") or str(Path.home() / ".
 #: measured on the hermes base, 106 tracebacks in one night. Each chunk commits
 #: on its own, releasing the write lock between batches.
 _DECAY_CHUNK = 500
+
+#: Rows one archive pass may take when the caller names no cap. The archive reads
+#: and then writes in one transaction per pass; an unbounded pass measured 302 rows
+#: in one audit call, 300 of them another owner's — the cost and the blast radius
+#: both scale with the table. 500 matches the decay chunk so a single pass holds the
+#: write lock no longer than a decay batch, and the rest is taken by the next pass.
+_ARCHIVE_MAX_ROWS = 500
 
 #: Which archived kinds a restore may route used to be decided **here**, by an
 #: allowlist built from `MemoryKind`.
@@ -203,16 +211,27 @@ class ForgettingSystem:
             logger.exception("Decay failed")
             return 0
 
-    async def archive_old_entries(self) -> int:
-        """Type-aware archive: instruction/rule/commitment never archived.
+    async def archive_old_entries(
+        self,
+        *,
+        user_id: str | None = None,
+        layer: str | None = None,
+        max_rows: int | None = None,
+    ) -> int:
+        """Type-aware archive: never_archive kinds are never archived.
 
-        Goal/todo/commitment archived by expires_at. Others by age + importance.
+        Goal/todo archived by expires_at. Others by age + importance.
+
+        `user_id` / `layer` scope the destructive pass; `None` leaves that axis
+        unrestricted for system callers. `max_rows=None` means the bounded default
+        `_ARCHIVE_MAX_ROWS` — no pass is unbounded unless the caller asks for it.
         """
         try:
             now = time.time()
+            limit = _ARCHIVE_MAX_ROWS if max_rows is None else max_rows
 
             # 1. Find archivable items (dispatcher read, nothing retained on the shared handle)
-            all_rows = await self._find_archivable_entries(now)
+            all_rows = await self._find_archivable_entries(now, user_id=user_id, layer=layer, max_rows=limit)
             if not all_rows:
                 return 0
 
@@ -553,35 +572,90 @@ class ForgettingSystem:
             ),
         )
 
-    async def _find_archivable_entries(self, now: float, conn: Any | None = None) -> list[Any]:
+    async def _find_archivable_entries(
+        self,
+        now: float,
+        conn: Any | None = None,
+        *,
+        user_id: str | None = None,
+        layer: str | None = None,
+        max_rows: int | None = _ARCHIVE_MAX_ROWS,
+    ) -> list[Any]:
         """Rows the archive ritual would take.
 
         `conn` is for callers already in a transaction; without it the read goes
         through the dispatcher.
+
+        `never_archive` is read from the policy once and applied to **both**
+        branches. The expired branch used to hardcode `('goal','todo','commitment')`
+        while the policy says a commitment is never archived — so 13 expired
+        commitments were archived with reason `expired`. One derived list means the
+        branches cannot drift again.
+
+        `max_rows` bounds each branch and the merged result; expired rows come
+        first, then by `entry_id`, so the cap is deterministic.
         """
-        # Expired goals/todos/commitments
+        protected = [k.value for k in MemoryKind if get_policy(k).never_archive]
+        placeholders = ",".join(["?"] * len(protected))
+
+        scope = ""
+        scope_params: list[Any] = []
+        if user_id is not None:
+            scope += " AND user_id=?"
+            scope_params.append(user_id)
+        if layer is not None:
+            scope += " AND layer=?"
+            scope_params.append(layer)
+        limit_sql = " LIMIT ?" if max_rows is not None else ""
+
+        # Expired goals/todos (never_archive kinds excluded)
         expired = await self._archivable_rows(
             conn,
-            """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
-               FROM core_memory
-               WHERE memory_kind IN ('goal', 'todo', 'commitment')
-                 AND expires_at IS NOT NULL AND expires_at < ?""",
-            (now,),
+            f"""SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+                FROM core_memory
+                WHERE memory_kind IN ('goal', 'todo')
+                  AND memory_kind NOT IN ({placeholders})
+                  AND expires_at IS NOT NULL AND expires_at < ?{scope}
+                ORDER BY entry_id{limit_sql}""",
+            (*protected, now, *scope_params, *([max_rows] if max_rows is not None else [])),
         )
 
         # Old low-importance entries (excluding never-archive types)
         old = await self._archivable_rows(
             conn,
-            """SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
-               FROM core_memory
-               WHERE memory_kind NOT IN ('instruction', 'rule', 'commitment')
-                 AND (expires_at IS NULL OR expires_at > ?)
-                 AND updated_at < ?
-                 AND importance < ?""",
-            (now, now - self.archive_days * 86400, self.archive_min_importance),
+            f"""SELECT entry_id, user_id, key, value, memory_kind, importance, expires_at
+                FROM core_memory
+                WHERE memory_kind NOT IN ({placeholders})
+                  AND (expires_at IS NULL OR expires_at > ?)
+                  AND updated_at < ?
+                  AND importance < ?{scope}
+                ORDER BY entry_id{limit_sql}""",
+            (
+                *protected,
+                now,
+                now - self.archive_days * 86400,
+                self.archive_min_importance,
+                *scope_params,
+                *([max_rows] if max_rows is not None else []),
+            ),
         )
 
-        return list(expired) + list(old)
+        rows = list(expired) + list(old)
+        return rows if max_rows is None else rows[:max_rows]
+
+    async def archivable_entries(
+        self,
+        *,
+        user_id: str | None = None,
+        layer: str | None = None,
+        max_rows: int | None = _ARCHIVE_MAX_ROWS,
+    ) -> list[sqlite3.Row]:
+        """Read-only preview: exactly the rows `archive_old_entries` would take.
+
+        Same scope, same cap, same order. A separate method rather than a union
+        return, so the destructive call keeps its `int` contract.
+        """
+        return await self._find_archivable_entries(time.time(), user_id=user_id, layer=layer, max_rows=max_rows)
 
     async def _archivable_rows(self, conn: Any | None, sql: str, params: tuple[Any, ...]) -> list[Any]:
         if conn is None:
@@ -661,7 +735,7 @@ class ForgettingSystem:
         """Alias for archive_old_entries to satisfy legacy compactor interface."""
         # ForgettingSystem defaults are used, user_id can override if needed
         # (though ForgettingSystem is currently layer-scoped)
-        count = await self.archive_old_entries()
+        count = await self.archive_old_entries(user_id=user_id, layer=self.layer)
         return {"archived": count}
 
 

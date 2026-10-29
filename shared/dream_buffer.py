@@ -104,9 +104,16 @@ class DreamBuffer:
 
     async def clear_staging(self, user_id: str = "default", session_id: str | None = None) -> int:
         await self.ensure()
+        # `layer` is part of the delete, not an afterthought: `lifespan.py` drains
+        # one layer at a time and then clears it, so a clear without the layer
+        # wiped the other layer's un-consolidated staging — irreversibly.
         if session_id:
-            return await self._dispatch.write(DB_NAME, "DELETE FROM staging_memories WHERE user_id=? AND session_id=?", (user_id, session_id))
-        return await self._dispatch.write(DB_NAME, "DELETE FROM staging_memories WHERE user_id=?", (user_id,))
+            return await self._dispatch.write(
+                DB_NAME,
+                "DELETE FROM staging_memories WHERE layer=? AND user_id=? AND session_id=?",
+                (self.layer, user_id, session_id),
+            )
+        return await self._dispatch.write(DB_NAME, "DELETE FROM staging_memories WHERE layer=? AND user_id=?", (self.layer, user_id))
 
     async def cleanup_old(self, max_age_hours: int = 24, max_count: int = 500) -> dict[str, int]:
         # Housekeeping must not ride, nor wait out, somebody else's transaction: a
@@ -122,22 +129,24 @@ class DreamBuffer:
 
         async def _cleanup(conn: Any) -> dict[str, int]:
             result = {"by_age": 0, "by_count": 0}
+            # Layer-scoped like `clear_staging`: housekeeping in one layer must
+            # not age out or cap another layer's staging.
             cur = await conn.execute(
-                "DELETE FROM staging_memories WHERE created_at < datetime(?, 'unixepoch')",
-                (cutoff,),
+                "DELETE FROM staging_memories WHERE layer=? AND created_at < datetime(?, 'unixepoch')",
+                (self.layer, cutoff),
             )
             result["by_age"] = int(cur.rowcount)
             rows = await (
                 await conn.execute(
-                    "SELECT user_id, COUNT(*) as cnt FROM staging_memories GROUP BY user_id HAVING cnt > ?",
-                    (max_count,),
+                    "SELECT user_id, COUNT(*) as cnt FROM staging_memories WHERE layer=? GROUP BY user_id HAVING cnt > ?",
+                    (self.layer, max_count),
                 )
             ).fetchall()
             for row in rows:
                 excess = int(row["cnt"]) - max_count
                 cur = await conn.execute(
-                    "DELETE FROM staging_memories WHERE id IN (SELECT id FROM staging_memories WHERE user_id=? ORDER BY created_at ASC LIMIT ?)",
-                    (row["user_id"], excess),
+                    "DELETE FROM staging_memories WHERE id IN (SELECT id FROM staging_memories WHERE layer=? AND user_id=? ORDER BY created_at ASC LIMIT ?)",
+                    (self.layer, row["user_id"], excess),
                 )
                 result["by_count"] += int(cur.rowcount)
             return result
