@@ -49,21 +49,28 @@ def global_base(tmp_path):
 
 
 async def test_archive_old_writes_to_the_callers_base(tmp_path, global_base):
-    """Kills the mutation: `ArchivedMemories()` bound to the global manager."""
+    """Kills the mutation: `ArchivedMemories()` bound to the global manager.
+
+    The global base is deliberately left without the table: a global-bound
+    instance would create `archived_memories` there in `ensure()`, and the
+    insert would then ride the caller's open transaction through the
+    dispatcher's `_active` ContextVar — so a row-level assertion alone stays
+    green with the fix reverted. Absence of the table is what proves the bin
+    was never bound to the global base at all.
+    """
     base_a = tmp_path / "a"
     base_a.mkdir()
     cm_a = _cm(base_a)
     epi = EpisodicMemory(cm=cm_a, layer="user")
     await epi._init_db()
     await ArchivedMemories(cm=cm_a).ensure()
-    await ArchivedMemories(cm=_cm(global_base)).ensure()
     await epi.save("u1", "old low-weight memory", emotional_weight=0.1, created_at=OLD)
 
     assert await epi.archive_old("u1", days=90) == 1
 
     assert _rows(base_a, "SELECT episode_id FROM episodes") == []
     assert _rows(base_a, "SELECT memory_type FROM archived_memories") == [("episode",)]
-    assert _rows(global_base, "SELECT id FROM archived_memories") == []
+    assert _rows(global_base, "SELECT name FROM sqlite_master WHERE type='table' AND name='archived_memories'") == []
 
 
 async def test_archive_old_leaves_other_owners_and_layers(tmp_path):
