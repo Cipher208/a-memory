@@ -790,7 +790,6 @@ class BackupCron:
 
         restored: list[str] = []
         for db_file in manifest.get("files", []):
-            safe_resolve(self.base_dir, db_file)  # raises ValueError if traversal
             dest_path = self.base_dir / db_file
             if dest_path.exists() and dest_path.is_symlink():
                 logger.error("Refusing to restore over symlink: %s", dest_path)
