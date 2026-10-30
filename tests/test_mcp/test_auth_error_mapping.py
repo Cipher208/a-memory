@@ -99,14 +99,21 @@ async def test_auth_create_returns_503_when_the_store_is_unreadable(tmp_path: An
 
 @pytest.mark.asyncio
 async def test_memory_api_key_returns_an_error_result_when_the_store_is_unreadable(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Kills the mutation that lets `StoreUnreadable` escape the tool as a transport error."""
+    """Kills the mutation that lets `StoreUnreadable` escape the tool as a transport error.
+
+    All three branches are exercised: an unmapped `create` would leave a tool
+    error on the one action that writes, and a loop over `list`/`revoke` alone
+    would not notice.
+    """
     _unreadable_store(tmp_path, monkeypatch)
 
-    for action in ("list", "revoke"):
+    for action in ("create", "list", "revoke"):
         result = await memory_api_key(action=action, api_key="ak_deadbeef")
         assert result["error"] == ERROR_KEY_STORE_UNREADABLE
         assert result["keys"] is None
         assert result["revoked"] is None
+        assert result["api_key"] is None
+        assert str(tmp_path) not in json.dumps(result), "the tool result leaked the store path"
 
 
 @pytest.mark.asyncio
