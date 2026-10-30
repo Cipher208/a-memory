@@ -63,9 +63,9 @@ class UserHooks:
             return {"action": "save_episode", "summary": f"State changed: {list(delta.keys())}", "weight": 0.4}
         return {"action": "skip"}
 
-    @hook_registry.mark("consolidation", layer="both")
+    @hook_registry.mark("consolidation", layer="user")
     async def _consolidation(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return await consolidation(ctx, self.user_id)
+        return await consolidation(ctx, self.user_id, layer="user")
 
     @hook_registry.mark("emotion_trigger", layer="user")
     async def _emotion_trigger(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:

@@ -169,6 +169,7 @@ async def consolidation(
     user_id: str = DEFAULT_USER,
     min_importance: float | None = None,
     action_key: str | None = None,
+    layer: str = "user",
 ) -> dict[str, Any]:
     staging_items = ctx.get("staging_items", [])
     final_key = action_key or "consolidated"
@@ -181,9 +182,9 @@ async def consolidation(
         from lifecycle.consolidation import stage_consolidation
 
         gate = min_importance if min_importance is not None else 0.7
-        pid = await stage_consolidation(user_id, "user", staging_items, min_importance=gate)
+        pid = await stage_consolidation(user_id, layer, staging_items, min_importance=gate)
         return {"action": final_key, "staged": pid is not None, "proposal_id": pid, "promoted": 0, "skipped": 0}
-    engine = ConsolidationEngine()
+    engine = ConsolidationEngine(layer=layer)
     if min_importance is not None:
         result = await engine.consolidate_staging(user_id, staging_items, min_importance=min_importance)
     else:
