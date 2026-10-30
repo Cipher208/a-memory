@@ -97,6 +97,7 @@ class ApiKeyResult(BaseModel):
     label: str | None = None
     revoked: bool | None = None
     keys: list[dict[str, Any]] | None = Field(default=None, description="List of API keys")
+    error: str | None = Field(default=None, description="Error message when the key store is unreadable")
 
 
 class BackupResult(BaseModel):
