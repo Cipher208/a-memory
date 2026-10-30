@@ -17,6 +17,7 @@ from mcp_server.tools.base import (
     _get_rag,
     _fire_hook,
     _truncate_to_budget,
+    _clamp_limit,
     DEFAULT_TOKEN_BUDGET,
 )
 
@@ -34,6 +35,10 @@ async def dream(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Universal Primitive: Hybrid search across ALL layers (L3, L4, Wiki, Graph) with context construction."""
+    if limit is not None:
+        # None is meaningful downstream (the RAG picks its own default); a
+        # caller-supplied number is bounded like every other read tool.
+        limit = _clamp_limit(limit)
     app: AppContext = _get_ctx(ctx)
     metrics.inc("tool_calls")
     metrics.inc("tool_dream")

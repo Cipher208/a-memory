@@ -199,14 +199,23 @@ class FakeWiki:
 
 
 async def test_s2_route_list_all_wiki() -> None:
-    from rag.dual_route import s2_exhaustive
+    from rag.dual_route import route_query, s2_exhaustive
 
     rows = [{"entry_id": i, "title": f"diary-{i}", "content": f"запись {i}", "wiki_type": "diary"} for i in range(6)]
     rows += [{"entry_id": 100, "title": "note", "content": "заметка", "wiki_type": "notes"}]
     out = await s2_exhaustive(FakeWiki(rows), None, "list all diary entries", user_id="u1")
-    assert len(out) == 6, "полный сбор детей категории — без top-k"
+    assert len(out) == 6, "S2 collects the full category — the router bounds it at the exit, not the collector"
     assert all(r["source"] == "s2_exhaustive" for r in out)
     assert all("diary" in str(r["wiki_type"]) for r in out)
+
+    # F33: the enumerative route used to return the whole collection; the
+    # caller's limit must win at the router exit.
+    class _WikiRag:
+        def __init__(self, wiki: FakeWiki) -> None:
+            self.wiki = wiki
+
+    routed = await route_query(_WikiRag(FakeWiki(rows)), "list all diary entries", user_id="u1", limit=3)
+    assert len(routed) <= 3, f"F33: enumerative route must respect limit=3, got {len(routed)}"
 
 
 class FakeWikiModels:
@@ -378,7 +387,7 @@ async def test_route_enumerative_uses_s2_without_dense_search() -> None:
     rag = FakeRoutedRAG([_cand(1, "что-то", 0.9)], wiki=FakeWiki(rows))
     out = await route_query(rag, "list all diary entries", user_id="u1", limit=3)
     assert rag.calls == [], "S2-маршрут не ходит в dense-pool"
-    assert len(out) == 6, "exhaustive: без top-k"
+    assert len(out) == 3, "F33: exhaustive-сбор ограничен лимитом вызывающего, а не отдаётся целиком"
 
 
 # --- precision (Tenure-стиль): не вернуть чужой скоуп ---

@@ -242,6 +242,7 @@ async def build_inject_blocks(
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "important", "content": content, "score": max(f.importance for f in important)})
+            remaining -= cost
 
     # C8 pinned block: pinned facts are always injected (stable prefix, E9),
     # regardless of importance and budget competition.
@@ -256,11 +257,11 @@ async def build_inject_blocks(
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "pinned", "content": content, "score": 1.0})
+            remaining -= cost
 
     # [S5] Insight: the top-3 themes of the current snapshot (refreshed by the
-    # nightly phase). This block DEBITS the budget — important/pinned above do
-    # not (audit finding F6) — but that defect must not be copied into the
-    # new block.
+    # nightly phase). Every block above debits `remaining`; this one does too,
+    # so the budget is a real upper bound for the whole result.
     try:
         insight_lines = await _top_insights(user_id, layer="user", limit=3)
     except Exception as exc:

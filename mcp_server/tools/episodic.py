@@ -6,7 +6,7 @@ from shared.constants import DB_NAME
 from shared.metrics import metrics
 from shared.write_dispatch import get_write_dispatch
 
-from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache, _fire_hook
+from .base import _validate_layer, _check_rate_limit, _get_memory, _invalidate_cache, _fire_hook, _clamp_limit
 from typing import Any
 
 # Runtime import: MCPServer evaluates tool annotations at registration;
@@ -51,6 +51,7 @@ async def memory_episode_recall(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Recall episodes, optionally filtered by tag."""
+    limit = _clamp_limit(limit)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
@@ -74,6 +75,7 @@ async def memory_episode_list(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """List episodes from L3 episodic memory."""
+    limit = _clamp_limit(limit)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
