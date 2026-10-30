@@ -3,22 +3,28 @@ from __future__ import annotations
 """Pydantic models for MCP tool return types."""
 
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class RememberResult(BaseModel):
+class _ResultBase(BaseModel):
+    """Base for tool result models: an undeclared key is an error, not a silent drop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class RememberResult(_ResultBase):
     status: str = Field(description="ok, skipped, or error")
     entry_id: int | None = Field(default=None, description="Database row ID")
     graph_node_id: int | None = Field(default=None, description="Graph node ID (agent layer)")
     reason: str | None = Field(default=None, description="Skip reason")
 
 
-class RecallResult(BaseModel):
+class RecallResult(_ResultBase):
     results: list[dict[str, Any]] = Field(description="List of matching memories")
     count: int = Field(description="Number of results")
 
 
-class ForgetResult(BaseModel):
+class ForgetResult(_ResultBase):
     deleted_l4: int = Field(default=0, description="Deleted core memory records")
     deleted_l3: int = Field(default=0, description="Deleted episodes")
     deleted_graph: int = Field(default=0, description="Deleted graph nodes")
@@ -41,35 +47,35 @@ class ForgetResult(BaseModel):
     )
 
 
-class EvolveResult(BaseModel):
+class EvolveResult(_ResultBase):
     status: str = Field(description="ok or error")
     summary: str = Field(description="Summary of personality shift")
 
 
-class ProjectResult(BaseModel):
+class ProjectResult(_ResultBase):
     status: str = Field(description="ok, updated, archived, or audit")
     title: str = Field(description="Project title")
     path: str | None = Field(default=None, description="Wiki page path or archive path")
     audit_report: str | None = Field(default=None, description="Project health audit report")
 
 
-class SessionResult(BaseModel):
+class SessionResult(_ResultBase):
     session_id: str | None = Field(default=None, description="Session ID")
     status: str = Field(default="ok", description="Operation status")
 
 
-class EpisodeResult(BaseModel):
+class EpisodeResult(_ResultBase):
     episode_id: int | None = Field(default=None, description="Episode database ID")
     episodes: list[dict[str, Any]] | None = Field(default=None, description="List of episodes")
 
 
-class GraphNodeResult(BaseModel):
+class GraphNodeResult(_ResultBase):
     node_id: int | None = Field(default=None, description="Graph node ID")
     created: bool | None = Field(default=None, description="Whether the node was newly created (social upsert)")
     nodes: list[dict[str, Any]] | None = Field(default=None, description="List of graph nodes")
 
 
-class StatsResult(BaseModel):
+class StatsResult(_ResultBase):
     l1_buffer: int = Field(description="L1 buffer size")
     l2_sessions: int = Field(description="L2 session count")
     l3_episodes: int = Field(description="L3 episode count")
@@ -83,7 +89,7 @@ class StatsResult(BaseModel):
     recall_count: int = Field(default=0, description="Total recall (dream) calls for the user")
 
 
-class ContextResult(BaseModel):
+class ContextResult(_ResultBase):
     context: str = Field(description="Compressed context string")
     l4_facts_count: int
     l3_episodes_count: int
@@ -91,7 +97,7 @@ class ContextResult(BaseModel):
     wiki_count: int
 
 
-class ApiKeyResult(BaseModel):
+class ApiKeyResult(_ResultBase):
     api_key: str | None = Field(default=None, description="Generated API key")
     user_id: str | None = None
     label: str | None = None
@@ -100,21 +106,44 @@ class ApiKeyResult(BaseModel):
     error: str | None = Field(default=None, description="Error message when the key store is unreadable")
 
 
-class BackupResult(BaseModel):
+class BackupNowResult(_ResultBase):
     path: str | None = Field(default=None, description="Backup path")
+
+
+class BackupListResult(_ResultBase):
     backups: list[dict[str, Any]] | None = Field(default=None, description="List of backups")
-    running: bool | None = None
-    interval_hours: int | None = None
 
 
-class DataResult(BaseModel):
+class BackupRestoreResult(_ResultBase):
+    restored: list[str] | None = Field(default=None, description="Files restored from the backup")
+    backup: str | None = Field(default=None, description="Name of the backup that was read")
+    error: str | None = Field(default=None, description="Why the restore was refused")
+
+
+class BackupStatusResult(_ResultBase):
+    running: bool | None = Field(default=None, description="Whether the cron loop is running")
+    interval_hours: int | None = Field(default=None, description="Hours between backups")
+    jitter_seconds: int | None = Field(default=None, description="Random delay added to the schedule")
+    retention_days: int | None = Field(default=None, description="Days a backup is kept")
+    keep_count: int | None = Field(default=None, description="Number of backups kept")
+    wiki_sync_interval_minutes: int | None = Field(default=None, description="Minutes between wiki syncs")
+    last_backup: float | None = Field(default=None, description="Unix timestamp of the last backup")
+    next_backup: float | None = Field(default=None, description="Unix timestamp of the next backup")
+    nightly_failures: int | None = Field(default=None, description="Consecutive nightly pass failures")
+    next_nightly_retry: float | None = Field(default=None, description="Unix timestamp of the next nightly retry")
+    backup_count: int | None = Field(default=None, description="Backups present on disk")
+
+
+class DataResult(_ResultBase):
     path: str | None = Field(default=None, description="Export path")
     exports: list[dict[str, Any]] | None = Field(default=None, description="List of exports")
     core_memory: int | None = None
     episodes: int | None = None
+    sessions: int | None = None
+    l1: int | None = None
 
 
-class CleanupResult(BaseModel):
+class CleanupResult(_ResultBase):
     dedup_core: int | None = None
     compress_episodes: int | None = None
     dream_buffer_cleanup: dict[str, Any] | None = None
@@ -124,7 +153,7 @@ class CleanupResult(BaseModel):
     compaction: int | None = None
 
 
-class PurgeResult(BaseModel):
+class PurgeResult(_ResultBase):
     core_memory: int = Field(description="Deleted core memory records")
     episodes: int = Field(description="Deleted episodes")
     staging: int = Field(description="Deleted staging entries")
@@ -132,19 +161,19 @@ class PurgeResult(BaseModel):
     graph_nodes: int = Field(description="Deleted graph nodes")
 
 
-class SearchResult(BaseModel):
+class SearchResult(_ResultBase):
     results: list[dict[str, Any]] = Field(description="Search results")
     count: int = Field(description="Number of results")
     method: str = Field(default="rrf", description="Search method used")
 
 
-class ThinkResult(BaseModel):
+class ThinkResult(_ResultBase):
     status: str = Field(description="ok or error")
     routing: dict[str, Any] = Field(description="Routing decision details")
     actions: list[dict[str, Any]] = Field(description="Actions taken (L3 save, L4 remember, Graph add)")
 
 
-class DreamResult(BaseModel):
+class DreamResult(_ResultBase):
     summary: str = Field(description="Formatted search results")
     truncated: bool = Field(description="Whether the output was truncated to budget")
     result_count: int = Field(description="Number of results found")

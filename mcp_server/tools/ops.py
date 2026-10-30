@@ -16,7 +16,10 @@ from mcp_server.models import (
     StatsResult,
     ContextResult,
     ApiKeyResult,
-    BackupResult,
+    BackupNowResult,
+    BackupListResult,
+    BackupRestoreResult,
+    BackupStatusResult,
     CleanupResult,
     PurgeResult,
     SearchResult,
@@ -336,15 +339,12 @@ async def memory_backup(
     metrics.inc("tool_backup")
 
     if action == "now":
-        path = backup_cron.backup_now()
-        return BackupResult(path=path).dict()
+        return BackupNowResult(path=backup_cron.backup_now()).dict()
     if action == "list":
-        return BackupResult(backups=backup_cron.list_backups()).dict()
+        return BackupListResult(backups=backup_cron.list_backups()).dict()
     if action == "restore":
-        result = backup_cron.restore(backup_name)
-        return BackupResult(**result).dict()
-    status = backup_cron.status()
-    return BackupResult(**status).dict()
+        return BackupRestoreResult(**backup_cron.restore(backup_name)).dict()
+    return BackupStatusResult(**backup_cron.status()).dict()
 
 
 async def memory_saga(
