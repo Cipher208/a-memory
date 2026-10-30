@@ -472,7 +472,7 @@ async def distill_and_route(
             saved.append(clause)
             if has_conflict:
                 stats["conflicts"] += 1
-    stats["wired_edges"] = await _wire_atoms(cmem._cm, user_id, saved)
+    stats["wired_edges"] = await _wire_atoms(cmem._cm, speaker_layer, user_id, saved)
     # A2-advisory: unique keys in order of first occurrence.
     stats["similar_to"] = list(dict.fromkeys(stats["similar_to"]))
     return stats
@@ -524,13 +524,17 @@ async def _mark_earlier_scope(cmem: Any, user_id: str, conflict: dict[str, Any])
     return first_key
 
 
-async def _wire_atoms(cm: Any, user_id: str, clauses: list[str]) -> int:
+async def _wire_atoms(cm: Any, layer: str, user_id: str, clauses: list[str]) -> int:
     """Incremental mode (G4): a graph node for each saved atom + edges vs existing ones.
 
     The light miners (tags/entities/tokens) fire on the NEW node immediately at
     write time — the nightly batch (graph_enrich) is not needed for fresh neighbors.
     Best-effort: distill_and_route sits in the prod path — a miner failure does not
     silence memory saving; it degrades to the nightly batch.
+
+    ``layer`` is the SPEAKER's layer, passed explicitly by the caller (F27): the
+    caller already knows it, and reading it back off ``cm`` is how an agent's
+    atoms were wired into the owner's graph for months.
     """
     if not clauses:
         return 0
@@ -538,11 +542,11 @@ async def _wire_atoms(cm: Any, user_id: str, clauses: list[str]) -> int:
         from graph.epistemic import EpistemicGraph
         from lifecycle.graph_miners import wire_new_node
 
-        g = EpistemicGraph(cm=cm, layer="user")
+        g = EpistemicGraph(cm=cm, layer=layer)
         edges = 0
         for clause in clauses:
             node_id, _created = await g.find_or_add_entity(user_id, clause[:500], "fact")
-            edges += await wire_new_node(cm, "user", node_id, clause[:500])
+            edges += await wire_new_node(cm, layer, node_id, clause[:500])
         return edges
     except Exception:
         logger.debug("incremental graph wiring failed", exc_info=True)

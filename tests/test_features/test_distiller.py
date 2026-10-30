@@ -264,3 +264,39 @@ async def test_mem_without_layer_type_defaults_to_user(cm) -> None:
     conn = await cm.get("memory.db")
     rows = await (await conn.execute("SELECT layer FROM core_memory WHERE user_id='u1'")).fetchall()
     assert {r[0] for r in rows} == {"user"}, f"отсутствие layer_type → user: {rows!r}"
+
+
+@pytest.mark.asyncio
+async def test_agent_distill_wires_into_the_agent_graph(cm) -> None:
+    """F27: atoms of an agent memory are wired into the AGENT graph, not the owner's.
+
+    Kills the mutation `_wire_atoms(cm, user_id, saved)` that hardcodes
+    ``layer="user"`` twice inside the helper: the speaker layer is known at the
+    call site (``speaker_layer``) and must be carried into both
+    ``EpistemicGraph(layer=...)`` and ``wire_new_node(cm, layer, ...)``.
+    Two atoms share four canon tokens, so wiring must produce a real edge.
+    """
+    from lifecycle.distiller import distill_and_route
+
+    fake_mem, fake_graph = FakeMem(layer_type="agent"), MagicMock()
+    text = "кластер биллинга использует postgresql хранилище отчётов. кластер биллинга использует postgresql реплику аналитики."
+    r = await distill_and_route(fake_mem, fake_graph, "a1", text, 0.8)
+    assert r["wired_edges"] >= 1, f"setup: two overlapping atoms must wire an edge: {r}"
+
+    conn = await cm.get("memory.db")
+    agent_nodes = await (await conn.execute("SELECT node_id, content FROM epi_nodes WHERE layer='agent'")).fetchall()
+    user_nodes = await (await conn.execute("SELECT node_id, content FROM epi_nodes WHERE layer='user'")).fetchall()
+    assert agent_nodes, "distilled agent atoms must land in the agent graph"
+    assert user_nodes == [], f"agent atoms leaked into the user graph: {[dict(n) for n in user_nodes]!r}"
+
+    edge_layers = await (
+        await conn.execute(
+            "SELECT DISTINCT s.layer AS a, t.layer AS b FROM epi_edges e"
+            " JOIN epi_nodes s ON s.node_id = e.source_id"
+            " JOIN epi_nodes t ON t.node_id = e.target_id"
+        )
+    ).fetchall()
+    assert edge_layers, "setup: an edge must exist"
+    assert all(row["a"] == "agent" and row["b"] == "agent" for row in edge_layers), (
+        f"edges of agent atoms must stay in the agent layer: {[dict(r) for r in edge_layers]!r}"
+    )

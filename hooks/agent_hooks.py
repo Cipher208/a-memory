@@ -163,9 +163,9 @@ class AgentHooks:
     async def _dream_buffer(self, ctx: dict[str, Any], mem: Any | None = None) -> dict[str, Any]:
         return await dream_buffer_staging(ctx, self.user_id, layer=AGENT_LAYER, cm=mem._cm if mem else None)
 
-    @hook_registry.mark("consolidation", layer="both")
+    @hook_registry.mark("consolidation", layer=AGENT_LAYER)
     async def _consolidation(self, ctx: dict[str, Any]) -> dict[str, Any]:
-        return await consolidation(ctx, self.user_id, min_importance=0.6, action_key="agent_consolidated")
+        return await consolidation(ctx, self.user_id, min_importance=0.6, action_key="agent_consolidated", layer=AGENT_LAYER)
 
     @hook_registry.mark("forgetting_ritual", layer="both")
     async def _forgetting_ritual(self, ctx: dict[str, Any]) -> dict[str, Any]:

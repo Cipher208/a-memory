@@ -221,7 +221,10 @@ class ConsolidationEngine:
         """Type-aware promotion: instruction/rule/commitment pass even with low importance."""
         from core.memory import CoreMemory
 
-        cm = CoreMemory(cm=self._cm)
+        # `self.layer`, not the default: the engine is told which layer it serves
+        # at construction, and promoting an agent's staging into the owner's L4 is
+        # the same defect F98 fixed on the staging branch.
+        cm = CoreMemory(cm=self._cm, layer=self.layer)
         promoted = 0
         skipped = 0
 
