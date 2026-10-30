@@ -155,7 +155,7 @@ async def memory_graph_nodes(
 
 async def memory_graph_edges(
     layer: str = "user",
-    user_id: str = "",
+    user_id: str = "default",
     node_id: int = 0,
     limit: int = 20,
     direction: Literal["out", "in", "both"] = "out",
@@ -166,7 +166,10 @@ async def memory_graph_edges(
     direction: "out" (default, edges leaving node_id), "in" (backlinks),
     "both" (either endpoint matches).
 
-    An empty user_id keeps the old layer-only scope (no user predicate).
+    The answer is scoped to `user_id` on both endpoints of every edge, like the
+    sibling node readers. An empty user_id keeps the layer-only scope for
+    internal callers that genuinely want the whole layer; the default is
+    `"default"` so an omitted argument cannot read another user's edges.
     """
     limit = _clamp_limit(limit, default=20)
     app = _get_ctx(ctx)

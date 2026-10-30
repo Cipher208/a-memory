@@ -42,10 +42,14 @@ class HookRegistry:
         every hook fires N times. The class name is in the key so two different
         hook classes registering the same hook name both survive.
         """
+        func = handler.func
+        module = getattr(func, "__module__", "") or ""
+        # `__qualname__` keeps two same-named functions from different modules
+        # apart; `__name__` is the fallback for a callable without one.
         return (
             handler.name,
             type(handler.instance).__name__ if handler.instance is not None else None,
-            getattr(handler.func, "__name__", repr(handler.func)),
+            f"{module}.{getattr(func, '__qualname__', getattr(func, '__name__', repr(func)))}",
         )
 
     def register(self, handler: HookHandler) -> None:

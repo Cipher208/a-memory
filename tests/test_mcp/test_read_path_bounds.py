@@ -226,12 +226,26 @@ async def test_inject_budget_covers_every_block(monkeypatch) -> None:
     monkeypatch.setattr(inj, "_pending_proposals", _empty_async)
     mem = SimpleNamespace(l1=_L1(), l3=_L3(), l4=_L4())
 
-    blocks = await inj.build_inject_blocks(mem, rag=None, user_id="u", text="", budget=100)
+    # Tight budget: pinned alone fits, pinned + important does not. Without the
+    # debit both would be appended and the pair would exceed the budget; with it
+    # the second block is refused. Pinned must be the one that wins — the block
+    # is documented as always injected, which is why it now claims the budget
+    # before the importance-ranked block can spend it.
+    tight = await inj.build_inject_blocks(mem, rag=None, user_id="u", text="", budget=150)
+    tight_kinds = [b["kind"] for b in tight]
+    tight_total = sum(estimate_tokens(b["content"]) for b in tight if b["kind"] != "cache_break")
 
-    kinds = [b["kind"] for b in blocks]
-    assert "important" in kinds, f"the important block must still be built, kinds={kinds}"
-    total = sum(estimate_tokens(b["content"]) for b in blocks if b["kind"] != "cache_break")
-    assert total <= 100, f"inject budget is 100 tokens but the blocks sum to {total}: {kinds}"
+    assert "pinned" in tight_kinds, f"pinned must always be injected, kinds={tight_kinds}"
+    assert "important" not in tight_kinds, f"important must not fit the remaining budget, kinds={tight_kinds}"
+    assert tight_total <= 150, f"inject budget is 150 tokens but the blocks sum to {tight_total}: {tight_kinds}"
+
+    # Generous budget: both blocks fit and both are built.
+    roomy = await inj.build_inject_blocks(mem, rag=None, user_id="u", text="", budget=400)
+    roomy_kinds = [b["kind"] for b in roomy]
+    roomy_total = sum(estimate_tokens(b["content"]) for b in roomy if b["kind"] != "cache_break")
+
+    assert "pinned" in roomy_kinds and "important" in roomy_kinds, f"both blocks must fit a 400-token budget, kinds={roomy_kinds}"
+    assert roomy_total <= 400, f"inject budget is 400 tokens but the blocks sum to {roomy_total}: {roomy_kinds}"
 
 
 def test_appcontext_does_not_double_the_hook_registry() -> None:
@@ -248,3 +262,42 @@ def test_appcontext_does_not_double_the_hook_registry() -> None:
 
     assert after_second == after_first, f"a second AppContext() doubled the registry: {after_first} -> {after_second}"
     assert len(hook_registry._hooks.get("new_message", [])) == first_new_message, "new_message gained handlers on the second construction"
+
+
+async def test_graph_edges_default_does_not_read_another_user(read_db) -> None:
+    """Kills F54's remaining hole: an omitted user_id fell back to layer-only.
+
+    The sibling node readers default to `"default"`; the edges tool defaulted to
+    an empty string, which the SQL treated as "no user predicate" — so a caller
+    who simply left the argument out read every user's edges and their content.
+    """
+    conn = await read_db.get("memory.db")
+    now = time.time()
+    ids: dict[str, int] = {}
+    for user in ("default", "bob"):
+        for i in range(2):
+            cur = await conn.execute(
+                "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at)"
+                " VALUES ('user', ?, ?, 'fact', '[]', 0.5, ?)",
+                (user, f"{user}-{i}", now),
+            )
+            ids[f"{user}-{i}"] = int(cur.lastrowid)
+    for src, tgt, rel in (
+        (ids["default-0"], ids["default-1"], "mine"),
+        (ids["bob-0"], ids["bob-1"], "bob_rel"),
+    ):
+        await conn.execute(
+            "INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at) VALUES (?, ?, ?, 0.8, ?)",
+            (src, tgt, rel, now),
+        )
+    await conn.commit()
+
+    from mcp_server.tools.graph import memory_graph_edges
+
+    # No user_id argument at all — the default must not be "every user".
+    out = await memory_graph_edges(ctx=_ctx(_app(read_db)))
+
+    assert out["edges"], "the default user's own edge must still be returned"
+    for edge in out["edges"]:
+        assert str(edge["source_content"]).startswith("default"), f"foreign source leaked on the default call: {edge}"
+        assert str(edge["target_content"]).startswith("default"), f"foreign target leaked on the default call: {edge}"

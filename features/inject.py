@@ -233,19 +233,9 @@ async def build_inject_blocks(
     except Exception as exc:
         logger.debug("disclosure block skipped: %s", exc)
 
-    important_min = float(config.get("inject", "important_min", default=0.8))
-    facts = await mem.l4.get_all(user_id, 50)
-    important = [f for f in facts if f.importance >= important_min and getattr(f, "visibility", "visible") == "visible"]
-    if important:
-        content = "; ".join(f"{row_stamp(f)}{f.key}={f.value[:80]}" for f in important)
-        content = _cap(content)
-        cost = estimate_tokens(content)
-        if cost <= remaining:
-            blocks.append({"kind": "important", "content": content, "score": max(f.importance for f in important)})
-            remaining -= cost
-
     # C8 pinned block: pinned facts are always injected (stable prefix, E9),
-    # regardless of importance and budget competition.
+    # regardless of importance and budget competition — so it claims its budget
+    # BEFORE the importance-ranked block can spend it. It still debits.
     try:
         pinned = await mem.l4.get_pinned(user_id, 10)
     except Exception as exc:
@@ -257,6 +247,17 @@ async def build_inject_blocks(
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "pinned", "content": content, "score": 1.0})
+            remaining -= cost
+
+    important_min = float(config.get("inject", "important_min", default=0.8))
+    facts = await mem.l4.get_all(user_id, 50)
+    important = [f for f in facts if f.importance >= important_min and getattr(f, "visibility", "visible") == "visible"]
+    if important:
+        content = "; ".join(f"{row_stamp(f)}{f.key}={f.value[:80]}" for f in important)
+        content = _cap(content)
+        cost = estimate_tokens(content)
+        if cost <= remaining:
+            blocks.append({"kind": "important", "content": content, "score": max(f.importance for f in important)})
             remaining -= cost
 
     # [S5] Insight: the top-3 themes of the current snapshot (refreshed by the
