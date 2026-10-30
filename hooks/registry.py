@@ -33,9 +33,31 @@ class HookRegistry:
         self._hooks: dict[str, list[HookHandler]] = {}
         self._enabled_hooks: set[str] = set()  # Optional explicit enablement
 
+    @staticmethod
+    def _identity(handler: HookHandler) -> tuple[str, str | None, str]:
+        """Who a registration is: same hook, same class, same underlying function.
+
+        F84: ``AppContext()`` calls ``register_instance`` on every construction,
+        so without this the global registry grows a full set per context and
+        every hook fires N times. The class name is in the key so two different
+        hook classes registering the same hook name both survive.
+        """
+        func = handler.func
+        module = getattr(func, "__module__", "") or ""
+        # `__qualname__` keeps two same-named functions from different modules
+        # apart; `__name__` is the fallback for a callable without one.
+        return (
+            handler.name,
+            type(handler.instance).__name__ if handler.instance is not None else None,
+            f"{module}.{getattr(func, '__qualname__', getattr(func, '__name__', repr(func)))}",
+        )
+
     def register(self, handler: HookHandler) -> None:
         if handler.name not in self._hooks:
             self._hooks[handler.name] = []
+        identity = self._identity(handler)
+        if any(self._identity(existing) == identity for existing in self._hooks[handler.name]):
+            return
         self._hooks[handler.name].append(handler)
 
     def register_instance(self, obj: Any) -> None:

@@ -108,6 +108,24 @@ async def build_inject_blocks(
     blocks: list[dict[str, Any]] = []
     remaining = budget
 
+    # C8 pinned block: pinned facts are always injected, regardless of
+    # importance and budget competition — so it is built FIRST, before any
+    # ranked block can spend the budget, and it debits. (Its position in the
+    # final prompt is still decided by `_apply_kind_policy`, which keeps it in
+    # the dynamic group; that is a separate, older inconsistency with E9.)
+    try:
+        pinned = await mem.l4.get_pinned(user_id, 10)
+    except Exception as exc:
+        logger.debug("pinned block skipped: %s", exc)
+        pinned = []
+    if pinned:
+        content = "; ".join(f"📌 {f.key}={f.value[:80]}" for f in pinned)
+        content = _cap(content)
+        cost = estimate_tokens(content)
+        if cost <= remaining:
+            blocks.append({"kind": "pinned", "content": content, "score": 1.0})
+            remaining -= cost
+
     if text and rag is not None:
         hits = await rag.search(text, user_id=user_id, limit=5)
         for h in hits[:5]:
@@ -242,25 +260,11 @@ async def build_inject_blocks(
         cost = estimate_tokens(content)
         if cost <= remaining:
             blocks.append({"kind": "important", "content": content, "score": max(f.importance for f in important)})
-
-    # C8 pinned block: pinned facts are always injected (stable prefix, E9),
-    # regardless of importance and budget competition.
-    try:
-        pinned = await mem.l4.get_pinned(user_id, 10)
-    except Exception as exc:
-        logger.debug("pinned block skipped: %s", exc)
-        pinned = []
-    if pinned:
-        content = "; ".join(f"📌 {f.key}={f.value[:80]}" for f in pinned)
-        content = _cap(content)
-        cost = estimate_tokens(content)
-        if cost <= remaining:
-            blocks.append({"kind": "pinned", "content": content, "score": 1.0})
+            remaining -= cost
 
     # [S5] Insight: the top-3 themes of the current snapshot (refreshed by the
-    # nightly phase). This block DEBITS the budget — important/pinned above do
-    # not (audit finding F6) — but that defect must not be copied into the
-    # new block.
+    # nightly phase). Every block above debits `remaining`; this one does too,
+    # so the budget is a real upper bound for the whole result.
     try:
         insight_lines = await _top_insights(user_id, layer="user", limit=3)
     except Exception as exc:

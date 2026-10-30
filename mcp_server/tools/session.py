@@ -4,7 +4,7 @@ from mcp_server.models import SessionResult
 from mcp_server.registry import _get_ctx
 from shared.metrics import metrics
 
-from .base import _validate_layer, _check_rate_limit, _get_memory, _fire_hook
+from .base import _validate_layer, _check_rate_limit, _get_memory, _fire_hook, _clamp_limit
 from typing import Any
 
 # Runtime import: MCPServer evaluates tool annotations at registration;
@@ -70,6 +70,7 @@ async def memory_session_list(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """List recent memory sessions."""
+    limit = _clamp_limit(limit)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")

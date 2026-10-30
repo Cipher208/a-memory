@@ -7,7 +7,7 @@ from typing import Any, Literal
 from mcp.server.mcpserver import Context  # noqa: TC002
 
 from mcp_server.registry import _get_ctx
-from mcp_server.tools.base import _get_wiki, _validate_layer
+from mcp_server.tools.base import _get_wiki, _validate_layer, _clamp_limit
 from shared.metrics import metrics
 
 
@@ -17,6 +17,7 @@ async def wiki_reflect(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Wiki outcome digest (A1.3): status/type counts, top pages, staleness signal."""
+    limit = _clamp_limit(limit, default=50)
     _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")

@@ -42,6 +42,7 @@ from .base import (
     _truncate_to_budget,
     _fire_hook,
     _invalidate_cache,
+    _clamp_limit,
     DEFAULT_TOKEN_BUDGET,
 )
 from rag.ablation import retrieval_mode
@@ -534,6 +535,7 @@ async def memory_search(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Hybrid search across RAG + Wiki with strategy selection."""
+    limit = _clamp_limit(limit)
     metrics.inc("tool_calls")
     metrics.inc("tool_search")
     app = _get_ctx(ctx)
@@ -891,6 +893,7 @@ async def memory_proposals(
     The apply path executes the exact write the direct path would have done;
     every decision is audit-logged.
     """
+    limit = _clamp_limit(limit, default=20)
     # ctx matters only for branches that execute mutations (decide/revert).
     # list / propose / conflict / revert_transition work without context, so
     # CLI calls and the meta dispatcher without injection don't explode
@@ -1041,6 +1044,7 @@ async def memory_disclose(
     against recall/inject text and surface their content as a `triggered`
     block. action: "list" | "add" | "disable" | "enable" | "delete".
     """
+    limit = _clamp_limit(limit, default=50)
     if ctx is not None:
         _get_ctx(ctx)
     from features import disclosure
@@ -1414,6 +1418,7 @@ async def memory_query(
     E10 facets: `tags` entries are `dimension:value` — same-dimension values
     are OR'd, different dimensions AND'd. Read-only, no injection surface.
     """
+    limit = _clamp_limit(limit, default=50)
     if ctx is not None:
         _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -1499,6 +1504,7 @@ async def memory_history(
     manage named point-in-time captures of the (layer, user) fact set;
     restore is ledger-traced and idempotent. Scars stay forever.
     """
+    limit = _clamp_limit(limit, default=50)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     from features.history import get_history_row, list_history

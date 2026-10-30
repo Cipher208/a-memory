@@ -56,6 +56,19 @@ _dedup_cache = _DedupCache(ttl=300, max_size=10000)
 DEFAULT_TOKEN_BUDGET = 2000
 CHARS_PER_TOKEN = 4
 
+# F53: SQLite reads LIMIT -1 as "no limit", and LIMIT 0 as "no rows". Every
+# caller-supplied limit is bounded here, at the tool boundary — clamping deeper
+# would silently change internal callers that legitimately pass large values.
+MAX_TOOL_LIMIT = 200
+
+
+def _clamp_limit(value: int | None, default: int = 10, maximum: int = MAX_TOOL_LIMIT) -> int:
+    """Bound a caller-supplied limit: SQLite reads LIMIT -1 as 'no limit'."""
+    if value is None:
+        return default
+    return max(1, min(int(value), maximum))
+
+
 # Moved verbatim to shared/tokens.py to break the hooks → base → context
 # import cycle; underscore aliases keep every existing caller working.
 from shared.tokens import estimate_tokens, truncate_to_budget

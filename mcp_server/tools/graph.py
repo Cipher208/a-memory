@@ -8,7 +8,7 @@ from shared.write_dispatch import get_write_dispatch
 
 from graph.epistemic import SOCIAL_NODE_TYPES
 
-from .base import _validate_layer, _check_rate_limit, _get_graph, _invalidate_cache, _fire_hook
+from .base import _validate_layer, _check_rate_limit, _get_graph, _invalidate_cache, _fire_hook, _clamp_limit
 from typing import Any, Literal
 
 # Runtime import: MCPServer evaluates tool annotations at registration;
@@ -109,6 +109,7 @@ async def memory_graph_query(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Query the epistemic graph by tag or node type."""
+    limit = _clamp_limit(limit, default=20)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
@@ -134,6 +135,7 @@ async def memory_graph_nodes(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """List nodes from the epistemic graph."""
+    limit = _clamp_limit(limit, default=20)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
@@ -153,7 +155,7 @@ async def memory_graph_nodes(
 
 async def memory_graph_edges(
     layer: str = "user",
-    user_id: str = "",
+    user_id: str = "default",
     node_id: int = 0,
     limit: int = 20,
     direction: Literal["out", "in", "both"] = "out",
@@ -163,13 +165,26 @@ async def memory_graph_edges(
 
     direction: "out" (default, edges leaving node_id), "in" (backlinks),
     "both" (either endpoint matches).
+
+    The answer is scoped to `user_id` on both endpoints of every edge, like the
+    sibling node readers. An empty user_id keeps the layer-only scope for
+    internal callers that genuinely want the whole layer; the default is
+    `"default"` so an omitted argument cannot read another user's edges.
     """
+    limit = _clamp_limit(limit, default=20)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")
     metrics.inc("tool_graph_edges")
     graph = _get_graph(app, layer)
     dispatch = get_write_dispatch(graph._cm)
+    # F54: the edge is scoped on BOTH endpoints — a join on one side alone
+    # pulls a foreign node's content into the answer.
+    user_clause = ""
+    user_params: tuple[Any, ...] = ()
+    if user_id:
+        user_clause = " AND s.user_id = ? AND t.user_id = ?"
+        user_params = (user_id, user_id)
     if node_id:
         where = {
             "out": "e.source_id = ?",
@@ -184,21 +199,21 @@ async def memory_graph_edges(
                FROM epi_edges e
                JOIN epi_nodes s ON e.source_id = s.node_id
                JOIN epi_nodes t ON e.target_id = t.node_id
-               WHERE {where} AND s.layer = ?
+               WHERE {where} AND s.layer = ?{user_clause}
                ORDER BY e.weight DESC LIMIT ?""",
-            (*params, graph.layer, limit),
+            (*params, graph.layer, *user_params, limit),
         )
     else:
         rows = await dispatch.query(
             DB_NAME,
-            """SELECT e.source_id, e.target_id, e.relation, e.weight,
+            f"""SELECT e.source_id, e.target_id, e.relation, e.weight,
                       s.content as src_content, t.content as tgt_content
                FROM epi_edges e
                JOIN epi_nodes s ON e.source_id = s.node_id
                JOIN epi_nodes t ON e.target_id = t.node_id
-               WHERE s.layer = ?
+               WHERE s.layer = ?{user_clause}
                ORDER BY e.weight DESC LIMIT ?""",
-            (graph.layer, limit),
+            (graph.layer, *user_params, limit),
         )
     edges = [
         {

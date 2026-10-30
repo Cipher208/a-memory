@@ -15,6 +15,7 @@ from .base import (
     _get_recall_cache,
     _set_recall_cache,
     _fire_hook,
+    _clamp_limit,
 )
 from typing import Any
 
@@ -114,6 +115,7 @@ async def memory_recall(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Search memory across L3 (episodes) and L4 (facts)."""
+    limit = _clamp_limit(limit)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     metrics.inc("tool_calls")

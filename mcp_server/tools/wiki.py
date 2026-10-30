@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 
 from mcp_server.registry import _get_ctx
-from .base import _validate_layer, _get_wiki
+from .base import _validate_layer, _get_wiki, _clamp_limit
 from typing import Any
 
 # Runtime import: MCPServer evaluates tool annotations at registration;
@@ -34,6 +34,7 @@ async def wiki_search(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """Search wiki pages."""
+    limit = _clamp_limit(limit)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     wiki = _get_wiki(app, layer)
@@ -59,6 +60,7 @@ async def wiki_list(
     ctx: Context[Any, Any] | None = None,
 ) -> dict[str, Any]:
     """List wiki pages."""
+    limit = _clamp_limit(limit, default=20)
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
     wiki = _get_wiki(app, layer)

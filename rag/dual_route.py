@@ -210,7 +210,9 @@ async def route_query(
     if qtype == "enumerative":
         hits = await s2_exhaustive(getattr(rag, "wiki", None), _graph_cm(rag, cm), query, user_id=user_id, layer=layer)
         if hits:
-            return hits
+            # F33: the exhaustive collection is bounded at the router exit —
+            # s2 deliberately collects everything, the caller's limit still wins.
+            return hits[:limit]
         # category not recognized → fall back to dense/EDM (recall-first)
 
     # D-Mem: dense-first for factual AND multi-hop (graph-augmented loses to

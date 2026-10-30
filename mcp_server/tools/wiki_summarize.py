@@ -17,6 +17,7 @@ from mcp_server.tools.base import (
     _validate_layer,
     _get_wiki,
     _truncate_to_budget,
+    _clamp_limit,
     DEFAULT_TOKEN_BUDGET,
 )
 
@@ -56,6 +57,7 @@ async def wiki_summarize(
     - Non-empty `query` -> FTS5 search inside `layer`, filtered to the perspective's type.
     - Result is truncated to DEFAULT_TOKEN_BUDGET (2000) tokens.
     """
+    limit = _clamp_limit(limit)
     app = _get_ctx(ctx)
     perspective = _validate_perspective(perspective)
     _validate_layer(layer)
