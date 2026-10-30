@@ -50,3 +50,4 @@ ROADMAP.md
 # ignore file, build backends read only this one, and that difference already put
 # a 5.6 GB venv into a source distribution once.
 .codegraph/
+.worktrees/
