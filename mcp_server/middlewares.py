@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import Awaitable, Callable
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -7,6 +8,8 @@ from starlette.requests import Request
 from starlette.applications import Starlette
 from features.auth import bearer_auth
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -26,8 +29,15 @@ def _verify_api_key(auth: str) -> bool:
     if not auth.startswith("Bearer ak_"):
         return False
     from features.auth import api_key_auth
+    from features.auth.store import StoreUnreadable
 
-    return api_key_auth.verify(auth[7:]) is not None
+    try:
+        return api_key_auth.verify(auth[7:]) is not None
+    except StoreUnreadable:
+        # Fail closed: an unreadable store must deny, not become a 500.
+        store_path = getattr(getattr(api_key_auth, "store", None), "file_path", "?")
+        logger.error("API key store %s is unreadable; denying request", store_path)  # noqa: TRY400 — one line, no traceback needed
+        return False
 
 
 def add_middlewares(app: Starlette) -> None:

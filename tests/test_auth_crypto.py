@@ -61,9 +61,12 @@ def test_wrong_master_key_fails(tmp_path):
 
     secrets._master_cache.clear()
 
-    # Should fail to decrypt (returns empty dict, not exception)
+    # Should fail to decrypt: an unreadable store must not read as "no keys"
+    from features.auth.store import StoreUnreadable
+
     auth2 = APIKeyAuth(keys_file=str(keys_file))
-    assert auth2.list_keys() == []  # cannot read old keys
+    with pytest.raises(StoreUnreadable):
+        auth2.list_keys()
 
 
 def test_bearer_token_encrypted(tmp_path):
