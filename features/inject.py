@@ -108,11 +108,11 @@ async def build_inject_blocks(
     blocks: list[dict[str, Any]] = []
     remaining = budget
 
-    # C8 pinned block: pinned facts are always injected (stable prefix, E9),
-    # regardless of importance and budget competition — so it is built FIRST,
-    # before any ranked block can spend the budget, and it debits. E9 wants it
-    # at the head of the prompt anyway: a stable prefix that moves is a cache
-    # miss on every block that follows it.
+    # C8 pinned block: pinned facts are always injected, regardless of
+    # importance and budget competition — so it is built FIRST, before any
+    # ranked block can spend the budget, and it debits. (Its position in the
+    # final prompt is still decided by `_apply_kind_policy`, which keeps it in
+    # the dynamic group; that is a separate, older inconsistency with E9.)
     try:
         pinned = await mem.l4.get_pinned(user_id, 10)
     except Exception as exc:
