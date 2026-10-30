@@ -113,5 +113,6 @@ nav:
     - Secrets: api/secrets.md
     - Importance: api/importance.md
     - Memory Types: api/memory-types.md
+    - Error Statuses: api/errors.md
   - Contributing: contributing.md
   - Changelog: changelog.md
