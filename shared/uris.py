@@ -98,6 +98,8 @@ async def resolve_uri(
     """Resolve a URI to its content. None = not found / not an ariel-URI; peer → ValueError.
 
     ``user_id`` is required in the call — isolation: other users' records are not visible via a URI.
+    Wiki resolution also requires an explicitly injected ``wiki`` manager because
+    the index has no user ownership column; omitting it fails closed with ``None``.
     """
     parsed = parse_uri(uri)
     if parsed is None:
@@ -126,9 +128,7 @@ async def resolve_uri(
         }
     if store == "wiki":
         if wiki is None:
-            from wiki.manager import WikiManager
-
-            wiki = WikiManager(layer=layer, cm=cm)
+            return None
         wentry = await wiki.get(parsed["key"])
         if wentry is None:
             return None
@@ -144,8 +144,8 @@ async def resolve_uri(
     if store == "graph":
         row = await dispatch.select_one(
             DB_NAME,
-            "SELECT node_id, content, node_type FROM epi_nodes WHERE node_id=? AND layer=?",
-            (parsed["node_id"], layer),
+            "SELECT node_id, content, node_type FROM epi_nodes WHERE node_id=? AND layer=? AND user_id=?",
+            (parsed["node_id"], layer, user_id),
         )
         if row is None:
             return None
@@ -160,8 +160,8 @@ async def resolve_uri(
     if store == "episode":
         row = await dispatch.select_one(
             DB_NAME,
-            "SELECT episode_id, summary FROM episodes WHERE episode_id=? AND layer=?",
-            (parsed["id"], layer),
+            "SELECT episode_id, summary FROM episodes WHERE episode_id=? AND layer=? AND user_id=?",
+            (parsed["id"], layer, user_id),
         )
         if row is None:
             return None
@@ -175,8 +175,8 @@ async def resolve_uri(
     if store == "l0":
         row = await dispatch.select_one(
             DB_NAME,
-            "SELECT id, text, ts, event FROM l0_journal WHERE id=? AND layer=?",
-            (parsed["id"], layer),
+            "SELECT id, text, ts, event FROM l0_journal WHERE id=? AND layer=? AND user_id=?",
+            (parsed["id"], layer, user_id),
         )
         if row is None:
             return None
