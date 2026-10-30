@@ -23,6 +23,7 @@ from mcp_server.models import (
     DataResult,
 )
 from mcp_server.registry import _get_ctx
+from mcp_server.constants import ERROR_KEY_STORE_UNREADABLE
 from shared.metrics import metrics
 from shared.constants import DB_NAME, DEFAULT_USER, DEFAULT_LAYER, METRIC_TOOL_CALLS
 
@@ -306,17 +307,21 @@ async def memory_api_key(
 ) -> dict[str, Any]:
     """Manage API keys."""
     from features.auth import api_key_auth
+    from features.auth.store import StoreUnreadable
 
     metrics.inc("tool_calls")
     metrics.inc("tool_api_key")
 
-    if action == "create":
-        key = api_key_auth.create_key(user_id, label)
-        return ApiKeyResult(api_key=key, user_id=user_id, label=label).dict()
-    if action == "revoke":
-        revoked = api_key_auth.revoke(api_key)
-        return ApiKeyResult(revoked=revoked).dict()
-    return ApiKeyResult(keys=api_key_auth.list_keys()).dict()
+    try:
+        if action == "create":
+            key = api_key_auth.create_key(user_id, label)
+            return ApiKeyResult(api_key=key, user_id=user_id, label=label).dict()
+        if action == "revoke":
+            revoked = api_key_auth.revoke(api_key)
+            return ApiKeyResult(revoked=revoked).dict()
+        return ApiKeyResult(keys=api_key_auth.list_keys()).dict()
+    except StoreUnreadable:
+        return ApiKeyResult(error=ERROR_KEY_STORE_UNREADABLE).dict()
 
 
 async def memory_backup(
