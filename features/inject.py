@@ -108,6 +108,24 @@ async def build_inject_blocks(
     blocks: list[dict[str, Any]] = []
     remaining = budget
 
+    # C8 pinned block: pinned facts are always injected (stable prefix, E9),
+    # regardless of importance and budget competition — so it is built FIRST,
+    # before any ranked block can spend the budget, and it debits. E9 wants it
+    # at the head of the prompt anyway: a stable prefix that moves is a cache
+    # miss on every block that follows it.
+    try:
+        pinned = await mem.l4.get_pinned(user_id, 10)
+    except Exception as exc:
+        logger.debug("pinned block skipped: %s", exc)
+        pinned = []
+    if pinned:
+        content = "; ".join(f"📌 {f.key}={f.value[:80]}" for f in pinned)
+        content = _cap(content)
+        cost = estimate_tokens(content)
+        if cost <= remaining:
+            blocks.append({"kind": "pinned", "content": content, "score": 1.0})
+            remaining -= cost
+
     if text and rag is not None:
         hits = await rag.search(text, user_id=user_id, limit=5)
         for h in hits[:5]:
@@ -232,22 +250,6 @@ async def build_inject_blocks(
                 remaining -= cost
     except Exception as exc:
         logger.debug("disclosure block skipped: %s", exc)
-
-    # C8 pinned block: pinned facts are always injected (stable prefix, E9),
-    # regardless of importance and budget competition — so it claims its budget
-    # BEFORE the importance-ranked block can spend it. It still debits.
-    try:
-        pinned = await mem.l4.get_pinned(user_id, 10)
-    except Exception as exc:
-        logger.debug("pinned block skipped: %s", exc)
-        pinned = []
-    if pinned:
-        content = "; ".join(f"📌 {f.key}={f.value[:80]}" for f in pinned)
-        content = _cap(content)
-        cost = estimate_tokens(content)
-        if cost <= remaining:
-            blocks.append({"kind": "pinned", "content": content, "score": 1.0})
-            remaining -= cost
 
     important_min = float(config.get("inject", "important_min", default=0.8))
     facts = await mem.l4.get_all(user_id, 50)

@@ -247,6 +247,22 @@ async def test_inject_budget_covers_every_block(monkeypatch) -> None:
     assert "pinned" in roomy_kinds and "important" in roomy_kinds, f"both blocks must fit a 400-token budget, kinds={roomy_kinds}"
     assert roomy_total <= 400, f"inject budget is 400 tokens but the blocks sum to {roomy_total}: {roomy_kinds}"
 
+    # The debit on `important` specifically: pinned and important both fit, and
+    # the insight line that follows fits only if important never paid. Without
+    # `remaining -= cost` after important, insight is appended and the total
+    # breaks the budget — so this case fails if that one line is removed.
+    async def _big_insights(user_id, layer="user", limit=3):
+        return ["z" * 600]
+
+    monkeypatch.setattr(inj, "_top_insights", _big_insights)
+    tight_insight = await inj.build_inject_blocks(mem, rag=None, user_id="u", text="", budget=250)
+    ti_kinds = [b["kind"] for b in tight_insight]
+    ti_total = sum(estimate_tokens(b["content"]) for b in tight_insight if b["kind"] != "cache_break")
+
+    assert "important" in ti_kinds, f"important must fit this budget, kinds={ti_kinds}"
+    assert "insight" not in ti_kinds, f"insight must not fit once important has paid, kinds={ti_kinds}"
+    assert ti_total <= 250, f"inject budget is 250 tokens but the blocks sum to {ti_total}: {ti_kinds}"
+
 
 def test_appcontext_does_not_double_the_hook_registry() -> None:
     """Kills F84: every ``AppContext()`` appends another full set of handlers."""
