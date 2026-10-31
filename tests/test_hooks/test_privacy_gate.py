@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from mcp_server.utils.privacy import sanitize
+from tests._ner import REQUIRES_EN_NER
 
 
 def test_placeholder_stability() -> None:
@@ -13,6 +14,7 @@ def test_placeholder_stability() -> None:
     assert m["⟨EMAIL_1⟩"] == "ann@example.com"
 
 
+@REQUIRES_EN_NER
 def test_ner_masks_person_and_org() -> None:
     # en_core_web_sm ловит ru-имена в name-intro паттернах («зовут X»);
     # sentence-initial кириллические имена модель НЕ маскирует (док. в T2).

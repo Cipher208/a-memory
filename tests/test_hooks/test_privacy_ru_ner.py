@@ -7,23 +7,16 @@ circuit breaker → en-путь/словарь/regex. Флаг rag.ru_ner (defau
 
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
 
 from config import config
 from mcp_server.utils.privacy import sanitize
+from tests._ner import REQUIRES_EN_NER, REQUIRES_RU_NER
 
+if TYPE_CHECKING:
+    import pytest
 
-def _ru_nlp_available() -> bool:
-    try:
-        import spacy
-
-        spacy.load("ru_core_news_sm")
-        return True
-    except Exception:
-        return False
-
-
-RU_NER = pytest.mark.skipif(not _ru_nlp_available(), reason="ru_core_news_sm not installed")
+RU_NER = REQUIRES_RU_NER
 
 
 @RU_NER
@@ -71,6 +64,7 @@ def test_ru_ner_disabled_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Укупник" in out, "флаг off: ru-NER не маскирует"
 
 
+@REQUIRES_EN_NER
 def test_ru_ner_breaker_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     """Модель сломана → breaker деградирует к en-пути, sanitize не падает."""
     import mcp_server.utils.privacy as priv
