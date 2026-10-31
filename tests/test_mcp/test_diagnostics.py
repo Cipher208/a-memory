@@ -14,6 +14,29 @@ def hermetic_base(tmp_path, monkeypatch):
     return tmp_path
 
 
+def test_breaker_opened_here_is_visible_now():
+    """First half of the isolation contract: leave a foreign open breaker behind.
+
+    The breaker registry is process-global; `tests/test_hooks/test_privacy_ru.py`
+    opens `ru_ner_model` on a host without the optional ru model, and this file
+    then saw it. conftest's autouse fixture must clear it before the next test.
+    """
+    from shared.circuit_breaker import breaker_registry
+
+    probe = breaker_registry.get("leak_probe", threshold=1, recovery_timeout=60.0)
+    probe.record_failure()
+    assert breaker_registry.get("leak_probe").state.value == "open"
+
+
+def test_breaker_registry_starts_clean():
+    """Second half: the previous test's breaker must not leak in here."""
+    from shared.circuit_breaker import breaker_registry
+
+    probe = breaker_registry.get_all().get("leak_probe")
+    assert probe is None or (probe.failures == 0 and probe.state.value == "closed")
+    assert not [n for n, m in breaker_registry.get_all_metrics().items() if m["state"] != "closed"]
+
+
 async def test_diagnose_fresh_db_ok(hermetic_base):
     from shared.migrations import migration_manager
 

@@ -1,4 +1,3 @@
-import contextlib
 import re
 from re import Pattern
 from typing import Any
@@ -73,32 +72,56 @@ def _ru_ner_enabled() -> bool:
     return bool(config.get("rag", "ru_ner", default=True))
 
 
+def _ner_breaker_instance() -> Any:
+    """Return the process-wide `ru_ner_model` breaker (created on first use)."""
+    global _ner_breaker
+    if _ner_breaker is None:
+        from shared.circuit_breaker import breaker_registry
+
+        _ner_breaker = breaker_registry.get("ru_ner_model", threshold=3, recovery_timeout=60.0)
+    return _ner_breaker
+
+
+def _model_absent(exc: BaseException) -> bool:
+    """Tell whether the optional model package is simply not installed.
+
+    spaCy raises `ModuleNotFoundError`/`ImportError` when spaCy or the model's
+    Python package is missing, and `OSError` `[E050] Can't find model …` when
+    the package name does not resolve to an importable model. Neither is a
+    breakage: the gate degrades to the en-model + dictionary + regex.
+    """
+    if isinstance(exc, ImportError):
+        return True
+    return isinstance(exc, OSError) and ("E050" in str(exc) or "Can't find model" in str(exc))
+
+
 def _get_ru_nlp() -> Any:
     """Lazy ru_core_news_sm + circuit breaker (_embedding_breaker pattern).
 
     3 load/run failures in a row → breaker open for 60s; sanitize then runs
     on the en-model + dictionary + regex. Model not installed → None without
     failures (degradation is a normal mode, not a breakage).
+
+    The two paths are told apart by `_model_absent`: an absent package is the
+    documented normal mode, a package that is present but raises is a
+    breakage and must reach the breaker.
     """
-    global _ru_nlp, _ner_breaker
+    global _ru_nlp
     if _ru_nlp is not None:
         return _ru_nlp
-    if _ner_breaker is None:
-        from shared.circuit_breaker import breaker_registry
-
-        _ner_breaker = breaker_registry.get("ru_ner_model", threshold=3, recovery_timeout=60.0)
-    if not _ner_breaker.allow_request():
+    breaker = _ner_breaker_instance()
+    if not breaker.allow_request():
         return None
     try:
         import spacy
 
         _ru_nlp = spacy.load("ru_core_news_sm")
-        _ner_breaker.record_success()
-    except Exception:
-        # Not installed or broken — breaker accumulates failures, retry only
-        # after recovery_timeout (not on every message).
-        _ner_breaker.record_failure()
+    except Exception as exc:
         _ru_nlp = None
+        if not _model_absent(exc):
+            breaker.record_failure()
+        return None
+    breaker.record_success()
     return _ru_nlp
 
 
@@ -189,10 +212,14 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
         has_cyr_input = any("\u0400" <= ch <= "\u04ff" for ch in out)
         ru_doc = None
         if has_cyr_input and _ru_ner_enabled():
-            with contextlib.suppress(Exception):
+            try:
                 ru_nlp = _get_ru_nlp()
                 if ru_nlp is not None:
                     ru_doc = ru_nlp(out)
+            except Exception:
+                # Absence was already handled inside _get_ru_nlp; reaching this
+                # except means a loaded model failed at inference — a breakage.
+                _ner_breaker_instance().record_failure()
         if ru_doc is not None:
             try:
                 taken = [(m.start(), m.end()) for m in re.finditer("⟨[^⟩]*⟩", out)]
