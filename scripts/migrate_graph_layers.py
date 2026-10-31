@@ -65,17 +65,38 @@ def _database_path(data_dir: Path) -> Path:
     return data_dir / "memory.db"
 
 
+# The database is more than memory.db: SQLite keeps committed-but-not-yet-
+# checkpointed rows in `-wal`, its shared-memory index in `-shm`, and a rollback
+# journal in `-journal`. A manifest written over any of those siblings destroys
+# live data just as surely as one written over the database itself, and harder to
+# notice — the main file still looks intact while the reader gets
+# "disk I/O error".
+_DATABASE_SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def _protected_database_paths(data_dir: Path) -> list[Path]:
+    db_path = _database_path(data_dir)
+    return [db_path, *(db_path.with_name(db_path.name + suffix) for suffix in _DATABASE_SIDECARS)]
+
+
 def _resolve_output_paths(data_dir: Path, output: Path) -> tuple[Path, Path]:
     db_path = _database_path(data_dir)
     resolved_db = db_path.resolve()
     resolved_output = output.resolve()
-    if resolved_output == resolved_db:
-        raise SchemaError("refusing output path resolving to database")
+    protected = [path.resolve() for path in _protected_database_paths(data_dir)]
+    if resolved_output in protected:
+        raise SchemaError("refusing output path resolving to the database or one of its sidecars")
     if output.exists():
         db_stat = db_path.stat()
         output_stat = output.stat()
         if (output_stat.st_dev, output_stat.st_ino) == (db_stat.st_dev, db_stat.st_ino):
             raise SchemaError("refusing output path aliasing database")
+        for sidecar in _protected_database_paths(data_dir)[1:]:
+            if not sidecar.exists():
+                continue
+            sidecar_stat = sidecar.stat()
+            if (output_stat.st_dev, output_stat.st_ino) == (sidecar_stat.st_dev, sidecar_stat.st_ino):
+                raise SchemaError("refusing output path aliasing a database sidecar")
     return resolved_db, output.absolute()
 
 

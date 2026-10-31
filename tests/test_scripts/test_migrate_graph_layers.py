@@ -635,3 +635,24 @@ def test_marker_order_does_not_change_the_policy(fixture_base: Path) -> None:
     reverse = migration.inventory(fixture_base, markers=["beta_marker", "alpha_marker"])["marker_policy"]
 
     assert forward == reverse
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])
+def test_output_cannot_be_a_database_sidecar(fixture_base: Path, suffix: str) -> None:
+    """Kills: guarding only `memory.db` and letting the manifest land on `-wal`.
+
+    SQLite keeps committed rows in the write-ahead log until it checkpoints. A
+    manifest written over `memory.db-wal` leaves the main file looking intact
+    while those rows become unreachable — the reader gets "disk I/O error".
+    """
+    db_path = fixture_base / "memory.db"
+    sidecar = fixture_base / f"memory.db{suffix}"
+    original = b"pretend sidecar contents"
+    sidecar.write_bytes(original)
+
+    before = _db_hash(db_path)
+    with pytest.raises(migration.SchemaError, match=r"sidecar"):
+        migration.write_inventory(fixture_base, sidecar)
+
+    assert sidecar.read_bytes() == original, "the sidecar was overwritten"
+    assert _db_hash(db_path) == before
