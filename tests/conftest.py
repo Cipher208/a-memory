@@ -145,6 +145,25 @@ def deterministic_gate_and_registry():
 
 
 @pytest.fixture(autouse=True)
+def clean_breaker_registry():
+    """Reset circuit-breaker state per test.
+
+    `breaker_registry` is a process-global singleton, like `hook_registry`. A
+    test that exercises a failing model path (privacy ru-NER on a host without
+    ru_core_news_sm) leaves `ru_ner_model` open, and `test_diagnostics` then
+    reports `degraded` for a breaker it never touched. Reset every breaker
+    after each test — reset, not clear: modules cache the instance at import
+    (`shared.embeddings._embedding_breaker`, `privacy._ner_breaker`) and tests
+    assert it is still the registry entry, so dropping the entries would
+    orphan them.
+    """
+    from shared.circuit_breaker import breaker_registry
+
+    yield
+    breaker_registry.reset_all()
+
+
+@pytest.fixture(autouse=True)
 def reap_leaked_workers():
     """Stop aiosqlite workers leaked by clear()-style teardowns after each test.
 

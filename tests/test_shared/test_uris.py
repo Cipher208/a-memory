@@ -74,6 +74,49 @@ async def test_resolve_fact_isolation_and_miss(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_graph_does_not_cross_user(db) -> None:
+    import time
+
+    conn = await db.get("memory.db")
+    await conn.execute(
+        "INSERT INTO epi_nodes (node_id, layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (4242, "user", "foreign", "чужой узел", "fact", "[]", 0.5, time.time()),
+    )
+    await conn.commit()
+
+    assert await resolve_uri(db, "user", "owner", node_uri("user", 4242)) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_episode_does_not_cross_user(db) -> None:
+    import time
+
+    conn = await db.get("memory.db")
+    cursor = await conn.execute(
+        "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("user", "foreign", "чужой эпизод", 0.5, "[]", time.time()),
+    )
+    episode_id = int(cursor.lastrowid)
+    await conn.commit()
+
+    assert await resolve_uri(db, "user", "owner", f"ariel://user/episode/{episode_id}") is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_l0_does_not_cross_user(db) -> None:
+    import time
+
+    conn = await db.get("memory.db")
+    await conn.execute(
+        "INSERT INTO l0_journal (id, ts, event, layer, user_id, text) VALUES (?, ?, ?, ?, ?, ?)",
+        (4243, time.time(), "new_message", "user", "foreign", "чужой сырой текст"),
+    )
+    await conn.commit()
+
+    assert await resolve_uri(db, "user", "owner", "ariel://user/l0/4243") is None
+
+
+@pytest.mark.asyncio
 async def test_resolve_graph_episode_l0(db) -> None:
     import time
 
@@ -119,6 +162,25 @@ async def test_resolve_wiki_needs_page(db) -> None:
     hit = await resolve_uri(db, "user", "ru", wiki_uri("user", "work_notes/refs-20260907-test.md"), wiki=wm)
     assert hit and "данные" in hit["content"], f"hit={hit!r}; get direct={await wm.get('work_notes/refs-20260907-test.md') is not None}"
     assert await resolve_uri(db, "user", "ru", wiki_uri("user", "work_notes/missing.md"), wiki=wm) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_wiki_without_manager_fails_closed(db, monkeypatch) -> None:
+    from wiki import manager as wiki_manager
+
+    constructed: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    class _UnexpectedWikiManager:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            constructed.append((args, kwargs))
+
+        async def get(self, file_path: str):
+            return None
+
+    monkeypatch.setattr(wiki_manager, "WikiManager", _UnexpectedWikiManager)
+
+    assert await resolve_uri(db, "user", "owner", wiki_uri("user", "work_notes/shared.md")) is None
+    assert constructed == []
 
 
 def test_resolve_peer_raises_sync() -> None:
