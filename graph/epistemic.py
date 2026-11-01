@@ -337,8 +337,14 @@ class EpistemicGraph:
         Returns `{"total", "live", "dead"}`.
 
         `epi_edges` carries no `layer` column, so an edge belongs to the layer
-        of its SOURCE node — the same convention `memory_graph_edges` already
-        uses. An edge whose source node is gone is counted by none of the three
+        of its SOURCE node — that is the convention counted here. It is NOT the
+        convention `memory_graph_edges` lists by: that reader requires both
+        endpoints in the requested layer, because it returns the target node's
+        content and a source-only filter would pull a foreign layer's text into
+        the answer. The two therefore diverge on a cross-layer edge: counted
+        here, not listed there. Today no such edge exists; a node re-layering
+        would create them, and this counter would then exceed what the tool
+        shows. An edge whose source node is gone is counted by none of the three
         numbers rather than guessed into one.
 
         "Dead" is `weight <= 0`, not `weight < NREM_FLOOR`: measured on all

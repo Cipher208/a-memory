@@ -170,6 +170,9 @@ async def memory_graph_edges(
     sibling node readers. An empty user_id keeps the layer-only scope for
     internal callers that genuinely want the whole layer; the default is
     `"default"` so an omitted argument cannot read another user's edges.
+    The `layer` is scoped on both endpoints too: an edge belongs to its
+    endpoints' layer, so filtering only the source would pull a foreign
+    layer's node content through the join.
     """
     limit = _clamp_limit(limit, default=20)
     app = _get_ctx(ctx)
@@ -179,7 +182,8 @@ async def memory_graph_edges(
     graph = _get_graph(app, layer)
     dispatch = get_write_dispatch(graph._cm)
     # F54: the edge is scoped on BOTH endpoints — a join on one side alone
-    # pulls a foreign node's content into the answer.
+    # pulls a foreign node's content into the answer. F105: the layer is scoped
+    # the same way, on the target as well as the source.
     user_clause = ""
     user_params: tuple[Any, ...] = ()
     if user_id:
@@ -199,9 +203,9 @@ async def memory_graph_edges(
                FROM epi_edges e
                JOIN epi_nodes s ON e.source_id = s.node_id
                JOIN epi_nodes t ON e.target_id = t.node_id
-               WHERE {where} AND s.layer = ?{user_clause}
+               WHERE {where} AND s.layer = ? AND t.layer = ?{user_clause}
                ORDER BY e.weight DESC LIMIT ?""",
-            (*params, graph.layer, *user_params, limit),
+            (*params, graph.layer, graph.layer, *user_params, limit),
         )
     else:
         rows = await dispatch.query(
@@ -211,9 +215,9 @@ async def memory_graph_edges(
                FROM epi_edges e
                JOIN epi_nodes s ON e.source_id = s.node_id
                JOIN epi_nodes t ON e.target_id = t.node_id
-               WHERE s.layer = ?{user_clause}
+               WHERE s.layer = ? AND t.layer = ?{user_clause}
                ORDER BY e.weight DESC LIMIT ?""",
-            (graph.layer, *user_params, limit),
+            (graph.layer, graph.layer, *user_params, limit),
         )
     edges = [
         {
