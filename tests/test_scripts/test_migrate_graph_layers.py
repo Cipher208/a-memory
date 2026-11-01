@@ -81,6 +81,28 @@ def fixture_base(tmp_path: Path) -> Generator[Path, None, None]:
     yield base
 
 
+PROFILE_LINE = "name: X. calls me Y. i call them Z."
+EXCLUDE_PATTERN = "calls me"
+
+
+@pytest.fixture
+def exclusion_base(tmp_path: Path) -> Generator[Path, None, None]:
+    base = tmp_path / "exclusion"
+    base.mkdir()
+    db = base / "memory.db"
+    with sqlite3.connect(db) as conn:
+        conn.executescript(NODE_DDL + EDGE_DDL)
+        conn.executemany(
+            "INSERT INTO epi_nodes (node_id, layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (1, "user", "default", f"{PROFILE_LINE} alpha_marker", "fact", "[]", 0.8, 1.0),
+                (2, "user", "default", f"{PROFILE_LINE} alpha_marker", "fact", "[]", 0.8, 2.0),
+                (3, "user", "default", "alpha_marker only", "fact", "[]", 0.8, 3.0),
+            ],
+        )
+    yield base
+
+
 def _db_hash(db: Path) -> str:
     return hashlib.sha256(db.read_bytes()).hexdigest()
 
@@ -133,6 +155,8 @@ def test_inventory_manifest_has_fingerprint_and_candidate_fields(fixture_base: P
     assert manifest["db_fingerprint"]["source"]["filename"] == "memory.db"
     assert set(manifest["summary"]) == {
         "candidates",
+        "excluded",
+        "reviewable",
         "high",
         "medium",
         "low",
@@ -656,3 +680,136 @@ def test_output_cannot_be_a_database_sidecar(fixture_base: Path, suffix: str) ->
 
     assert sidecar.read_bytes() == original, "the sidecar was overwritten"
     assert _db_hash(db_path) == before
+
+
+def test_excluded_candidate_is_emitted_and_marked_exclude(exclusion_base: Path) -> None:
+    """Kills: dropping excluded rows instead of emitting them, or forcing decision=review."""
+    manifest = migration.inventory(exclusion_base, markers=["alpha_marker"], excludes=[EXCLUDE_PATTERN])
+    excluded = next(item for item in manifest["candidates"] if item["node_id"] == 1)
+    review = next(item for item in manifest["candidates"] if item["node_id"] == 3)
+    baseline = next(item for item in migration.inventory(exclusion_base, markers=["alpha_marker"])["candidates"] if item["node_id"] == 1)
+
+    assert excluded["decision"] == "exclude"
+    assert f"excluded:{EXCLUDE_PATTERN}" in excluded["reasons"]
+    assert review["decision"] == "review"
+    assert excluded["confidence"] == baseline["confidence"] == "medium"
+
+
+def test_exclude_policy_is_metadata_only(exclusion_base: Path) -> None:
+    """Kills: leaking exclude words into the policy, or deviating from the marker policy shape.
+
+    The pattern here matches a real node on purpose. An earlier version used a
+    pattern that matched nothing, so "the word is not in the manifest" was true
+    no matter what the code did. The honest contract is narrower: the *policy*
+    carries only metadata, while a matching candidate's `reasons` legitimately
+    echo the pattern as `excluded:<pattern>` — that is the evidence a reviewer
+    reads, so this test asserts that echo is present rather than absent.
+    """
+    pattern = EXCLUDE_PATTERN
+    manifest = migration.inventory(exclusion_base, markers=["alpha_marker"], excludes=[pattern])
+    policy = manifest["exclude_policy"]
+
+    assert set(policy) == {"version", "source", "count", "sha256"}
+    assert policy["source"] == "cli"
+    assert policy["count"] == 1
+    assert policy["sha256"] == hashlib.sha256(pattern.encode("utf-8")).hexdigest()
+    assert pattern not in json.dumps(policy, ensure_ascii=False)
+
+    matched = [c for c in manifest["candidates"] if f"excluded:{pattern}" in c["reasons"]]
+    assert matched, "the fixture must produce at least one excluded candidate"
+    assert all(c["decision"] == "exclude" for c in matched)
+    assert manifest["summary"]["excluded"] == len(matched)
+    assert manifest["summary"]["reviewable"] == len(manifest["candidates"]) - len(matched)
+
+
+def test_exclude_file_and_option_combine_dedupe_and_sort(exclusion_base: Path) -> None:
+    """Kills: skipping file/CLI merge, dedupe, sort, or blank/comment filtering."""
+    output = exclusion_base / "manifest.json"
+    exclude_file = exclusion_base / "excludes.txt"
+    exclude_file.write_text("# exclusions\n\n  calls me  \nother_pattern\ncalls me\n", encoding="utf-8")
+
+    result = _run_inventory_cli(
+        exclusion_base,
+        output,
+        "--exclude-file",
+        str(exclude_file),
+        "--exclude",
+        "zzz_pattern",
+        "--exclude",
+        EXCLUDE_PATTERN,
+    )
+
+    assert result.returncode == 0, result.stderr
+    policy = json.loads(output.read_text(encoding="utf-8"))["exclude_policy"]
+    assert policy["source"] == "cli+file"
+    assert policy["count"] == 3
+    assert policy["sha256"] == _expected_marker_sha(["calls me", "other_pattern", "zzz_pattern"])
+
+
+def test_wiki_page_path_content_is_not_a_candidate(tmp_path: Path) -> None:
+    """Kills: treating wiki_page as agent prose when its content is a filesystem path."""
+    base = tmp_path / "wiki"
+    base.mkdir()
+    db = base / "memory.db"
+    with sqlite3.connect(db) as conn:
+        conn.executescript(NODE_DDL + EDGE_DDL)
+        conn.execute(
+            "INSERT INTO epi_nodes (node_id, layer, user_id, content, node_type, tags, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (1, "user", "default", "/home/user/wiki/user/diary/MOC_diary.md", "wiki_page", "[]", 0.5, 1.0),
+        )
+
+    manifest = _inventory(base)
+
+    assert manifest["candidates"] == []
+
+
+def test_summary_excluded_counts_excluded_candidates(exclusion_base: Path) -> None:
+    """Kills: reporting candidate totals without a separate excluded count."""
+    manifest = migration.inventory(exclusion_base, markers=["alpha_marker"], excludes=[EXCLUDE_PATTERN])
+
+    assert manifest["summary"]["excluded"] == 2
+    assert manifest["summary"]["candidates"] == 3
+    assert sum(item["decision"] == "exclude" for item in manifest["candidates"]) == 2
+
+
+def test_exclusion_keeps_inventory_read_only_deterministic_and_apply_rejected(exclusion_base: Path) -> None:
+    """Kills: exclusion bypassing the snapshot/read-only guarantees or enabling apply."""
+    db = exclusion_base / "memory.db"
+    before_hash = _db_hash(db)
+
+    first = migration.inventory(exclusion_base, markers=["alpha_marker"], excludes=[EXCLUDE_PATTERN])
+    second = migration.inventory(exclusion_base, markers=["alpha_marker"], excludes=[EXCLUDE_PATTERN])
+
+    assert first == second
+    assert json.dumps(first, ensure_ascii=False, sort_keys=True) == json.dumps(second, ensure_ascii=False, sort_keys=True)
+    assert _db_hash(db) == before_hash
+
+    output = exclusion_base / "manifest.json"
+    result = _run_inventory_cli(
+        exclusion_base,
+        output,
+        "--marker",
+        "alpha_marker",
+        "--exclude",
+        EXCLUDE_PATTERN,
+    )
+    assert result.returncode == 0, result.stderr
+    assert _db_hash(db) == before_hash
+
+    apply_result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts/migrate_graph_layers.py"),
+            "apply",
+            "--data-dir",
+            str(exclusion_base),
+            "--output",
+            str(output),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert apply_result.returncode != 0
+    assert _db_hash(db) == before_hash

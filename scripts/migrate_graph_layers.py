@@ -25,10 +25,14 @@ if TYPE_CHECKING:
 
 
 MARKER_VERSION = 1
+EXCLUDE_VERSION = 1
 MARKER_SOURCES = {"none", "cli", "file", "cli+file"}
+EXCLUDE_SOURCES = {"none", "cli", "file", "cli+file"}
 REQUIRED_NODE_COLUMNS = {"node_id", "layer", "user_id", "content", "node_type", "tags"}
 REQUIRED_EDGE_COLUMNS = {"source_id", "target_id", "relation", "tags"}
-AGENT_LIKE_NODE_TYPES = {"personality_trait", "action", "outcome", "error_outcome", "wiki_page"}
+# wiki_page is deliberately absent: its `content` is a filesystem path, not prose,
+# so the node type alone carries no agent-layer text evidence.
+AGENT_LIKE_NODE_TYPES = {"personality_trait", "action", "outcome", "error_outcome"}
 AGENT_LIKE_TAGS = {
     "learned_from",
     "decided_because",
@@ -154,45 +158,83 @@ def _json_list(value: Any) -> list[str]:
     return [item for item in decoded if isinstance(item, str)]
 
 
+def _normalize_patterns(patterns: Sequence[str]) -> list[str]:
+    return sorted({pattern for pattern in patterns if pattern})
+
+
 def _normalize_markers(markers: Sequence[str]) -> list[str]:
-    return sorted({marker for marker in markers if marker})
+    return _normalize_patterns(markers)
+
+
+def _normalize_excludes(excludes: Sequence[str]) -> list[str]:
+    return _normalize_patterns(excludes)
+
+
+def _pattern_policy(
+    patterns: Sequence[str],
+    source: str | None,
+    *,
+    version: int,
+    sources: set[str],
+    label: str,
+) -> dict[str, Any]:
+    normalized = _normalize_patterns(patterns)
+    resolved = source if source is not None else ("none" if not normalized else "cli")
+    if resolved not in sources:
+        raise SchemaError(f"unknown {label} source: {resolved}")
+    digest = hashlib.sha256("\n".join(normalized).encode("utf-8")).hexdigest()
+    return {"version": version, "source": resolved, "count": len(normalized), "sha256": digest}
 
 
 def _marker_policy(markers: Sequence[str], source: str | None) -> dict[str, Any]:
-    normalized = _normalize_markers(markers)
-    resolved = source if source is not None else ("none" if not normalized else "cli")
-    if resolved not in MARKER_SOURCES:
-        raise SchemaError(f"unknown marker source: {resolved}")
-    digest = hashlib.sha256("\n".join(normalized).encode("utf-8")).hexdigest()
-    return {"version": MARKER_VERSION, "source": resolved, "count": len(normalized), "sha256": digest}
+    return _pattern_policy(markers, source, version=MARKER_VERSION, sources=MARKER_SOURCES, label="marker")
 
 
-def _read_markers_file(path: Path) -> list[str]:
-    markers: list[str] = []
+def _exclude_policy(excludes: Sequence[str], source: str | None) -> dict[str, Any]:
+    return _pattern_policy(excludes, source, version=EXCLUDE_VERSION, sources=EXCLUDE_SOURCES, label="exclude")
+
+
+def _read_patterns_file(path: Path) -> list[str]:
+    patterns: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        markers.append(stripped)
-    return markers
+        patterns.append(stripped)
+    return patterns
 
 
-def _resolve_markers(markers_file: Path | None, markers: Sequence[str] | None) -> tuple[list[str], str]:
-    from_file = _read_markers_file(markers_file) if markers_file is not None else []
-    from_cli = list(markers) if markers else []
-    if markers_file is not None and from_cli:
+def _resolve_patterns_file(
+    patterns_file: Path | None,
+    patterns: Sequence[str] | None,
+) -> tuple[list[str], str]:
+    from_file = _read_patterns_file(patterns_file) if patterns_file is not None else []
+    from_cli = list(patterns) if patterns else []
+    if patterns_file is not None and from_cli:
         source = "cli+file"
-    elif markers_file is not None:
+    elif patterns_file is not None:
         source = "file"
     elif from_cli:
         source = "cli"
     else:
         source = "none"
-    return _normalize_markers([*from_file, *from_cli]), source
+    return _normalize_patterns([*from_file, *from_cli]), source
+
+
+def _resolve_markers(markers_file: Path | None, markers: Sequence[str] | None) -> tuple[list[str], str]:
+    return _resolve_patterns_file(markers_file, markers)
+
+
+def _resolve_excludes(excludes_file: Path | None, excludes: Sequence[str] | None) -> tuple[list[str], str]:
+    return _resolve_patterns_file(excludes_file, excludes)
 
 
 def _marker_reasons(content: str, markers: Sequence[str]) -> list[str]:
     return [f"marker:{marker}" for marker in markers if marker in content]
+
+
+def _exclude_reasons(content: str, excludes: Sequence[str]) -> list[str]:
+    return [f"excluded:{pattern}" for pattern in excludes if pattern in content]
 
 
 def _node_evidence(node: sqlite3.Row) -> tuple[list[str], bool]:
@@ -273,8 +315,11 @@ def _candidate(
     conn: sqlite3.Connection,
     edge_pk: list[str],
     markers: Sequence[str],
+    excludes: Sequence[str],
 ) -> Candidate | None:
-    marker_reasons = _marker_reasons(str(node["content"]), markers)
+    content = str(node["content"])
+    marker_reasons = _marker_reasons(content, markers)
+    exclude_reasons = _exclude_reasons(content, excludes)
     node_reasons, has_node_evidence = _node_evidence(node)
     edge_ids, edge_impact, edge_reasons = _edge_inventory(conn, int(node["node_id"]), str(node["user_id"]), edge_pk)
     reasons = marker_reasons + node_reasons + edge_reasons
@@ -288,6 +333,7 @@ def _candidate(
     if not reasons:
         return None
     confidence = "high" if categories >= 2 else "medium" if categories == 1 else "low"
+    decision = "exclude" if exclude_reasons else "review"
     duplicate_node_ids = _duplicate_node_ids(
         conn,
         int(node["node_id"]),
@@ -303,8 +349,8 @@ def _candidate(
         "current_layer": "user",
         "target_layer": "agent",
         "confidence": confidence,
-        "reasons": reasons,
-        "decision": "review",
+        "reasons": reasons + exclude_reasons,
+        "decision": decision,
         "edge_ids": edge_ids,
         "edge_impact": edge_impact,
         "duplicate_node_ids": duplicate_node_ids,
@@ -340,6 +386,8 @@ def inventory(
     *,
     markers: Sequence[str] | None = None,
     marker_source: str | None = None,
+    excludes: Sequence[str] | None = None,
+    exclude_source: str | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic, read-only inventory for one memory base.
 
@@ -351,8 +399,11 @@ def inventory(
     candidate itself is excluded. ``target_collision_node_ids`` identifies
     existing agent rows with the same user, node type, and content. Edge
     evidence includes the opposite user and only same-user evidence affects
-    confidence. All reads and the fingerprint use one temporary SQLite online
-    backup snapshot, which is removed before return.
+    confidence. A candidate matching an exclude pattern is still emitted but
+    carries ``decision="exclude"`` and an ``excluded:<pattern>`` reason; the
+    exclude words never appear in ``exclude_policy``. All reads and the
+    fingerprint use one temporary SQLite online backup snapshot, which is
+    removed before return.
     """
     db_path = _database_path(data_dir).resolve()
     if not db_path.is_file():
@@ -360,6 +411,8 @@ def inventory(
 
     normalized_markers = _normalize_markers(list(markers) if markers else [])
     policy = _marker_policy(normalized_markers, marker_source)
+    normalized_excludes = _normalize_excludes(list(excludes) if excludes else [])
+    exclude_policy = _exclude_policy(normalized_excludes, exclude_source)
     label = _database_label(data_dir, database)
     encoded_db_path = quote(str(db_path), safe="/")
     with closing(sqlite3.connect(f"file:{encoded_db_path}?mode=ro", uri=True)) as source_conn:
@@ -374,13 +427,22 @@ def inventory(
                 rows = conn.execute(
                     "SELECT node_id, layer, user_id, content, node_type, tags FROM epi_nodes WHERE layer = 'user' ORDER BY node_id"
                 ).fetchall()
-                candidates = [candidate for row in rows if (candidate := _candidate(row, conn, edge_pk, normalized_markers)) is not None]
+                candidates = [
+                    candidate for row in rows if (candidate := _candidate(row, conn, edge_pk, normalized_markers, normalized_excludes)) is not None
+                ]
                 layer_rows = conn.execute("SELECT layer, COUNT(*) AS row_count FROM epi_nodes GROUP BY layer ORDER BY layer").fetchall()
                 user_rows = conn.execute("SELECT user_id, COUNT(*) AS row_count FROM epi_nodes GROUP BY user_id ORDER BY user_id").fetchall()
             fingerprint = _fingerprint(snapshot_path, source_metadata)
 
+    excluded_count = sum(candidate["decision"] == "exclude" for candidate in candidates)
+    # The confidence buckets describe every emitted candidate, excluded ones
+    # included — they are a property of the evidence, not of the decision.
+    # `reviewable` is the number a reviewer actually acts on, so a consumer never
+    # has to know to subtract `excluded` itself.
     summary = {
         "candidates": len(candidates),
+        "excluded": excluded_count,
+        "reviewable": len(candidates) - excluded_count,
         "high": sum(candidate["confidence"] == "high" for candidate in candidates),
         "medium": sum(candidate["confidence"] == "medium" for candidate in candidates),
         "low": sum(candidate["confidence"] == "low" for candidate in candidates),
@@ -393,6 +455,7 @@ def inventory(
         "source_layer": "user",
         "target_layer": "agent",
         "marker_policy": policy,
+        "exclude_policy": exclude_policy,
         "edge_id_field": edge_pk,
         "db_fingerprint": fingerprint,
         "candidates": candidates,
@@ -407,10 +470,19 @@ def write_inventory(
     *,
     markers: Sequence[str] | None = None,
     marker_source: str | None = None,
+    excludes: Sequence[str] | None = None,
+    exclude_source: str | None = None,
 ) -> None:
     """Write a manifest only after the complete read-only inventory succeeds."""
     _, output_path = _resolve_output_paths(data_dir, output)
-    manifest = inventory(data_dir, database, markers=markers, marker_source=marker_source)
+    manifest = inventory(
+        data_dir,
+        database,
+        markers=markers,
+        marker_source=marker_source,
+        excludes=excludes,
+        exclude_source=exclude_source,
+    )
     temp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -441,6 +513,8 @@ def _parser() -> argparse.ArgumentParser:
     inventory_parser.add_argument("--database", type=str)
     inventory_parser.add_argument("--markers-file", type=Path)
     inventory_parser.add_argument("--marker", action="append", dest="markers", metavar="TEXT")
+    inventory_parser.add_argument("--exclude-file", type=Path)
+    inventory_parser.add_argument("--exclude", action="append", dest="excludes", metavar="TEXT")
     return parser
 
 
@@ -450,7 +524,16 @@ def main(argv: list[str] | None = None) -> int:
         raise AssertionError(f"unsupported command: {args.command}")
     try:
         markers, marker_source = _resolve_markers(args.markers_file, args.markers)
-        write_inventory(args.data_dir, args.output, args.database, markers=markers, marker_source=marker_source)
+        excludes, exclude_source = _resolve_excludes(args.exclude_file, args.excludes)
+        write_inventory(
+            args.data_dir,
+            args.output,
+            args.database,
+            markers=markers,
+            marker_source=marker_source,
+            excludes=excludes,
+            exclude_source=exclude_source,
+        )
     except (FileNotFoundError, OSError, SchemaError, sqlite3.Error) as exc:
         print(str(exc), file=sys.stderr)
         return 2
