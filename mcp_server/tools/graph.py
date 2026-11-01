@@ -182,8 +182,8 @@ async def memory_graph_edges(
     graph = _get_graph(app, layer)
     dispatch = get_write_dispatch(graph._cm)
     # F54: the edge is scoped on BOTH endpoints — a join on one side alone
-    # pulls a foreign node's content into the answer. F105: the layer is scoped
-    # the same way, on the target as well as the source.
+    # pulls a foreign node's content into the answer. The layer is scoped the
+    # same way, on the target as well as the source, for the same reason.
     user_clause = ""
     user_params: tuple[Any, ...] = ()
     if user_id:
