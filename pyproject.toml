@@ -41,7 +41,7 @@ dependencies = [
     # `spacy.load("en_core_web_sm")` raises
     # `OverflowError: Python int too large to convert to C ssize_t`.
     # 3.0.13 loads fine. Cap until upstream fixes it.
-    "preshed>=3.0.0,<3.0.14",
+    "preshed>=3.0.0,<3.0.16",
     "pymorphy3>=2.0.6",
     # lifecycle/ uses both at runtime (best-effort imports); they previously
     # arrived transitively via the embeddings extra — declared explicitly
