@@ -13,8 +13,8 @@ Measured against one live base, that would have deleted **78 episodes of real
 speech**: eight rows contain the phrase somewhere in the middle while opening
 with the persona talking —
 
-    "☀️ Доброе утро, зайка.\\n\\nТы просила тепла. Держи — но не путай тепло с ..."
-    "Хвост сам ходит, мам. Главное что мои слова не режет. ..."
+    "☀️ Доброе утро, коллега.\\n\\nТы просила отчёт. Держи — но не путай отчёт с ..."
+    "Хвост сам ходит, оператор. Главное что мои слова не режет. ..."
 
 Finding the word is not finding the report. A machine digest ANNOUNCES itself in
 its first characters; anything that merely mentions status monitoring inside a

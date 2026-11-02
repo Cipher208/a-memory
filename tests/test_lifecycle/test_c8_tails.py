@@ -76,7 +76,7 @@ async def test_visibility_pinned_and_private(tmp_path):
 
     cm = CoreMemory(cm=AsyncConnectionManager(base_dir=str(tmp_path)), layer="user")
     await cm._init_db()
-    saved_id = await cm.save("u1", "fact:owner", "сервер принадлежит Мурату", importance=0.4, visibility="pinned")
+    saved_id = await cm.save("u1", "fact:owner", "сервер принадлежит Оператору", importance=0.4, visibility="pinned")
     assert saved_id > 0
     await cm.save("u1", "fact:secret_token", "токен abc123", importance=0.9, visibility="private")
 
@@ -86,7 +86,7 @@ async def test_visibility_pinned_and_private(tmp_path):
     hits = await cm.search("u1", "токен")
     assert hits == [], "private не выходит через recall/search"
 
-    hits2 = await cm.search("u1", "Мурату")
+    hits2 = await cm.search("u1", "Оператору")
     assert hits2, "обычный/pinned ищется"
 
 
@@ -115,16 +115,16 @@ async def test_resave_preserves_operator_visibility(tmp_path):
     manager = AsyncConnectionManager(base_dir=str(tmp_path))
     cm = CoreMemory(cm=manager, layer="user")
     await cm._init_db()
-    eid = await cm.save("u1", "fact:owner", "владелец сервера — Мурат", importance=0.5)
+    eid = await cm.save("u1", "fact:owner", "владелец сервера — Оператор", importance=0.5)
     conn = await manager.get("memory.db")
     await conn.execute("UPDATE core_memory SET visibility='hidden' WHERE entry_id=?", (eid,))
     await conn.commit()
 
-    await cm.save("u1", "fact:owner", "владелец сервера — Мурат", importance=0.6)
+    await cm.save("u1", "fact:owner", "владелец сервера — Оператор", importance=0.6)
     row = await (await conn.execute("SELECT visibility FROM core_memory WHERE entry_id=?", (eid,))).fetchone()
     assert row["visibility"] == "hidden", "re-save without the arg preserves the operator flag"
 
-    await cm.save("u1", "fact:owner", "владелец сервера — Мурат", importance=0.6, visibility="visible")
+    await cm.save("u1", "fact:owner", "владелец сервера — Оператор", importance=0.6, visibility="visible")
     row = await (await conn.execute("SELECT visibility FROM core_memory WHERE entry_id=?", (eid,))).fetchone()
     assert row["visibility"] == "visible", "an explicit visibility arg still overrides"
 

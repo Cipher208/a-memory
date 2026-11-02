@@ -56,8 +56,8 @@ async def _seed() -> dict[str, int]:
         return int(cur.lastrowid or 0)
 
     ids = {
-        "n1": await _node("Лили принесла отчёт по проекту python sqlite database", T),
-        "n2": await _node("Lily обновила документацию python sqlite indexing", T + 60),
+        "n1": await _node("Алиса принесла отчёт по проекту python sqlite database", T),
+        "n2": await _node("Alice обновила документацию python sqlite indexing", T + 60),
         "n3": await _node("сборка postgres падает с ошибкой", T + 7200),
         "n4": await _node("postgres починила конфигурацию, теперь работает", T + 10800),
         # дословно пара из test_miner_embedding_jaccard_threshold: hash-Jaccard >= 0.7 доказан

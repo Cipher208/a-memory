@@ -75,12 +75,12 @@ def evaluate_importance(text: str) -> float:
         # Message-level check: an entire chat message can hold 3-4 short
         # vocative sentences (>8 distinct words) and still be pure phatics —
         # the clause default (8) would misjudge it as canon. 10 words keeps
-        # the cap on "Спасибо, мамочка! Важно! Нужно решить."-class chats
+        # the cap on "Спасибо, коллега! Важно! Нужно решить."-class chats
         # while long declarative instructions survive (K1 granularity split).
         # Short dialogic messages are pure chat (greetings, thanks, vocative
         # ping-pong) — cap below the default gate. LONG vocative-wrapped
         # messages stay eligible: the scorer's unit is the whole message and
-        # operators routinely embed instructions in address ("Умница, мам. Обнови
+        # operators routinely embed instructions in address ("Умница, оператор. Обнови
         # дашборд..."). The dialogic CLAUSES of those die later, in the
         # distiller's per-clause guard — the right granularity.
         score = min(score, 0.35)

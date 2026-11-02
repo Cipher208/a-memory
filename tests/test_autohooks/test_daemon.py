@@ -329,8 +329,8 @@ async def test_persona_owner_assistant_routes_agent_layer(tmp_path: Path) -> Non
         batches=[
             Batch(
                 messages=[
-                    Message(sender="assistant", text="Госпожа закрепила канон обращения к хозяйке", ts=2.5, source_id=9),
-                    Message(sender="user", text="да, госпожа", ts=2.6, source_id=10),
+                    Message(sender="assistant", text="Оператор закрепил канон обращения к коллеге", ts=2.5, source_id=9),
+                    Message(sender="user", text="да, оператор", ts=2.6, source_id=10),
                 ],
                 cursor=10,
             )

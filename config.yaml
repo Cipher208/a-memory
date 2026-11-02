@@ -102,16 +102,16 @@ rag:
   # rag.synonyms в обе стороны (см. mcp_server/utils/privacy.py).
   ru_personas:
     - мамочка
-    - котёнок
-    - Лили
-    - Lily
-    - лисёныш
-    - лисёнок
-    - Люси
-    - Эли
-    - Eli
-    - Мурат
-    - Murat
+    - persona_a
+    - persona_b
+    - persona_c
+    - persona_d
+    - user_a
+    - user_b
+    - user_c
+    - user_d
+    - оператор
+    - агент
   # S17 п.7 Tenure counter-signal aliases: {superseded_имя: текущее_имя}.
   # Хит, чей контент содержит старое имя без текущего (и запрос не спрашивает
   # про старое), пессимизируется ×0.7 — негативная роль, не дроп.

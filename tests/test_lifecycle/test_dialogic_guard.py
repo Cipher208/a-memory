@@ -1,7 +1,7 @@
 """L4 pollution guard: conversational-register clauses must not become durable facts.
 
 Regression (2026-09-12, Ф1 follow-up): the auto-extractor keyed the operator's
-greeting ("наконец явилась, сталь ждёт") and owner-addressed remarks as L4
+greeting ("наконец явилась, оператор ждёт") and owner-addressed remarks as L4
 rows with first-4-word slug keys — 61 garbage fact: rows in one base alone.
 Guards proven here:
 
@@ -37,8 +37,8 @@ def test_dialogic_vocatives_and_questions():
     from lifecycle.distiller import _is_dialogic
 
     assert _is_dialogic("Моё видение, госпожа — коротко и по-инженерному")
-    assert _is_dialogic("Привет, мамочка!")
-    assert _is_dialogic("Наконец явилась, сталь ждёт")
+    assert _is_dialogic("Привет, коллега!")
+    assert _is_dialogic("Наконец явилась, оператор ждёт")
     assert _is_dialogic("Какой порт у постгреса?")
     assert _is_dialogic("Доброе утро, всё работает?")
     assert _is_dialogic("Спасибо за отчёт")

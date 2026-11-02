@@ -151,13 +151,13 @@ async def test_search_punctuation_query_still_finds(wiki_index):
     entry = WikiEntry(
         wiki_type="notes",
         title="Greeting",
-        content="Привет мам эксперимент закрыт",
+        content="Привет друг эксперимент закрыт",
         file_path="/tmp/greet.md",
         created_at=time.time(),
         updated_at=time.time(),
     )
     await wiki_index.save(entry, hashlib.sha256(entry.content.encode()).hexdigest())
-    results = await wiki_index.search("Привет, мам")
+    results = await wiki_index.search("Привет, друг")
     assert [r["title"] for r in results] == ["Greeting"]
     # AND semantics preserved: an absent term still filters the page out.
     assert await wiki_index.search("Привет, отсутствующее") == []

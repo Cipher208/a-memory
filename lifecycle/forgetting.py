@@ -105,7 +105,7 @@ async def _not_carried(conn: Any, table: str, carried: frozenset[str]) -> set[st
 
     That sentence used to end in a count — "nine names for a core row" — and the count
     was wrong in the one place the paragraph above argues against: measured on a freshly
-    migrated database it is **ten**, and **eleven** on Эли's live base, whose `core_memory`
+    migrated database it is **ten**, and **eleven** on agent's live base, whose `core_memory`
     carries a stray `id INTEGER` column (index `idx_core_id`) that appears in no migration.
     A hand-written number cannot survive that, which is why there is no number here now —
     the caller reads `not_recorded` from the answer instead.

@@ -183,7 +183,7 @@ async def test_a_purged_row_is_refused_with_a_reason(cm: Any) -> None:
 
     This docstring used to say "The 41% stay out of reach" — a share of one instance's
     archive, present-tense, in a file whose own header says a share of one base must not be
-    memorised. It is no longer true of anything: those rows were deleted from Эли's base on
+    memorised. It is no longer true of anything: those rows were deleted from agent's base on
     2026-10-11 on her word, so the live bin holds 359 rows and **0** purges. The refusal
     stays because a row can carry such a reason again; the number never belonged here."""
     purged = min(PURGE_REASONS)

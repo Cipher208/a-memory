@@ -103,7 +103,7 @@ def test_persona_dictionary_is_not_empty() -> None:
     personas = _ru_personas()
     assert len(personas) >= 10, f"anonymizer dictionary shrank to {len(personas)}: {sorted(personas)}"
     # The two that leaked into release text during this change, by construction.
-    assert "Murat" in personas and "Эли" in personas
+    assert "persona_a" in personas and "user_a" in personas
 
 
 def _declared_requirements() -> list[tuple[str, str]]:

@@ -2,7 +2,7 @@
 
 Pure module (stdlib only): the importance scorer, the distiller and the
 consolidation engine all consume it without cycles. Extracted 2026-09-12
-after the F1 audit showed episode_promotion keying the owner's greeting as
+after the F1 audit showed episode_promotion keying a user's greeting as
 an L4 'fact'. Word-boundary matching keeps homograph adjectives/conjunctions
 (poka=until, khoroshaya=good, dorogaya=dear) from false-positive hits.
 """
