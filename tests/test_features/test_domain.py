@@ -16,7 +16,7 @@ def test_live_signals_are_alive():
     """Regression for the dead-signal bug: _emotion_engine was never passed,
     so emotional scored 0.0 everywhere; the lazy default must bring it back."""
     s = ImportanceScorer()
-    intimate = s.score("Я люблю тебя, госпожа, ты моя милая Steel Mother — нежность к хозяйке")
+    intimate = s.score("Я люблю тебя, коллега, ты мой добрый собеседник — нежность к коллеге")
     assert intimate.signals.emotional > 0.0, "emotion signal must not be dead"
     tech = s.score("redis postgres docker k8s migration api graphql kafka ssh rollback deploy")
     assert tech.signals.tech_keyword > 0.0

@@ -615,9 +615,9 @@ async def test_miner_embedding_lets_a_backend_failure_escape(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_miner_entities_synonym_canon_creates_co_mentions(db):
-    # «Лили» и «Lily» — один канон-класс сущности (словарь rag.synonyms, обе стороны)
-    n1 = await _node("Лили принесла отчёт по проекту", T)
-    n2 = await _node("Lily обновила документацию", T)
+    # «Алиса» и «Alice» — один канон-класс сущности (словарь rag.synonyms, обе стороны)
+    n1 = await _node("Алиса принесла отчёт по проекту", T)
+    n2 = await _node("Alice обновила документацию", T)
     await _node("деплой прошёл успешно", T)  # другое слово из словаря — не общая сущность
 
     from lifecycle.graph_miners import miner_entities
@@ -654,8 +654,8 @@ async def test_miner_entities_spacy_org_shared_mention(db):
 async def test_miner_entities_degree_cap_anti_hub(db):
     """B6 post-eval: multi-topic dump (все 11 синоним-классов) не собирает
     звезду из 20 узлов — cap 12 co_mentions на узел."""
-    # хаб: текст, содержащий ВСЕ канон-классы словаря (postgres, память, деплой, бэкап, Лили...)
-    hub = await _node("postgres память деплой backup Лили внутри textpost backupstore", T)
+    # хаб: текст, содержащий ВСЕ канон-классы словаря (postgres, память, деплой, бэкап, Алиса...)
+    hub = await _node("postgres память деплой backup Алиса внутри textpost backupstore", T)
     for i in range(20):
         await _node(f"postgres кластер партнёр {i}", T)
 
@@ -690,16 +690,16 @@ class _DistillMem:
 @pytest.mark.asyncio
 async def test_incremental_wiring_edges_immediately_on_distill(db):
     """(c) запись нового узла через distill_and_route → рёбра сразу, не в ночи."""
-    existing = await _node("Лили настроила postgres backup", T)
+    existing = await _node("Алиса настроила postgres backup", T)
 
     from lifecycle.distiller import distill_and_route
 
-    stats = await distill_and_route(_DistillMem(db), object(), "gu", "Лили обновила postgres индексы", 0.8)
+    stats = await distill_and_route(_DistillMem(db), object(), "gu", "Алиса обновила postgres индексы", 0.8)
 
     assert stats["l4_saved"] + stats["l3_saved"] >= 1
     conn = await connection_manager.get(DB_NAME)
     new_nodes = await (
-        await conn.execute("SELECT node_id FROM epi_nodes WHERE content=? AND node_id != ?", ("Лили обновила postgres индексы", existing))
+        await conn.execute("SELECT node_id FROM epi_nodes WHERE content=? AND node_id != ?", ("Алиса обновила postgres индексы", existing))
     ).fetchall()
     assert len(new_nodes) == 1  # атом попал в граф узлом при записи
     edges = await (
@@ -882,8 +882,8 @@ async def test_entities_cached_skips_second_extraction(db, monkeypatch):
     import lifecycle.graph_miners as gm
 
     conn = await connection_manager.get(DB_NAME)
-    syn = {"лили": ["lily"]}
-    texts = ["Лили принесла отчёт", "Lily обновила документацию"]
+    syn = {"алиса": ["alice"]}
+    texts = ["Алиса принесла отчёт", "Alice обновила документацию"]
 
     calls: list[str] = []
     real = gm._entities
@@ -909,13 +909,13 @@ async def test_entities_cached_dedupes_identical_texts(db, monkeypatch):
     import lifecycle.graph_miners as gm
 
     conn = await connection_manager.get(DB_NAME)
-    syn = {"лили": ["lily"]}
+    syn = {"алиса": ["alice"]}
 
     calls: list[str] = []
     real = gm._entities
     monkeypatch.setattr(gm, "_entities", lambda t, s, n=None: (calls.append(t), real(t, s, n))[1])
 
-    out = await gm._entities_cached(conn, ["Лили здесь", "Лили здесь"], syn, None)
+    out = await gm._entities_cached(conn, ["Алиса здесь", "Алиса здесь"], syn, None)
 
     assert out[0] == out[1]
     assert len(calls) == 1, f"дубликат текста парсится один раз, а не {len(calls)}"
@@ -927,9 +927,9 @@ async def test_entities_cached_invalidated_by_dictionary_change(db):
     import lifecycle.graph_miners as gm
 
     conn = await connection_manager.get(DB_NAME)
-    text = "Лили и Борис здесь"
-    syn_small = {"лили": ["lily"]}
-    syn_wide = {"лили": ["lily"], "борис": ["boris"]}
+    text = "Алиса и Борис здесь"
+    syn_small = {"алиса": ["alice"]}
+    syn_wide = {"алиса": ["alice"], "борис": ["boris"]}
 
     assert gm._ner_cache_tag(syn_small, None) != gm._ner_cache_tag(syn_wide, None)
 
@@ -948,7 +948,7 @@ def test_ner_cache_tag_separates_dict_only_from_ner_backend():
     class _FakeNlp:
         meta = {"name": "fake_ner", "version": "1.0"}
 
-    syn = {"лили": ["lily"]}
+    syn = {"алиса": ["alice"]}
     assert gm._ner_cache_tag(syn, None) != gm._ner_cache_tag(syn, _FakeNlp())
     assert "dict-only" in gm._ner_cache_tag(syn, None)
     assert "fake_ner" in gm._ner_cache_tag(syn, _FakeNlp())
@@ -964,8 +964,8 @@ async def test_miner_entities_second_run_does_not_reparse(db, monkeypatch):
     """
     import lifecycle.graph_miners as gm
 
-    await _node("Лили принесла отчёт по проекту", T)
-    await _node("Lily обновила документацию", T)
+    await _node("Алиса принесла отчёт по проекту", T)
+    await _node("Alice обновила документацию", T)
 
     calls: list[str] = []
     real = gm._entities
@@ -988,9 +988,9 @@ async def test_ner_cache_rows_are_keyed_by_tag(db):
     import lifecycle.graph_miners as gm
 
     conn = await connection_manager.get(DB_NAME)
-    syn = {"лили": ["lily"]}
+    syn = {"алиса": ["alice"]}
 
-    await gm._entities_cached(conn, ["Лили здесь"], syn, None)
+    await gm._entities_cached(conn, ["Алиса здесь"], syn, None)
     await gm._entities_cached(conn, ["нечто иное"], syn, None)
 
     rows = await (await conn.execute("SELECT text_hash, tag, entities FROM ner_cache")).fetchall()

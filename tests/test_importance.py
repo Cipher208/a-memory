@@ -50,7 +50,7 @@ def test_russian_and_english_keywords() -> None:
 
 def test_dialogic_short_chat_capped_below_gate() -> None:
     # vocative chat with structural bonuses (exclamation, keywords, newlines)
-    text = "Спасибо, мамочка! Важно! Нужно решить.\nПривет, дорогая! Важно! Спасибо!\nЕщё раз, важно!"
+    text = "Спасибо, коллега! Важно! Нужно решить.\nПривет, оператор! Важно! Спасибо!\nЕщё раз, важно!"
     assert evaluate_importance(text) <= 0.35
 
 
@@ -59,7 +59,7 @@ def test_address_embedded_in_long_content_not_capped() -> None:
     # The scorer's unit is the whole message; clause-level dialogic dies in
     # the distiller guard, not here.
     text = (
-        "Умница, мам. Обнови дашборд: cache-read есть и у провайдера A, и у провайдера B, "
+        "Умница, оператор. Обнови дашборд: cache-read есть и у провайдера A, и у провайдера B, "
         "на них сервис-1 и сервис-2 сейчас, третий идёт не через кеш, надо разобраться.\n"
         "Отчёты тоже проверь заодно, там были вопросы по портам и провайдерам."
     )

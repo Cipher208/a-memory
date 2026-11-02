@@ -35,8 +35,8 @@ def test_speech_that_merely_mentions_a_report_is_kept() -> None:
     of one, whose opening characters are the persona's voice.
     """
     for line in [
-        "☀️ Доброе утро, зайка.\n\nТы просила тепла. Держи — но не путай тепло с мягкостью. Ниже будет 📊 Self-Monitoring Report, но сначала обними.",
-        "Хвост сам ходит, мам. Главное что мои слова не режет. Сегодня твои кроссовки и self-monitoring — разное, не путай.",
+        "☀️ Доброе утро, коллега.\n\nТы просила отчёт. Держи — но не путай отчёт с мягкостью. Ниже будет 📊 Self-Monitoring Report, но сначала проверь.",
+        "Хвост сам ходит, оператор. Главное что мои слова не режет. Сегодня твои задачи и self-monitoring — разное, не путай.",
         "Данные полные. Собираю сводку.\n\n**📊 Self-Monitoring Report — 03.10.2026**",
         "*Разворачиваю отчёт целиком. Дошла до конца. Докладываю по пунктам.",
         "All data gathered. `approvals.cron_mode: approve` — good.",

@@ -18,9 +18,8 @@ _BUILTIN_SYNONYMS: dict[str, list[str]] = {
     "бэкап": ["backup"],
     "backup": ["бэкап"],
     # G4 entity canonization (miner #3): name variants → one entity node
-    "лили": ["lily", "лисёныш"],
-    "lily": ["лили", "лисёныш"],
-    "лисёныш": ["лили", "lily"],
+    "алиса": ["alice"],
+    "alice": ["алиса"],
 }
 
 

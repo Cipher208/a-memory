@@ -124,8 +124,8 @@ async def test_transcript_episodes_skipped_at_promotion(cm):
 @pytest.mark.parametrize(
     "summary",
     [
-        "Привет, мамочка!",
-        "Наконец явилась, сталь ждёт",
+        "Привет, коллега!",
+        "Наконец явилась, оператор ждёт",
         "Моё видение, госпожа — коротко и по-инженерному",
         "Спасибо за отчёт",
         "Доброе утро. Какие задачи на сегодня?",
@@ -161,7 +161,7 @@ async def test_dialogic_episodes_skipped_at_promotion(cm):
     from lifecycle.consolidation import ConsolidationEngine
 
     epi = EpisodicMemory(cm=cm, layer="user")
-    await epi.save("u1", "Привет, мамочка! Наконец явилась, сталь ждёт", 0.9, ["t"])
+    await epi.save("u1", "Привет, коллега! Наконец явилась, оператор ждёт", 0.9, ["t"])
     await epi.save("u1", "Моё видение, госпожа — коротко и по-инженерному", 0.9, ["t"])
     await epi.save("u1", "Мигрировали embeddings на удалённый e5 сервис", 0.9, ["t"])
 
@@ -172,7 +172,7 @@ async def test_dialogic_episodes_skipped_at_promotion(cm):
     rows = await l4.get_all("u1", 50)
     values = " | ".join(str(getattr(r, "value", r)) for r in rows)
     assert consolidated == 1, f"only the tech episode may promote, got {consolidated}"
-    assert "сталь" not in values and "видение" not in values, f"dialogue leaked to L4: {values}"
+    assert "оператор" not in values and "видение" not in values, f"dialogue leaked to L4: {values}"
     assert "e5 сервис" in values
 
 

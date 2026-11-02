@@ -22,7 +22,7 @@ def test_trailing_question_any_length():
 
 
 def test_long_declarative_with_vocative_survives():
-    clause = "Госпожа закрепила в SOUL: ассистентка обращается ко мне «Госпожа», а я к ней — «моя девочка»"
+    clause = "Оператор закрепил в SOUL: ассистент обращается ко мне «Оператор», а я к нему — «мой помощник»"
     assert not is_dialogic(clause)
 
 

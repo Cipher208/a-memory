@@ -15,7 +15,7 @@ from shared.write_dispatch import WriteDispatch, get_write_dispatch
 #: was deliberately removed makes the removal decorative.
 #:
 #: `foreign_agent_contamination` is written by `scripts/purge_foreign_rows.py`,
-#: which archives before it removes. On **Эли's** base measured 2026-10-11 that was
+#: which archives before it removes. On **agent's** base measured 2026-10-11 that was
 #: 247 of 606 archived rows (41%) — 238 episodes and 9 core entries. **Those 247 rows
 #: were then deleted, that same day, on her word**, so the figures describe a snapshot
 #: and not the live bin: that base now holds 359 rows and **zero** purges, and the
