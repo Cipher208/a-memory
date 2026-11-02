@@ -20,7 +20,7 @@ from shared.write_dispatch import WriteDispatch, get_write_dispatch
 #: were then deleted, that same day, on her word**, so the figures describe a snapshot
 #: and not the live bin: that base now holds 359 rows and **zero** purges, and the
 #: numbers above reproduce only against the snapshot taken before the deletion
-#: (`/home/murat/backups/cowagent-purge-rows-20261011/memory.db`). The refusal stays,
+#: (`<backup-root>/cowagent-purge-rows-20261011/memory.db`). The refusal stays,
 #: because a row can carry such a reason again. If they ever need to come back, that is
 #: an operator script run by hand, not a tool an agent can call — which is why nothing
 #: here, and nothing in the restore path, has a parameter that turns the refusal off.

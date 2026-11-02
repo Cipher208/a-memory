@@ -194,6 +194,7 @@ class Dashboard:
             "graph_edges": ug_edges["total"],
             "graph_edges_live": ug_edges["live"],
             "graph_edges_dead": ug_edges["dead"],
+            "graph_edges_cross_layer": ug_edges["cross_layer"],
             "agent_l1": am.l1.size(),
             "agent_l2": await am.l2.count_sessions(user_id),
             "agent_l3": await am.l3.count(user_id),

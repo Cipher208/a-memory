@@ -76,6 +76,7 @@ async def memory_stats(
         graph_edges=graph_edges["total"],
         graph_edges_live=graph_edges["live"],
         graph_edges_dead=graph_edges["dead"],
+        graph_edges_cross_layer=graph_edges["cross_layer"],
         avg_session_quality=await mem.l2.avg_quality(user_id),
         recall_count=await count_recalls(app.mm._cm, user_id),
     ).dict()
