@@ -85,6 +85,9 @@ class StatsResult(_ResultBase):
     graph_edges: int = Field(default=0, description="Graph edge count (all rows)")
     graph_edges_live: int = Field(default=0, description="Graph edges with weight > 0")
     graph_edges_dead: int = Field(default=0, description="Graph edges with weight <= 0 (revivable, not yet pruned)")
+    graph_edges_cross_layer: int = Field(
+        default=0, description="Edges touching this layer but with the other endpoint in another layer (not readable here)"
+    )
     avg_session_quality: float | None = Field(default=None, description="Average session quality score (0-100) over scored sessions")
     recall_count: int = Field(default=0, description="Total recall (dream) calls for the user")
 

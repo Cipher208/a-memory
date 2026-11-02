@@ -334,18 +334,26 @@ class EpistemicGraph:
     async def count_edges(self, user_id: str | None = None) -> dict[str, int]:
         """Count this layer's edges, split into live and dead by weight.
 
-        Returns `{"total", "live", "dead"}`.
+        Returns `{"total", "live", "dead", "cross_layer"}`.
 
-        `epi_edges` carries no `layer` column, so an edge belongs to the layer
-        of its SOURCE node — that is the convention counted here. It is NOT the
-        convention `memory_graph_edges` lists by: that reader requires both
-        endpoints in the requested layer, because it returns the target node's
-        content and a source-only filter would pull a foreign layer's text into
-        the answer. The two therefore diverge on a cross-layer edge: counted
-        here, not listed there. Today no such edge exists; a node re-layering
-        would create them, and this counter would then exceed what the tool
-        shows. An edge whose source node is gone is counted by none of the three
-        numbers rather than guessed into one.
+        `epi_edges` carries no `layer` column, so an edge's layer has to be
+        derived — and it is derived the same way `memory_graph_edges` reads it:
+        an edge counts as readable for a layer only when BOTH endpoints are in
+        that layer. The reader returns the target node's content, so an edge with
+        a foreign target is not readable there and must not be counted here
+        either; a source-only count would report edges nobody can list, by the
+        thousand after a node re-layering.
+
+        The universe is every edge incident to this layer on either end, which is
+        why `cross_layer` is symmetric: an edge leaving the layer and an edge
+        entering it are the same edge seen from its two sides, and both are
+        bleed. `cross_layer` is never folded into `total`; it is the size of the
+        remaining layer bleed, and the two together are what the layer touches.
+
+        An edge with a missing endpoint is counted by none of the numbers rather
+        than guessed into one, and it is not cross-layer either: nothing says the
+        layers differ. With `user_id`, the filter applies to whichever endpoint
+        sits in this layer.
 
         "Dead" is `weight <= 0`, not `weight < NREM_FLOOR`: measured on all
         three house databases, only 0.1% of edges fall strictly between zero and
@@ -354,24 +362,43 @@ class EpistemicGraph:
         revives it (see `_insert_edge`), which is why nothing prunes zero
         eagerly.
         """
-        where = "s.layer = ?"
-        params: tuple[Any, ...] = (self.layer,)
+        same = "s.layer = ? AND t.layer = ?"
+        same_params: list[Any] = [self.layer, self.layer]
+        cross_out = "s.layer = ? AND t.layer IS NOT NULL AND t.layer <> ?"
+        cross_in = "t.layer = ? AND s.layer IS NOT NULL AND s.layer <> ?"
+        cross_params: list[Any] = [self.layer, self.layer, self.layer, self.layer]
         if user_id:
-            where += " AND s.user_id = ?"
-            params = (self.layer, user_id)
-        row = await self._dispatch.select_one(
-            DB_NAME,
-            (
-                "SELECT COUNT(*) AS total,"
-                " COALESCE(SUM(CASE WHEN e.weight > 0 THEN 1 ELSE 0 END), 0) AS live,"
-                " COALESCE(SUM(CASE WHEN e.weight <= 0 THEN 1 ELSE 0 END), 0) AS dead"
-                f" FROM epi_edges e JOIN epi_nodes s ON e.source_id = s.node_id WHERE {where}"
-            ),
-            params,
+            # `memory_graph_edges` scopes user_id on both endpoints; a count that
+            # did not would report edges the reader hides.
+            same += " AND s.user_id = ? AND t.user_id = ?"
+            same_params += [user_id, user_id]
+            cross_out = "s.layer = ? AND s.user_id = ? AND t.layer IS NOT NULL AND t.layer <> ?"
+            cross_in = "t.layer = ? AND t.user_id = ? AND s.layer IS NOT NULL AND s.layer <> ?"
+            cross_params = [self.layer, user_id, self.layer, self.layer, user_id, self.layer]
+        sql = (
+            "SELECT"
+            f" COALESCE(SUM(CASE WHEN {same} THEN 1 ELSE 0 END), 0) AS total,"
+            f" COALESCE(SUM(CASE WHEN {same} AND e.weight > 0 THEN 1 ELSE 0 END), 0) AS live,"
+            f" COALESCE(SUM(CASE WHEN {same} AND e.weight <= 0 THEN 1 ELSE 0 END), 0) AS dead,"
+            f" COALESCE(SUM(CASE WHEN ({cross_out}) OR ({cross_in}) THEN 1 ELSE 0 END), 0) AS cross_layer"
+            " FROM epi_edges e"
+            " LEFT JOIN epi_nodes s ON e.source_id = s.node_id"
+            " LEFT JOIN epi_nodes t ON e.target_id = t.node_id"
+            " WHERE (s.layer = ? OR t.layer = ?)"
         )
+        params: list[Any] = same_params * 3 + cross_params + [self.layer, self.layer]
+        if user_id:
+            sql += " AND ((s.layer = ? AND s.user_id = ?) OR (t.layer = ? AND t.user_id = ?))"
+            params += [self.layer, user_id, self.layer, user_id]
+        row = await self._dispatch.select_one(DB_NAME, sql, tuple(params))
         if not row:
-            return {"total": 0, "live": 0, "dead": 0}
-        return {"total": int(row["total"]), "live": int(row["live"]), "dead": int(row["dead"])}
+            return {"total": 0, "live": 0, "dead": 0, "cross_layer": 0}
+        return {
+            "total": int(row["total"]),
+            "live": int(row["live"]),
+            "dead": int(row["dead"]),
+            "cross_layer": int(row["cross_layer"]),
+        }
 
     async def delete_nodes_older_than(self, user_id: str, cutoff: float) -> int:
         """Delete this layer's nodes created after cutoff; cleans tags/edges."""

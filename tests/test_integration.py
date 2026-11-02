@@ -172,6 +172,7 @@ async def test_dashboard():
     assert "l4_facts" in stats
     # the graph used to report nodes only; edge numbers are what make the size visible
     assert stats["graph_edges"] == stats["graph_edges_live"] + stats["graph_edges_dead"]
+    assert "graph_edges_cross_layer" in stats
 
 
 @pytest.mark.asyncio
