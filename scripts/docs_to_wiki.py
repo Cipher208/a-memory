@@ -25,11 +25,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import html
+import logging
 import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 ARIEL_REPO = str(Path(__file__).resolve().parents[1])
 # The interpreter running this script is the one whose environment has the
@@ -117,20 +120,29 @@ def sync_one(source: Path) -> int:
         return 0
 
     async def _run() -> dict:
+        from shared.connection import connection_manager
         from wiki.manager import WikiManager
 
-        wm = WikiManager(layer="user")
-        # unique parent dirs only — sync_external scans a dir recursively
-        dirs = sorted({str(p.parent) for p in pages})
-        out = {"imported": 0, "skipped": 0, "errors": 0}
-        for d in dirs:
-            res = await wm.sync_external([d])
-            for k in out:
-                out[k] += res.get(k, 0)
-        from shared.connection import connection_manager
-
-        await connection_manager.close_all()
-        return out
+        try:
+            wm = WikiManager(layer="user")
+            # unique parent dirs only — sync_external scans a dir recursively
+            dirs = sorted({str(p.parent) for p in pages})
+            out = {"imported": 0, "skipped": 0, "errors": 0}
+            for d in dirs:
+                res = await wm.sync_external([d])
+                for k in out:
+                    out[k] += res.get(k, 0)
+            return out
+        finally:
+            # Close on every exit path, not just the happy one: aiosqlite workers
+            # are non-daemon, so an exception escaping without this parks the
+            # interpreter in `threading._shutdown` (exit 124) instead of printing
+            # the traceback. Logged, not suppressed silently, so a broken close
+            # stays visible; it still cannot replace the original error.
+            try:
+                await connection_manager.close_all()
+            except Exception:
+                logger.warning("close_all() failed during shutdown", exc_info=True)
 
     res = asyncio.run(_run())
     print(f"imported={res['imported']} skipped={res['skipped']} errors={res['errors']}")

@@ -23,10 +23,13 @@ import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import sys
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -93,84 +96,92 @@ async def run(apply: bool) -> int:
     from shared.constants import DB_NAME
     from shared.write_dispatch import get_write_dispatch
 
-    dispatch = get_write_dispatch(cm)
-    rows = [dict(r) for r in await dispatch.query(DB_NAME, DUP_SQL)]
+    try:
+        dispatch = get_write_dispatch(cm)
+        rows = [dict(r) for r in await dispatch.query(DB_NAME, DUP_SQL)]
 
-    keep, drop = pick(rows)
-    before_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory") or 0
+        keep, drop = pick(rows)
+        before_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory") or 0
 
-    print(f"base={DATA_DIR}")
-    print(f"mode={'APPLY' if apply else 'dry-run'}  dup_rows={len(rows)} groups={len(keep)} drop={len(drop)} total={before_total}")
-    for k, d in zip(keep, drop, strict=False):
-        print(f"  keep {k['entry_id']} imp={k['importance']:.3f}  <-  drop {d['entry_id']} imp={d['importance']:.3f}  key={d['key']}")
+        print(f"base={DATA_DIR}")
+        print(f"mode={'APPLY' if apply else 'dry-run'}  dup_rows={len(rows)} groups={len(keep)} drop={len(drop)} total={before_total}")
+        for k, d in zip(keep, drop, strict=False):
+            print(f"  keep {k['entry_id']} imp={k['importance']:.3f}  <-  drop {d['entry_id']} imp={d['importance']:.3f}  key={d['key']}")
 
-    if not apply:
-        await cm.close_all()
-        return 0
+        if not apply:
+            return 0
 
-    # guard: every doomed key must address exactly one row
-    for d in drop:
-        n = await dispatch.scalar(
-            DB_NAME,
-            "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND key=?",
-            (d["layer"], d["user_id"], d["key"]),
-        )
-        if n != 1:
-            print(f"  ABORT: key {d['key']!r} matches {n} rows, expected 1")
-            await cm.close_all()
-            return 1
-
-    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    path = ARCHIVE_DIR / f"core-twins-{stamp}.jsonl"
-    with path.open("w", encoding="utf-8") as fh:
+        # guard: every doomed key must address exactly one row
         for d in drop:
-            fh.write(json.dumps(d, ensure_ascii=False, default=str) + "\n")
-
-    am = ArchivedMemories(cm=cm)
-    await am._init_db()
-    now = time.time()
-    done = 0
-    for d in drop:
-        await am.archive(
-            user_id=d["user_id"],
-            content=f"{d['key']}={d['value']}",
-            memory_type=d["memory_kind"] or "fact",
-            importance=d["importance"],
-            original_id=d["entry_id"],
-            reason="duplicate_twin",
-        )
-        with contextlib.suppress(Exception):
-            from lifecycle.transitions import record_transition
-
-            await record_transition(
-                cm, d["user_id"], "l4", f"core:{d['entry_id']}", "archived", f"archived:duplicate_twin:{path.name}", "duplicate_twin"
+            n = await dispatch.scalar(
+                DB_NAME,
+                "SELECT COUNT(*) FROM core_memory WHERE layer=? AND user_id=? AND key=?",
+                (d["layer"], d["user_id"], d["key"]),
             )
-        l4 = CoreMemory(cm=cm, layer=d["layer"])
-        ok = await l4.delete(d["user_id"], d["key"], triggered_by="dedup_core_twins")
-        if ok:
-            done += 1
-        await dispatch.write(
-            DB_NAME,
-            "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
-            (
-                d["user_id"],
-                "l4_dedup_twin",
-                d["layer"],
-                f"core_memory:{d['entry_id']}",
-                json.dumps({"key": d["key"], "kept": d["entry_id"], "archive": path.name}, ensure_ascii=False),
-                now,
-            ),
-        )
+            if n != 1:
+                print(f"  ABORT: key {d['key']!r} matches {n} rows, expected 1")
+                return 1
 
-    # verify
-    left = [dict(r) for r in await dispatch.query(DB_NAME, DUP_SQL)]
-    after_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory") or 0
-    print(f"archive: {path}")
-    print(f"deleted={done}/{len(drop)}  dup_left={len(left)}  total {before_total}->{after_total}")
-    print("VERDICT=" + ("CLEAN" if not left and after_total == before_total - done else "LEFTOVER"))
-    await cm.close_all()
-    return 0 if not left and after_total == before_total - done else 1
+        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = ARCHIVE_DIR / f"core-twins-{stamp}.jsonl"
+        with path.open("w", encoding="utf-8") as fh:
+            for d in drop:
+                fh.write(json.dumps(d, ensure_ascii=False, default=str) + "\n")
+
+        am = ArchivedMemories(cm=cm)
+        await am._init_db()
+        now = time.time()
+        done = 0
+        for d in drop:
+            await am.archive(
+                user_id=d["user_id"],
+                content=f"{d['key']}={d['value']}",
+                memory_type=d["memory_kind"] or "fact",
+                importance=d["importance"],
+                original_id=d["entry_id"],
+                reason="duplicate_twin",
+            )
+            with contextlib.suppress(Exception):
+                from lifecycle.transitions import record_transition
+
+                await record_transition(
+                    cm, d["user_id"], "l4", f"core:{d['entry_id']}", "archived", f"archived:duplicate_twin:{path.name}", "duplicate_twin"
+                )
+            l4 = CoreMemory(cm=cm, layer=d["layer"])
+            ok = await l4.delete(d["user_id"], d["key"], triggered_by="dedup_core_twins")
+            if ok:
+                done += 1
+            await dispatch.write(
+                DB_NAME,
+                "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
+                (
+                    d["user_id"],
+                    "l4_dedup_twin",
+                    d["layer"],
+                    f"core_memory:{d['entry_id']}",
+                    json.dumps({"key": d["key"], "kept": d["entry_id"], "archive": path.name}, ensure_ascii=False),
+                    now,
+                ),
+            )
+
+        # verify
+        left = [dict(r) for r in await dispatch.query(DB_NAME, DUP_SQL)]
+        after_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM core_memory") or 0
+        print(f"archive: {path}")
+        print(f"deleted={done}/{len(drop)}  dup_left={len(left)}  total {before_total}->{after_total}")
+        print("VERDICT=" + ("CLEAN" if not left and after_total == before_total - done else "LEFTOVER"))
+        return 0 if not left and after_total == before_total - done else 1
+    finally:
+        # Close on every exit path, not just the happy one: aiosqlite workers are
+        # non-daemon, so an exception leaving `run()` without this parks the
+        # interpreter in `threading._shutdown` (exit 124) instead of printing the
+        # traceback and exiting. Logged, not suppressed silently, so a broken
+        # close stays visible; it still cannot replace the original error.
+        try:
+            await cm.close_all()
+        except Exception:
+            logger.warning("close_all() failed during shutdown", exc_info=True)
 
 
 def main() -> int:

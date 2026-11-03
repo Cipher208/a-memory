@@ -348,7 +348,24 @@ def main() -> None:
                 logging.getLogger(__name__).exception("HTTP transport failed. Try with --dashboard flag.")
                 raise
     else:
-        mcp.run(transport=STDIO_TRANSPORT)
+        try:
+            mcp.run(transport=STDIO_TRANSPORT)
+        finally:
+            # stdio ends when the client closes stdin: `mcp.run` returns and the
+            # process is expected to exit. aiosqlite worker threads are non-daemon,
+            # so without closing them the interpreter parks in
+            # `threading._shutdown` and the client's parent sees a server that
+            # never dies. `finally` so an EOF-time exception does not strand the
+            # same workers. Logged, not suppressed silently, so a broken close
+            # stays visible; it still cannot replace the original error.
+            import asyncio
+
+            from shared.connection import connection_manager
+
+            try:
+                asyncio.run(connection_manager.close_all())
+            except Exception:
+                logging.getLogger(__name__).warning("close_all() failed during shutdown", exc_info=True)
 
 
 def _run_with_dashboard(host: str, port: int) -> None:
