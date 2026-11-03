@@ -155,3 +155,38 @@ def test_connection_stale_reopen():
         assert row[0] == 1
 
     asyncio.run(t())
+
+
+def test_close_all_closes_even_if_optimize_fails(tmp_path):
+    """F97 tail: `PRAGMA optimize` and `close()` must not share one suppress.
+
+    `close_all` used both inside a single `contextlib.suppress(Exception)`. If the
+    optimize raised — a locked or half-dead handle is enough — the `close()` on
+    the next line never ran, the aiosqlite worker thread (which is NON-daemon)
+    stayed alive, and the interpreter hung at exit with the unit still "active"
+    under systemd. The close is the load-bearing part; the optimize is not.
+    """
+    from shared.connection import AsyncConnectionManager
+
+    class _Stubborn:
+        """A connection whose PRAGMA raises; close() must still be reached."""
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def execute(self, sql: str, *a: object) -> None:
+            if "optimize" in sql:
+                raise RuntimeError("database is locked")
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def t() -> None:
+        cm = AsyncConnectionManager(base_dir=str(tmp_path))
+        conn = _Stubborn()
+        cm._conns["memory.db"] = conn  # type: ignore[assignment]
+        await cm.close_all()
+        assert cm._conns == {}, "the registry is cleared regardless"
+        assert conn.closed is True, "close() must run even though PRAGMA optimize raised"
+
+    asyncio.run(t())

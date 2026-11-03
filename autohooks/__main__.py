@@ -31,6 +31,7 @@ del _sp, _site_dirs, _site
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -194,100 +195,107 @@ def main(argv: list[str] | None = None) -> int:
 
         asyncio.run(connection_manager.close_all())
 
-    if ns.command == "daemon":
-        from autohooks.daemon import run_daemon
-        from autohooks.source import SqliteSource
+    try:
+        if ns.command == "daemon":
+            from autohooks.daemon import run_daemon
+            from autohooks.source import SqliteSource
 
-        assert cfg.source is not None  # checked above, before ariel was loaded
-        source = SqliteSource.from_config(cfg)
-        asyncio.run(
-            run_daemon(
-                cfg,
-                source,
-                mem,
-                graph,
-                rag,
-                max_iterations=1 if ns.once else None,
-                # S10: give the daemon a per-layer resolver for assistant-role
-                # persona dispatches.
-                resolve=lambda layer: resolve_layer(app, layer, cfg.user_id),
+            assert cfg.source is not None  # checked above, before ariel was loaded
+            source = SqliteSource.from_config(cfg)
+            asyncio.run(
+                run_daemon(
+                    cfg,
+                    source,
+                    mem,
+                    graph,
+                    rag,
+                    max_iterations=1 if ns.once else None,
+                    # S10: give the daemon a per-layer resolver for assistant-role
+                    # persona dispatches.
+                    resolve=lambda layer: resolve_layer(app, layer, cfg.user_id),
+                )
             )
-        )
-        _close_ariel()
-        return 0
+            return 0
 
-    if ns.command == "dispatch":
-        from hooks.external import dispatch_event
+        if ns.command == "dispatch":
+            from hooks.external import dispatch_event
 
-        try:
-            extra = json.loads(ns.payload) if ns.payload else {}
-        except json.JSONDecodeError:
-            logger.exception("invalid --payload JSON")
-            return 2
-        if not isinstance(extra, dict):
-            logger.error("--payload must be a JSON object")
-            return 2
-        since, until = _dispatch_window(ns)
-        d_layer = _dispatch_layer(cfg, extra)
-        if d_layer != cfg.layer:
-            mem, graph, rag = resolve_layer(app, d_layer, cfg.user_id)
-        result = asyncio.run(
-            dispatch_event(
-                ns.event,
-                d_layer,
-                cfg.user_id,
-                {"since": since, "until": until, "persona_owner": cfg.persona_owner, **extra},
-                mem,
-                graph,
-                rag,
+            try:
+                extra = json.loads(ns.payload) if ns.payload else {}
+            except json.JSONDecodeError:
+                logger.exception("invalid --payload JSON")
+                return 2
+            if not isinstance(extra, dict):
+                logger.error("--payload must be a JSON object")
+                return 2
+            since, until = _dispatch_window(ns)
+            d_layer = _dispatch_layer(cfg, extra)
+            if d_layer != cfg.layer:
+                mem, graph, rag = resolve_layer(app, d_layer, cfg.user_id)
+            result = asyncio.run(
+                dispatch_event(
+                    ns.event,
+                    d_layer,
+                    cfg.user_id,
+                    {"since": since, "until": until, "persona_owner": cfg.persona_owner, **extra},
+                    mem,
+                    graph,
+                    rag,
+                )
             )
-        )
-        _close_ariel()
-        print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+
+        if ns.command == "recall":
+            from features.recall import recall_protocol
+
+            blocks = asyncio.run(recall_protocol(mem, rag, cfg.user_id, query=ns.query, budget=int(ns.budget)))
+            if ns.format == "json":
+                print(json.dumps({"blocks": blocks}, ensure_ascii=False))
+            else:
+                print(_render_recall_md(blocks))
+            return 0
+
+        if ns.command == "context":
+            # S18 tail context_assembly: pre-response assembly (top-5 relevant +
+            # recent L1) — the adapter calls it BEFORE the agent answers and
+            # inserts the output.
+            from autohooks.context import assemble_context, render_context_json, render_context_md
+
+            assembly = asyncio.run(assemble_context(mem, rag, cfg.user_id, text=ns.text, budget=int(ns.budget)))
+            if ns.format == "json":
+                print(render_context_json(assembly))
+            else:
+                print(render_context_md(assembly))
+            return 0
+
+        if ns.command == "recap":
+            from features.continuity import session_recap
+
+            blocks = asyncio.run(session_recap(mem, cfg.user_id, budget=int(ns.budget)))
+            if ns.format == "json":
+                print(json.dumps({"blocks": blocks}, ensure_ascii=False))
+            else:
+                print(_render_recall_md(blocks))
+            return 0
+
+        from autohooks.inject import run_inject
+
+        out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format, blocks=ns.blocks, with_recap=ns.with_recap))
+        print(out)
         return 0
-
-    if ns.command == "recall":
-        from features.recall import recall_protocol
-
-        blocks = asyncio.run(recall_protocol(mem, rag, cfg.user_id, query=ns.query, budget=int(ns.budget)))
+    except BaseException:
+        # Close on the failure path too. `_close_ariel()` used to sit after each
+        # `asyncio.run(...)`, so an exception skipped it; aiosqlite's worker
+        # threads are non-daemon, `threading._shutdown` joins them at exit, and
+        # the process then prints a traceback and never returns — systemd keeps
+        # the unit `active`, so Restart=on-failure never fires. Suppressed here
+        # only so a failing close cannot replace the command's own exception.
+        with contextlib.suppress(Exception):
+            _close_ariel()
+        raise
+    else:
         _close_ariel()
-        if ns.format == "json":
-            print(json.dumps({"blocks": blocks}, ensure_ascii=False))
-        else:
-            print(_render_recall_md(blocks))
-        return 0
-
-    if ns.command == "context":
-        # S18 tail context_assembly: pre-response assembly (top-5 relevant +
-        # recent L1) — the adapter calls it BEFORE the agent answers and
-        # inserts the output.
-        from autohooks.context import assemble_context, render_context_json, render_context_md
-
-        assembly = asyncio.run(assemble_context(mem, rag, cfg.user_id, text=ns.text, budget=int(ns.budget)))
-        _close_ariel()
-        if ns.format == "json":
-            print(render_context_json(assembly))
-        else:
-            print(render_context_md(assembly))
-        return 0
-
-    if ns.command == "recap":
-        from features.continuity import session_recap
-
-        blocks = asyncio.run(session_recap(mem, cfg.user_id, budget=int(ns.budget)))
-        _close_ariel()
-        if ns.format == "json":
-            print(json.dumps({"blocks": blocks}, ensure_ascii=False))
-        else:
-            print(_render_recall_md(blocks))
-        return 0
-
-    from autohooks.inject import run_inject
-
-    out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format, blocks=ns.blocks, with_recap=ns.with_recap))
-    _close_ariel()
-    print(out)
-    return 0
 
 
 def _render_recall_md(blocks: list[dict[str, Any]]) -> str:

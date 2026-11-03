@@ -95,3 +95,41 @@ def test_main_dispatch_invalid_payload_exits_2(tmp_path, monkeypatch):
         ],
     )
     assert cli.main() == 2
+
+
+def test_main_closes_connections_when_command_raises(tmp_path, monkeypatch):
+    """A failing command must still close ariel's connections.
+
+    The close used to sit on the line after `asyncio.run(...)`, so an exception
+    from the command skipped it; the non-daemon aiosqlite workers then blocked
+    interpreter shutdown (systemd kept the unit `active`, so Restart=on-failure
+    never fired). Close must run on the exception path too, and the original
+    exception must still reach the caller.
+    """
+    from autohooks import appctx
+    from shared.connection import connection_manager
+
+    cfg = tmp_path / "agent.yaml"
+    cfg.write_text(f"data_dir: {tmp_path}\nuser_id: default\nlayer: user\n", encoding="utf-8")
+    # The exit watchdog is a process-wide faulthandler timer that would fire
+    # mid-suite 120 s later; these tests do not hang, so do not arm it.
+    monkeypatch.setenv("ARIEL_CLI_GUARD", "0")
+
+    closed: list[str] = []
+
+    async def fake_close_all() -> None:
+        closed.append("closed")
+
+    monkeypatch.setattr(connection_manager, "close_all", fake_close_all)
+    monkeypatch.setattr(appctx, "build_app_context", lambda: object())
+    monkeypatch.setattr(appctx, "resolve_layer", lambda app, layer, uid: (None, None, None))
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("boom: command failed mid-run")
+
+    monkeypatch.setattr("features.recall.recall_protocol", boom)
+
+    with pytest.raises(RuntimeError, match="boom: command failed mid-run"):
+        cli.main(["recall", "--config", str(cfg)])
+
+    assert closed == ["closed"]
