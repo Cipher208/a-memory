@@ -260,31 +260,58 @@ class EpistemicGraph:
         return [self._row_to_node(r) for r in rows]
 
     async def get_neighbors(self, node_id: int, depth: int = 1, relation: str | None = None, tag: str | None = None) -> list[dict[str, Any]]:
-        """Neighbors via recursive CTE.
+        """Neighbors via recursive CTE, scoped to the start node's owner.
 
         A2.4: optional `relation` and edge-`tag` (substring match on the
         edge's JSON tags — `_inverse`/`_value_regex`).
+
+        D2: the owner is read from the start node itself, never from a
+        parameter — a caller that forgets a `user_id` argument is exactly the
+        defect this scoping closes, and a layer-only filter answered with the
+        text of a node belonging to someone else. A start node that is missing
+        or lives in another layer leaves `owner` empty, so the CTE yields
+        nothing: not knowing whose neighbours these are means returning none.
         """
-        edge_filter = "WHERE e.source_id = ?"
-        params_list: list[Any] = [node_id]
+        owner_params: list[Any] = [node_id, self.layer, self.layer]
+        edge_filter = "e.source_id = ?"
+        edge_params: list[Any] = [node_id]
         if relation:
             edge_filter += " AND e.relation = ?"
-            params_list.append(relation)
+            edge_params.append(relation)
+        # `member` is the owner's node set in this layer, and every hop is
+        # checked against it: filtering only the returned rows would still let
+        # a foreign node bridge two of the owner's own nodes.
+        #
+        # D2 perf: a JOIN against `member` beats `target_id IN (SELECT ...)`
+        # on the user layer (hermes depth-2: ~1.2 s -> ~0.12 s), but only
+        # because `MATERIALIZED` pins it: without it SQLite inlines the CTE
+        # into the recursive step and rescans epi_nodes on every hop (measured
+        # ~4.7 s at the same depth). The owner+layer guarantee is unchanged —
+        # a hop still has to land on a node in `member`.
         sql = f"""
-        WITH RECURSIVE graph AS (
+        WITH RECURSIVE
+        owner AS (
+            SELECT user_id FROM epi_nodes WHERE node_id = ? AND layer = ?
+        ),
+        member AS MATERIALIZED (
+            SELECT n.node_id FROM epi_nodes n JOIN owner o ON n.user_id = o.user_id
+            WHERE n.layer = ?
+        ),
+        graph AS (
             SELECT e.source_id, e.target_id, e.relation, e.weight, e.tags as etags, 1 as d
-            FROM epi_edges e {edge_filter}
+            FROM epi_edges e JOIN member m ON m.node_id = e.target_id
+            WHERE {edge_filter}
             UNION ALL
             SELECT e.source_id, e.target_id, e.relation, e.weight, e.tags as etags, g.d + 1
             FROM epi_edges e JOIN graph g ON e.source_id = g.target_id
+            JOIN member m ON m.node_id = e.target_id
             WHERE g.d < ?
         )
         SELECT n.node_id, n.content, n.node_type, n.tags, g.relation, g.weight, g.etags
         FROM graph g JOIN epi_nodes n ON g.target_id = n.node_id
         WHERE n.layer = ?
         """
-        params_list.append(depth)
-        params_list.append(self.layer)
+        params_list = owner_params + edge_params + [depth, self.layer]
         rows = await self._dispatch.query(DB_NAME, sql, tuple(params_list))
         out = [
             {
