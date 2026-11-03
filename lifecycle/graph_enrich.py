@@ -477,7 +477,7 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     """Pre-clean JSON junk from the graph, then run miners. Returns stats."""
     from graph.epistemic import EpistemicGraph
     from lifecycle.graph_miners import MINERS
-    from shared.l0 import capture
+    from shared.l0 import SERVICE_RAW_TYPE, capture
 
     cm = connection_manager
     # Housekeeping must not ride, nor wait out, somebody else's transaction: a
@@ -504,7 +504,16 @@ async def graph_enrich(layer: str = "user") -> dict[str, Any]:
     with _timed_phase(layer, "junk_capture"):
         for row in junk:
             # capture() never raises; junk must reach L0 before its node is gone.
-            await capture(event="graph_cleanup", layer=layer, user_id=str(row["user_id"]), text=str(row["content"]))
+            # Explicit raw_type: the deleted node's prose can look like the
+            # owner's message (classify_raw only anchors the opening), and then
+            # replay distilled the junk straight back into memory.
+            await capture(
+                event="graph_cleanup",
+                layer=layer,
+                user_id=str(row["user_id"]),
+                text=str(row["content"]),
+                raw_type=SERVICE_RAW_TYPE,
+            )
             ids.append(int(row["node_id"]))
     if ids:
         with _timed_phase(layer, "junk_delete"):

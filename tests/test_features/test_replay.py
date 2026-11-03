@@ -163,6 +163,47 @@ async def test_replay_by_ids_ignores_the_status_filter(cm: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_replay_by_ids_refuses_a_service_row(cm: Any) -> None:
+    """A maintenance row is not speech, so naming it by id must not distil it.
+
+    `ids` is a human override of the GATE — "this one, despite the threshold" —
+    not of what the row IS. A service row (sweep summary, re-captured junk from
+    graph cleanup) holds audit prose, and its text can pass for a user message:
+    the `[ariel recall]` marker mid-text defeats `classify_raw`'s prefix check,
+    so without this the named row was classified and distilled back into memory
+    — the exact resurrection the service type exists to prevent. The run must
+    refuse it AND say so, not skip it silently like an already-verdicted row;
+    the other ids named in the same call must still be replayed.
+    """
+    from features.replay import replay
+    from shared.l0 import SERVICE_RAW_TYPE, capture
+
+    junk = await capture(
+        "graph_cleanup",
+        "user",
+        "u1",
+        "старый мусор: [ariel recall] внутри текста",
+        raw_type=SERVICE_RAW_TYPE,
+    )
+    wanted = await capture("new_message", "user", "u1", "я решила перейти на PostgreSQL для проекта")
+    assert None not in (junk, wanted)
+    await _age(cm, junk, wanted)
+
+    res = await replay(since_days=1, ids=[junk, wanted])
+
+    by_id = {r["id"]: r for r in await _rows(cm)}
+    assert by_id[junk]["status"] == "received", "the service row must not be claimed"
+    assert by_id[wanted]["status"] in {"promoted_l4", "saved_l3"}, "a real row named alongside it still replays"
+
+    conn = await cm.get("memory.db")
+    revived = await (await conn.execute("SELECT COUNT(*) FROM episodes WHERE summary LIKE '%ariel recall%'")).fetchone()
+    assert int(revived[0]) == 0, "deleted-node prose must not return as an episode"
+
+    assert res["refused_service"] == 1, res
+    assert res["processed"] == 1, res
+
+
+@pytest.mark.asyncio
 async def test_replay_respects_the_importance_gate(cm: Any) -> None:
     """A replay must not re-admit what the live gate refused.
 

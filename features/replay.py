@@ -200,6 +200,11 @@ async def replay(
     written into the decision as `gate_override`, so the record shows a person
     chose it rather than implying the gate admitted it.
 
+    The override covers the gate, not the row's nature: a `service` row named by
+    id is refused before it is claimed, and counted in `refused_service`. Audit
+    prose is not speech, and the name cannot change that; refusing visibly (a
+    count, not a silent skip) tells the caller the id can never be replayed.
+
     `max_rows` bounds a single run. A config change re-opens every row whose
     decisions carry the old config_hash — 564 refused rows on one live base — and
     without a bound the whole backlog would be distilled in one burst. Bounding it
@@ -208,24 +213,41 @@ async def replay(
     from core import MemoryManager
     from graph.epistemic import EpistemicGraph
     from lifecycle.distiller import distill_and_route, score_text
-    from shared.l0 import STATUS_RECEIVED, classify_received
+    from shared.l0 import SERVICE_RAW_TYPE, STATUS_RECEIVED, classify_received
 
     dispatch = get_write_dispatch()
     cutoff = time.time() - since_days * 86400
     chash = config_hash()
+    refused_service = 0
     if ids:
         placeholders = ",".join("?" for _ in ids)
         rows = await dispatch.query(
             DB_NAME,
-            f"SELECT id, ts, layer, user_id, text, status, decisions FROM l0_journal WHERE id IN ({placeholders}) ORDER BY id",
+            f"SELECT id, ts, layer, user_id, text, status, decisions, raw_type FROM l0_journal WHERE id IN ({placeholders}) ORDER BY id",
             tuple(ids),
         )
+        # `ids` overrides the GATE ("this one, despite the threshold"), not what
+        # the row IS. A service row is audit material, never speech: naming one
+        # must not turn the sweep summary or re-captured junk into a message.
+        # This branch has no raw_type predicate by design (a named import must
+        # stay reachable), so the refusal happens here, and it is COUNTED: a
+        # silent filter would be indistinguishable from "already verdicted",
+        # and the caller would keep retrying a row that can never be replayed.
+        refused_service = sum(1 for r in rows if str(r["raw_type"] or "") == SERVICE_RAW_TYPE)
+        if refused_service:
+            rows = [r for r in rows if str(r["raw_type"] or "") != SERVICE_RAW_TYPE]
+            logger.warning("replay: refused %d named service row(s) — audit material, not speech", refused_service)
     else:
         rows = await dispatch.query(
             DB_NAME,
+            # Service rows (sweep summary, graph-cleanup capture) are audit
+            # material, not speech. The distiller already refuses a machine
+            # report by text, but a structural fact must not depend on that
+            # content detector: without this filter every nightly pass claimed
+            # the sweep row and only then discarded it.
             "SELECT id, ts, layer, user_id, text, status, decisions FROM l0_journal"
-            " WHERE ts > ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
-            (cutoff, time.time() - 600.0),
+            " WHERE ts > ? AND raw_type != ? AND (status IN ('received', 'gated_out') OR (status='processing' AND processed_at < ?)) ORDER BY id",
+            (cutoff, SERVICE_RAW_TYPE, time.time() - 600.0),
         )
 
     # An explicit id list is a human decision to wake that row; a window run is
@@ -401,4 +423,11 @@ async def replay(
             (new_status, time.time(), json.dumps(decisions, ensure_ascii=False), row["id"]),
         )
         processed += 1
-    return {"processed": processed, "skipped": skipped, "conflicts": conflicts, "gated": gated, "limit": max_rows}
+    return {
+        "processed": processed,
+        "skipped": skipped,
+        "conflicts": conflicts,
+        "gated": gated,
+        "limit": max_rows,
+        "refused_service": refused_service,
+    }

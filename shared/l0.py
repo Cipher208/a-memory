@@ -34,6 +34,14 @@ logger = logging.getLogger(__name__)
 STATUS_RECEIVED = "received"
 STATUS_PARKED = "parked"
 
+#: Raw type of a maintenance job's own journal row (the sweep summary, the junk
+#: re-captured by graph cleanup). These rows are audit material, not speech:
+#: classifying their text made `cleaner_summary: {...}` a `user-message`, so the
+#: replay distilled it and the miners bound it to the owner's sessions. A
+#: dedicated type keeps them out of every `user-message` reader without teaching
+#: each reader to recognise the text.
+SERVICE_RAW_TYPE = "service"
+
 #: The close reason for a row the capture path captured but never stamped:
 #: the body returned or raised before the write happened, so NOTHING was
 #: written and the row must be re-enterable. It is the one close reason that
@@ -686,8 +694,11 @@ async def sweep_received(*, grace_s: float = 600.0) -> dict[str, int]:
             # with no age window — keeps them safe if that migration has not
             # run or failed halfway. The cost of being wrong is one
             # owner-requested history silently closed by tier_l0 the same night.
-            "SELECT id FROM l0_journal WHERE status=? AND raw_type != 'import'",
-            (STATUS_RECEIVED,),
+            # Service rows are skipped too: a journal-only audit line has no
+            # memory evidence to find, so judging it would only stamp it
+            # UNACCOUNTED_EXIT for a write that was never meant to happen.
+            "SELECT id FROM l0_journal WHERE status=? AND raw_type NOT IN ('import', ?)",
+            (STATUS_RECEIVED, SERVICE_RAW_TYPE),
         )
     except Exception as exc:
         logger.warning("sweep_received: cannot read the journal: %s", exc)

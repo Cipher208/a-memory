@@ -76,3 +76,23 @@ async def test_enrich_rebuilds_summary_from_l0(cm: Any) -> None:
     row = await (await conn.execute("SELECT summary FROM sessions WHERE session_id='sess_t7'")).fetchone()
     assert "postgres" in row[0] and "backup" in row[0]
     assert "старое резюме" not in row[0]
+
+
+@pytest.mark.asyncio
+async def test_enrich_ignores_sweep_summary(cm: Any) -> None:
+    """L2 enrichment binds user messages only; a sweep log line is not a topic."""
+    from features.l2_enrich import enrich_sessions
+    from lifecycle.l0_sweep import sweep_expired
+
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO sessions (session_id, user_id, summary, started_at) VALUES (?, ?, ?, ?)",
+        ("sess_sweep", "default", "старое резюме", 1.0),
+    )
+    await conn.commit()
+    await sweep_expired(min_remain=0)
+
+    await enrich_sessions(days=1)
+
+    row = await (await conn.execute("SELECT summary FROM sessions WHERE session_id='sess_sweep'")).fetchone()
+    assert "cleaner_summary" not in row[0]
