@@ -80,6 +80,81 @@ async def _edge(a: int, b: int, relation: str = "mentions", weight: float = 0.8)
     await conn.commit()
 
 
+# --- edge age semantics: created_at advances only on a weight-increasing re-mine ---
+
+
+@pytest.mark.asyncio
+async def test_remine_after_inhibition_refreshes_the_edge_age(db) -> None:
+    """Pin the measured contract of `created_at` on heuristic edges.
+
+    F42 asked whether a re-mine resets an edge's age so the 30-day NREM prune
+    never fires. The upsert does refresh the age — but dead edges do NOT
+    accumulate past the boundary: measured 2026-11-03 (see
+    `.compose/reports/2026-11-03-f42-dryrun.md`), ~57k dead heuristic edges sit
+    in Hermes' 25-30 d band and only ~190 sit just past 30 d, waiting for the
+    next NREM pass. Pruning lags by up to one pass; it does not starve. (One
+    measured exception, not explained here: Mimocode holds 120 dead edges at
+    44.7 d — see the report.)
+
+    The contract pinned here:
+
+      - `created_at` is the edge's birth or its last WEIGHT-INCREASING
+        re-derivation, whichever is later. It is not "last time seen": an equal
+        re-mine is common (the miner re-derives the same pair every night) and
+        must not move it, or no edge would ever settle;
+      - equal and weaker repeats are true no-ops, so a fading edge still ages;
+      - a stronger repeat writes the row and refreshes the age, which is why an
+        edge that inhibition drove to zero comes back with a fresh age when its
+        miner re-derives it at full strength.
+
+    Changing the last of these is a behaviour decision, not a bugfix: a
+    re-derived edge would then start decaying 30 days after its first sighting
+    instead of being refreshed, and would die once enough NREM passes had
+    subtracted below the floor.
+    """
+    from lifecycle.graph_miners import _insert_edge
+
+    conn = await db.get(DB_NAME)
+    old = T - 40 * 86400
+    a = await _node("alpha beta gamma", T, ["x"])
+    b = await _node("alpha beta gamma", T, ["x"])
+    await conn.execute(
+        "INSERT INTO epi_edges (source_id, target_id, relation, weight, created_at, tags)"
+        " VALUES (?, ?, 'topic_overlap', 0.8, ?, '[\"heuristic:tokens\"]')",
+        (a, b, old),
+    )
+    await conn.commit()
+
+    async def state() -> tuple[int, float]:
+        row = await (await conn.execute("SELECT weight, created_at FROM epi_edges WHERE source_id=? AND target_id=?", (a, b))).fetchone()
+        return int(row["weight"] * 100), float(row["created_at"])
+
+    # lateral inhibition drives the weight down; the edge is now dead but old
+    await conn.execute("UPDATE epi_edges SET weight=0 WHERE source_id=? AND target_id=?", (a, b))
+    await conn.commit()
+
+    # a stronger re-mine is a real write and refreshes the age
+    assert await _insert_edge(conn, a, b, "topic_overlap", 0.8, "tokens") == 1
+    weight, settled = await state()
+    assert weight == 80
+    assert settled > old + 86400, "created_at tracks the last weight-increasing evidence, not the birth"
+
+    # an equal repeat is a genuine no-op: a settled edge stops churning
+    assert await _insert_edge(conn, a, b, "topic_overlap", 0.8, "tokens") == 0
+    assert await state() == (80, settled), "an equal repeat must not touch weight or age"
+
+    # a weaker repeat is also a no-op: the stronger stored evidence wins, and a
+    # fading edge must still be allowed to age out
+    assert await _insert_edge(conn, a, b, "topic_overlap", 0.5, "tokens") == 0
+    assert await state() == (80, settled), "a weaker repeat must not touch weight or age"
+
+    # a strictly stronger repeat refreshes the age again
+    assert await _insert_edge(conn, a, b, "topic_overlap", 0.81, "tokens") == 1
+    weight2, refreshed = await state()
+    assert weight2 == 81
+    assert refreshed > settled, "a weight-increasing re-mine moves created_at forward"
+
+
 # --- (a) miner_tags: общий тег → tagged, weight = min(0.3+0.1*shared, 0.6) ---
 
 
