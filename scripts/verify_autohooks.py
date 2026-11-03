@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sqlite3
 import sys
@@ -29,6 +30,8 @@ os.environ.setdefault("MCP_CONFIG_PATH", str(SCRATCH / "config.yaml"))
 os.environ.setdefault("BACKUP_CRON_DISABLED", "1")
 
 RESULTS: list[tuple[str, bool, str]] = []
+
+logger = logging.getLogger(__name__)
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -70,7 +73,7 @@ def make_schemas() -> None:
     conv.close()
 
 
-async def main() -> int:
+async def _run_checks() -> list[tuple[str, bool, str]]:
     make_schemas()
     from mcp_server.context import AppContext
 
@@ -278,15 +281,32 @@ async def main() -> int:
         check("HTTP surfaces", False, repr(e)[:150])
 
     # ── summary ───────────────────────────────────────────────────────────
-    from shared.connection import connection_manager
-
-    await connection_manager.close_all()  # aiosqlite workers block interpreter exit otherwise
     failed = [r for r in RESULTS if not r[1]]
     print(
         f"\n{'=' * 64}\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed"
         + (f" — FAILURES: {[f[0] for f in failed]}" if failed else " — ALL GREEN")
     )
     sys.stdout.flush()
+    return failed
+
+
+async def main() -> int:
+    try:
+        failed = await _run_checks()
+    finally:
+        # Close on every exit path, not just the happy one: aiosqlite workers are
+        # non-daemon, so an exception escaping the checks leaves the interpreter
+        # parked in threading._shutdown until the 45 s faulthandler fires and
+        # replaces the real failure with a timeout exit. Logged, not suppressed
+        # silently, so a broken close stays visible; it still cannot replace the
+        # original error. `os._exit` below would skip a `finally` it sat inside,
+        # which is why the close lives here and the exit does not.
+        from shared.connection import connection_manager
+
+        try:
+            await connection_manager.close_all()
+        except Exception:
+            logger.warning("close_all() failed during shutdown", exc_info=True)
     # Known repo-wide aiosqlite quirk: a lingering worker thread blocks interpreter
     # shutdown (same workaround as tests/conftest.py pytest_sessionfinish).
     os._exit(1 if failed else 0)

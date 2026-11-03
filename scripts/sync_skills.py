@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import shutil
+import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +37,8 @@ AGENTS = {
     "mimocode": Path.home() / ".mcp-ariel-memory-mimocode",
     "cowagent": Path.home() / ".mcp-ariel-memory-cowagent",
 }
+
+logger = logging.getLogger(__name__)
 
 README = """# Skills SSOT
 
@@ -69,13 +72,20 @@ def sync_one(agent: str) -> dict:
 
     async def _run() -> dict:
         wm = WikiManager(layer="user")
-        res = await wm.sync_external([str(SSOT_DIR / "skill")])
-        # aiosqlite workers are non-daemon: without close_all the interpreter
-        # hangs at exit AFTER printing (autohooks _close_ariel lesson).
-        from shared.connection import connection_manager
+        try:
+            return await wm.sync_external([str(SSOT_DIR / "skill")])
+        finally:
+            # Close on every exit path: aiosqlite workers are non-daemon, so an
+            # exception escaping sync_external without this parks the interpreter
+            # in threading._shutdown (the per-agent subprocess hangs instead of
+            # failing). Logged, not suppressed silently, so a broken close stays
+            # visible; it still cannot replace the original error.
+            from shared.connection import connection_manager
 
-        await connection_manager.close_all()
-        return res
+            try:
+                await connection_manager.close_all()
+            except Exception:
+                logger.warning("close_all() failed during shutdown", exc_info=True)
 
     return asyncio.run(_run())
 

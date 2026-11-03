@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import logging
 from typing import Any
 
@@ -74,8 +73,13 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
             )
         finally:
-            with contextlib.suppress(Exception):
+            # A close failure is the only signal that aiosqlite workers may still
+            # be alive, so suppressing it hides the very hang this guard exists
+            # to prevent. Logged, not raised: it must not replace the work error.
+            try:
                 await connection_manager.close_all()
+            except Exception:
+                logger.warning("close_all() failed during shutdown", exc_info=True)
         print(f"{'applied' if args.apply else 'dry-run'}: {n} chunk(s)")
         return 0
 
