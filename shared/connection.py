@@ -390,12 +390,21 @@ class AsyncConnectionManager:
     async def close_all(self) -> None:
         """Close all open connections (on shutdown)."""
         for name, conn in self._conns.items():
+            # Two SEPARATE suppressions on purpose (F97). Sharing one meant a
+            # failing `PRAGMA optimize` — a locked or half-dead handle is enough
+            # — skipped the `close()` below it, and an unclosed aiosqlite
+            # connection keeps a NON-daemon worker thread, which
+            # `threading._shutdown` joins forever at interpreter exit. That is
+            # the same hang `main()` now prevents on the command path; closing
+            # here must not reintroduce it. The optimize is an optimisation; the
+            # close is the contract.
             with contextlib.suppress(Exception):
                 # PRAGMA optimize lets SQLite run ANALYZE if the query planner
                 # needs it — cheap, recommended before closing a connection.
                 await conn.execute("PRAGMA optimize")
+            with contextlib.suppress(Exception):
                 await conn.close()
-                logger.debug("closed connection %s", name)
+            logger.debug("closed connection %s", name)
         self._conns.clear()
         self._paths.clear()
         # The write dispatcher owns a connector of its own, built on this manager.
