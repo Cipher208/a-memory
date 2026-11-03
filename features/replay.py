@@ -112,7 +112,12 @@ async def cls_replay(cm: Any, user_id: str, layer: str = "user", window_hours: i
             new = min(1.0, old + boost)
             if new <= old:
                 continue
-            await conn.execute("UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?", (new, now, int(r["entry_id"])))
+            # `updated_at` is deliberately NOT written: this is a derived-score
+            # change on a nightly timer, and `updated_at` is the age that
+            # forgetting decays by and archives on. Stamping it made a
+            # frequently recalled fact immortal — it could never age out. The
+            # replay time is recorded in `importance_audit.rescored_at` below.
+            await conn.execute("UPDATE core_memory SET importance=? WHERE entry_id=?", (new, int(r["entry_id"])))
             await conn.execute(
                 """INSERT INTO importance_audit (user_id, chunk_id, source, old_importance, new_importance, signal_breakdown, reason, rescored_at)
                    VALUES (?, ?, 'core_memory', ?, ?, '{}', 'cls_replay', ?)""",

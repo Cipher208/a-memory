@@ -480,9 +480,15 @@ class ImportanceScheduler:
                 stats["skipped"] += 1
                 continue
             now = time.time()
+            # `updated_at` is NOT written here. It is the age that
+            # `lifecycle.forgetting.decay` and the archive read, so stamping it
+            # with `now` made every rescored row look freshly written and no
+            # such row ever aged out or archived. The rescore time is already
+            # recorded in `importance_audit.rescored_at`, which is where it
+            # belongs.
             conn.execute(
-                "UPDATE core_memory SET importance=?, updated_at=? WHERE entry_id=?",
-                (new_score, now, int(r["entry_id"])),
+                "UPDATE core_memory SET importance=? WHERE entry_id=?",
+                (new_score, int(r["entry_id"])),
             )
             conn.execute(
                 """INSERT INTO importance_audit
