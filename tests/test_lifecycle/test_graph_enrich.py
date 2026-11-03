@@ -409,3 +409,21 @@ def test_timed_phase_suppress_still_decides():
     reached = True
 
     assert reached
+
+
+@pytest.mark.asyncio
+async def test_graph_cleanup_rows_are_service_not_user_speech(graph):
+    """Re-captured junk is audit material: replay must not resurrect it as speech.
+
+    This node is junk by the `%[ariel recall]%` pattern, but the marker is mid-text,
+    so classify_raw() reads the prose as `user-message` and replay would distil the
+    deleted node straight back into memory.
+    """
+    await graph.add_node("gu", "старый мусор: [ariel recall] внутри текста", "fact")
+    from lifecycle.graph_enrich import graph_enrich
+
+    await graph_enrich(layer="user")
+    conn = await connection_manager.get("memory.db")
+    row = await (await conn.execute("SELECT raw_type FROM l0_journal WHERE event='graph_cleanup'")).fetchone()
+    assert row is not None
+    assert row["raw_type"] == "service"

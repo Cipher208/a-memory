@@ -83,6 +83,9 @@ async def close_overdue_received(
             # clause keeps them safe if that migration has not run or failed
             # halfway. The cost of being wrong here is one owner-requested
             # history silently closed, so the redundant guard is worth it.
+            # Service rows (sweep summary, graph cleanup) DO pass here on
+            # purpose: sweep_received skips them and replay never reads them,
+            # so this expiry is the only thing that closes a journal-only row.
             "SELECT id, decisions FROM l0_journal WHERE status='received' AND raw_type != 'import' AND ts <= ? ORDER BY id",
             (cutoff,),
         )

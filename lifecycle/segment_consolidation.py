@@ -98,13 +98,17 @@ async def segment_l0(since_hours: float = 24.0, layer: str = "user") -> dict[str
     consumes the segments as a grouping.
     """
     from shared.connection import connection_manager
+    from shared.l0 import SERVICE_RAW_TYPE
     from shared.write_dispatch import get_write_dispatch
 
     cutoff = __import__("time").time() - since_hours * 3600
     rows = await get_write_dispatch(connection_manager).query(
         DB_NAME,
-        "SELECT id, text FROM l0_journal WHERE ts >= ? AND layer=? ORDER BY id ASC LIMIT 500",
-        (cutoff, layer),
+        # Segmentation groups conversation into coherent batches. A maintenance
+        # row is a boundary the owner never spoke; letting one in would shape
+        # the grouping graph_enrich consumes.
+        "SELECT id, text FROM l0_journal WHERE ts >= ? AND layer=? AND raw_type != ? ORDER BY id ASC LIMIT 500",
+        (cutoff, layer, SERVICE_RAW_TYPE),
     )
     records = [(int(r["id"]), str(r["text"])) for r in rows]
     segments = detect_boundaries(records)

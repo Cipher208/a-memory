@@ -219,3 +219,39 @@ async def test_sweep_scopes_to_the_named_layer(app):
     left = {r["key"] for r in await (await conn.execute("SELECT key FROM core_memory WHERE user_id='lay'")).fetchall()}
     assert "agent_exp" in left, "a user-layer sweep reached into the agent layer"
     assert "user_exp" not in left
+
+
+@pytest.mark.asyncio
+async def test_sweep_summary_is_service_not_user_message(app):
+    """The cleaner's own summary is audit material, not the owner's speech.
+
+    classify_raw() reads `cleaner_summary: {...}` as `user-message`, so every
+    L0 reader that selects user messages treated the sweep's own log line as a
+    turn of the owner's.
+    """
+    from lifecycle.l0_sweep import sweep_expired
+
+    await sweep_expired(min_remain=0)
+    conn = await connection_manager.get("memory.db")
+    row = await (await conn.execute("SELECT raw_type FROM l0_journal WHERE event='l0_sweep' ORDER BY id DESC LIMIT 1")).fetchone()
+    assert row is not None
+    assert row["raw_type"] == "service"
+
+
+@pytest.mark.asyncio
+async def test_sweep_summary_never_becomes_an_episode_or_graph_node(app):
+    """Replay must not distil the sweep summary into L3/L4 or wire it into the graph."""
+    from features.replay import replay
+    from lifecycle.l0_sweep import sweep_expired
+
+    await sweep_expired(min_remain=0)
+    conn = await connection_manager.get("memory.db")
+    await conn.execute("UPDATE l0_journal SET ts = ts - 1200 WHERE event='l0_sweep'")
+    await conn.commit()
+
+    await replay(since_days=1, respect_gate=False)
+
+    episodes = await (await conn.execute("SELECT COUNT(*) FROM episodes WHERE summary LIKE 'cleaner_summary:%'")).fetchone()
+    nodes = await (await conn.execute("SELECT COUNT(*) FROM epi_nodes WHERE content LIKE 'cleaner_summary:%'")).fetchone()
+    assert int(episodes[0]) == 0, "the sweep summary became an L3 episode"
+    assert int(nodes[0]) == 0, "the sweep summary was wired into the graph"

@@ -115,6 +115,9 @@ async def _journal(summary: dict[str, Any], layer: str | None) -> None:
     import contextlib
 
     with contextlib.suppress(Exception):
-        from shared.l0 import capture
+        from shared.l0 import SERVICE_RAW_TYPE, capture
 
-        await capture("l0_sweep", layer or "user", "default", f"cleaner_summary: {summary}", decisions=[summary])
+        # Explicit raw_type: classify_raw() reads `cleaner_summary: {...}` as a
+        # `user-message`, which made the sweep's own audit line a turn of the
+        # owner's speech for replay, L2 enrichment and the graph miners.
+        await capture("l0_sweep", layer or "user", "default", f"cleaner_summary: {summary}", raw_type=SERVICE_RAW_TYPE, decisions=[summary])

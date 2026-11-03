@@ -1333,3 +1333,21 @@ def test_no_maintenance_wrapped_function_commits_on_its_own():
                     if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == "commit":
                         offenders.append(f"{path}:{sub.lineno} in {node.name}")
     assert not offenders, f"@_maintenance function commits on its own: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_miner_sessions_ignores_sweep_summary(db):
+    """A maintenance summary must not open a user session and bind nodes to it."""
+    from lifecycle.graph_miners import miner_sessions
+    from lifecycle.l0_sweep import sweep_expired
+
+    await sweep_expired(min_remain=0)
+    conn = await connection_manager.get(DB_NAME)
+    row = await (await conn.execute("SELECT ts FROM l0_journal WHERE event='l0_sweep' ORDER BY id DESC LIMIT 1")).fetchone()
+    ts = float(row["ts"])
+    await _node("alpha quantum", ts + 10)
+    await _node("beta neutrino", ts + 30)
+
+    result = await miner_sessions(db, "user")
+
+    assert result["edges"] == 0
