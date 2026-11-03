@@ -43,6 +43,34 @@ def _save(core, key, value, importance):
     asyncio.run(core.save("u1", key, value, importance=importance))
 
 
+def test_replay_boost_does_not_rejuvenate_the_row(tmp_path):
+    """The nightly boost is a derived-score change, not owner activity.
+
+    `core_memory.updated_at` is the age that `lifecycle.forgetting` decays by and
+    archives on, so a nightly timer that stamps it makes a frequently recalled
+    row immortal: it never ages and never archives. The rescore time belongs in
+    `importance_audit.rescored_at`, which already carries it.
+    """
+    cm, core = _make_cm(tmp_path)
+    _save(core, "hot", "recalled long ago", importance=0.5)
+    conn = asyncio.run(cm.get(DB_NAME))
+    hot_id = int(_fetchone(conn, "SELECT entry_id FROM core_memory WHERE key='hot'")[0])
+
+    born = time.time() - 120 * 86400
+    touched = time.time() - 45 * 86400
+    asyncio.run(conn.execute("UPDATE core_memory SET created_at=?, updated_at=? WHERE entry_id=?", (born, touched, hot_id)))
+    asyncio.run(conn.commit())
+
+    asyncio.run(record_recall_useful(cm, "user", "u1", [(hot_id, "hot")]))
+    result = asyncio.run(cls_replay(cm, "u1", layer="user"))
+    assert result["boosted"] == 1
+
+    row = _fetchone(conn, "SELECT importance, updated_at, created_at FROM core_memory WHERE entry_id=?", (hot_id,))
+    assert abs(float(row[0]) - 0.55) < 1e-9, "the boost still happened"
+    assert float(row[1]) == touched, "a background boost must not reset the row's age"
+    assert float(row[2]) == born
+
+
 def test_record_and_replay_boost(tmp_path):
     """A recalled fact gets +0.05; unrecalled facts are untouched."""
     cm, core = _make_cm(tmp_path)

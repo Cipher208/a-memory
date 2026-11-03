@@ -63,6 +63,37 @@ async def test_scheduler_rescores_big_delta(cm, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_rescoring_does_not_rejuvenate_the_row(cm, monkeypatch):
+    """`updated_at` is the age that forgetting and archive read.
+
+    The sweep used to stamp `updated_at=now` on every row whose score moved, so a
+    rescored row looked freshly written: decay never saw it age and archive never
+    reached it. Measured on the Hermes base before the fix, 94 rows older than 60
+    days by `created_at` still read as younger than 30 by `updated_at`.
+    """
+    monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
+    conn = await cm.get("memory.db")
+    born = time.time() - 90 * 86400
+    touched = time.time() - 5 * 86400
+    await conn.execute(
+        """INSERT INTO core_memory
+           (user_id, "key", value, importance, updated_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("alice", "k", "redis cluster pipelining", 0.4, touched, born),
+    )
+    await conn.commit()
+
+    s = ImportanceScheduler(scheduler_config=SchedulerConfig(delta_threshold=0.05))
+    stats = await s.run_once()
+    assert stats["rescored"] >= 1
+
+    row = await (await conn.execute("SELECT importance, updated_at, created_at FROM core_memory WHERE \"key\"='k'")).fetchone()
+    assert row["importance"] != 0.4, "the rescore still happened"
+    assert row["updated_at"] == touched, "a rescore must not reset the row's age"
+    assert row["created_at"] == born
+
+
+@pytest.mark.asyncio
 async def test_scheduler_skips_small_delta(cm, monkeypatch):
     monkeypatch.setattr("lifecycle.importance_scheduler.connection_manager", cm)
     conn = await cm.get("memory.db")
