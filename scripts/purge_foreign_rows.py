@@ -69,10 +69,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
@@ -283,23 +286,33 @@ async def main() -> int:
         print("  РЕЖИМ ОТЧЁТА — ничего не записано. Для удаления: --apply")
         return 0
 
-    before = _counts(db)
-    print()
-    await apply(p, db)
-    after = _counts(db)
-    print()
-    print("  изменение:")
-    for k in before:
-        d = after[k] - before[k]
-        print(f"    {k:<12} {before[k]:>6} -> {after[k]:<6} ({d:+d})")
-
     from shared.connection import connection_manager
     from shared.l0 import verify_chain
 
-    broken = await verify_chain()
-    print(f"  L0 цепочка нарушений: {len(broken)}")
-    await connection_manager.close_all()
-    return 0
+    try:
+        before = _counts(db)
+        print()
+        await apply(p, db)
+        after = _counts(db)
+        print()
+        print("  изменение:")
+        for k in before:
+            d = after[k] - before[k]
+            print(f"    {k:<12} {before[k]:>6} -> {after[k]:<6} ({d:+d})")
+
+        broken = await verify_chain()
+        print(f"  L0 цепочка нарушений: {len(broken)}")
+        return 0
+    finally:
+        # Close on every exit path, not just the happy one: aiosqlite workers are
+        # non-daemon, so an exception escaping without this parks the interpreter
+        # in `threading._shutdown` (exit 124) instead of printing the traceback.
+        # Logged, not suppressed silently, so a broken close stays visible; it
+        # still cannot replace the original error.
+        try:
+            await connection_manager.close_all()
+        except Exception:
+            logger.warning("close_all() failed during shutdown", exc_info=True)
 
 
 if __name__ == "__main__":

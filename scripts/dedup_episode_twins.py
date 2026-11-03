@@ -31,11 +31,14 @@ import asyncio
 import calendar
 import contextlib
 import json
+import logging
 import os
 import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -119,145 +122,150 @@ async def run(apply: bool) -> int:
     from shared.constants import DB_NAME
     from shared.write_dispatch import get_write_dispatch
 
-    dispatch = get_write_dispatch(cm)
-    rows = [dict(r) for r in await dispatch.query(DB_NAME, SQL)]
+    try:
+        dispatch = get_write_dispatch(cm)
+        rows = [dict(r) for r in await dispatch.query(DB_NAME, SQL)]
 
-    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for r in rows:
-        groups[(r["user_id"], r["summary"])].append(r)
+        groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for r in rows:
+            groups[(r["user_id"], r["summary"])].append(r)
 
-    keep: list[dict] = []
-    drop: list[dict] = []
-    klass = Counter()
-    for members in groups.values():
-        k, d, name = classify(members)
-        klass[name] += 1
-        keep.extend(k)
-        drop.extend(d)
+        keep: list[dict] = []
+        drop: list[dict] = []
+        klass = Counter()
+        for members in groups.values():
+            k, d, name = classify(members)
+            klass[name] += 1
+            keep.extend(k)
+            drop.extend(d)
 
-    before_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM episodes") or 0
-    orphans_sql = (
-        "SELECT COUNT(*) FROM epi_edges e WHERE "
-        "NOT EXISTS (SELECT 1 FROM epi_nodes n WHERE n.node_id=e.source_id) OR "
-        "NOT EXISTS (SELECT 1 FROM epi_nodes n WHERE n.node_id=e.target_id)"
-    )
-    before_orphans = await dispatch.scalar(DB_NAME, orphans_sql) or 0
-
-    print(f"base={DATA_DIR}")
-    print(f"mode={'APPLY' if apply else 'dry-run'}  dup_groups={len(groups)} dup_rows={len(rows)} total={before_total}")
-    print("classes: " + "  ".join(f"{k}={v}" for k, v in sorted(klass.items())))
-    print(f"drop={len(drop)}  keep={len(keep)}")
-
-    byday = Counter(time.strftime("%Y-%m-%d", time.gmtime(d["created_at"])) for d in drop)
-    print("drop by day (UTC): " + "  ".join(f"{d}:{byday[d]}" for d in sorted(byday)))
-
-    if not apply:
-        for d in drop[:15]:
-            print(
-                f"  drop {d['episode_id']:>5} {time.strftime('%m-%d %H:%M', time.gmtime(d['created_at']))} "
-                f"{_raws(d['tags']).pop():<10} {d['summary'][:52]!r}"
-            )
-        if len(drop) > 15:
-            print(f"  ... +{len(drop) - 15} more")
-        await cm.close_all()
-        return 0
-
-    if not drop:
-        print("nothing to drop")
-        await cm.close_all()
-        return 0
-
-    # guard: every doomed id must still match its group exactly
-    doomed = {d["episode_id"] for d in drop}
-    if len(doomed) != len(drop):
-        print("ABORT: duplicate episode_id in drop set")
-        await cm.close_all()
-        return 1
-    for d in drop:
-        n = await dispatch.scalar(
-            DB_NAME,
-            "SELECT COUNT(*) FROM episodes WHERE episode_id=? AND summary=? AND tags IS ? AND layer=?",
-            (d["episode_id"], d["summary"], d["tags"], d["layer"]),
+        before_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM episodes") or 0
+        orphans_sql = (
+            "SELECT COUNT(*) FROM epi_edges e WHERE "
+            "NOT EXISTS (SELECT 1 FROM epi_nodes n WHERE n.node_id=e.source_id) OR "
+            "NOT EXISTS (SELECT 1 FROM epi_nodes n WHERE n.node_id=e.target_id)"
         )
-        if n != 1:
-            print(f"  ABORT: episode {d['episode_id']} no longer matches its group (matches={n})")
-            await cm.close_all()
-            return 1
-    for k in keep:
-        if k["episode_id"] in doomed:
-            print(f"  ABORT: keep id {k['episode_id']} also in drop set")
-            await cm.close_all()
-            return 1
+        before_orphans = await dispatch.scalar(DB_NAME, orphans_sql) or 0
 
-    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    path = ARCHIVE_DIR / f"episode-twins-{stamp}.jsonl"
-    with path.open("w", encoding="utf-8") as fh:
+        print(f"base={DATA_DIR}")
+        print(f"mode={'APPLY' if apply else 'dry-run'}  dup_groups={len(groups)} dup_rows={len(rows)} total={before_total}")
+        print("classes: " + "  ".join(f"{k}={v}" for k, v in sorted(klass.items())))
+        print(f"drop={len(drop)}  keep={len(keep)}")
+
+        byday = Counter(time.strftime("%Y-%m-%d", time.gmtime(d["created_at"])) for d in drop)
+        print("drop by day (UTC): " + "  ".join(f"{d}:{byday[d]}" for d in sorted(byday)))
+
+        if not apply:
+            for d in drop[:15]:
+                print(
+                    f"  drop {d['episode_id']:>5} {time.strftime('%m-%d %H:%M', time.gmtime(d['created_at']))} "
+                    f"{_raws(d['tags']).pop():<10} {d['summary'][:52]!r}"
+                )
+            if len(drop) > 15:
+                print(f"  ... +{len(drop) - 15} more")
+            return 0
+
+        if not drop:
+            print("nothing to drop")
+            return 0
+
+        # guard: every doomed id must still match its group exactly
+        doomed = {d["episode_id"] for d in drop}
+        if len(doomed) != len(drop):
+            print("ABORT: duplicate episode_id in drop set")
+            return 1
         for d in drop:
-            fh.write(json.dumps(d, ensure_ascii=False, default=str) + "\n")
-
-    am = ArchivedMemories(cm=cm)
-    await am._init_db()
-    now = time.time()
-    for d in drop:
-        await am.archive(
-            user_id=d["user_id"],
-            content=str(d["summary"]),
-            memory_type="episode",
-            importance=float(d["emotional_weight"] or 0.0),
-            original_id=int(d["episode_id"]),
-            reason="duplicate_episode_replay",
-        )
-        with contextlib.suppress(Exception):
-            from lifecycle.transitions import record_transition
-
-            await record_transition(
-                cm,
-                d["user_id"],
-                "episode",
-                f"episode:{d['episode_id']}",
-                "archived",
-                f"archived:duplicate_episode_replay:{path.name}",
-                "duplicate_episode_replay",
+            n = await dispatch.scalar(
+                DB_NAME,
+                "SELECT COUNT(*) FROM episodes WHERE episode_id=? AND summary=? AND tags IS ? AND layer=?",
+                (d["episode_id"], d["summary"], d["tags"], d["layer"]),
             )
-        await dispatch.write(
-            DB_NAME,
-            "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
-            (
-                d["user_id"],
-                "l3_dedup_twin",
-                d["layer"],
-                f"episodes:{d['episode_id']}",
-                json.dumps({"raw": sorted(_raws(d["tags"])), "archive": path.name}, ensure_ascii=False),
-                now,
-            ),
-        )
-    # API-only delete, each row inside its own (user_id, layer) scope
-    by_scope: dict[tuple[str, str], list[int]] = defaultdict(list)
-    for row in drop:
-        by_scope[(row["user_id"], str(row["layer"]))].append(int(row["episode_id"]))
-    deleted = 0
-    for (owner, layer), ids in by_scope.items():
-        deleted += await EpisodicMemory(cm=cm, layer=layer).delete_by_ids(sorted(ids), user_id=owner)
+            if n != 1:
+                print(f"  ABORT: episode {d['episode_id']} no longer matches its group (matches={n})")
+                return 1
+        for k in keep:
+            if k["episode_id"] in doomed:
+                print(f"  ABORT: keep id {k['episode_id']} also in drop set")
+                return 1
 
-    after_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM episodes") or 0
-    after_orphans = await dispatch.scalar(DB_NAME, orphans_sql) or 0
-    left = 0
-    rest = [dict(r) for r in await dispatch.query(DB_NAME, SQL)]
-    rg: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    for r in rest:
-        rg[(r["user_id"], r["summary"])].append(r)
-    for members in rg.values():
-        if classify(members)[2] == "SAME_RAW":
-            left += 1
+        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        path = ARCHIVE_DIR / f"episode-twins-{stamp}.jsonl"
+        with path.open("w", encoding="utf-8") as fh:
+            for d in drop:
+                fh.write(json.dumps(d, ensure_ascii=False, default=str) + "\n")
 
-    print(f"archive: {path}")
-    print(f"deleted={deleted}/{len(drop)}  same_raw_left={left}  total {before_total}->{after_total}")
-    print(f"orphans {before_orphans}->{after_orphans}")
-    ok = deleted == len(drop) and left == 0 and after_total == before_total - deleted and after_orphans == before_orphans
-    print("VERDICT=" + ("CLEAN" if ok else "LEFTOVER"))
-    await cm.close_all()
-    return 0 if ok else 1
+        am = ArchivedMemories(cm=cm)
+        await am._init_db()
+        now = time.time()
+        for d in drop:
+            await am.archive(
+                user_id=d["user_id"],
+                content=str(d["summary"]),
+                memory_type="episode",
+                importance=float(d["emotional_weight"] or 0.0),
+                original_id=int(d["episode_id"]),
+                reason="duplicate_episode_replay",
+            )
+            with contextlib.suppress(Exception):
+                from lifecycle.transitions import record_transition
+
+                await record_transition(
+                    cm,
+                    d["user_id"],
+                    "episode",
+                    f"episode:{d['episode_id']}",
+                    "archived",
+                    f"archived:duplicate_episode_replay:{path.name}",
+                    "duplicate_episode_replay",
+                )
+            await dispatch.write(
+                DB_NAME,
+                "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
+                (
+                    d["user_id"],
+                    "l3_dedup_twin",
+                    d["layer"],
+                    f"episodes:{d['episode_id']}",
+                    json.dumps({"raw": sorted(_raws(d["tags"])), "archive": path.name}, ensure_ascii=False),
+                    now,
+                ),
+            )
+        # API-only delete, each row inside its own (user_id, layer) scope
+        by_scope: dict[tuple[str, str], list[int]] = defaultdict(list)
+        for row in drop:
+            by_scope[(row["user_id"], str(row["layer"]))].append(int(row["episode_id"]))
+        deleted = 0
+        for (owner, layer), ids in by_scope.items():
+            deleted += await EpisodicMemory(cm=cm, layer=layer).delete_by_ids(sorted(ids), user_id=owner)
+
+        after_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM episodes") or 0
+        after_orphans = await dispatch.scalar(DB_NAME, orphans_sql) or 0
+        left = 0
+        rest = [dict(r) for r in await dispatch.query(DB_NAME, SQL)]
+        rg: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        for r in rest:
+            rg[(r["user_id"], r["summary"])].append(r)
+        for members in rg.values():
+            if classify(members)[2] == "SAME_RAW":
+                left += 1
+
+        print(f"archive: {path}")
+        print(f"deleted={deleted}/{len(drop)}  same_raw_left={left}  total {before_total}->{after_total}")
+        print(f"orphans {before_orphans}->{after_orphans}")
+        ok = deleted == len(drop) and left == 0 and after_total == before_total - deleted and after_orphans == before_orphans
+        print("VERDICT=" + ("CLEAN" if ok else "LEFTOVER"))
+        return 0 if ok else 1
+    finally:
+        # Close on every exit path, not just the happy one: aiosqlite workers are
+        # non-daemon, so an exception leaving `run()` without this parks the
+        # interpreter in `threading._shutdown` (exit 124) instead of printing the
+        # traceback and exiting. Logged, not suppressed silently, so a broken
+        # close stays visible; it still cannot replace the original error.
+        try:
+            await cm.close_all()
+        except Exception:
+            logger.warning("close_all() failed during shutdown", exc_info=True)
 
 
 async def backfill_transitions(apply: bool) -> int:
@@ -273,52 +281,60 @@ async def backfill_transitions(apply: bool) -> int:
     from shared.constants import DB_NAME
     from shared.write_dispatch import get_write_dispatch
 
-    dispatch = get_write_dispatch(cm)
-    files = sorted(ARCHIVE_DIR.glob("episode-twins-*.jsonl"))
-    if not files:
-        print("no episode-twins-*.jsonl in archive dir — cannot name the to_ref")
-        await cm.close_all()
-        return 1
-    path = files[-1]
+    try:
+        dispatch = get_write_dispatch(cm)
+        files = sorted(ARCHIVE_DIR.glob("episode-twins-*.jsonl"))
+        if not files:
+            print("no episode-twins-*.jsonl in archive dir — cannot name the to_ref")
+            return 1
+        path = files[-1]
 
-    rows = await dispatch.query(
-        DB_NAME,
-        "SELECT id, user_id, original_id, archived_at FROM archived_memories WHERE archive_reason='duplicate_episode_replay' ORDER BY id",
-    )
-    existing = {str(r["from_ref"]) for r in await dispatch.query(DB_NAME, "SELECT from_ref FROM memory_transitions WHERE kind='episode->archived'")}
-
-    todo = []
-    for r in rows:
-        ref = f"episode:{r['original_id']}"
-        if ref in existing:
-            continue
-        todo.append((r["user_id"], ref, r["archived_at"]))
-
-    print(f"archived rows={len(rows)}  already recorded={len(rows) - len(todo)}  to insert={len(todo)}")
-    print(f"to_ref=archived:duplicate_episode_replay:{path.name}")
-    if not apply:
-        await cm.close_all()
-        return 0
-
-    # One transaction for the whole replay: a half-written transition log would
-    # claim episodes were archived that the file never recorded.
-    ops = []
-    for user_id, ref, archived_at in todo:
-        ts = calendar.timegm(time.strptime(str(archived_at), "%Y-%m-%d %H:%M:%S"))
-        ops.append(
-            (
-                "INSERT INTO memory_transitions (user_id, kind, from_ref, to_ref, reason, ts) VALUES (?,?,?,?,?,?)",
-                (user_id, "episode->archived", ref, f"archived:duplicate_episode_replay:{path.name}", "duplicate_episode_replay", ts),
-            )
+        rows = await dispatch.query(
+            DB_NAME,
+            "SELECT id, user_id, original_id, archived_at FROM archived_memories WHERE archive_reason='duplicate_episode_replay' ORDER BY id",
         )
-    if ops:
-        await dispatch.write_many(DB_NAME, ops)
+        existing = {
+            str(r["from_ref"]) for r in await dispatch.query(DB_NAME, "SELECT from_ref FROM memory_transitions WHERE kind='episode->archived'")
+        }
 
-    n = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM memory_transitions WHERE reason='duplicate_episode_replay'") or 0
-    print(f"inserted={len(todo)}  now_in_table={n}")
-    print("VERDICT=" + ("CLEAN" if n == len(rows) else "LEFTOVER"))
-    await cm.close_all()
-    return 0 if n == len(rows) else 1
+        todo = []
+        for r in rows:
+            ref = f"episode:{r['original_id']}"
+            if ref in existing:
+                continue
+            todo.append((r["user_id"], ref, r["archived_at"]))
+
+        print(f"archived rows={len(rows)}  already recorded={len(rows) - len(todo)}  to insert={len(todo)}")
+        print(f"to_ref=archived:duplicate_episode_replay:{path.name}")
+        if not apply:
+            return 0
+
+        # One transaction for the whole replay: a half-written transition log would
+        # claim episodes were archived that the file never recorded.
+        ops = []
+        for user_id, ref, archived_at in todo:
+            ts = calendar.timegm(time.strptime(str(archived_at), "%Y-%m-%d %H:%M:%S"))
+            ops.append(
+                (
+                    "INSERT INTO memory_transitions (user_id, kind, from_ref, to_ref, reason, ts) VALUES (?,?,?,?,?,?)",
+                    (user_id, "episode->archived", ref, f"archived:duplicate_episode_replay:{path.name}", "duplicate_episode_replay", ts),
+                )
+            )
+        if ops:
+            await dispatch.write_many(DB_NAME, ops)
+
+        n = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM memory_transitions WHERE reason='duplicate_episode_replay'") or 0
+        print(f"inserted={len(todo)}  now_in_table={n}")
+        print("VERDICT=" + ("CLEAN" if n == len(rows) else "LEFTOVER"))
+        return 0 if n == len(rows) else 1
+    finally:
+        # Same contract as `run()`: the dispatch calls above opened connections,
+        # so any exit path must close them or the interpreter hangs on the
+        # non-daemon aiosqlite workers. Logged so a broken close is visible.
+        try:
+            await cm.close_all()
+        except Exception:
+            logger.warning("close_all() failed during shutdown", exc_info=True)
 
 
 def main() -> int:

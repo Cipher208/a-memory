@@ -17,9 +17,12 @@ from typing import Any
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -45,40 +48,50 @@ async def run(apply: bool, limit: int = 0) -> int:
     from shared.write_dispatch import get_write_dispatch
 
     cm = connection_manager
-    dispatch = get_write_dispatch(cm)
-    rows = await flagged(dispatch)
-    if limit:
-        rows = rows[:limit]
-    print(f"base={DATA_DIR}  flagged={len(rows)}  mode={'APPLY' if apply else 'dry-run'}")
+    try:
+        dispatch = get_write_dispatch(cm)
+        rows = await flagged(dispatch)
+        if limit:
+            rows = rows[:limit]
+        print(f"base={DATA_DIR}  flagged={len(rows)}  mode={'APPLY' if apply else 'dry-run'}")
 
-    resolver = ConflictResolver(cm=cm)
-    ok = fail = 0
-    for row in rows:
-        rid, gid, preview = row["id"], row["conflict_group_id"], row["preview"]
-        if not gid:
-            print(f"  SKIP id={rid}: no conflict_group_id")
-            fail += 1
-            continue
-        if not apply:
-            print(f"  dry  id={rid} gid={gid[:8]}  {preview[:50]!r}")
-            continue
-        try:
-            if await resolver.resolve(gid, rid):
-                ok += 1
-                print(f"  ok   id={rid} gid={gid[:8]}")
-            else:
+        resolver = ConflictResolver(cm=cm)
+        ok = fail = 0
+        for row in rows:
+            rid, gid, preview = row["id"], row["conflict_group_id"], row["preview"]
+            if not gid:
+                print(f"  SKIP id={rid}: no conflict_group_id")
                 fail += 1
-                print(f"  FAIL id={rid} gid={gid[:8]} (resolve returned False)")
-        except Exception as e:  # one row must not stop the batch
-            fail += 1
-            print(f"  ERR  id={rid}: {type(e).__name__}: {e}")
+                continue
+            if not apply:
+                print(f"  dry  id={rid} gid={gid[:8]}  {preview[:50]!r}")
+                continue
+            try:
+                if await resolver.resolve(gid, rid):
+                    ok += 1
+                    print(f"  ok   id={rid} gid={gid[:8]}")
+                else:
+                    fail += 1
+                    print(f"  FAIL id={rid} gid={gid[:8]} (resolve returned False)")
+            except Exception as e:  # one row must not stop the batch
+                fail += 1
+                print(f"  ERR  id={rid}: {type(e).__name__}: {e}")
 
-    left = len(await flagged(dispatch))
-    print(f"done: resolved={ok} failed={fail}  flagged_before={len(rows)} flagged_after={left}")
-    if apply and not limit:
-        assert left == len(rows) - ok, f"flag count mismatch: {left} != {len(rows) - ok}"
-    await cm.close_all()
-    return 1 if fail else 0
+        left = len(await flagged(dispatch))
+        print(f"done: resolved={ok} failed={fail}  flagged_before={len(rows)} flagged_after={left}")
+        if apply and not limit:
+            assert left == len(rows) - ok, f"flag count mismatch: {left} != {len(rows) - ok}"
+        return 1 if fail else 0
+    finally:
+        # Close on every exit path, including the `assert` above: aiosqlite
+        # workers are non-daemon, so an escaping exception without this parks the
+        # interpreter in `threading._shutdown` (exit 124) instead of printing the
+        # traceback and exiting. Logged, not suppressed silently, so a broken
+        # close stays visible; it still cannot replace the original error.
+        try:
+            await cm.close_all()
+        except Exception:
+            logger.warning("close_all() failed during shutdown", exc_info=True)
 
 
 def main() -> int:

@@ -29,6 +29,7 @@ import sys
 import time
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
+logger = logging.getLogger(__name__)
 
 BASE = os.environ["MCP_MEMORY_DATA_DIR"]
 LAYER = "user"
@@ -94,11 +95,21 @@ async def main() -> None:
     )
 
 
-asyncio.run(main())
-
 # aiosqlite worker threads are non-daemon, so without closing the connections the
 # interpreter parks in `threading._shutdown` forever after the work is done — the
 # script looks hung while it has actually finished.
 from shared.connection import connection_manager as _cm
 
-asyncio.run(_cm.close_all())
+try:
+    asyncio.run(main())
+finally:
+    # `finally`, not a plain statement after the call: when `main()` raises (a
+    # missing table, a bad env, Ctrl-C) the connections are already open, and
+    # skipping the close turns a clean traceback+exit into a hang that an
+    # external timeout kills (measured: exit 124 vs exit 1). Logged, not
+    # suppressed silently, so a broken close stays visible; it still cannot
+    # replace the traceback the operator needs.
+    try:
+        asyncio.run(_cm.close_all())
+    except Exception:
+        logger.warning("close_all() failed during shutdown", exc_info=True)

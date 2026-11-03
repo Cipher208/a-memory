@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import sys
 import time
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 from shared.constants import DB_NAME
+
+logger = logging.getLogger(__name__)
 
 LIMIT = 2000
 
@@ -213,25 +216,37 @@ async def run_manifest(manifest_path: Path) -> int:
     original_base = cm.base_dir
     current_base: Path | None = None
     total = 0
-    for base, file, kind, layer, user, ns in resolved:
-        if base != current_base:
+    try:
+        for base, file, kind, layer, user, ns in resolved:
+            if base != current_base:
+                await cm.close_all()
+                cm.base_dir = base
+                current_base = base
+            if file is None:
+                print(f"drift: {base.name} {kind} missing file")
+                total += 1
+                continue
+            drift = await check_drift([file], kind, layer, user, cm, ns)
+            count = sum(len(keys) for keys in drift.values())
+            for cls, keys in drift.items():
+                for key in keys:
+                    print(f"drift: {base.name} {file.name} {cls} {key}")
+            total += count
+        print(f"manifest: {'clean' if not total else f'{total} drift item(s)'} across {len(resolved)} entries")
+        return total
+    finally:
+        # Close on every exit path, not just the happy one: aiosqlite workers are
+        # non-daemon, so an exception escaping without this parks the interpreter
+        # in `threading._shutdown` (exit 124) instead of printing the traceback.
+        # base_dir is restored here too — it is a process-global that must not be
+        # left pointing at the last manifest base. Logged, not suppressed
+        # silently, so a broken close stays visible; it still cannot replace the
+        # original error.
+        try:
             await cm.close_all()
-            cm.base_dir = base
-            current_base = base
-        if file is None:
-            print(f"drift: {base.name} {kind} missing file")
-            total += 1
-            continue
-        drift = await check_drift([file], kind, layer, user, cm, ns)
-        count = sum(len(keys) for keys in drift.values())
-        for cls, keys in drift.items():
-            for key in keys:
-                print(f"drift: {base.name} {file.name} {cls} {key}")
-        total += count
-    await cm.close_all()
-    cm.base_dir = original_base
-    print(f"manifest: {'clean' if not total else f'{total} drift item(s)'} across {len(resolved)} entries")
-    return total
+        except Exception:
+            logger.warning("close_all() failed during shutdown", exc_info=True)
+        cm.base_dir = original_base
 
 
 async def migrate_sha_keys(mem: Any, cm: Any, user_id: str, layer: str, dry: bool = False) -> tuple[int, list[str]]:
@@ -305,23 +320,31 @@ def main() -> int:
     from shared.connection import connection_manager
 
     async def _run() -> int:
-        app = AppContext()
-        mem = app.mm.agent_memory(ns.user) if ns.layer == "agent" else app.mm.user_memory(ns.user)
-        if ns.check:
-            drift = await check_drift(files, ns.kind, ns.layer, ns.user, connection_manager, ns=ns.ns)
-            for class_, keys in drift.items():
-                for key in keys:
-                    print(f"{class_}: {key}")
-            total = sum(len(v) for v in drift.values())
-            print(f"check: {'clean' if not total else f'{total} drift item(s)'}")
-            await connection_manager.close_all()
-            return total
-        if ns.migrate_sha_keys:
-            removed, unmapped = await migrate_sha_keys(mem, connection_manager, ns.user, ns.layer, ns.dry_run)
-            print(f"migrate{' (dry)' if ns.dry_run else ''}: {removed} legacy row(s), {len(unmapped)} unmapped kept")
-        total = await mirror(files, ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run, mem, connection_manager, ns=ns.ns)
-        await connection_manager.close_all()
-        return total
+        try:
+            app = AppContext()
+            mem = app.mm.agent_memory(ns.user) if ns.layer == "agent" else app.mm.user_memory(ns.user)
+            if ns.check:
+                drift = await check_drift(files, ns.kind, ns.layer, ns.user, connection_manager, ns=ns.ns)
+                for class_, keys in drift.items():
+                    for key in keys:
+                        print(f"{class_}: {key}")
+                total = sum(len(v) for v in drift.values())
+                print(f"check: {'clean' if not total else f'{total} drift item(s)'}")
+                return total
+            if ns.migrate_sha_keys:
+                removed, unmapped = await migrate_sha_keys(mem, connection_manager, ns.user, ns.layer, ns.dry_run)
+                print(f"migrate{' (dry)' if ns.dry_run else ''}: {removed} legacy row(s), {len(unmapped)} unmapped kept")
+            return await mirror(files, ns.kind, ns.layer, ns.user, ns.importance, ns.dry_run, mem, connection_manager, ns=ns.ns)
+        finally:
+            # Close on every exit path, not just the happy one: aiosqlite workers
+            # are non-daemon, so an exception escaping without this parks the
+            # interpreter in `threading._shutdown` (exit 124) instead of printing
+            # the traceback. Logged, not suppressed silently, so a broken close
+            # stays visible; it still cannot replace the original error.
+            try:
+                await connection_manager.close_all()
+            except Exception:
+                logger.warning("close_all() failed during shutdown", exc_info=True)
 
     n = asyncio.run(_run())
     if ns.check:
