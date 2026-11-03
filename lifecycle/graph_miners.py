@@ -2,8 +2,10 @@
 
 Miners read existing data (epi_tags, node contents, L0 user-message rows) and
 write edges into epi_edges tagged `heuristic:<name>` (rollback: DELETE WHERE
-tags LIKE '%heuristic:%'). All inserts are INSERT OR IGNORE against the
-epi_edges PK — re-runs are no-ops. No LLM calls anywhere.
+tags LIKE '%heuristic:%'). Edges go through `_insert_edge`, an upsert on the
+epi_edges PK that keeps the strongest evidence: a re-run at an equal or weaker
+weight is a no-op, a strictly stronger one rewrites the weight and moves
+`created_at` (see that function for what the age means). No LLM calls anywhere.
 """
 
 from __future__ import annotations
@@ -176,7 +178,7 @@ async def _inhibit_dirty(conn: Any, dirty: set[int]) -> int:
 
 
 async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, heuristic: str, dirty: set[int] | None = None) -> int:
-    """UPSERT into epi_edges; returns rows actually written (re-run → 0).
+    """UPSERT into epi_edges; returns rows actually written (equal repeat → 0).
 
     Audit 05.09 (P1): INSERT OR IGNORE froze the weight — a miner re-run
     never strengthened a link. The upsert now takes max(weight) (strongest
@@ -184,11 +186,39 @@ async def _insert_edge(conn: Any, a: int, b: int, relation: str, weight: float, 
     inserted, lateral inhibition applies (G5, SYNAPSE): a weak edge is
     suppressed by the cluster of stronger neighbors around the node.
 
-    19.09 (issue G): inhibition runs ONLY for newly created rows. A repeat
-    upsert used to re-run the quadratic lateral_inhibition over the whole
-    hub on every nightly (640k edges → 9h of 100% main-thread CPU that
-    never converges: upsert re-raises what inhibition lowered). Return
-    contract is unchanged (rows written, 0/1).
+    `created_at` is the edge's BIRTH or its last WEIGHT-INCREASING
+    re-derivation, whichever is later — an equal or weaker re-mine leaves it
+    alone (measured 2026-11-03, F42; see
+    `.compose/reports/2026-11-03-f42-dryrun.md`). There is no separate birth
+    column and `valid_from` is NULL on every row of all three house bases, so an
+    edge's true age cannot be recovered. Consequences, pinned by the test
+    `test_remine_after_inhibition_refreshes_the_edge_age`:
+
+      - a repeat at an EQUAL-or-lower weight is a true no-op (0 rows written,
+        weight and age untouched) — the 19.09 gate below. This matters: the
+        miners re-derive the same pairs every night, and if an equal repeat moved
+        the age, nothing would ever settle;
+      - a repeat at a HIGHER weight writes the row and moves the age. That is
+        why an edge that inhibition drove to zero comes back with a fresh age
+        when its miner re-derives it at full strength, and it is the only way
+        this upsert keeps an edge out of the NREM stale band
+        (`graph_enrich._dream_nrem`, `created_at < now - 30 d`).
+
+    F42 read the second bullet as prune starvation: if a re-mined dead edge
+    never reaches 30 days, it never dies. Measured on the live bases, that does
+    not happen. On 2026-11-03 at 06:59 CET the dead heuristic edges sat almost
+    entirely inside the window — Hermes 56 650 in the 25-30 d band against 189
+    just past it (30-31 d) and none beyond; CowAgent 1 765 against 2 and none.
+    The boundary is therefore crossed in batches and cleared on the NEXT NREM
+    pass, so pruning lags by up to one pass rather than starving. Sampling the
+    same Hermes base eight minutes apart is enough to see the lag move (56 839 /
+    0 → 56 650 / 189), so a single "0 past 30 d" reading is a moment, not a
+    property.
+
+    One exception is measured and unresolved: Mimocode holds 120 dead
+    `heuristic:tokens` edges at 44.7 d, all stamped within ~0.9 s on 2026-09-19.
+    Skipping NREM across a boundary would explain it, but that is a hypothesis
+    about that base's schedule, not something these rows prove.
 
     19.09 (issue G, part 3): the upsert is gated — a weaker-or-equal repeat
     is a true no-op (no row touched, created_at stable, returns 0). Without
