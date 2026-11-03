@@ -6,6 +6,9 @@ S13 (estate-quality): dense_per_kind арм видит только тегиро
 
 from __future__ import annotations
 
+import importlib
+import logging
+
 import pytest
 
 from shared.connection import connection_manager
@@ -77,3 +80,23 @@ async def test_backfill_limit(db) -> None:
     await _chunk("нужно сделать два")
     assert await backfill_memory_kind(connection_manager, dry_run=False, limit=1) == 1
     assert await backfill_memory_kind(connection_manager, dry_run=False, limit=1) == 1
+
+
+def test_close_failure_is_logged_not_suppressed(caplog, monkeypatch) -> None:
+    """The `finally` was already there; the defect was `contextlib.suppress`,
+    which made a real close failure indistinguishable from a clean shutdown.
+    A broken close must leave a warning and must not change the exit code."""
+    module = importlib.import_module("scripts.backfill_memory_kind")
+
+    async def _work(*_args, **_kwargs) -> int:
+        return 0
+
+    async def _boom() -> None:
+        raise RuntimeError("close boom")
+
+    monkeypatch.setattr(module, "backfill_memory_kind", _work)
+    monkeypatch.setattr(connection_manager, "close_all", _boom)
+    with caplog.at_level(logging.WARNING):
+        rc = module.main([])
+    assert rc == 0
+    assert any("close_all" in record.getMessage() for record in caplog.records), caplog.text

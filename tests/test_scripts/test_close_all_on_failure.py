@@ -21,10 +21,33 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _rebind_leaked_write_dispatch():
+    """Rebind `get_write_dispatch` in modules that imported it during a patch.
+
+    `core.memory`, `core.episodic`, `core.session` and ~40 others bind the
+    function object at module level. A test that patches
+    `shared.write_dispatch.get_write_dispatch` and then imports one of them
+    inside that window leaves the stub permanently bound: monkeypatch restores
+    the shared attribute, never the copies already taken. Rebinding at teardown
+    keeps the stub local to the test that asked for it.
+    """
+    from shared import write_dispatch
+
+    real = write_dispatch.get_write_dispatch
+    yield
+    for module in list(sys.modules.values()):
+        if not isinstance(module, ModuleType):
+            continue
+        if getattr(module, "get_write_dispatch", real) is not real:
+            module.get_write_dispatch = real  # type: ignore[attr-defined]
 
 
 @pytest.fixture
@@ -123,6 +146,25 @@ def test_docs_to_wiki_closes_when_sync_raises(tmp_path: Path, close_calls: list[
     monkeypatch.setattr("wiki.manager.WikiManager", _WikiManager)
     with pytest.raises(RuntimeError, match="boom"):
         module.sync_one(tmp_path)
+    assert close_calls[-1] == "close"
+
+
+def test_sync_skills_closes_when_sync_raises(close_calls: list[str], monkeypatch) -> None:
+    """`sync_one` runs `sync_external` before closing, so a raise there used to
+    strand the aiosqlite workers and hang the per-agent subprocess."""
+    module = importlib.import_module("scripts.sync_skills")
+
+    class _WikiManager:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def sync_external(self, _dirs) -> dict[str, int]:
+            close_calls.append("fail")
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("wiki.manager.WikiManager", _WikiManager)
+    with pytest.raises(RuntimeError, match="boom"):
+        module.sync_one("pytest")
     assert close_calls[-1] == "close"
 
 
