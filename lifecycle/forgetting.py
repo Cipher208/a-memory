@@ -111,6 +111,30 @@ def _carried_into_episodes(row: Any) -> frozenset[str]:
     return _CARRIED_INTO_EPISODES | {"created_at"}
 
 
+def _carried_into_core(row: Any) -> frozenset[str]:
+    """Return the core columns this archived row can fill — one answer per row.
+
+    `memory_kind` is carried only when the bin recorded a real kind. `memory_type`
+    is also the route label, and older versions of the purge scripts recorded the
+    *source table* (`core_memory`) there for rows they selected from `core_memory`;
+    writing that label back would be a kind no registry entry matches, so
+    `_restore_core` writes `NULL` instead and this answer must say the kind was not
+    carried. `fact` is not
+    substituted: the archive never recorded one, and inventing it is the guess
+    `route_of` exists to avoid.
+
+    The column is read, not guarded. `restore_entries` dereferences
+    `row["memory_type"]` in `refusal_reason` before this helper is reached, so a
+    bin without that column fails earlier with an `IndexError` and `reason="error"`
+    instead of arriving here. The column belongs to the bin's original schema, so
+    its absence means a broken base, not an older one.
+    """
+    recorded = row["memory_type"]
+    if isinstance(recorded, str) and validate_kind(recorded):
+        return _CARRIED_INTO_CORE
+    return _CARRIED_INTO_CORE - {"memory_kind"}
+
+
 async def _not_carried(conn: Any, table: str, carried: frozenset[str]) -> set[str]:
     """Return the columns of `table` an archive row cannot fill — **read from the schema**.
 
@@ -432,7 +456,7 @@ class ForgettingSystem:
                 if route_of(row["memory_type"]) == ROUTE_EPISODES:
                     destination, carried = "episodes", _carried_into_episodes(row)
                 else:
-                    destination, carried = "core_memory", _CARRIED_INTO_CORE
+                    destination, carried = "core_memory", _carried_into_core(row)
                 if destination == "core_memory":
                     # Asked *before* the write, and in `dry_run` as well as in the pass,
                     # because otherwise the two modes answer differently about the same
@@ -581,11 +605,16 @@ class ForgettingSystem:
         `partition` splits on the first `=` only, so a value that contains one
         survives whole: `k=v=w` returns key `k`, value `v=w`.
 
-        The kind is written back **exactly as recorded**. An earlier version
-        substituted `"fact"` when the column was empty — a guess about a row this
-        method never saw written, and the same guess `fetchone()` used to make about
-        which row it had found. A row with no recorded kind cannot reach here:
-        `refusal_reason` refuses it first.
+        The kind is written back only when it is a **real kind**. `memory_type` is
+        also the route label, and older versions of the purge scripts recorded the
+        source table (`core_memory`) there for rows they selected from `core_memory`;
+        that label routes correctly but is not a kind. Writing it into `memory_kind`
+        made the
+        row invisible to kind-filtered reads and exempt from `decay_importance`,
+        which skips an unvalidated kind — so the row became immortal. An invalid or
+        absent label is therefore written as `NULL`, "kind unknown", not `fact`: the
+        archive never recorded a kind, and substituting one is the guess `route_of`
+        exists to avoid. `_carried_into_core` reports that loss per row.
 
         **The layer is named, and that is a repair.** This `INSERT` used to leave the
         column out, so it took the column default `'user'` whatever layer the caller
@@ -598,6 +627,9 @@ class ForgettingSystem:
         another layer on a collision course with the rows already there.
         """
         key, value = _split_core_content(row, original_id)
+        recorded_kind = row["memory_type"]
+        # Only a validated kind is written; a source-table label is a route, not a kind.
+        kind = recorded_kind if isinstance(recorded_kind, str) and validate_kind(recorded_kind) else None
         await conn.execute(
             "INSERT INTO core_memory (layer, user_id, key, value, importance, created_at, updated_at, memory_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -608,7 +640,7 @@ class ForgettingSystem:
                 row["importance"],
                 now,
                 now,
-                row["memory_type"],
+                kind,
             ),
         )
 

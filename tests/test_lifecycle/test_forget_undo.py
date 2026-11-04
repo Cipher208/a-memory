@@ -162,9 +162,14 @@ async def test_a_restored_core_row_goes_back_to_core_memory(app: Any, ctx: Any, 
 async def test_a_row_labelled_with_its_source_table_goes_back_to_core_memory(app: Any, ctx: Any, cm: Any) -> None:
     """`memory_type` names a source when it is a table name, and the route follows it.
 
-    `core_memory` is written by `scripts/purge_foreign_rows.py` for rows it selected from
+    Older versions of the purge scripts wrote `core_memory` for rows they selected from
     `core_memory`, so it means "this came from `core_memory`" — the same convention as the
-    singular `episode` naming the table `episodes`.
+    singular `episode` naming the table `episodes`. Their bins still hold the label.
+
+    The route is the only thing the label can supply. It is not a kind, so the restored
+    row's `memory_kind` is `NULL` — "unknown", not the table name. Writing the label as a
+    kind would exempt the row from decay (`validate_kind` rejects it) and hide it from
+    kind-filtered reads; `fact` would invent a provenance the archive never recorded.
     """
     await _archive(cm, original_id=43, content="a_key=a_value", memory_type="core_memory", reason="inactive_90d")
 
@@ -173,7 +178,8 @@ async def test_a_row_labelled_with_its_source_table_goes_back_to_core_memory(app
     assert result["restored"] == 1
     rows = await _rows(cm, "SELECT key, value, memory_kind FROM core_memory WHERE user_id=?", (U1,))
     assert rows[0][0] == "a_key" and rows[0][1] == "a_value"
-    assert rows[0][2] == "core_memory", "the recorded label is written back exactly, not replaced by a guess"
+    assert rows[0][2] is None, "the source label is a route, not a kind"
+    assert "memory_kind" in result["restored_items"][0]["not_recorded"]
 
 
 async def test_undo_reports_what_came_back_and_where_it_went(app: Any, ctx: Any, cm: Any) -> None:

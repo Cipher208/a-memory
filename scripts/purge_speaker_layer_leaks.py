@@ -198,7 +198,9 @@ async def apply(p: dict[str, Any], db: Path) -> None:
             await am.archive(
                 user_id=r["user_id"] or "default",
                 content=f"{r['key']} = {r['value']}",
-                memory_type="core_memory",
+                # The row's own kind, not the source table: a restore writes this
+                # value into `memory_kind`, where a table name is not a kind.
+                memory_type=r["memory_kind"] or "fact",
                 importance=float(r["importance"] or 0.0),
                 original_id=int(r["entry_id"]),
                 reason=ARCHIVE_REASON,

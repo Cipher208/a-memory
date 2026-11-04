@@ -206,6 +206,35 @@ async def test_an_episode_archived_by_the_script_restores_into_episodes(db, tmp_
     assert int((facts or (0,))[0]) == 0, "the episode was filed as an L4 fact instead of an episode"
 
 
+async def test_a_fact_archived_by_the_script_keeps_its_kind(db, tmp_path) -> None:
+    """The script knows the row's kind from the plan, so the bin must record it.
+
+    It used to archive every fact under `"core_memory"` — the source table. `route_of`
+    accepts that label, but it is not a kind: a restore would write it into
+    `memory_kind`, where `validate_kind` rejects it and `decay_importance` skips the
+    row forever. The plan already selected `memory_kind`; passing it through is the
+    whole repair.
+    """
+    from lifecycle.forgetting import ForgettingSystem
+    from scripts.purge_speaker_layer_leaks import apply, plan
+
+    agent_l0 = await _l0("agent", "реплика агента")
+    eid = await _fact("user", "rule:утекло", "моя реплика", agent_l0)
+
+    db_path = connection_manager.base_dir / DB_NAME
+    await apply(plan(db_path), db_path)
+
+    conn = await connection_manager.get(DB_NAME)
+    archived = await (await conn.execute("SELECT memory_type FROM archived_memories WHERE original_id=?", (eid,))).fetchall()
+    assert [str(r[0]) for r in archived] == ["rule"], "the bin recorded the source table instead of the row's kind"
+
+    outcome = await ForgettingSystem(cm=connection_manager, layer="user").restore_entries([eid], user_id="default")
+
+    assert outcome.restored == 1, outcome
+    restored = await (await conn.execute("SELECT memory_kind FROM core_memory WHERE user_id='default'")).fetchall()
+    assert [r[0] for r in restored] == ["rule"], "the recorded kind did not survive the restore"
+
+
 async def test_apply_removes_the_episodes_the_plan_reports(db, tmp_path) -> None:
     """Регресс: план и отчёт считали эпизоды, а apply их не удалял — молча.
 

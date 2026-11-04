@@ -52,9 +52,11 @@ ROUTE_CORE = "core_memory"
 #:
 #: `core_memory` is deliberately **not** in this set. It was, on a story that turned
 #: out to be invented — that the value was a table name which had leaked into a kind
-#: field. It has not: `scripts/purge_foreign_rows.py:225` writes it for rows it
+#: field. It had not: older versions of the purge scripts wrote it for rows they
 #: selected **from** `core_memory`, so it names the source, exactly as `episode`
-#: names `episodes`. See `route_of`.
+#: names `episodes`. Those writers now record the row's real kind, but their earlier
+#: bins still hold the label (65 rows on the Hermes base, measured 2026-11-03), so
+#: the route must keep accepting it. See `route_of`.
 _NO_ROUTE_KINDS = frozenset({"project_archive"})
 _NO_ROUTE_PREFIXES = ("graph:",)
 
@@ -93,11 +95,12 @@ def route_of(memory_type: str | None) -> str | None:
 
     The convention is that the value names the table the row came from: `episode`
     for `episodes` (the name is singular, the table is not), `core_memory` for
-    `core_memory` — which is what `scripts/purge_foreign_rows.py:225` writes — and
-    an L4 kind such as `fact` or `rule` for a row from `core_memory`, where the kind
-    is the more useful thing to know. So `episodes` is named explicitly and
-    `core_memory` is the default, with a small closed set of labels that name no
-    table this can write to (`_NO_ROUTE_KINDS`, `_NO_ROUTE_PREFIXES`).
+    `core_memory` — which older versions of the purge scripts wrote, and whose bins
+    still hold it — and an L4 kind such as `fact` or `rule` for a row from
+    `core_memory`, where the kind is the more useful thing to know. So `episodes` is
+    named explicitly and `core_memory` is the default, with a small closed set of
+    labels that name no table this can write to (`_NO_ROUTE_KINDS`,
+    `_NO_ROUTE_PREFIXES`).
 
     `None` is answered in two different situations on purpose — a kind that was never
     recorded, and a label with no restore path — because both mean the same thing to
@@ -243,7 +246,7 @@ class ArchivedMemories:
         guessing a destination.
 
         So the two ends are not the same expression, even though they look alike.
-        Two of this method's callers pass `memory_kind or "fact"`, and on the
+        Several of this method's callers pass `memory_kind or "fact"`, and on the
         **writing** side that is legitimate: the row was just read out of
         `core_memory`, so naming it a core kind records where it came from. The same
         `or "fact"` on the **reading** side is the defect `route_of` exists to
