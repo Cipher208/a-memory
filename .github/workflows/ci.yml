@@ -83,6 +83,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
       - uses: astral-sh/setup-uv@v5
+      # Seed pip into the venv: scripts/install_ner_models.py shells out to
+      # `sys.executable -m pip install <wheel URLs>`, and a uv-created venv
+      # has no pip otherwise. `uv sync` keeps the seeded pip, and the pip
+      # cache (setup-python `cache: pip`) keeps the model wheels warm.
+      - run: uv venv --seed --python ${{ matrix.python-version }}
       - run: uv sync --locked --extra dev --extra binary --python ${{ matrix.python-version }}
       - run: uv run python scripts/install_ner_models.py
       - run: uv run pytest tests/ -v --tb=long --timeout=30 -n auto
@@ -96,6 +101,7 @@ jobs:
           python-version: "3.12"
           cache: "pip"
       - uses: astral-sh/setup-uv@v5
+      - run: uv venv --seed --python 3.12  # NER installer needs pip in the venv
       - run: uv sync --locked --extra dev --extra binary --python 3.12
       - run: uv run python scripts/install_ner_models.py
       - run: uv run pytest tests/ -n auto --cov=features --cov=shared --cov=core --cov=rag --cov=wiki --cov=graph --cov=lifecycle --cov=hooks --cov=mcp_server --cov-report=xml --cov-report=term-missing --cov-fail-under=60 --timeout=60
