@@ -223,7 +223,7 @@ async def apply(p: dict[str, Any], db: Path) -> None:
                 await am.archive(
                     user_id=r["user_id"] or "default",
                     content=str(r["summary"]),
-                    memory_type="episodes",
+                    memory_type="episode",
                     importance=float(r["emotional_weight"] or 0.0),
                     original_id=int(r["episode_id"]),
                     reason=ARCHIVE_REASON,

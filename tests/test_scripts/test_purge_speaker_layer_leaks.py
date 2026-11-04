@@ -179,6 +179,33 @@ async def test_apply_writes_one_audit_row_per_removed_record(db, tmp_path) -> No
     assert all("speaker_layer_leak" in str(r[3]) for r in rows), "причина названа в details"
 
 
+async def test_an_episode_archived_by_the_script_restores_into_episodes(db, tmp_path) -> None:
+    """The label the script writes must be the one `route_of` understands.
+
+    The script used to archive an episode under `"episodes"` — the table name in the
+    plural — while `route_of` names a table by the singular label `"episode"`.
+    Anything unrecognised falls through to `core_memory`, so a replay that produced
+    this class of leak would have restored the summary as an L4 key/value row.
+    """
+    from lifecycle.forgetting import ForgettingSystem
+    from scripts.purge_speaker_layer_leaks import apply, plan
+
+    agent_l0 = await _l0("agent", "реплика агента")
+    ep_id = await _episode("user", "утекший эпизод", agent_l0)
+
+    db_path = connection_manager.base_dir / DB_NAME
+    await apply(plan(db_path), db_path)
+
+    outcome = await ForgettingSystem(cm=connection_manager, layer="user").restore_entries([ep_id], user_id="default")
+
+    assert outcome.restored == 1, outcome
+    conn = await connection_manager.get(DB_NAME)
+    episodes = await (await conn.execute("SELECT summary FROM episodes")).fetchall()
+    assert [str(r[0]) for r in episodes] == ["утекший эпизод"], "the episode did not return to episodes"
+    facts = await (await conn.execute("SELECT COUNT(*) FROM core_memory")).fetchone()
+    assert int((facts or (0,))[0]) == 0, "the episode was filed as an L4 fact instead of an episode"
+
+
 async def test_apply_removes_the_episodes_the_plan_reports(db, tmp_path) -> None:
     """Регресс: план и отчёт считали эпизоды, а apply их не удалял — молча.
 

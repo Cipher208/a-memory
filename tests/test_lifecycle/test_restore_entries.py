@@ -78,6 +78,7 @@ async def _archive(
     reason: str = "inactive_90d",
     user_id: str = U1,
     importance: float = 0.5,
+    original_created_at: float | None = None,
 ) -> int:
     store = _am(cm)
     return await store.archive(
@@ -87,6 +88,7 @@ async def _archive(
         importance=importance,
         original_id=original_id,
         reason=reason,
+        original_created_at=original_created_at,
     )
 
 
@@ -183,6 +185,31 @@ async def test_a_restored_episode_keeps_the_moment_it_happened(cm: Any) -> None:
     assert outcome.restored == 1
     row = (await _rows(cm, "SELECT created_at FROM episodes WHERE summary='an old moment'"))[0]
     assert row["created_at"] == pytest.approx(t0), "the restored episode was stamped with the moment of its return"
+
+
+async def test_not_recorded_names_created_at_only_when_the_time_was_not_kept(cm: Any) -> None:
+    """`not_recorded` is what a caller reads to know the limits of undo.
+
+    Since #191 `_restore_episode` gives the time back when the bin holds
+    `original_created_at`. The report kept saying `created_at` was lost for that
+    row anyway, which is the limit lying in the caller's favour — the opposite of
+    its job. Both sides are asserted so the fix cannot collapse into "never lost".
+    """
+    await _archive(
+        cm,
+        original_id=851,
+        content="a moment the bin kept",
+        memory_type="episode",
+        original_created_at=time.time() - 86400,
+    )
+    await _archive(cm, original_id=852, content="a moment the bin never kept", memory_type="episode")
+
+    kept = await _fs(cm).restore_entries([851], user_id=U1)
+    lost = await _fs(cm).restore_entries([852], user_id=U1)
+
+    assert kept.restored == 1 and lost.restored == 1
+    assert "created_at" not in kept.restored_items[0]["not_recorded"], "a time that came back was reported as lost"
+    assert "created_at" in lost.restored_items[0]["not_recorded"], "a time the archive never kept was reported as returned"
 
 
 async def test_an_archived_episode_with_no_recorded_time_comes_back_now(cm: Any) -> None:
