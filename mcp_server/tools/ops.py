@@ -79,7 +79,7 @@ async def memory_stats(
         graph_edges_cross_layer=graph_edges["cross_layer"],
         avg_session_quality=await mem.l2.avg_quality(user_id),
         recall_count=await count_recalls(app.mm._cm, user_id),
-    ).dict()
+    ).model_dump()
 
 
 async def memory_context(
@@ -138,7 +138,7 @@ async def memory_context(
         l3_episodes_count=len(l3_episodes),
         l1_recent_count=len(l1_recent),
         wiki_count=len(wiki_entries),
-    ).dict()
+    ).model_dump()
     _set_cached(cache_key, result)
     return result
 
@@ -320,13 +320,13 @@ async def memory_api_key(
     try:
         if action == "create":
             key = api_key_auth.create_key(user_id, label)
-            return ApiKeyResult(api_key=key, user_id=user_id, label=label).dict()
+            return ApiKeyResult(api_key=key, user_id=user_id, label=label).model_dump()
         if action == "revoke":
             revoked = api_key_auth.revoke(api_key)
-            return ApiKeyResult(revoked=revoked).dict()
-        return ApiKeyResult(keys=api_key_auth.list_keys()).dict()
+            return ApiKeyResult(revoked=revoked).model_dump()
+        return ApiKeyResult(keys=api_key_auth.list_keys()).model_dump()
     except StoreUnreadable:
-        return ApiKeyResult(error=ERROR_KEY_STORE_UNREADABLE).dict()
+        return ApiKeyResult(error=ERROR_KEY_STORE_UNREADABLE).model_dump()
 
 
 async def memory_backup(
@@ -341,12 +341,12 @@ async def memory_backup(
     metrics.inc("tool_backup")
 
     if action == "now":
-        return BackupNowResult(path=backup_cron.backup_now()).dict()
+        return BackupNowResult(path=backup_cron.backup_now()).model_dump()
     if action == "list":
-        return BackupListResult(backups=backup_cron.list_backups()).dict()
+        return BackupListResult(backups=backup_cron.list_backups()).model_dump()
     if action == "restore":
-        return BackupRestoreResult(**backup_cron.restore(backup_name)).dict()
-    return BackupStatusResult(**backup_cron.status()).dict()
+        return BackupRestoreResult(**backup_cron.restore(backup_name)).model_dump()
+    return BackupStatusResult(**backup_cron.status()).model_dump()
 
 
 async def memory_saga(
@@ -389,13 +389,13 @@ async def memory_data(
 
     if action == "export":
         path = await app.import_export.export_user(user_id, mm=app.mm)
-        return DataResult(path=path).dict()
+        return DataResult(path=path).model_dump()
     if action == "import":
         result = await app.import_export.import_user(file_path, target_user_id or user_id, mm=app.mm)
         for layer in ("user", "agent"):
             _invalidate_cache(layer, target_user_id or user_id)
-        return DataResult(**result).dict()
-    return DataResult(exports=app.import_export.list_exports()).dict()
+        return DataResult(**result).model_dump()
+    return DataResult(exports=app.import_export.list_exports()).model_dump()
 
 
 async def memory_sync_replica(
@@ -449,7 +449,7 @@ async def memory_cleanup(
         backup_cleanup=results[4],
         saga_cleanup=saga_watchdog.cleanup_completed(),
         compaction=results[5].get("archived", 0) if isinstance(results[5], dict) else 0,
-    ).dict()
+    ).model_dump()
 
 
 async def memory_lucidity_purge(
@@ -480,7 +480,7 @@ async def memory_lucidity_purge(
         audit=results[2],
         graph_nodes=results[3],
         staging=results[4],
-    ).dict()
+    ).model_dump()
 
 
 # Whitelisted purge targets — never accept caller-supplied identifiers.
@@ -561,7 +561,7 @@ async def memory_search(
             include_rag=include_rag,
             include_wiki=include_wiki,
         )
-    return SearchResult(results=results, count=len(results), method=strategy).dict()
+    return SearchResult(results=results, count=len(results), method=strategy).model_dump()
 
 
 # ── CONTEXT.md persistence (research backlog 3.13) ──────────────

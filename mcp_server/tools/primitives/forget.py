@@ -159,7 +159,7 @@ async def forget(
             restored_items=outcome.restored_items,
             refused=outcome.refused,
             not_found=outcome.not_found,
-        ).dict()
+        ).model_dump()
 
     mem = _get_memory(app, layer, user_id)
     graph = _get_graph(app, layer)
@@ -185,7 +185,7 @@ async def forget(
         episodes=outcome.episodes,
         graph_nodes=outcome.graph_nodes,
         not_found=outcome.not_found,
-    ).dict()
+    ).model_dump()
 
 
 async def _forget_exact(app: AppContext, key: str, user_id: str, mem: Any, shadow_bin: bool, dry_run: bool = False) -> _Outcome:

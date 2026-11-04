@@ -30,7 +30,7 @@ async def memory_session_start(
     session_id = await _get_memory(app, layer, user_id).l2.create_session(user_id)
     await _fire_hook("message_received", layer, {"text": "session_started", "session_id": session_id, "user_id": user_id})
 
-    return SessionResult(session_id=session_id).dict()
+    return SessionResult(session_id=session_id).model_dump()
 
 
 async def memory_session_end(
@@ -60,7 +60,7 @@ async def memory_session_end(
     await _fire_hook("consolidation", layer, {"trigger": "session_end", "session_id": session_id, "user_id": user_id})
     await _fire_hook("state_delta", layer, {"trigger": "session_end", "session_id": session_id, "summary": summary, "user_id": user_id})
 
-    return SessionResult(status="ok").dict()
+    return SessionResult(status="ok").model_dump()
 
 
 async def memory_session_list(

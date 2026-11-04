@@ -99,4 +99,4 @@ async def dream(
         summary=summary,
         truncated=truncated,
         result_count=len(results),
-    ).dict()
+    ).model_dump()

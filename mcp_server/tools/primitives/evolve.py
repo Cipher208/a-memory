@@ -50,4 +50,4 @@ async def evolve(
     hook_result = await _fire_hook("personality_shift", "agent", {"instruction": instruction, "user_id": user_id}, mem=mem)
 
     summary = hook_result.get("summary", "Personality evolution recorded.")
-    return EvolveResult(status="ok", summary=summary).dict()
+    return EvolveResult(status="ok", summary=summary).model_dump()
