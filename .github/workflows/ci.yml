@@ -41,8 +41,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-      - run: pip install -e ".[dev,binary]"
-      - run: mypy --config-file pyproject.toml features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked --extra dev --extra binary --python 3.12
+      - run: uv run mypy --config-file pyproject.toml features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/
 
   quality:
     runs-on: ubuntu-latest
@@ -81,9 +82,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
-      - run: pip install -e ".[dev,binary]" "aiosqlite>=0.21.0,!=0.22.0"
-      - run: python scripts/install_ner_models.py
-      - run: pytest tests/ -v --tb=long --timeout=30
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked --extra dev --extra binary --python ${{ matrix.python-version }}
+      - run: uv run python scripts/install_ner_models.py
+      - run: uv run pytest tests/ -v --tb=long --timeout=30 -n auto
 
   coverage:
     runs-on: ubuntu-latest
@@ -93,9 +95,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-      - run: pip install -e ".[dev,binary]" "aiosqlite>=0.21.0,!=0.22.0"
-      - run: python scripts/install_ner_models.py
-      - run: pytest tests/ --cov=features --cov=shared --cov=core --cov=rag --cov=wiki --cov=graph --cov=lifecycle --cov=hooks --cov=mcp_server --cov-report=xml --cov-report=term-missing --cov-fail-under=60 --timeout=60
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked --extra dev --extra binary --python 3.12
+      - run: uv run python scripts/install_ner_models.py
+      - run: uv run pytest tests/ -n auto --cov=features --cov=shared --cov=core --cov=rag --cov=wiki --cov=graph --cov=lifecycle --cov=hooks --cov=mcp_server --cov-report=xml --cov-report=term-missing --cov-fail-under=60 --timeout=60
       - uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -136,6 +139,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-      - run: pip install -e ".[docs]"
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked --extra docs --python 3.12
       - name: Build docs (strict — fails on broken refs)
-        run: mkdocs build --strict
+        run: uv run mkdocs build --strict

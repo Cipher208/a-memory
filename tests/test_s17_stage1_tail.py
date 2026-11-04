@@ -174,13 +174,16 @@ async def test_distiller_similar_to_on_conflict() -> None:
 
 
 @pytest.fixture
-async def migrated_cm():
+async def migrated_cm(tmp_path, monkeypatch):
     """Hermetic global DB + полная схема (l0_journal и co-таблицы живут миграциями)."""
     from shared.connection import connection_manager
     from shared.migrations import MigrationManager
 
+    monkeypatch.setattr(connection_manager, "base_dir", tmp_path)  # патчим base_dir, не подменяем объект
+    connection_manager._conns.clear()  # cached conns pin the old tmp dir
     await MigrationManager(cm=connection_manager).migrate()
-    return connection_manager
+    yield connection_manager
+    connection_manager._conns.clear()
 
 
 @pytest.mark.asyncio
@@ -231,11 +234,12 @@ async def test_zero_result_journal_and_miner(migrated_cm) -> None:
 
 @pytest.mark.asyncio
 async def test_zero_result_single_hit_not_surfaced(migrated_cm) -> None:
-    from lifecycle.graph_miners import log_zero_result, miner_zero_results
+    from lifecycle.graph_miners import ensure_zero_result, log_zero_result, miner_zero_results
     from shared.constants import DB_NAME
 
     cm = migrated_cm
     conn = await cm.get(DB_NAME)
+    await ensure_zero_result(cm)  # lazy-ensure таблица: без неё DELETE падает в герметичной БД
     await conn.execute("DELETE FROM recall_zero_results")  # сессионная БД: изолируем журнал
     await conn.commit()
     await log_zero_result(cm, "user", "s17zr2", "единичный провал запроса XYZ")
@@ -253,11 +257,12 @@ async def test_zero_result_miner_lets_a_failure_escape(migrated_cm, monkeypatch)
     ноль — это работа, которая не нашлась, а сбой пусть ловит `graph_enrich`.
     """
     from graph.epistemic import EpistemicGraph
-    from lifecycle.graph_miners import log_zero_result, miner_zero_results
+    from lifecycle.graph_miners import ensure_zero_result, log_zero_result, miner_zero_results
     from shared.constants import DB_NAME
 
     cm = migrated_cm
     conn = await cm.get(DB_NAME)
+    await ensure_zero_result(cm)  # lazy-ensure таблица: без неё DELETE падает в герметичной БД
     await conn.execute("DELETE FROM recall_zero_results")
     await conn.commit()
     for _ in range(2):

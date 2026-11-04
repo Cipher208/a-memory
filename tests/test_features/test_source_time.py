@@ -241,7 +241,7 @@ class _NullMem:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("payload_ts", "expected"),
-    [(time.time() - 5 * 86400, "forwarded"), ("2026-09-18T07:03:00", "refused"), (None, "refused")],
+    [(1700000000.0, "forwarded"), ("2026-09-18T07:03:00", "refused"), (None, "refused")],
 )
 async def test_new_message_forwards_a_numeric_ts_and_refuses_anything_else(cm: Any, payload_ts: Any, expected: str, monkeypatch) -> None:
     """Hop 4: the daemon's `ts` reaches capture — if, and only if, it is a number.
