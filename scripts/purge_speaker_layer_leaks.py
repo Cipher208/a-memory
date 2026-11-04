@@ -34,19 +34,30 @@ move, and it is worse than deleting. 38 of them carry kinds that never archive, 
 the move would make junk my own PERMANENT canon instead of the owner's — the same
 defect, relocated. They are archived here, so nothing is lost.
 
-NOTHING IS ERASED
+WHAT IS ERASED, AND WHAT IS NOT
 
-Every removed row is copied to `archived_memories` with reason `speaker_layer_leak`
-before the delete. That reason is deliberately NOT in `PURGE_REASONS`: removal was
-deliberate, but restorable, and a restorable removal is the safer default.
+`core_memory` facts and episodes are copied to `archived_memories` with reason
+`speaker_layer_leak` before the delete. That reason is deliberately NOT in
+`PURGE_REASONS`: removal was deliberate, but restorable, and a restorable removal
+is the safer default.
 
-EVERY REMOVAL LEAVES A TRAIL
+The graph is not archived. `epi_nodes`, their `epi_edges` and `epi_tags` are
+deleted outright, and the audit row for a node says `deleted`, never `archive`:
+a node's `content` is derived text — it already lives in an episode or a fact —
+and this repository has no restore route for a node, so there is nothing a
+restore could return. The cost is stated plainly: **after this purge
+the graph cannot be rebuilt from the archive**, and the edges removed with a node
+are gone with it.
 
-One `audit_log` row per removed record — `action='speaker_layer_leak_purge'`, the
-shape `purge_l3_legacy` writes. Per-record and not a summary: `features/blame.py`
-answers «what happened to this row» with `WHERE target_id=?`, and
-`lifecycle/importance_scheduler.py` counts `target_id`, so a single summary row
-would answer neither question.
+WHAT LEAVES A TRAIL, AND WHAT DOES NOT
+
+Facts, episodes and nodes each get one `audit_log` row —
+`action='speaker_layer_leak_purge'`, the shape `purge_l3_legacy` writes.
+Per-record and not a summary: `features/blame.py` answers «what happened to this
+row» with `WHERE target_id=?`, and `lifecycle/importance_scheduler.py` counts
+`target_id`, so a single summary row would answer neither question. `epi_edges`
+and `epi_tags` leave no audit row of their own: they are deleted with their node,
+and the node's row is the only trail they get.
 
 USAGE
 
@@ -178,11 +189,12 @@ async def apply(p: dict[str, Any], db: Path) -> None:
         """
 
         async def _audit(target_id: str, details: dict[str, Any]) -> None:
-            """One row per removed record, the shape `purge_l3_legacy` writes.
+            """One row per removed fact, episode or node — edges and tags get none.
 
-            Per-record and not a summary line: `features/blame.py` answers «what happened
-            to this row» with `WHERE target_id=?`, and `lifecycle/importance_scheduler.py`
-            counts `target_id`. A single summary row would answer neither.
+            The shape is the one `purge_l3_legacy` writes. Per-record and not a summary
+            line: `features/blame.py` answers «what happened to this row» with
+            `WHERE target_id=?`, and `lifecycle/importance_scheduler.py` counts
+            `target_id`. A single summary row would answer neither.
             """
             await conn.execute(
                 "INSERT INTO audit_log (user_id, action, layer, target_id, details, timestamp) VALUES (?,?,?,?,?,?)",
@@ -245,7 +257,11 @@ async def apply(p: dict[str, Any], db: Path) -> None:
             await conn.execute(f"DELETE FROM epi_tags WHERE node_id IN ({ph})", tuple(p["node_ids"]))
             await conn.execute(f"DELETE FROM epi_nodes WHERE node_id IN ({ph})", tuple(p["node_ids"]))
             for nid in p["node_ids"]:
-                await _audit(f"epi_node:{int(nid)}", {"klass": ARCHIVE_REASON, "archive": f"archived_memories:{ARCHIVE_REASON}"})
+                # A node's `content` is derived text and there is no restore route
+                # for a node, so nothing went to `archived_memories`. `deleted` states
+                # the fact the other rows state with `archive`; an `archive` key here
+                # would claim a copy that does not exist and that no restore could return.
+                await _audit(f"epi_node:{int(nid)}", {"klass": ARCHIVE_REASON, "deleted": True, "table": "epi_nodes"})
 
         return len(ids), len(ep_ids), len(p["node_ids"])
 
