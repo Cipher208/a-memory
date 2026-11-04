@@ -334,11 +334,13 @@ class ForgettingSystem:
         is the argument that resolves it rather than a contradiction of it.
 
         WHAT IS LOST. `layer` is not in the archive and neither are an episode's
-        `tags`, `created_at` or its layer, so a restored episode lands in this
-        system's own layer and carries the moment of its return. Data the archive
-        never kept cannot be restored, and this method does not pretend it can.
-        The rule is settled rather than pending: separating that metadata is
-        separate work, deliberately not done here.
+        `tags`, so a restored episode lands in this system's own layer. Its
+        `created_at` is now kept — in `original_created_at` — but only for rows
+        archived after the bin started recording it; an older row still carries
+        the moment of its return, and `archived_at` is not used as a stand-in for a
+        time nobody recorded. Data the archive never kept cannot be restored, and
+        this method does not pretend it can. The rule is settled rather than
+        pending: separating the rest is separate work, deliberately not done here.
         """
         from shared.archived_memories import (
             REFUSAL_ALREADY_PRESENT,
@@ -520,6 +522,10 @@ class ForgettingSystem:
         whose summary was re-added is a no-op on the row count. That is counted as
         restored — the text is in the table, which is what the caller asked for —
         and it is a deliberate reading rather than an accident of the dedup.
+
+        The episode is given back with the time it happened when the bin recorded
+        it (`original_created_at`). A row archived before that column existed has
+        no time to give back, so it is stamped with the moment of its return.
         """
         from core.episodic import EpisodicMemory
 
@@ -533,7 +539,22 @@ class ForgettingSystem:
         # `forget_primitive_fuzzy_l3`, so the old form would have restored that episode
         # at 0.5. There is no single base to measure — the archive is per instance.
         weight = 0.5 if row["importance"] is None else float(row["importance"])
-        return await mem.save(user_id, str(row["content"]), emotional_weight=weight)
+        # The bin now carries the moment the episode happened. It is absent on rows
+        # archived before the column existed (3159 of them on one live base,
+        # measured 2026-11-03), and `archived_at` is not a substitute: it is when
+        # the row was removed, not when it happened. So a missing value keeps the
+        # old behaviour and the episode is stamped with its return.
+        #
+        # The key check is for a base whose bin predates the column and where
+        # `ensure()` has not run in this process yet — `restore_entries` reads the
+        # table directly and must not crash on a schema it can still serve.
+        created_at = None
+        # `in row` would test VALUES, not column names on sqlite3.Row, so the key
+        # check has to go through `.keys()` (SIM118 does not apply to this type).
+        if "original_created_at" in row.keys():  # noqa: SIM118
+            recorded = row["original_created_at"]
+            created_at = None if recorded is None else float(recorded)
+        return await mem.save(user_id, str(row["content"]), emotional_weight=weight, created_at=created_at)
 
     async def _restore_core(self, conn: Any, row: Any, original_id: int, now: float) -> None:
         """Put an archived L4 row back into `core_memory`.

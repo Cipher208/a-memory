@@ -84,6 +84,63 @@ def test_archived_memories_works_on_a_migrated_database(tmp_path):
     asyncio.run(t())
 
 
+def test_ensure_adds_original_created_at_to_an_existing_bin(tmp_path):
+    """Корзина, созданная до появления колонки, должна получить её без потерь.
+
+    Замерено 2026-11-03: в базе Hermes 3159 архивных эпизодов и колонки
+    `original_created_at` нет. Миграции на такой базе не запускаются — `ensure()`
+    зовут конструкторы, — поэтому ALTER живёт в нём. Два прохода подряд обязаны
+    пройти молча: второй не должен падать на «duplicate column name».
+    """
+    import sqlite3
+
+    from shared.archived_memories import ArchivedMemories
+    from shared.connection import AsyncConnectionManager
+    from shared.constants import DB_NAME
+    from shared.write_dispatch import get_write_dispatch
+
+    raw = sqlite3.connect(tmp_path / DB_NAME)
+    try:
+        raw.executescript(
+            """
+            CREATE TABLE archived_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                original_id INTEGER, content TEXT NOT NULL,
+                memory_type TEXT, importance REAL,
+                archive_reason TEXT NOT NULL,
+                archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO archived_memories (user_id, original_id, content, memory_type, archive_reason)
+            VALUES ('test_sh', 1, 'an old archived episode', 'episode', 'inactive_90d');
+            """
+        )
+        raw.commit()
+    finally:
+        raw.close()
+
+    async def t():
+        cm = AsyncConnectionManager(base_dir=str(tmp_path))
+        dispatch = get_write_dispatch(cm)
+        try:
+            await ArchivedMemories(cm=cm).ensure()
+            # A fresh instance has its own `_ready` flag; it must not re-ALTER.
+            await ArchivedMemories(cm=cm).ensure()
+            # The loser of two concurrent ALTERs sees `duplicate column name`.
+            # That must be read as success — decided by the schema, not by text.
+            await ArchivedMemories(cm=cm)._add_original_created_at()
+            cols = [r["name"] for r in await dispatch.query(DB_NAME, "PRAGMA table_info(archived_memories)")]
+            assert "original_created_at" in cols
+            rows = await dispatch.query(DB_NAME, "SELECT content, original_created_at FROM archived_memories")
+            assert len(rows) == 1, "the ALTER lost the rows that were already in the bin"
+            assert rows[0]["content"] == "an old archived episode"
+            assert rows[0]["original_created_at"] is None
+        finally:
+            await cm.close_all()
+
+    asyncio.run(t())
+
+
 def test_embedding_cache(tmp_path):
     """Тот же принцип: свой manager, чтобы файл не трогал общий каталог вовсе."""
     from shared.connection import AsyncConnectionManager

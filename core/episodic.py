@@ -201,6 +201,10 @@ class EpisodicMemory:
                     importance=float(row["emotional_weight"]),
                     original_id=int(row["episode_id"]),
                     reason=f"inactive_{days}d",
+                    # The row is already in hand and carries the moment it happened.
+                    # Without it the bin keeps only `archived_at`, and a restore
+                    # could not tell when this episode belonged to.
+                    original_created_at=float(row["created_at"]),
                 )
                 archived_count += 1
 

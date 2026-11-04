@@ -134,10 +134,13 @@ async def run(apply: bool) -> int:
         drop: list[dict] = []
         klass = Counter()
         for members in groups.values():
-            k, d, name = classify(members)
+            # Named apart from `keep`/`drop` and from the loop variables below:
+            # unpacking into `k, d` bound `d` to `list[dict]`, so every later
+            # `for d in drop` looked like a dict assigned to a list.
+            group_keep, group_drop, name = classify(members)
             klass[name] += 1
-            keep.extend(k)
-            drop.extend(d)
+            keep.extend(group_keep)
+            drop.extend(group_drop)
 
         before_total = await dispatch.scalar(DB_NAME, "SELECT COUNT(*) FROM episodes") or 0
         orphans_sql = (
@@ -206,6 +209,7 @@ async def run(apply: bool) -> int:
                 importance=float(d["emotional_weight"] or 0.0),
                 original_id=int(d["episode_id"]),
                 reason="duplicate_episode_replay",
+                original_created_at=float(d["created_at"]),
             )
             with contextlib.suppress(Exception):
                 from lifecycle.transitions import record_transition

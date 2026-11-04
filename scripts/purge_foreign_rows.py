@@ -117,7 +117,7 @@ def plan(db: Path) -> dict[str, Any]:
         # --- episodes: via the raw:<l0_id> provenance tag ---
         foreign_eps: list[sqlite3.Row] = []
         keep_summaries: set[str] = set()
-        for row in conn.execute("SELECT episode_id, summary, layer, user_id, emotional_weight, tags FROM episodes"):
+        for row in conn.execute("SELECT episode_id, summary, layer, user_id, emotional_weight, tags, created_at FROM episodes"):
             raws = _raw_tags(row["tags"])
             if raws and any(r in marked for r in raws):
                 foreign_eps.append(row)
@@ -220,6 +220,7 @@ async def apply(p: dict[str, Any], db: Path) -> None:
             importance=float(r["emotional_weight"] or 0.0),
             original_id=int(r["episode_id"]),
             reason=ARCHIVE_REASON,
+            original_created_at=float(r["created_at"]),
         )
         archived += 1
     for r in p["facts"]:

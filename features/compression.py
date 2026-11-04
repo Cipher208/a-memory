@@ -59,7 +59,7 @@ class MemoryCompressor:
         params = (user_id, layer, min_weight, cutoff)
         doomed = await self._dispatch.query(
             DB_NAME,
-            "SELECT episode_id, summary, emotional_weight FROM episodes WHERE user_id=? AND layer=? AND emotional_weight < ? AND created_at < ?",
+            "SELECT episode_id, summary, emotional_weight, created_at FROM episodes WHERE user_id=? AND layer=? AND emotional_weight < ? AND created_at < ?",
             params,
         )
         if not doomed:
@@ -78,6 +78,7 @@ class MemoryCompressor:
                 importance=float(r["emotional_weight"]),
                 original_id=int(r["episode_id"]),
                 reason="compression_low_weight",
+                original_created_at=float(r["created_at"]),
             )
             with contextlib.suppress(Exception):
                 from lifecycle.transitions import record_transition

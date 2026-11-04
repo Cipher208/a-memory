@@ -1,6 +1,8 @@
 """ArchivedMemories — async archived memory storage."""
 
 from __future__ import annotations
+
+import sqlite3
 from typing import Any
 
 from shared.connection import AsyncConnectionManager, connection_manager
@@ -163,13 +165,47 @@ class ArchivedMemories:
         first. Run alone, or with `-p no:randomly`, it failed with
         `no such table: archived_memories`. A test that needs a neighbour to
         pass is not testing the class.
+
+        `original_created_at` is added here and not only in the migration because
+        this method is what a base without migrations gets: constructors call it
+        on bases that never ran `alembic upgrade`. A bin written before the column
+        existed holds 3159 archived episodes on one live base (measured 2026-11-03),
+        and they must survive the ALTER — it is a schema-only change, so no row is
+        rewritten and every old row reads NULL.
         """
         if self._ready:
             return
-        cols = [r["name"] for r in await self._dispatch.query(DB_NAME, "PRAGMA table_info(archived_memories)")]
+        cols = await self._columns()
         if not cols:
             await self._init_db()
+            # Re-read instead of trusting the CREATE: another process may have won
+            # the race and created the table with an older shape. The ALTER below
+            # is what actually guarantees the column.
+            cols = await self._columns()
+        if cols and "original_created_at" not in cols:
+            await self._add_original_created_at()
         self._ready = True
+
+    async def _columns(self) -> list[str]:
+        rows = await self._dispatch.query(DB_NAME, "PRAGMA table_info(archived_memories)")
+        return [r["name"] for r in rows]
+
+    async def _add_original_created_at(self) -> None:
+        """Add the time an archived row happened, once, without touching a row.
+
+        WHY THE EXCEPTION IS TOLERATED AND NOT MATCHED BY TEXT. Two processes can
+        reach `ensure()` on one base at the same moment: both read the old schema,
+        then serialize on SQLite's write lock, and the loser's ALTER finds the
+        column already there. That is the operation having succeeded, so success is
+        decided by re-reading the schema — not by the error message, which would
+        also swallow a real failure that happens to read alike. A genuine failure
+        leaves the column missing and is re-raised.
+        """
+        try:
+            await self._dispatch.write(DB_NAME, "ALTER TABLE archived_memories ADD COLUMN original_created_at REAL")
+        except sqlite3.OperationalError:
+            if "original_created_at" not in await self._columns():
+                raise
 
     async def _init_db(self) -> None:
         await self._dispatch.execute_script(
@@ -181,7 +217,8 @@ class ArchivedMemories:
                 original_id INTEGER, content TEXT NOT NULL,
                 memory_type TEXT, importance REAL,
                 archive_reason TEXT NOT NULL,
-                archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                archived_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                original_created_at REAL
             );
             CREATE INDEX IF NOT EXISTS idx_archived_user ON archived_memories(user_id, archived_at DESC);
         """,
@@ -195,6 +232,7 @@ class ArchivedMemories:
         importance: float | None = None,
         original_id: int | None = None,
         reason: str = "manual",
+        original_created_at: float | None = None,
     ) -> int:
         """Record a row in the bin.
 
@@ -214,12 +252,20 @@ class ArchivedMemories:
         repository — `core/memory.py`, `hooks/shared.py`, `importance_scheduler.py` —
         but those are not calls to this method and were counted as though they were
         in an earlier version of this docstring.)
+
+        `original_created_at` is the moment the row *happened*, which only the
+        caller knows: an episode carries it in its own `created_at`. Recording it
+        here is what lets a restore give the row back with its own age instead of
+        stamping it with the moment of its return. `None` is honest for rows that
+        never had a time, and for core rows, whose restore path does not use it.
         """
         await self.ensure()
         return await self._dispatch.insert(
             DB_NAME,
-            "INSERT INTO archived_memories (user_id, original_id, content, memory_type, importance, archive_reason) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, original_id, content, memory_type, importance, reason),
+            "INSERT INTO archived_memories "
+            "(user_id, original_id, content, memory_type, importance, archive_reason, original_created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, original_id, content, memory_type, importance, reason, original_created_at),
         )
 
     async def get_archived(self, user_id: str = "default", limit: int = 50) -> dict[str, Any]:
