@@ -102,7 +102,7 @@ def plan(db: Path) -> dict[str, Any]:
         # every legitimate agent episode (6030 of them) and would delete the whole
         # agent layer instead of the leak.
         doomed_eps: list[sqlite3.Row] = []
-        for row in conn.execute("SELECT episode_id, summary, tags, user_id, emotional_weight FROM episodes WHERE layer='user'"):
+        for row in conn.execute("SELECT episode_id, summary, tags, user_id, emotional_weight, created_at FROM episodes WHERE layer='user'"):
             try:
                 tags = json.loads(row["tags"]) if row["tags"] else []
             except (TypeError, ValueError):
@@ -227,6 +227,7 @@ async def apply(p: dict[str, Any], db: Path) -> None:
                     importance=float(r["emotional_weight"] or 0.0),
                     original_id=int(r["episode_id"]),
                     reason=ARCHIVE_REASON,
+                    original_created_at=float(r["created_at"]),
                 )
             ph = ",".join("?" * len(ep_ids))
             await conn.execute(f"DELETE FROM episodes WHERE episode_id IN ({ph})", tuple(ep_ids))

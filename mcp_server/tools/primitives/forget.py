@@ -274,6 +274,7 @@ async def _forget_episode_ids(app: AppContext, episode_ids: list[int], user_id: 
                 importance=episode.emotional_weight,
                 original_id=episode.episode_id,
                 reason="forget_primitive_episode_ids",
+                original_created_at=episode.created_at,
             )
     outcome.deleted_l3 = int(await mem.l3.delete_by_ids([e.episode_id for e in found], user_id=user_id))
     return outcome
@@ -296,6 +297,7 @@ async def _delete_matching_episodes(
                 importance=episode.emotional_weight,
                 original_id=episode.episode_id,
                 reason="forget_primitive_fuzzy_l3",
+                original_created_at=episode.created_at,
             )
     return int(await mem.l3.delete_by_ids([e.episode_id for e in episodes], user_id=user_id)), hits
 

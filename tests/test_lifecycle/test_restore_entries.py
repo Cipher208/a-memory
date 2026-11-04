@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from core.episodic import EpisodicMemory
 from lifecycle.forgetting import ForgettingSystem
 from shared.archived_memories import PURGE_REASONS, ArchivedMemories
 from shared.connection import connection_manager
@@ -144,9 +145,10 @@ async def test_an_episode_returns_to_episodes_and_not_to_core_memory(cm: Any) ->
 
 
 async def test_a_restored_episode_loses_what_the_archive_never_kept(cm: Any) -> None:
-    """The limit, asserted rather than left to be discovered: the archive holds a
-    summary and a weight, so `tags`, `created_at` and `layer` cannot come back.
-    A restored episode carries the moment of its return."""
+    """The limit, asserted rather than left to be discovered: this row was
+    archived without a time and without a layer, and neither can be recovered —
+    the archive never kept them. `created_at` is the moment of return, as before;
+    a row that did record its time keeps it (see the test below)."""
     await _archive(cm, original_id=31, content="an old moment", memory_type="episode", importance=0.4)
 
     before = time.time()
@@ -156,6 +158,49 @@ async def test_a_restored_episode_loses_what_the_archive_never_kept(cm: Any) -> 
     assert row["tags"] == "[]", "tags came back from somewhere — the archive does not hold them"
     assert before <= row["created_at"] <= time.time() + 1, "created_at is the moment of return, not an archived value"
     assert row["layer"] == "agent", "the restore must land in the system's own layer, the only one it has"
+
+
+async def test_a_restored_episode_keeps_the_moment_it_happened(cm: Any) -> None:
+    """The bin is a place a row waits, not a place it is reborn.
+
+    Measured 2026-11-03: `_restore_episode` called `save()` without `created_at`,
+    and `archived_memories` had no column to carry one, so a restored episode was
+    stamped with the moment of its return. It then never aged, never met the
+    purge, and sorted to the end of the L4 queue — `lifecycle/consolidation.py`
+    orders by `created_at`.
+
+    This walks the real path end to end: `archive_old` writes the bin and the
+    restore reads it, so both the archiving writer and the restoring reader are
+    exercised rather than a hand-written row.
+    """
+    epi = EpisodicMemory(cm=cm, layer="user")
+    t0 = time.time() - 90 * 86400
+    episode_id = await epi.save(U1, "an old moment", emotional_weight=0.1, created_at=t0)
+    assert await epi.archive_old(U1, days=90) == 1
+
+    outcome = await _fs(cm).restore_entries([episode_id], user_id=U1, memory_type="episode")
+
+    assert outcome.restored == 1
+    row = (await _rows(cm, "SELECT created_at FROM episodes WHERE summary='an old moment'"))[0]
+    assert row["created_at"] == pytest.approx(t0), "the restored episode was stamped with the moment of its return"
+
+
+async def test_an_archived_episode_with_no_recorded_time_comes_back_now(cm: Any) -> None:
+    """The 3159 rows already in the bin have no time to give back — measured on
+    the Hermes base 2026-11-03 — and `archived_at` is when the row was removed,
+    not when the moment happened, so it is not used as a stand-in. Such a row
+    must restore exactly as it did before: no exception, and `created_at` is now.
+    """
+    await _archive(cm, original_id=32, content="an old moment", memory_type="episode", importance=0.4)
+    archived = await _rows(cm, "SELECT original_created_at FROM archived_memories WHERE original_id=32")
+    assert archived[0]["original_created_at"] is None, "a row archived without a time must not invent one"
+
+    before = time.time()
+    outcome = await _fs(cm).restore_entries([32], user_id=U1)
+
+    assert outcome.restored == 1
+    row = (await _rows(cm, "SELECT created_at FROM episodes WHERE summary='an old moment'"))[0]
+    assert before <= row["created_at"] <= time.time() + 1
 
 
 async def test_an_episode_whose_text_was_re_added_is_still_counted_as_present(cm: Any) -> None:
@@ -175,6 +220,45 @@ async def test_an_episode_whose_text_was_re_added_is_still_counted_as_present(cm
     assert outcome.restored == 1
     assert len(await _rows(cm, "SELECT episode_id FROM episodes WHERE summary='same words'")) == 1
     assert await _archived_count(cm, 41) == 0, "the archive row must still be consumed — the restore did succeed"
+
+
+async def test_a_bin_without_the_new_column_still_restores(tmp_path: Any) -> None:
+    """A base whose bin predates `original_created_at`, and where `ensure()` has
+    not run in this process. `restore_entries` reads the table directly, so the
+    missing column must read as "no recorded time", not crash the restore — the
+    alternative is that an upgraded server cannot return anything from an old bin
+    until something happens to archive a row.
+    """
+    from shared.connection import AsyncConnectionManager
+
+    cm = AsyncConnectionManager(base_dir=str(tmp_path))
+    try:
+        await EpisodicMemory(cm=cm, layer="user")._init_db()
+        conn = await cm.get("memory.db")
+        await conn.executescript(
+            """
+            CREATE TABLE archived_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                original_id INTEGER, content TEXT NOT NULL,
+                memory_type TEXT, importance REAL,
+                archive_reason TEXT NOT NULL,
+                archived_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO archived_memories (user_id, original_id, content, memory_type, archive_reason)
+            VALUES ('u_restore_1', 81, 'an old moment', 'episode', 'inactive_90d');
+            """
+        )
+        await conn.commit()
+
+        before = time.time()
+        outcome = await _fs(cm).restore_entries([81], user_id=U1, memory_type="episode")
+
+        assert outcome.restored == 1
+        row = (await _rows(cm, "SELECT created_at FROM episodes WHERE summary='an old moment'"))[0]
+        assert before <= row["created_at"] <= time.time() + 1
+    finally:
+        await cm.close_all()
 
 
 async def test_a_purged_row_is_refused_with_a_reason(cm: Any) -> None:
