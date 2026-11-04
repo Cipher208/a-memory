@@ -718,3 +718,126 @@ async def test_the_listing_never_offers_what_the_restore_refuses(cm: Any) -> Non
     for original_id in hidden:
         outcome = await fs.restore_entries([original_id], user_id=U1)
         assert outcome.refused, f"the listing hid id {original_id}, but the restore accepts it"
+
+
+async def test_a_deduped_restore_reports_what_the_surviving_row_kept(cm: Any) -> None:
+    """The report describes the row in the table, not the bin's capability.
+
+    `EpisodicMemory.save()` dedups on `(layer, user_id, summary)` and returns the
+    existing id without writing. The bin held a time and a weight, but the row
+    already in `episodes` kept its own, so `not_recorded` must name both: a caller
+    reading the answer would otherwise believe the archived values came back.
+    """
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at)"
+        " VALUES ('user', ?, 'same words', 0.9, '[]', 1700099999.0)",
+        (U1,),
+    )
+    await conn.commit()
+    await _archive(
+        cm,
+        original_id=61,
+        content="same words",
+        memory_type="episode",
+        importance=0.2,
+        original_created_at=1700000000.0,
+    )
+
+    outcome = await _fs(cm).restore_entries([61], user_id=U1)
+
+    assert outcome.restored == 1
+    not_recorded = outcome.restored_items[0]["not_recorded"]
+    assert "created_at" in not_recorded, "the deduped row kept its own time, not the archived one"
+    assert "emotional_weight" in not_recorded, "the deduped row kept its own weight, not the archived one"
+
+
+async def test_a_clean_restore_does_not_report_the_time_or_weight_as_lost(cm: Any) -> None:
+    """Control for the dedup report: with no existing row both values do land."""
+    t0 = 1700000000.0
+    await _archive(
+        cm,
+        original_id=62,
+        content="a fresh moment",
+        memory_type="episode",
+        importance=0.2,
+        original_created_at=t0,
+    )
+
+    outcome = await _fs(cm).restore_entries([62], user_id=U1)
+
+    assert outcome.restored == 1
+    not_recorded = outcome.restored_items[0]["not_recorded"]
+    assert "created_at" not in not_recorded
+    assert "emotional_weight" not in not_recorded
+    row = (await _rows(cm, "SELECT created_at, emotional_weight FROM episodes WHERE summary='a fresh moment'"))[0]
+    assert row["created_at"] == pytest.approx(t0)
+    assert row["emotional_weight"] == pytest.approx(0.2)
+
+
+async def test_dry_run_and_pass_report_the_same_not_recorded_for_a_deduped_restore(cm: Any) -> None:
+    """The preview is the pass: one question, answered identically in both modes.
+
+    `EpisodicMemory.save()` dedups on `(layer, user_id, summary)`. When the text is
+    already in `episodes`, the pass reads the surviving row back and reports its
+    `created_at` and `emotional_weight` as not returned. The preview used to skip
+    that question — `not_applied` stayed empty in `dry_run` — and reported both
+    values as returned for the same row the pass reported them as lost. Measured
+    on scratch: preview `not_recorded = [episode_id, layer, memory_kind, tags]`,
+    pass adds `[created_at, emotional_weight]`. The preview must run the same
+    dedup query `save()` runs (`core/episodic.py:91-94`) and say what the pass
+    will say; the core key check at `lifecycle/forgetting.py:460-466` closes the
+    same class of drift the same way.
+    """
+    conn = await cm.get("memory.db")
+    await conn.execute(
+        "INSERT INTO episodes (layer, user_id, summary, emotional_weight, tags, created_at)"
+        " VALUES ('user', ?, 'same words', 0.9, '[]', 1700099999.0)",
+        (U1,),
+    )
+    await conn.commit()
+    await _archive(
+        cm,
+        original_id=63,
+        content="same words",
+        memory_type="episode",
+        importance=0.2,
+        original_created_at=1700000000.0,
+    )
+
+    preview = await _fs(cm).restore_entries([63], user_id=U1, dry_run=True)
+
+    assert preview.restored == 0, "a preview restores nothing"
+    assert len(await _rows(cm, "SELECT episode_id FROM episodes WHERE summary='same words'")) == 1, "the preview wrote a row"
+    assert await _archived_count(cm, 63) == 1, "the preview consumed the archive row"
+
+    actual = await _fs(cm).restore_entries([63], user_id=U1)
+
+    assert actual.restored == 1
+    assert preview.restored_items[0]["not_recorded"] == actual.restored_items[0]["not_recorded"], (
+        "the preview and the pass answered differently about the same row"
+    )
+    assert "created_at" in preview.restored_items[0]["not_recorded"], "the preview reported a deduped time as returned"
+    assert "emotional_weight" in preview.restored_items[0]["not_recorded"], "the preview reported a deduped weight as returned"
+
+
+async def test_dry_run_and_pass_agree_on_a_clean_restore(cm: Any) -> None:
+    """Control for the drift test: with no surviving row both modes say the values
+    land. Without this the repair could collapse into "the preview always reports
+    the values as lost", which would pass the dedup test and still be a lie."""
+    await _archive(
+        cm,
+        original_id=64,
+        content="a fresh moment",
+        memory_type="episode",
+        importance=0.2,
+        original_created_at=1700000000.0,
+    )
+
+    preview = await _fs(cm).restore_entries([64], user_id=U1, dry_run=True)
+    actual = await _fs(cm).restore_entries([64], user_id=U1)
+
+    assert actual.restored == 1
+    assert preview.restored_items[0]["not_recorded"] == actual.restored_items[0]["not_recorded"]
+    assert "created_at" not in preview.restored_items[0]["not_recorded"]
+    assert "emotional_weight" not in preview.restored_items[0]["not_recorded"]

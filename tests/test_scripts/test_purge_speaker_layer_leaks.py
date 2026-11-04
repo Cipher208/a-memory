@@ -66,6 +66,17 @@ async def _episode(layer: str, summary: str, raw_id: int) -> int:
     return int(cur.lastrowid or 0)
 
 
+async def _node(layer: str, content: str) -> int:
+    conn = await connection_manager.get(DB_NAME)
+    cur = await conn.execute(
+        "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at)"
+        " VALUES (?, 'default', ?, 'concept', '[]', 0.5, 1.0)",
+        (layer, content),
+    )
+    await conn.commit()
+    return int(cur.lastrowid or 0)
+
+
 async def test_selects_only_the_owner_row_whose_source_is_the_agent(db) -> None:
     """Слой говорящего — по источнику: agent-L0 в user-слое = утечка, user-L0 — нет."""
     from scripts.purge_speaker_layer_leaks import plan
@@ -256,3 +267,36 @@ async def test_apply_removes_the_episodes_the_plan_reports(db, tmp_path) -> None
     assert left == 0, "эпизод из плана обязан быть удалён, а не только показан"
     archived = await (await conn.execute("SELECT COUNT(*) FROM archived_memories WHERE archive_reason=?", ("speaker_layer_leak",))).fetchone()
     assert int((archived or (0,))[0]) == 2, "заархивированы и запись, и эпизод"
+
+
+async def test_a_deleted_node_is_not_recorded_as_archived(db, tmp_path) -> None:
+    """A node's `content` is derived text and there is no restore route for a node;
+    the audit line must say deleted.
+
+    The graph is derived structure: `apply()` deletes `epi_nodes`/`epi_edges`/`epi_tags`
+    without calling `archive()`. The audit row used to carry
+    `archive: archived_memories:speaker_layer_leak`, which told a reader that a copy
+    existed when none did.
+    """
+    from pathlib import Path
+
+    agent_l0 = await _l0("agent", "реплика агента")
+    await _fact("user", "rule:утекло", "моя реплика", agent_l0)
+    nid = await _node("user", "моя реплика")
+
+    repo = Path(__file__).resolve().parents[2]
+    proc = _run_cli(repo, _cli_env(tmp_path), "--apply")
+    assert proc.returncode == 0, proc.stderr[-800:]
+
+    conn = await connection_manager.get(DB_NAME)
+    rows = await (
+        await conn.execute(
+            "SELECT details FROM audit_log WHERE action='speaker_layer_leak_purge' AND target_id=?",
+            (f"epi_node:{nid}",),
+        )
+    ).fetchall()
+    assert len(rows) == 1, "a removed node must leave one audit row"
+    details = json.loads(str(rows[0][0]))
+    assert details.get("deleted") is True, f"the audit line does not say the node was deleted: {details}"
+    assert "archive" not in details, f"the audit line still claims an archived copy: {details}"
+    assert "archived_memories" not in json.dumps(details), f"the audit line still names the bin: {details}"

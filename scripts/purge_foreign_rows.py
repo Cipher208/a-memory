@@ -32,11 +32,16 @@ A node is only removed when its content does **not** also match a surviving
 episode, so a text that legitimately belongs to the persona is never taken out
 because a foreign row happened to produce the same summary.
 
-NOTHING IS ERASED
+WHAT IS ERASED, AND WHAT IS NOT
 
-Every removed row is copied to `archived_memories` with its reason before the
-delete, using the same class `features.compression` uses. Deleting without
-archiving would be the same class of mistake as the bug that put the rows there.
+Episodes and `core_memory` facts are copied to `archived_memories` with reason
+`foreign_agent_contamination` before the delete, using the same class
+`features.compression` uses. The graph is not: `epi_nodes`, their `epi_edges`
+and `epi_tags` are deleted outright. A node's `content` is derived text — it
+already lives in an episode or a fact — and this repository has no restore route
+for a node, so there is nothing a restore could return. The cost is stated rather
+than hidden: **after this purge the graph cannot be rebuilt from the archive**,
+and the edges removed with a node are gone with it.
 
 **These rows are not restorable through anything an agent can call.** The archive
 reason is `foreign_agent_contamination`, and `PURGE_REASONS` makes that a refusal

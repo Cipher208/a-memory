@@ -135,6 +135,78 @@ def _carried_into_core(row: Any) -> frozenset[str]:
     return _CARRIED_INTO_CORE - {"memory_kind"}
 
 
+def _episode_requested(row: Any) -> tuple[float, float | None]:
+    """Return the weight and time a restore asks `save()` to write, in one place.
+
+    Two callers must agree: `_restore_episode` writes the pair, and
+    `restore_entries` asks about it in `dry_run` — the same question, before the
+    write the preview does not run. A second copy of the rule would let the
+    preview and the pass disagree about which values were requested, which is the
+    same shape of defect `_split_core_content` exists to prevent on the core route.
+
+    `None` is checked, not truthiness. `row["importance"] or 0.5` — the earlier
+    form — treats a recorded `0.0` as absent and returns the episode with a
+    different weight than it had. **This was live, not latent.** An earlier
+    version of this comment said the base held no such row; that was measured on
+    one instance and is false of the set of them. Measured 2026-10-11 from copies:
+    the `-hermes` base holds one archived episode with `importance=0.0` and reason
+    `forget_primitive_fuzzy_l3`, so the old form would have restored that episode
+    at 0.5. There is no single base to measure — the archive is per instance.
+
+    The bin now carries the moment the episode happened. It is absent on rows
+    archived before the column existed (3159 of them on one live base,
+    measured 2026-11-03), and `archived_at` is not a substitute: it is when
+    the row was removed, not when it happened. So a missing value keeps the
+    old behaviour and the episode is stamped with its return.
+
+    The key check is for a base whose bin predates the column and where
+    `ensure()` has not run in this process yet — `restore_entries` reads the
+    table directly and must not crash on a schema it can still serve.
+    `in row` would test VALUES, not column names on sqlite3.Row, so the key
+    check has to go through `.keys()` (SIM118 does not apply to this type).
+    """
+    weight = 0.5 if row["importance"] is None else float(row["importance"])
+    created_at = None
+    if "original_created_at" in row.keys():  # noqa: SIM118
+        recorded = row["original_created_at"]
+        created_at = None if recorded is None else float(recorded)
+    return weight, created_at
+
+
+def _episode_not_applied(actual: Any, created_at: float | None, weight: float) -> frozenset[str]:
+    """Name the requested values the row in `episodes` does not hold — one comparison.
+
+    `_restore_episode` asks this of its post-write read-back, and `restore_entries`
+    asks it of the dedup survivor in `dry_run`: the same rule in the one place both
+    modes read, which is what keeps the two answers identical about the same row.
+    A `None` `created_at` was never requested, so it cannot be "not applied".
+    """
+    not_applied: set[str] = set()
+    if actual is not None:
+        if created_at is not None and actual["created_at"] != created_at:
+            not_applied.add("created_at")
+        if actual["emotional_weight"] != weight:
+            not_applied.add("emotional_weight")
+    return frozenset(not_applied)
+
+
+async def _episode_dedup_survivor(conn: Any, layer: str, user_id: str, summary: str) -> Any:
+    """Return the row `EpisodicMemory.save` would dedup against, or `None`.
+
+    Precisely the dedup query `save()` runs before it writes
+    (`core/episodic.py:91-94`) — same columns in the WHERE, same ordering — asked
+    in `dry_run` so the preview and the pass cannot answer differently about
+    whether a restore will write or dedup. It is a read, and the preview writes
+    nothing else.
+    """
+    return await (
+        await conn.execute(
+            "SELECT created_at, emotional_weight FROM episodes WHERE layer=? AND user_id=? AND summary=? ORDER BY episode_id ASC LIMIT 1",
+            (layer, user_id, summary),
+        )
+    ).fetchone()
+
+
 async def _not_carried(conn: Any, table: str, carried: frozenset[str]) -> set[str]:
     """Return the columns of `table` an archive row cannot fill — **read from the schema**.
 
@@ -478,10 +550,23 @@ class ForgettingSystem:
                             }
                         )
                         continue
+                not_applied: frozenset[str] = frozenset()
+                if destination == "episodes" and dry_run:
+                    # Asked in the preview because the pass answers it, and the two
+                    # must not answer differently about the same row: `_restore_episode`
+                    # reads the surviving row back after `save()` and reports which
+                    # requested values it does not hold. A preview that skipped the
+                    # question reported a deduped row's `created_at` as returned while
+                    # the pass reported it as lost. Closed the way the core key check
+                    # above closes it: the question the write will ask is asked in both
+                    # modes, and the write itself still does not run in a preview.
+                    weight, created_at = _episode_requested(row)
+                    survivor = await _episode_dedup_survivor(conn, self.layer, user_id, str(row["content"]))
+                    not_applied = _episode_not_applied(survivor, created_at, weight)
                 if not dry_run:
                     try:
                         if destination == "episodes":
-                            await self._restore_episode(row, user_id)
+                            _, not_applied = await self._restore_episode(row, user_id)
                         else:
                             await self._restore_core(conn, row, original_id, now)
                         await conn.execute("DELETE FROM archived_memories WHERE id = ?", (row["id"],))
@@ -516,7 +601,7 @@ class ForgettingSystem:
                         # The limit, per row, where the answer is read. A caller who
                         # gets a summary back and no tags should learn why from this
                         # answer rather than from a missing tag weeks later.
-                        "not_recorded": sorted(await _not_carried(conn, destination, carried)),
+                        "not_recorded": sorted(await _not_carried(conn, destination, carried - not_applied)),
                     }
                 )
             # Only the pass commits. An unconditional `commit()` here was reached on the
@@ -557,7 +642,7 @@ class ForgettingSystem:
             )
             return outcome
 
-    async def _restore_episode(self, row: Any, user_id: str) -> int:
+    async def _restore_episode(self, row: Any, user_id: str) -> tuple[int, frozenset[str]]:
         """Put an archived episode back into `episodes`, where it came from.
 
         `EpisodicMemory.save()` dedups on `(layer, user_id, summary)` and returns
@@ -569,35 +654,30 @@ class ForgettingSystem:
         The episode is given back with the time it happened when the bin recorded
         it (`original_created_at`). A row archived before that column existed has
         no time to give back, so it is stamped with the moment of its return.
+
+        Returns the id and the carried fields the **surviving row** did not get.
+        The read-back is deliberate: when the dedup fires, `save()` writes nothing
+        and the row that was already there keeps its own `created_at` and
+        `emotional_weight`. Reporting the bin's capability instead of the row's
+        state would tell a caller those values came back when they did not.
+        `restore_entries` asks the same question in `dry_run` — through the same
+        dedup query and the same comparison — so the preview and this pass answer
+        identically about the same row.
         """
         from core.episodic import EpisodicMemory
 
         mem = EpisodicMemory(cm=self._cm, layer=self.layer)
-        # `None` is checked, not truthiness. `row["importance"] or 0.5` — the earlier
-        # form — treats a recorded `0.0` as absent and returns the episode with a
-        # different weight than it had. **This was live, not latent.** An earlier
-        # version of this comment said the base held no such row; that was measured on
-        # one instance and is false of the set of them. Measured 2026-10-11 from copies:
-        # the `-hermes` base holds one archived episode with `importance=0.0` and reason
-        # `forget_primitive_fuzzy_l3`, so the old form would have restored that episode
-        # at 0.5. There is no single base to measure — the archive is per instance.
-        weight = 0.5 if row["importance"] is None else float(row["importance"])
-        # The bin now carries the moment the episode happened. It is absent on rows
-        # archived before the column existed (3159 of them on one live base,
-        # measured 2026-11-03), and `archived_at` is not a substitute: it is when
-        # the row was removed, not when it happened. So a missing value keeps the
-        # old behaviour and the episode is stamped with its return.
-        #
-        # The key check is for a base whose bin predates the column and where
-        # `ensure()` has not run in this process yet — `restore_entries` reads the
-        # table directly and must not crash on a schema it can still serve.
-        created_at = None
-        # `in row` would test VALUES, not column names on sqlite3.Row, so the key
-        # check has to go through `.keys()` (SIM118 does not apply to this type).
-        if "original_created_at" in row.keys():  # noqa: SIM118
-            recorded = row["original_created_at"]
-            created_at = None if recorded is None else float(recorded)
-        return await mem.save(user_id, str(row["content"]), emotional_weight=weight, created_at=created_at)
+        weight, created_at = _episode_requested(row)
+        episode_id = await mem.save(user_id, str(row["content"]), emotional_weight=weight, created_at=created_at)
+        # Read the row back through the dispatcher that wrote it: the shared
+        # connection `restore_entries` holds may already be inside a transaction
+        # (its per-row `DELETE`), whose snapshot predates this write.
+        actual = await mem._dispatch.select_one(
+            DB_NAME,
+            "SELECT created_at, emotional_weight FROM episodes WHERE episode_id = ?",
+            (episode_id,),
+        )
+        return episode_id, _episode_not_applied(actual, created_at, weight)
 
     async def _restore_core(self, conn: Any, row: Any, original_id: int, now: float) -> None:
         """Put an archived L4 row back into `core_memory`.
