@@ -163,32 +163,47 @@ async def _audit_contradictions(conn: Any) -> dict[str, Any] | None:
     return None
 
 
-async def _audit_duplicates(conn: Any, user_id: str) -> dict[str, Any] | None:
-    """(b) duplicates: pairwise same-kind, different keys, smart_similarity > 0.85.
+def _pairwise_duplicates(groups: list[list[tuple[str, str, str]]]) -> list[dict[str, Any]]:
+    """Sync pairwise scan over (key, value, kind) triples (F91).
+
+    Runs off the event loop via asyncio.to_thread. Exactly the old loop: skip
+    equal keys, smart_similarity > 0.85, same group/pair order, same element
+    schema.
 
     ponytail: O(n²) pairwise scan — fine at audit scale (<10k facts); blocking or
     FTS prefilter if user memories grow past that.
     """
     from rag.conflict import smart_similarity
 
+    dup_items: list[dict[str, Any]] = []
+    for group in groups:
+        for i, a in enumerate(group):
+            for b in group[i + 1 :]:
+                if a[0] == b[0]:
+                    continue
+                sim = smart_similarity(a[1], b[1])
+                if sim > 0.85:
+                    dup_items.append({"a_key": a[0], "b_key": b[0], "kind": a[2], "similarity": round(sim, 3)})
+    return dup_items
+
+
+async def _audit_duplicates(conn: Any, user_id: str) -> dict[str, Any] | None:
+    """(b) duplicates: pairwise same-kind, different keys, smart_similarity > 0.85.
+
+    F91: the CPU-bound scan is delegated to a worker thread so the MCP server
+    stays responsive; rows are flattened to plain tuples before crossing the
+    thread boundary (sqlite3.Row objects do not cross it).
+    """
     rows = await (
         await conn.execute(
             "SELECT entry_id, memory_kind, key, value FROM core_memory WHERE user_id=? AND memory_kind IS NOT NULL ORDER BY memory_kind",
             (user_id,),
         )
     ).fetchall()
-    by_kind: dict[str, list[Any]] = {}
+    by_kind: dict[str, list[tuple[str, str, str]]] = {}
     for r in rows:
-        by_kind.setdefault(str(r["memory_kind"]), []).append(r)
-    dup_items: list[dict[str, Any]] = []
-    for group in by_kind.values():
-        for i, a in enumerate(group):
-            for b in group[i + 1 :]:
-                if a["key"] == b["key"]:
-                    continue
-                sim = smart_similarity(str(a["value"]), str(b["value"]))
-                if sim > 0.85:
-                    dup_items.append({"a_key": a["key"], "b_key": b["key"], "kind": str(a["memory_kind"]), "similarity": round(sim, 3)})
+        by_kind.setdefault(str(r["memory_kind"]), []).append((str(r["key"]), str(r["value"]), str(r["memory_kind"])))
+    dup_items = await asyncio.to_thread(_pairwise_duplicates, list(by_kind.values()))
     if dup_items:
         return {
             "severity": "warn",
