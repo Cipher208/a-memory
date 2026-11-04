@@ -88,7 +88,7 @@ async def project(
     }
     handler = handlers.get(action)
     if handler is None:
-        return ProjectResult(status="error", title=name, audit_report=f"unknown action: {action}").dict()
+        return ProjectResult(status="error", title=name, audit_report=f"unknown action: {action}").model_dump()
 
     status_res, result_extra, audit_report, wiki_path = await handler(
         pctx,
@@ -101,7 +101,7 @@ async def project(
         decision=decision,
         outcome=outcome,
     )
-    return {**ProjectResult(status=status_res, title=name, path=wiki_path, audit_report=audit_report).dict(), **result_extra}
+    return {**ProjectResult(status=status_res, title=name, path=wiki_path, audit_report=audit_report).model_dump(), **result_extra}
 
 
 async def _action_init(pctx: _ProjectCtx, *, name: str, details: str, path: str, **_: Any) -> tuple[str, dict[str, Any], None, str | None]:

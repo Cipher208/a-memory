@@ -46,7 +46,7 @@ async def memory_remember(
     value = strip_secrets(value)
     if session_id and _dedup_cache.is_duplicate(session_id, key, value):
         logger.info("Dedup: skipping identical remember key=%s user=%s", key, user_id)
-        return RememberResult(status="skipped", reason="duplicate_within_ttl").dict()
+        return RememberResult(status="skipped", reason="duplicate_within_ttl").model_dump()
 
     app = _get_ctx(ctx)
     layer = _validate_layer(layer)
@@ -60,7 +60,7 @@ async def memory_remember(
     gate = await _fire_hook("importance_gate", layer, {"text": value, "key": key, "importance": importance})
     if gate.get("results") and any(r.get("bypass") for r in gate["results"] if isinstance(r, dict)):
         logger.info("Importance gate bypassed: key=%s, importance=%.2f, user=%s", key, importance, user_id)
-        return RememberResult(status="skipped", reason="below_importance_threshold").dict()
+        return RememberResult(status="skipped", reason="below_importance_threshold").model_dump()
 
     mem = _get_memory(app, layer, user_id)
 
@@ -92,7 +92,7 @@ async def memory_remember(
         await _fire_hook("message_received", layer, {"text": value, "key": key, "user_id": user_id}, mem=mem)
 
     _invalidate_cache(layer, user_id)
-    return RememberResult(status="ok", entry_id=entry_id, graph_node_id=None).dict()
+    return RememberResult(status="ok", entry_id=entry_id, graph_node_id=None).model_dump()
 
 
 async def _fire_post_remember_hooks(layer: str, user_id: str, key: str, value: str, mem: Any, graph: Any = None) -> None:
@@ -125,14 +125,14 @@ async def memory_recall(
 
     cached = _get_recall_cache(query, user_id, layer, limit)
     if cached is not None:
-        return {**RecallResult(results=cached, count=len(cached)).dict(), "cached": True}
+        return {**RecallResult(results=cached, count=len(cached)).model_dump(), "cached": True}
 
     results = await _get_memory(app, layer, user_id).recall(query, limit)
     _set_recall_cache(query, user_id, layer, limit, results)
 
     await _fire_hook("auto_context", layer, {"query": query, "results_count": len(results), "user_id": user_id})
 
-    return RecallResult(results=results, count=len(results)).dict()
+    return RecallResult(results=results, count=len(results)).model_dump()
 
 
 # memory_forget was removed: a strict subset of the `forget` primitive

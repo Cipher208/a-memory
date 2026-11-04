@@ -97,7 +97,7 @@ async def memory_graph_add(
     if hook_name:
         await _fire_hook(hook_name, layer, {"node_type": node_type, "content": content, "user_id": user_id})
 
-    return GraphNodeResult(node_id=node_id, created=created).dict()
+    return GraphNodeResult(node_id=node_id, created=created).model_dump()
 
 
 async def memory_graph_query(
@@ -124,7 +124,7 @@ async def memory_graph_query(
         nodes = await graph.query_by_type(user_id, node_type, limit)
     else:
         nodes = []
-    return GraphNodeResult(nodes=[{"id": n.node_id, "content": n.content, "type": n.node_type, "tags": n.tags} for n in nodes]).dict()
+    return GraphNodeResult(nodes=[{"id": n.node_id, "content": n.content, "type": n.node_type, "tags": n.tags} for n in nodes]).model_dump()
 
 
 async def memory_graph_nodes(

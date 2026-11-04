@@ -208,4 +208,4 @@ async def think(
     if awaitable_tasks:
         await asyncio.gather(*awaitable_tasks)
 
-    return ThinkResult(status="ok", routing=routing, actions=actions).dict()
+    return ThinkResult(status="ok", routing=routing, actions=actions).model_dump()

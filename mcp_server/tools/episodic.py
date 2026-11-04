@@ -40,7 +40,7 @@ async def memory_episode_save(
     await _fire_hook("state_delta", layer, {"summary": summary, "tags": tags, "user_id": user_id})
     await _fire_hook("consolidation", layer, {"trigger": "episode_save", "user_id": user_id})
 
-    return EpisodeResult(episode_id=episode_id).dict()
+    return EpisodeResult(episode_id=episode_id).model_dump()
 
 
 async def memory_episode_recall(
@@ -64,7 +64,7 @@ async def memory_episode_recall(
         episodes = await mem.l3.search_by_tag(user_id, tag, limit)
     else:
         episodes = await mem.l3.get_episodes(user_id, limit)
-    return EpisodeResult(episodes=[{"id": e.episode_id, "summary": e.summary, "weight": e.emotional_weight} for e in episodes]).dict()
+    return EpisodeResult(episodes=[{"id": e.episode_id, "summary": e.summary, "weight": e.emotional_weight} for e in episodes]).model_dump()
 
 
 async def memory_episode_list(
