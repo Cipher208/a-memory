@@ -92,6 +92,25 @@ _CARRIED_INTO_EPISODES = frozenset({"user_id", "summary", "emotional_weight"})
 _CARRIED_INTO_CORE = frozenset({"user_id", "key", "value", "importance", "memory_kind"})
 
 
+def _carried_into_episodes(row: Any) -> frozenset[str]:
+    """Return the episode columns this archived row can fill — one answer per row.
+
+    `created_at` is carried only when the bin recorded the moment the episode
+    happened. Since #191 `_restore_episode` writes that time back, so reporting it
+    as lost was a limit stated in the caller's favour: `not_recorded` exists to tell
+    a caller what undo cannot bring back.
+
+    The column may be absent on a bin older than it, and `in row` on `sqlite3.Row`
+    tests *values*, not column names, so the check goes through `keys()`. A missing
+    column means the same as `NULL` here — no recorded time.
+    """
+    if "original_created_at" not in row.keys():  # noqa: SIM118
+        return _CARRIED_INTO_EPISODES
+    if row["original_created_at"] is None:
+        return _CARRIED_INTO_EPISODES
+    return _CARRIED_INTO_EPISODES | {"created_at"}
+
+
 async def _not_carried(conn: Any, table: str, carried: frozenset[str]) -> set[str]:
     """Return the columns of `table` an archive row cannot fill — **read from the schema**.
 
@@ -411,7 +430,7 @@ class ForgettingSystem:
                     )
                     continue
                 if route_of(row["memory_type"]) == ROUTE_EPISODES:
-                    destination, carried = "episodes", _CARRIED_INTO_EPISODES
+                    destination, carried = "episodes", _carried_into_episodes(row)
                 else:
                     destination, carried = "core_memory", _CARRIED_INTO_CORE
                 if destination == "core_memory":
