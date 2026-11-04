@@ -362,8 +362,9 @@ async def test_an_unroutable_kind_is_refused_instead_of_written(cm: Any) -> None
 
     This test used to use `core_memory` as its example, on the reasoning that the
     value was a table name leaked into a kind field. That reasoning was invented and
-    is now known to be false — `purge_foreign_rows.py` writes it deliberately for rows
-    it selected from `core_memory`, so it routes there (see the test above). The
+    is now known to be false — older versions of `purge_foreign_rows.py` wrote it
+    deliberately for rows they selected from `core_memory`, so it routes there (see
+    the test above). The
     example is `project_archive` instead, which really has nowhere to go: `project.py`
     archives a **wiki page** body, and this repository has no restore for one.
     """
@@ -636,31 +637,61 @@ async def test_a_restored_core_row_without_a_separator_keeps_its_text(cm: Any) -
 
 async def test_a_row_labelled_with_its_source_table_routes_there(cm: Any) -> None:
     """`episode` names the table `episodes` and routes there. `core_memory` names
-    the table `core_memory`, and the value is written by `scripts/purge_foreign_rows.py`
-    for rows it selected **from** `core_memory` — so the same convention applies.
+    the table `core_memory`, and older versions of the purge scripts wrote it for
+    rows they selected **from** `core_memory` — so the same convention applies.
 
     The first version of `route_of` refused it, on a story that turned out to be
     invented: that the value was a table name which had leaked into a kind field.
     It had not. The label is deliberate and it names the source; the reason these
     rows are not recoverable in practice is `archive_reason`, not the route.
 
-    What the label does **not** carry is the row's original kind, so the restored
-    row keeps the label as its kind — a kind the registry does not list, which is
-    visible rather than disguised as `fact`.
+    What the label does **not** carry is the row's original kind. An earlier version
+    kept the label as `memory_kind`, on the argument that a visible junk kind is
+    better than an invented `fact`. That argument was wrong about the cost: the
+    label is not a kind the registry knows, and `decay_importance` skips a row whose
+    kind does not validate — so the row becomes immortal, and a kind-filtered lookup
+    can never find it under any real kind. A junk value is not a visible marker; it
+    is an exemption from the rules. So an unvalidated label is written as `NULL`,
+    which means "kind unknown": it decays as `fact` like any row written without a
+    kind, and `not_recorded` tells the caller the kind did not come back. The cost is
+    real and bounded — the restored row cannot be selected by its original kind and
+    is treated as `fact` by decay — but it is declared, not disguised.
     """
     await _archive(cm, original_id=901, content="purged_key=purged_value", memory_type="core_memory", reason="inactive_90d")
 
     outcome = await _fs(cm).restore_entries([901], user_id=U1)
 
     assert outcome.restored == 1, "a row whose label names its source table was called unroutable"
+    assert outcome.restored_items[0]["destination"] == "core_memory", "the route still follows the source label"
     row = await _rows(cm, "SELECT key, value, memory_kind FROM core_memory WHERE user_id=?", (U1,))
     assert row[0][0] == "purged_key" and row[0][1] == "purged_value"
-    # The consequence, asserted rather than left to be discovered: the label names the
-    # source, not the kind, so the restored row carries a kind the registry does not
-    # list. `validate_kind` rejects it and `decay_importance` skips such a row, so it
-    # will not decay. That is a real difference from a `fact` — and a visible one,
-    # which is the point of writing what was recorded instead of substituting a default.
-    assert row[0][2] == "core_memory"
+    # The label names the source, not the kind, so there is no kind to write back.
+    # `NULL` is the only honest value: `fact` would invent a provenance the archive
+    # never recorded, and the label itself would exempt the row from decay.
+    assert row[0][2] is None, "the source-table label was written into memory_kind"
+    assert "memory_kind" in outcome.restored_items[0]["not_recorded"], "the lost kind was not reported"
+
+
+async def test_the_recorded_kind_decides_whether_memory_kind_is_carried(cm: Any) -> None:
+    """`not_recorded` is per row, not per destination: one call restores both kinds.
+
+    A row archived with a real kind keeps it, and the answer does not claim the
+    kind was lost. A row archived with its source table has no kind to keep, so it
+    comes back as `NULL` and the answer says so. Both are asserted in one call
+    because a destination-wide answer — "core rows lose their kind" or "core rows
+    keep their kind" — would be wrong for one of these two rows.
+    """
+    await _archive(cm, original_id=911, content="kept=fact_value", memory_type="fact")
+    await _archive(cm, original_id=912, content="lost=label_value", memory_type="core_memory")
+
+    outcome = await _fs(cm).restore_entries([911, 912], user_id=U1)
+
+    assert outcome.restored == 2
+    rows = {r["key"]: r["memory_kind"] for r in await _rows(cm, "SELECT key, memory_kind FROM core_memory WHERE user_id=?", (U1,))}
+    assert rows == {"kept": "fact", "lost": None}, "a real kind was dropped or a source label was kept as a kind"
+    by_id = {item["original_id"]: item for item in outcome.restored_items}
+    assert "memory_kind" not in by_id[911]["not_recorded"], "a kind that came back was reported as lost"
+    assert "memory_kind" in by_id[912]["not_recorded"], "a kind the archive never kept was reported as returned"
 
 
 async def test_the_listing_never_offers_what_the_restore_refuses(cm: Any) -> None:

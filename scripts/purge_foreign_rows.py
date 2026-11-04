@@ -45,12 +45,14 @@ was forgotten. An earlier version of this docstring advertised a `--restore-arch
 flag that does not exist and never did. Putting a run back is an out-of-band operator
 job, and it would have to bypass the refusal deliberately rather than by calling it.
 
-`memory_type` is written as the **source**, not the kind: `"episode"` for a row from
-`episodes` and `"core_memory"` for one from `core_memory`, which is how `route_of`
-reads it. The content is stored as `key = value` with spaces, whereas
-`_restore_core` splits on the first `=` without trimming — so a restore of one of
-these rows would keep the padding in the key. Unreachable today because the reason
-refuses first; noted here so that unwinding the refusal is not done blind.
+`memory_type` records where a row came from, in the form `route_of` reads: an
+episode is written as `"episode"` (the singular label for the `episodes` table),
+and a fact is written as its own `memory_kind`, falling back to `"fact"` when that
+column is empty — never the source table name. The content is stored as
+`key = value` with spaces; `_split_core_content` splits on the first `=` and strips
+both sides, so a restore recovers the original key and value without the padding.
+Unreachable today because the reason refuses first; noted here so that unwinding
+the refusal is not done blind.
 
 The L0 hash chain is not touched at all: `l0_journal` rows are left in place with
 `status='foreign_agent'`, so `verify_chain` stays clean and the chain remains a
@@ -136,7 +138,7 @@ def plan(db: Path) -> dict[str, Any]:
 
         # --- facts: via metadata.source_raw_id ---
         foreign_facts: list[sqlite3.Row] = []
-        for row in conn.execute("SELECT entry_id, key, value, layer, user_id, importance, metadata FROM core_memory"):
+        for row in conn.execute("SELECT entry_id, key, value, memory_kind, layer, user_id, importance, metadata FROM core_memory"):
             meta = row["metadata"]
             if not meta:
                 continue
@@ -227,7 +229,9 @@ async def apply(p: dict[str, Any], db: Path) -> None:
         await am.archive(
             user_id=r["user_id"] or "default",
             content=f"{r['key']} = {r['value']}",
-            memory_type="core_memory",
+            # The row's own kind, not the source table: a restore writes this value
+            # into `memory_kind`, where a table name is not a kind.
+            memory_type=r["memory_kind"] or "fact",
             importance=float(r["importance"] or 0.0),
             original_id=int(r["entry_id"]),
             reason=ARCHIVE_REASON,
