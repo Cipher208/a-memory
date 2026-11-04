@@ -5,6 +5,7 @@ detects same-kind duplicates via smart_similarity, stale un-recalled facts and
 dead [[fact:key]] links in wiki content.
 """
 
+import asyncio
 import sqlite3
 import time
 
@@ -131,3 +132,44 @@ async def test_diagnose_checks_l0_hash_chain(audit_db):
     res2 = await run_diagnose("u1")
     names2 = {c["name"]: c for c in res2["checks"]}
     assert names2["l0_hash_chain"]["status"] == "fail"
+
+
+async def test_audit_duplicates_does_not_freeze_event_loop(audit_db):
+    """F91: 160 near-identical same-kind facts → 12 720 pairs (~1s naive CPU scan).
+
+    The pairwise duplicate scan must run off the event loop: a heartbeat task
+    ticking every 20ms must never observe a gap >= 0.5s while audit_content
+    works. The first seeded pair is generated first, so the [:100] cap cannot
+    cut it from items.
+    """
+    stem = "the user drinks dark roast coffee with oat milk and one cinnamon stick every morning"
+    for i in range(160):
+        _fact(audit_db, f"dup.{i:03d}", f"{stem} note {i:03d}", kind="preference")
+
+    from features.diagnostics import audit_content
+
+    gaps: list[float] = []
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    async def heartbeat() -> None:
+        last = loop.time()
+        while not stop.is_set():
+            await asyncio.sleep(0.02)
+            now = loop.time()
+            gaps.append(now - last)
+            last = now
+
+    hb = asyncio.create_task(heartbeat())
+    try:
+        findings = await audit_content("u1")
+    finally:
+        stop.set()
+        await hb  # no dangling tasks
+
+    assert gaps, "heartbeat never ticked"
+    assert max(gaps) < 0.5, f"event loop frozen for {max(gaps):.2f}s during duplicate scan"
+
+    dup = next((c for c in findings if c["type"] == "duplicate"), None)
+    assert dup is not None, "duplicate finding missing"
+    assert any({i["a_key"], i["b_key"]} == {"dup.000", "dup.001"} for i in dup["items"])
