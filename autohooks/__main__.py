@@ -284,18 +284,18 @@ def main(argv: list[str] | None = None) -> int:
         out = asyncio.run(run_inject(cfg, mem, graph, rag, text=ns.text, fmt=ns.format, blocks=ns.blocks, with_recap=ns.with_recap))
         print(out)
         return 0
-    except BaseException:
-        # Close on the failure path too. `_close_ariel()` used to sit after each
-        # `asyncio.run(...)`, so an exception skipped it; aiosqlite's worker
-        # threads are non-daemon, `threading._shutdown` joins them at exit, and
-        # the process then prints a traceback and never returns — systemd keeps
-        # the unit `active`, so Restart=on-failure never fires. Suppressed here
-        # only so a failing close cannot replace the command's own exception.
+    finally:
+        # Close on EVERY path. aiosqlite worker threads are non-daemon, so an
+        # unclosed connection makes `threading._shutdown` join forever: the
+        # process prints its output and never returns — systemd keeps the unit
+        # `active` (Restart=on-failure never fires) and hooks time out with no
+        # output. This used to be `except: close; raise` + `else: close`, which
+        # never ran on success: every command branch ends with `return 0`
+        # inside the `try`, and a `return` from a `try` body skips `else`.
+        # Suppressed so a failing close cannot replace the command's own
+        # exception.
         with contextlib.suppress(Exception):
             _close_ariel()
-        raise
-    else:
-        _close_ariel()
 
 
 def _render_recall_md(blocks: list[dict[str, Any]]) -> str:
