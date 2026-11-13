@@ -133,3 +133,38 @@ def test_main_closes_connections_when_command_raises(tmp_path, monkeypatch):
         cli.main(["recall", "--config", str(cfg)])
 
     assert closed == ["closed"]
+
+
+def test_main_closes_connections_on_success(tmp_path, monkeypatch):
+    """A successful command must close ariel's connections before returning.
+
+    Every command branch ends with `return 0` inside the `try`, and a `return`
+    from a `try` body skips the `else:` clause entirely. The close therefore
+    never ran on the success path — the exact path every hook takes. The
+    non-daemon aiosqlite worker then blocked interpreter shutdown, so
+    `autohooks inject` printed its block and hung until the 120 s watchdog
+    killed it. Hooks time out at 20 s, so the injection was silently lost.
+    """
+    from autohooks import appctx
+    from shared.connection import connection_manager
+
+    cfg = tmp_path / "agent.yaml"
+    cfg.write_text(f"data_dir: {tmp_path}\nuser_id: default\nlayer: user\n", encoding="utf-8")
+    monkeypatch.setenv("ARIEL_CLI_GUARD", "0")
+
+    closed: list[str] = []
+
+    async def fake_close_all() -> None:
+        closed.append("closed")
+
+    monkeypatch.setattr(connection_manager, "close_all", fake_close_all)
+    monkeypatch.setattr(appctx, "build_app_context", lambda: object())
+    monkeypatch.setattr(appctx, "resolve_layer", lambda app, layer, uid: (None, None, None))
+
+    async def ok(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr("features.recall.recall_protocol", ok)
+
+    assert cli.main(["recall", "--config", str(cfg), "--query", "x"]) == 0
+    assert closed == ["closed"], "connections must be closed on the success path too"
