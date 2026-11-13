@@ -102,3 +102,26 @@ async def test_gate_releases_even_when_migrate_raises(tmp_path) -> None:
     from shared.maintenance_lock import release
 
     release(fd)
+
+
+def test_startup_gate_is_bounded_below_the_client_handshake_budget() -> None:
+    """The gate must never outlast the client's handshake wait.
+
+    2026-11-13: a stdio server blocked in `maintenance_lock.acquire()` for the
+    full 120 s default while the opencode v2 client gives up on `initialize`
+    after ~6 s. The server was alive and polling the lock, but the client had
+    already declared `mcp transport error ... process exited` — so the memory
+    server was invisible for every session that started during the wedge.
+
+    The gate's own docstring already says the fallback is "better a noisy
+    success than a server that never comes up". A 120 s wait contradicts that:
+    the server is up, yet unreachable. Bound the wait to less than the client
+    budget so the ungated fallback actually runs while the client is listening.
+    """
+    from mcp_server import lifespan
+
+    assert lifespan.MIGRATION_GATE_TIMEOUT_S < lifespan.CLIENT_HANDSHAKE_BUDGET_S, (
+        f"startup gate ({lifespan.MIGRATION_GATE_TIMEOUT_S}s) must be shorter than "
+        f"the client handshake budget ({lifespan.CLIENT_HANDSHAKE_BUDGET_S}s), "
+        "or a held lock makes the server unreachable"
+    )

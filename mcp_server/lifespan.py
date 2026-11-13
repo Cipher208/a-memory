@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -77,10 +78,30 @@ async def _storage_pass() -> None:
     await _connection_health()
 
 
+# How long the MCP client waits for `initialize` before it declares the server
+# dead. opencode v2 gives up after ~6 s and logs
+# `mcp transport error ... process exited` — while the process is still alive.
+# Any startup wait longer than this makes a healthy server unreachable.
+CLIENT_HANDSHAKE_BUDGET_S: float = 6.0
+
 # How long startup waits its turn on the maintenance turnstile before running
 # migrations ungated (spec S3). Bounded: the normal wait is milliseconds —
 # only a genuinely long migration makes a follower wait at all.
-MIGRATION_GATE_TIMEOUT_S: float = 120.0
+#
+# 2026-11-13: this was 120 s, i.e. 20x the client's handshake budget. A server
+# blocked in `maintenance_lock.acquire()` therefore stayed alive but invisible:
+# the client had already given up, so every session that started during the
+# wedge had no memory server at all. The gate's own fallback ("better a noisy
+# success than a server that never comes up") never ran, because the wait
+# outlasted the client. Keep it under the handshake budget so the ungated
+# fallback happens while the client is still listening.
+# 2 s, not 4: an uncontended startup already spends ~2.7 s before it can
+# answer `initialize` (imports + migrations), so the gate has to leave room
+# inside the 6 s budget or the contended case lands exactly on the cliff.
+# Measured 2026-11-13: gate 4 s + 2.2 s of work = 6.24 s, i.e. still late.
+# Override with ARIEL_MIGRATION_GATE_TIMEOUT_S when a deliberately long
+# migration has to be waited out.
+MIGRATION_GATE_TIMEOUT_S: float = float(os.environ.get("ARIEL_MIGRATION_GATE_TIMEOUT_S", "2.0"))
 
 
 async def run_startup_gated(
