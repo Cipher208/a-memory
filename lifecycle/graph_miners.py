@@ -699,7 +699,7 @@ def _get_ner() -> Any:
         try:
             from mcp_server.utils.privacy import _get_nlp
 
-            _ner = _get_nlp()
+            _ner = _get_nlp(for_ner=True)
         except Exception:
             _ner = False
     return _ner or None

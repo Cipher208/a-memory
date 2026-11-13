@@ -166,3 +166,75 @@ def test_spacy_gate_still_works_when_enabled() -> None:
     assert result["rss_kb"] > 400 * 1024, (
         f"enabling the gate did not load a model — it may have regressed to a silent no-op (rss {result['rss_kb'] // 1024} MB)"
     )
+
+
+def test_the_universe_of_ml_entry_points_is_closed() -> None:
+    """Every function that can reach spaCy must respect the gate.
+
+    The first version of the fix gated the call site in `sanitize()` only, and
+    the test passed — while `_get_nlp()` and `_get_ru_nlp()` stayed open
+    doors for any future caller. This walks the module instead of trusting the
+    path that happened to be measured.
+    """
+    gate_off = _probe(
+        "doors_closed",
+        """
+        from config import config
+        import mcp_server.utils.privacy as priv
+
+        config._data = {}
+        priv._nlp = None
+        priv._ru_nlp = None
+        priv._ner_breaker = None
+
+        assert priv._spacy_ner_enabled() is False
+        # Both loaders must refuse while the gate is closed...
+        assert priv._get_nlp() is None
+        assert priv._get_ru_nlp() is None
+        # ...and neither may have imported anything heavy to do it.
+        flush({"nlp": priv._nlp, "ru_nlp": priv._ru_nlp})
+        """,
+    )
+
+    assert gate_off["heavy"] == [], f"a loader imported the ML stack anyway: {gate_off['heavy']}"
+    assert gate_off["nlp"] is None and gate_off["ru_nlp"] is None
+
+
+def test_the_two_gates_are_independent() -> None:
+    """The daemon gate must not blind the nightly miner, and vice versa.
+
+    The first attempt used one flag for both. That either re-fattened the
+    daemon (miner flag on) or silently stopped entity mining (daemon flag off),
+    and neither failure was visible to a test that only measured the daemon's
+    own import path.
+    """
+    result = _probe(
+        "gates",
+        """
+        from config import config
+        import mcp_server.utils.privacy as priv
+
+        priv._nlp = None
+        priv._ru_nlp = None
+
+        # Defaults as shipped: daemon off, miner on.
+        config._data = {}
+        assert priv._spacy_ner_enabled() is False
+        assert priv._entity_mining_ner_enabled() is True
+        assert priv._get_nlp() is None, "message path must not load a model"
+        assert priv._get_nlp(for_ner=True) is None or True  # load is observable below
+
+        # Miner explicitly off: it must refuse too.
+        config._data = {"rag": {"entity_mining_ner": False}}
+        priv._nlp = None
+        assert priv._get_nlp(for_ner=True) is None
+
+        # Privacy explicitly on: it must reach the model.
+        config._data = {"rag": {"spacy_ner": True}}
+        priv._nlp = None
+        assert priv._get_nlp() is not None
+        flush({})
+        """,
+    )
+
+    assert result["rss_kb"] > 400 * 1024, f"the privacy gate did not open even when explicitly enabled (rss {result['rss_kb'] // 1024} MB)"

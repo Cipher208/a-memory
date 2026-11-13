@@ -52,7 +52,7 @@ _ner_breaker = None
 
 
 def _spacy_ner_enabled() -> bool:
-    """Master switch for the spaCy tiers — the cheap ones stay on.
+    """Master switch for the spaCy tiers on the message path — default OFF.
 
     2026-11-13: `import spacy` itself is **546 MB RSS** because spaCy pulls
     torch, and 752 MB with a model loaded. That is fine for a server process
@@ -60,29 +60,58 @@ def _spacy_ner_enabled() -> bool:
     per agent (two on this box), handles an event, and was sitting at ~900 MB
     — the VPS was carrying 10.5 GB of swap with no OOM, just permanent lag.
 
-    So the ML tiers are opt-in per contour. The regex/credential/dictionary
-    tiers are what a daemon actually needs, and they cost nothing: the
-    credential tier catches the shapes that must never be stored (`sk-`,
-    `ghp_`, PEM, `<private>`), and `rag.ru_personas` still masks known people.
-    What is lost is open-vocabulary name recognition — a rare surname in
-    stored prose stays unmasked.
+    So the tiers are opt-in per contour on the *message path*. The regex /
+    credential / dictionary tiers are what a daemon actually needs, and they
+    cost nothing: the credential tier catches the shapes that must never be
+    stored (`sk-`, `ghp_`, PEM, `<private>`), and `rag.ru_personas` still
+    masks known people. What is lost is open-vocabulary name recognition — a
+    rare surname in stored prose stays unmasked.
 
-    Turn it back on where a real model is worth the half-gigabyte: an agent
-    server that already holds the stack, or a dedicated privacy pass.
+    The nightly miners keep their own switch (`rag.entity_mining_ner`): they
+    run in the leader's housekeeping pass, where the model is worth its weight,
+    not once per message. Sharing one flag would have forced a choice between
+    a fat daemon and a blind miner.
     """
     from config import config
 
     return bool(config.get("rag", "spacy_ner", default=False))
 
 
-def _get_nlp() -> Any:
-    """Lazy process-wide spaCy NER (en_core_web_sm; Cyrillic prose is not parsed — fine)."""
+def _get_nlp(for_ner: bool = False) -> Any:
+    """Lazy process-wide spaCy NER (en_core_web_sm; Cyrillic prose is not parsed — fine).
+
+    Shared by the message path (`sanitize`) and the nightly entity miner, so it
+    takes the caller's intent rather than reading one flag for both: the miner
+    passes `for_ner=True` and is governed by `rag.entity_mining_ner`, the
+    message path passes nothing and stays off unless `rag.spacy_ner`.
+    """
+    allowed = _entity_mining_ner_enabled() if for_ner else _spacy_ner_enabled()
+    if not allowed:
+        return None
     global _nlp
     if _nlp is None:
         import spacy
 
         _nlp = spacy.load("en_core_web_sm")
     return _nlp
+
+
+def _entity_mining_ner_enabled() -> bool:
+    """SpaCy for the *nightly* entity miner — default ON.
+
+    This one stays on by default and that is deliberate: the miner runs in the
+    leader's housekeeping pass, once per node per night with a content-hash
+    cache, so the model's cost is amortised over a pass that already takes
+    minutes. The message path is where it could not stay — one `import spacy`
+    per process, per agent, for one call per message.
+
+    Living in one module with two flags is the honest shape of the fix: the
+    first attempt shared a single flag, which either blinded the miner or
+    re-fattened the daemon, and the test suite could not see the choice.
+    """
+    from config import config
+
+    return bool(config.get("rag", "entity_mining_ner", default=True))
 
 
 def _ru_ner_enabled() -> bool:
@@ -129,7 +158,12 @@ def _get_ru_nlp() -> Any:
     The two paths are told apart by `_model_absent`: an absent package is the
     documented normal mode, a package that is present but raises is a
     breakage and must reach the breaker.
+
+    `rag.spacy_ner` gates the import here too, not just the call site: this is
+    the one function that turns a config flag into 546 MB of resident torch.
     """
+    if not _spacy_ner_enabled():
+        return None
     global _ru_nlp
     if _ru_nlp is not None:
         return _ru_nlp

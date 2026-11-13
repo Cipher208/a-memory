@@ -128,6 +128,12 @@ rag:
   # lost is open-vocabulary name recognition — a rare surname in stored prose
   # stays unmasked. Turn on where a real model is worth half a gigabyte.
   spacy_ner: false
+  # The nightly entity miner keeps its own switch and defaults ON: it runs in
+  # the leader's housekeeping pass, once per node per night with a content-hash
+  # cache, so the model is amortised over a pass that already takes minutes.
+  # One flag for both would force a choice between a fat daemon and a blind
+  # miner — which is exactly what the first cut of this fix got wrong.
+  entity_mining_ner: true
   # S19-хвосты: RU-морфология через pymorphy3 (lazy, сбои → сырые токены).
   # lemmatize: леммы в _canon_tokens (topic_overlap/wire_new_node) и канон-ключах
   # дистиллера. Внимание ключам: смена деривации = новые факты о старых темах
