@@ -37,10 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # No `cache: "pip"` here: this job installs with uv, never pip, so the
+      # cache path is never created and setup-python's post step fails the job
+      # ("Cache folder path is retrieved for pip but doesn't exist on disk")
+      # even though mypy passed.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --locked --extra dev --extra binary --python 3.12
       - run: uv run mypy --config-file pyproject.toml features/ shared/ mcp_server/ rag/ hooks/ wiki/ lifecycle/ graph/ core/
@@ -141,10 +144,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Same reason as typecheck: uv installs, pip never runs.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --locked --extra docs --python 3.12
       - name: Build docs (strict — fails on broken refs)
