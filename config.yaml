@@ -120,6 +120,14 @@ rag:
   # ⟨LOC_N⟩). Model install: pip ru-core-news-sm; сбои → circuit breaker → en-NER/
   # словарь/regex. false = только словарь ru_personas + en-NER.
   ru_ner: true
+  # Master switch for the spaCy tiers. Default OFF (2026-11-13): `import spacy`
+  # alone costs 546 MB RSS (it pulls torch), 752 MB with a model loaded — fatal
+  # for the autohooks daemon, which runs once per agent and then sits there.
+  # What stays on is the free half: the credential tier (`sk-`, `ghp_`, PEM,
+  # `<private>`), the PII regex tier and the `ru_personas` dictionary. What is
+  # lost is open-vocabulary name recognition — a rare surname in stored prose
+  # stays unmasked. Turn on where a real model is worth half a gigabyte.
+  spacy_ner: false
   # S19-хвосты: RU-морфология через pymorphy3 (lazy, сбои → сырые токены).
   # lemmatize: леммы в _canon_tokens (topic_overlap/wire_new_node) и канон-ключах
   # дистиллера. Внимание ключам: смена деривации = новые факты о старых темах

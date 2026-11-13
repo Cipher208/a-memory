@@ -3,6 +3,12 @@
 Схема: кириллический ввод → ru-NER (PER/ORG/LOC, garbage-guard ≥2 симв., ≤4
 токенов, не чисто-цифровые), латиница → en-NER как было. Отказ модели →
 circuit breaker → en-путь/словарь/regex. Флаг rag.ru_ner (default on).
+
+Both spaCy tiers sit behind `rag.spacy_ner` (default OFF since 2026-11-13 —
+`import spacy` is 546 MB of torch per process, and the autohooks daemon runs
+once per agent). Every test here that needs a model therefore turns the switch
+on explicitly: these tests describe what the NER *does*, not what a given host
+is configured to do.
 """
 
 from __future__ import annotations
@@ -18,12 +24,20 @@ from tests._ner import REQUIRES_EN_NER, REQUIRES_RU_NER
 
 RU_NER = REQUIRES_RU_NER
 
+_NER_ON = {"rag": {"spacy_ner": True}}
+
+
+@pytest.fixture
+def ner_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turn the spaCy tiers on for this test only."""
+    monkeypatch.setattr(config, "_data", _NER_ON, raising=False)
+
 
 @RU_NER
 def test_ru_ner_masks_unfamiliar_cyrillic_person(monkeypatch: pytest.MonkeyPatch) -> None:
     # Имя НЕ из словаря ru_personas — раньше en-NER его не ловил (кириллица
     # не парсится), теперь ловит ru-NER.
-    monkeypatch.setattr(config, "_data", {"rag": {"ru_personas": ["мамочка"]}}, raising=False)
+    monkeypatch.setattr(config, "_data", {"rag": {"spacy_ner": True, "ru_personas": ["мамочка"]}}, raising=False)
     out, mapping = sanitize("Аркадий Укупник позвонил насчёт контракта в последнюю пятницу.")
     assert "Укупник" not in out, f"ru-NER должен маскировать незнакомую персону: {out}"
     assert "⟨PER_" in out
@@ -33,7 +47,7 @@ def test_ru_ner_masks_unfamiliar_cyrillic_person(monkeypatch: pytest.MonkeyPatch
 @RU_NER
 def test_ru_ner_dictionary_tier_first(monkeypatch: pytest.MonkeyPatch) -> None:
     # Словарная персона уходит раньше (PERSON_RU, дешёвый тир), ru-NER не нужен.
-    monkeypatch.setattr(config, "_data", {"rag": {"ru_personas": ["мамочка"]}}, raising=False)
+    monkeypatch.setattr(config, "_data", {"rag": {"spacy_ner": True, "ru_personas": ["мамочка"]}}, raising=False)
     out, _mapping = sanitize("мамочка сказала не забывать про бэкапы")
     assert "мамочка" not in out
     assert "⟨PERSON_RU_1⟩" in out
@@ -42,7 +56,7 @@ def test_ru_ner_dictionary_tier_first(monkeypatch: pytest.MonkeyPatch) -> None:
 @RU_NER
 def test_ru_ner_garbage_guard_short_noise(monkeypatch: pytest.MonkeyPatch) -> None:
     """S19-спека: ru-NER шумит на коротких текстах — guard не маскирует мусор."""
-    monkeypatch.setattr(config, "_data", {}, raising=False)
+    monkeypatch.setattr(config, "_data", _NER_ON, raising=False)
     for noisy in ("ок", "да", "-", "12"):
         out, _ = sanitize(noisy)
         assert "⟨PER" not in out and "⟨ORG" not in out, f"шум {noisy!r} замаскирован: {out}"
@@ -50,7 +64,7 @@ def test_ru_ner_garbage_guard_short_noise(monkeypatch: pytest.MonkeyPatch) -> No
 
 @RU_NER
 def test_ru_ner_latin_path_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "_data", {}, raising=False)
+    monkeypatch.setattr(config, "_data", _NER_ON, raising=False)
     out, _mapping = sanitize("John Smith met Bob at Acme Corp office")
     assert "John" not in out and "Bob" not in out, "en-NER путь не сломан"
     assert "⟨PERSON_" in out
@@ -58,7 +72,7 @@ def test_ru_ner_latin_path_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @RU_NER
 def test_ru_ner_disabled_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "_data", {"rag": {"ru_ner": False}}, raising=False)
+    monkeypatch.setattr(config, "_data", {"rag": {"spacy_ner": True, "ru_ner": False}}, raising=False)
     # Незнакомая персона остаётся: ru-NER выключен, словарь пуст, en-NER кириллицу не берёт.
     out, _ = sanitize("Аркадий Укупник позвонил насчёт контракта.")
     assert "Укупник" in out, "флаг off: ru-NER не маскирует"
@@ -69,7 +83,7 @@ def test_ru_ner_breaker_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
     """Модель сломана → breaker деградирует к en-пути, sanitize не падает."""
     import mcp_server.utils.privacy as priv
 
-    monkeypatch.setattr(config, "_data", {}, raising=False)
+    monkeypatch.setattr(config, "_data", _NER_ON, raising=False)
     monkeypatch.setattr(priv, "_ru_nlp", None)
     monkeypatch.setattr(priv, "_ner_breaker", None)
 
@@ -132,7 +146,7 @@ def test_ru_ner_absent_model_does_not_trip_breaker(monkeypatch: pytest.MonkeyPat
     import mcp_server.utils.privacy as priv
 
     breaker = CircuitBreaker(threshold=3, recovery_timeout=60.0, name="ru_ner_absent_probe")
-    monkeypatch.setattr(config, "_data", {}, raising=False)
+    monkeypatch.setattr(config, "_data", _NER_ON, raising=False)
     monkeypatch.setattr(priv, "_ru_nlp", None)
     monkeypatch.setattr(priv, "_ner_breaker", breaker)
     monkeypatch.setattr("spacy.load", loader)
@@ -154,7 +168,7 @@ def test_ru_ner_runtime_error_still_trips_breaker(monkeypatch: pytest.MonkeyPatc
             raise RuntimeError("inference blew up")
 
     breaker = CircuitBreaker(threshold=3, recovery_timeout=60.0, name="ru_ner_runtime_probe")
-    monkeypatch.setattr(config, "_data", {}, raising=False)
+    monkeypatch.setattr(config, "_data", _NER_ON, raising=False)
     monkeypatch.setattr(priv, "_ru_nlp", _Exploding())
     monkeypatch.setattr(priv, "_ner_breaker", breaker)
 
@@ -168,7 +182,7 @@ def test_ru_ner_load_runtime_error_still_trips_breaker(monkeypatch: pytest.Monke
     import mcp_server.utils.privacy as priv
 
     breaker = CircuitBreaker(threshold=3, recovery_timeout=60.0, name="ru_ner_load_probe")
-    monkeypatch.setattr(config, "_data", {}, raising=False)
+    monkeypatch.setattr(config, "_data", _NER_ON, raising=False)
     monkeypatch.setattr(priv, "_ru_nlp", None)
     monkeypatch.setattr(priv, "_ner_breaker", breaker)
     monkeypatch.setattr("spacy.load", _raising(RuntimeError("model is corrupt")))

@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+from config import config
 from mcp_server.utils.privacy import sanitize
 from tests._ner import REQUIRES_EN_NER
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_placeholder_stability() -> None:
@@ -15,11 +21,27 @@ def test_placeholder_stability() -> None:
 
 
 @REQUIRES_EN_NER
-def test_ner_masks_person_and_org() -> None:
+def test_ner_masks_person_and_org(monkeypatch: pytest.MonkeyPatch) -> None:
     # en_core_web_sm ловит ru-имена в name-intro паттернах («зовут X»);
     # sentence-initial кириллические имена модель НЕ маскирует (док. в T2).
+    # spaCy tiers are opt-in since 2026-11-13 (546 MB of torch per process).
+    monkeypatch.setattr(config, "_data", {"rag": {"spacy_ner": True}}, raising=False)
     out, _m = sanitize("Меня зовут Аня и я работаю в Acme Corp", use_ner=True)
     assert "Аня" not in out and "Acme Corp" not in out
+
+
+def test_ner_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default posture: no spaCy, no torch — regex/dictionary tiers only.
+
+    The credential and PII tiers must keep working, or the privacy gate has no
+    floor left. Open-vocabulary names are deliberately NOT masked here.
+    """
+    monkeypatch.setattr(config, "_data", {}, raising=False)
+    out, mapping = sanitize("Иван Петров написал на ivan@example.com", use_ner=True)
+
+    assert "ivan@example.com" not in out
+    assert mapping
+    assert "Иван Петров" in out, "without a model, an unknown name survives"
 
 
 def test_prose_not_destroyed() -> None:

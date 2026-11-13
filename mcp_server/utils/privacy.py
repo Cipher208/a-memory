@@ -51,6 +51,30 @@ _ru_nlp = None
 _ner_breaker = None
 
 
+def _spacy_ner_enabled() -> bool:
+    """Master switch for the spaCy tiers — the cheap ones stay on.
+
+    2026-11-13: `import spacy` itself is **546 MB RSS** because spaCy pulls
+    torch, and 752 MB with a model loaded. That is fine for a server process
+    the user already runs, and ruinous for the autohooks daemon: it runs once
+    per agent (two on this box), handles an event, and was sitting at ~900 MB
+    — the VPS was carrying 10.5 GB of swap with no OOM, just permanent lag.
+
+    So the ML tiers are opt-in per contour. The regex/credential/dictionary
+    tiers are what a daemon actually needs, and they cost nothing: the
+    credential tier catches the shapes that must never be stored (`sk-`,
+    `ghp_`, PEM, `<private>`), and `rag.ru_personas` still masks known people.
+    What is lost is open-vocabulary name recognition — a rare surname in
+    stored prose stays unmasked.
+
+    Turn it back on where a real model is worth the half-gigabyte: an agent
+    server that already holds the stack, or a dedicated privacy pass.
+    """
+    from config import config
+
+    return bool(config.get("rag", "spacy_ner", default=False))
+
+
 def _get_nlp() -> Any:
     """Lazy process-wide spaCy NER (en_core_web_sm; Cyrillic prose is not parsed — fine)."""
     global _nlp
@@ -204,11 +228,15 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
     except Exception:  # noqa: S110 — dictionary unavailable: the next tiers will handle it
         pass
 
-    if use_ner:
+    if use_ner and _spacy_ner_enabled():
         # S19: ru-NER for Cyrillic (ru_core_news_sm), en-NER for Latin script.
         # ru-model garbage guard (S19 spec: ru-NER is noisy on short texts):
         # PER/ORG/LOC ≤ 4 tokens AND ≥ 2 chars; 1-char and all-digit spans
         # are tokenizer noise, not a person. ru-model failure → en-path as is.
+        #
+        # `_spacy_ner_enabled()` gates the WHOLE block: `import spacy` is 546 MB
+        # RSS on its own, so a half-enabled gate (say, ru off, en on) would still
+        # pay it for nothing. Both tiers or neither.
         has_cyr_input = any("\u0400" <= ch <= "\u04ff" for ch in out)
         ru_doc = None
         if has_cyr_input and _ru_ner_enabled():
