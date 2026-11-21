@@ -8,6 +8,7 @@
 import asyncio
 import json
 import struct
+import sys
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -1351,3 +1352,48 @@ async def test_miner_sessions_ignores_sweep_summary(db):
     result = await miner_sessions(db, "user")
 
     assert result["edges"] == 0
+
+
+def test_ner_backend_tag_none_without_spacy(monkeypatch):
+    """spaCy не установлен ⇒ бэкенда нет, тег остаётся dict-only."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: None)
+    assert gm._ner_backend_tag() is None
+
+
+def test_ner_backend_tag_reads_model_meta(monkeypatch, tmp_path):
+    """Тег берётся из meta.json пакета модели, без импорта spaCy."""
+    import lifecycle.graph_miners as gm
+
+    pkg = tmp_path / "en_core_web_sm"
+    pkg.mkdir()
+    (pkg / "meta.json").write_text('{"name": "core_web_sm", "version": "3.8.0"}', encoding="utf-8")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: _Spec())
+    imported = set(sys.modules)
+    assert gm._ner_backend_tag() == "core_web_sm-3.8.0"
+    # The tag must not drag spaCy/torch into the process: an earlier test in this
+    # file may already have imported them, so compare against the modules present
+    # before the call instead of asserting on the whole of `sys.modules`.
+    assert not {"spacy", "torch"} & (set(sys.modules) - imported)
+
+
+def test_ner_backend_tag_none_on_broken_meta(monkeypatch, tmp_path):
+    """Битый meta.json не роняет проход — бэкенда нет."""
+    import lifecycle.graph_miners as gm
+
+    pkg = tmp_path / "en_core_web_sm"
+    pkg.mkdir()
+    (pkg / "meta.json").write_text("{not json", encoding="utf-8")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: _Spec())
+    assert gm._ner_backend_tag() is None

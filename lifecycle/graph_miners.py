@@ -14,8 +14,10 @@ import contextlib
 import functools
 from bisect import bisect_left, bisect_right
 import hashlib
+import importlib.util
 import json
 import logging
+import pathlib
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -574,6 +576,39 @@ def _ner_dict_fingerprint(syn: dict[str, list[str]]) -> str:
     """
     vocab = sorted(set(syn) | {v for vs in syn.values() for v in vs})
     return hashlib.sha256("\n".join(vocab).encode("utf-8")).hexdigest()[:16]
+
+
+# The spaCy model the miner uses (`privacy._get_nlp(for_ner=True)`). The tag is
+# derived from the installed package's meta.json so the nightly pass can compute
+# it without importing spaCy — one import costs 546 MB RSS of torch that then
+# stays resident for the life of the process.
+_NER_MODEL = "en_core_web_sm"
+
+
+def _ner_backend_tag() -> str | None:
+    """Read the NER backend fingerprint from the model package metadata.
+
+    Returns `None` when spaCy or the model package is absent — the caller then
+    falls back to `dict-only`, exactly as a process without spaCy always has.
+    ``importlib.util.find_spec`` locates the package without importing it, so
+    torch never enters ``sys.modules`` on this path.
+    """
+    if importlib.util.find_spec("spacy") is None:
+        return None
+    spec = importlib.util.find_spec(_NER_MODEL)
+    locations = getattr(spec, "submodule_search_locations", None) or []
+    for location in locations:
+        meta_path = pathlib.Path(location) / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("ner backend: cannot read %s", meta_path)
+            continue
+        name = meta.get("name")
+        version = meta.get("version")
+        if name and version:
+            return f"{name}-{version}"
+    return None
 
 
 def _ner_cache_tag(syn: dict[str, list[str]], nlp: Any) -> str:
