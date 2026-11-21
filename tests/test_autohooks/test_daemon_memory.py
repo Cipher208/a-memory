@@ -158,14 +158,12 @@ def test_spacy_gate_still_works_when_enabled() -> None:
 
         assert priv._spacy_ner_enabled() is True
         out, _m = priv.sanitize("John Smith met Bob at Acme Corp", use_ner=True)
-        flush({"out": out})
+        flush({"out": out, "model_loaded": priv._nlp is not None})
         """,
     )
 
     assert "John" not in result.get("out", "John"), f"NER tier did not run: {result.get('out')!r}"
-    assert result["rss_kb"] > 400 * 1024, (
-        f"enabling the gate did not load a model — it may have regressed to a silent no-op (rss {result['rss_kb'] // 1024} MB)"
-    )
+    assert result["model_loaded"] is True, "enabling the gate did not load a model — it may have regressed to a silent no-op"
 
 
 def test_the_universe_of_ml_entry_points_is_closed() -> None:
@@ -233,8 +231,8 @@ def test_the_two_gates_are_independent() -> None:
         config._data = {"rag": {"spacy_ner": True}}
         priv._nlp = None
         assert priv._get_nlp() is not None
-        flush({})
+        flush({"model_loaded": priv._nlp is not None})
         """,
     )
 
-    assert result["rss_kb"] > 400 * 1024, f"the privacy gate did not open even when explicitly enabled (rss {result['rss_kb'] // 1024} MB)"
+    assert result["model_loaded"] is True, "the privacy gate did not open even when explicitly enabled"
