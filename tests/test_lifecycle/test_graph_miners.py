@@ -9,6 +9,7 @@ import asyncio
 import json
 import struct
 import sys
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -708,19 +709,41 @@ async def test_miner_entities_synonym_canon_creates_co_mentions(db):
 
 
 @pytest.mark.asyncio
-async def test_miner_entities_spacy_org_shared_mention(db):
-    try:
-        from mcp_server.utils.privacy import _get_nlp
+async def test_miner_entities_spacy_org_shared_mention(db, monkeypatch):
+    """Сущности NER из тёплого кэша (строки под тэгом бэкенда) дают рёбра co_mentions.
 
-        _get_nlp()
-    except Exception:
+    Майнер больше не грузит spaCy сам (`nlp=None` всегда): он читает строки,
+    которые записал `warm_ner_cache.py` под тэгом бэкенда. Здесь строка кэша
+    вставляется явно — это и есть контракт «warmer пишет, ночной проход читает».
+    Сам тест spaCy НЕ импортирует: иначе он бы отравил sys.modules для
+    `test_miner_entities_does_not_import_spacy`.
+    """
+    import hashlib
+
+    import lifecycle.graph_miners as gm
+    from rag.synonyms import load_synonyms
+
+    if gm._ner_backend_tag() is None:
         pytest.skip("en_core_web_sm не установлена")
+
+    monkeypatch.setattr(gm, "_get_ner", lambda: (_ for _ in ()).throw(AssertionError("_get_ner must not be called")))
+
     n1 = await _node("Борис работает в Acme Corp", T)
     n2 = await _node("офис Acme Corp открыт давно", T)
 
-    from lifecycle.graph_miners import miner_entities
+    syn = load_synonyms()
+    tag = gm._ner_cache_tag(syn, None)  # тэг бэкенда: именно его читает ночной проход
+    conn = await db.get("memory.db")
+    await gm._ensure_ner_cache(conn)
+    for text in ("Борис работает в Acme Corp", "офис Acme Corp открыт давно"):
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        await conn.execute(
+            "INSERT OR REPLACE INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+            (digest, tag, json.dumps(["acme corp"])),
+        )
+    await conn.commit()
 
-    await miner_entities(db, "user")
+    await gm.miner_entities(db, "user")
 
     rows = await _edges("co_mentions")
     assert (min(n1, n2), max(n1, n2)) in {(r["source_id"], r["target_id"]) for r in rows}
@@ -748,6 +771,37 @@ async def test_miner_entities_degree_cap_anti_hub(db):
     ).fetchone()
     assert result["edges"] > 0, "обычные co_mentions работают"
     assert deg[0] <= 12, f"хаб срезан лимитом 12: {deg[0]}"
+
+
+@pytest.mark.asyncio
+async def test_miner_entities_does_not_import_spacy(db, monkeypatch):
+    """Ночной майнер не имеет права тянуть spaCy/torch в процесс-лидер."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_get_ner", lambda: (_ for _ in ()).throw(AssertionError("_get_ner must not be called")))
+
+    # The suite may have imported spacy/torch in earlier tests; purge them so this
+    # check is about what THIS miner pulls in, not about test order. The original
+    # module objects are restored afterwards so later tests reuse them unchanged
+    # (no torch re-init) — we only drop the sys.modules keys for the call window.
+    saved = {name: mod for name, mod in sys.modules.items() if name in {"spacy", "torch"} or name.startswith(("spacy.", "torch."))}
+    for name in saved:
+        del sys.modules[name]
+    try:
+        conn = await connection_manager.get(DB_NAME)
+        for i in range(3):
+            await conn.execute(
+                "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES ('user', 'gu', ?, 'fact', '[]', 0.5, ?)",
+                (f"Алиса и Борис текст {i}", time.time()),
+            )
+        await conn.commit()
+
+        apply = await gm.miner_entities(db, "user")
+        assert apply is not None
+        assert "spacy" not in sys.modules
+        assert "torch" not in sys.modules
+    finally:
+        sys.modules.update(saved)
 
 
 class _FakeL3:
@@ -1078,6 +1132,13 @@ async def test_miner_entities_second_run_does_not_reparse(db, monkeypatch):
     — что извлечение сущностей не повторяется.
     """
     import lifecycle.graph_miners as gm
+
+    # Pin dict-only mode so the miner's own writes (dict-only tag) are the rows it
+    # reads back: read tag == write tag. On a spaCy-installed host the miner reads
+    # under the backend tag and writes dict-only (the warmer fills the backend
+    # rows), so without this a second pass would legitimately re-parse. The cache
+    # coherence this test checks is exactly the dict-only operating mode.
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: None)
 
     await _node("Алиса принесла отчёт по проекту", T)
     await _node("Alice обновила документацию", T)

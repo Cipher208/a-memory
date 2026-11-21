@@ -517,7 +517,11 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str, *, read: Any) -
     from rag.synonyms import load_synonyms
 
     syn = load_synonyms()
-    nlp = _get_ner()
+    # No spaCy here on purpose: importing it costs 546 MB RSS that stays resident
+    # for the life of this process. The tag still names the NER backend (read from
+    # the model's meta.json), so a cache warmed by `warm_ner_cache.py` is hit; the
+    # misses this pass sees are written dictionary-only and filled by the warmer.
+    nlp = None
     ents, pending = await _entities_read(read, [str(c) for _, c in nodes], syn, nlp)
     wanted: list[tuple[int, int]] = []
     degree: dict[int, int] = {}
