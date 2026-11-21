@@ -617,9 +617,13 @@ def _ner_cache_tag(syn: dict[str, list[str]], nlp: Any) -> str:
     A row computed with `nlp=None` (dictionary only) must never be served once
     spaCy becomes available, and vice versa: the two produce different sets, and
     mixing them would silently change which co_mentions edges get written.
+
+    With no loaded model the backend comes from the installed package metadata
+    (`_ner_backend_tag`), so the nightly pass computes the same tag a spaCy-loaded
+    process would, without paying 546 MB of resident torch to learn it.
     """
     if nlp is None:
-        backend = "dict-only"
+        backend = _ner_backend_tag() or "dict-only"
     else:
         meta = getattr(nlp, "meta", None) or {}
         backend = f"{meta.get('name', 'ner')}-{meta.get('version', '?')}"

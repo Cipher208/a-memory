@@ -1017,7 +1017,25 @@ async def test_entities_cached_invalidated_by_dictionary_change(db):
     assert "boris" in after[0], f"после расширения словаря Борис должен появиться: {after[0]}"
 
 
-def test_ner_cache_tag_separates_dict_only_from_ner_backend():
+def test_ner_cache_tag_none_uses_metadata_backend(monkeypatch):
+    """nlp=None, но модель установлена: тег несёт бэкенд, а не dict-only."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: "core_web_sm-3.8.0")
+    tag = gm._ner_cache_tag({"алиса": ["alice"]}, None)
+    assert tag.endswith("|core_web_sm-3.8.0")
+    assert "dict-only" not in tag
+
+
+def test_ner_cache_tag_none_falls_back_to_dict_only(monkeypatch):
+    """Модели нет ⇒ прежнее поведение, старые строки остаются валидными."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: None)
+    assert gm._ner_cache_tag({"алиса": ["alice"]}, None).endswith("|dict-only")
+
+
+def test_ner_cache_tag_separates_dict_only_from_ner_backend(monkeypatch):
     """dict-only и spaCy дают разные множества — теги не имеют права совпасть."""
     import lifecycle.graph_miners as gm
 
@@ -1025,8 +1043,14 @@ def test_ner_cache_tag_separates_dict_only_from_ner_backend():
         meta = {"name": "fake_ner", "version": "1.0"}
 
     syn = {"алиса": ["alice"]}
-    assert gm._ner_cache_tag(syn, None) != gm._ner_cache_tag(syn, _FakeNlp())
+
+    # Без установленной модели nlp=None — это dict-only.
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: None)
     assert "dict-only" in gm._ner_cache_tag(syn, None)
+
+    # Модель установлена: тег несёт её бэкенд и не совпадает с загруженной spaCy.
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: "core_web_sm-3.8.0")
+    assert gm._ner_cache_tag(syn, None) != gm._ner_cache_tag(syn, _FakeNlp())
     assert "fake_ner" in gm._ner_cache_tag(syn, _FakeNlp())
 
 
