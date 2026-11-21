@@ -1355,10 +1355,34 @@ async def test_miner_sessions_ignores_sweep_summary(db):
 
 
 def test_ner_backend_tag_none_without_spacy(monkeypatch):
-    """spaCy не установлен ⇒ бэкенда нет, тег остаётся dict-only."""
+    """spaCy есть, пакет модели — нет: бэкенда нет, тег остаётся dict-only."""
     import lifecycle.graph_miners as gm
 
-    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: None)
+    class _SpacySpec:
+        origin = "/fake/spacy/__init__.py"
+        submodule_search_locations = ["/fake/spacy"]
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: _SpacySpec() if name == "spacy" else None)
+    assert gm._ner_backend_tag() is None
+
+
+def test_ner_backend_tag_none_when_spacy_missing_but_model_present(monkeypatch, tmp_path):
+    """Модель установлена и читаема, spaCy — нет: бэкенда не вычисляем (guard несущий).
+
+    meta.json здесь настоящий и валидный: без guard'а функция вернула бы тег, и
+    кэш молча пометился бы как валидный при отсутствующем NER-слое.
+    """
+    import lifecycle.graph_miners as gm
+
+    pkg = tmp_path / "en_core_web_sm"
+    pkg.mkdir()
+    (pkg / "meta.json").write_text('{"name": "core_web_sm", "version": "3.8.0"}', encoding="utf-8")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: None if name == "spacy" else _Spec())
     assert gm._ner_backend_tag() is None
 
 
@@ -1374,7 +1398,11 @@ def test_ner_backend_tag_reads_model_meta(monkeypatch, tmp_path):
         origin = str(pkg / "__init__.py")
         submodule_search_locations = [str(pkg)]
 
-    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: _Spec())
+    monkeypatch.setattr(
+        gm.importlib.util,
+        "find_spec",
+        lambda name: _Spec() if name in ("spacy", "en_core_web_sm") else None,
+    )
     imported = set(sys.modules)
     assert gm._ner_backend_tag() == "core_web_sm-3.8.0"
     # The tag must not drag spaCy/torch into the process: an earlier test in this
