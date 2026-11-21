@@ -614,13 +614,11 @@ def _ner_backend_tag() -> str | None:
 def _ner_cache_tag(syn: dict[str, list[str]], nlp: Any) -> str:
     """Cache tag tying a row to BOTH the dictionary and the NER backend.
 
-    A row computed with `nlp=None` (dictionary only) must never be served once
-    spaCy becomes available, and vice versa: the two produce different sets, and
-    mixing them would silently change which co_mentions edges get written.
-
-    With no loaded model the backend comes from the installed package metadata
-    (`_ner_backend_tag`), so the nightly pass computes the same tag a spaCy-loaded
-    process would, without paying 546 MB of resident torch to learn it.
+    The read tag names the backend a spaCy-loaded process uses, so the nightly
+    pass finds rows the warmer wrote. It does NOT describe what a process with no
+    loaded model actually computed — that is the write tag, which stays
+    `dict-only` (see `_entities_read`). Mixing the two would let dict-only
+    entities pose as spaCy output and silently kill co_mentions edges.
     """
     if nlp is None:
         backend = _ner_backend_tag() or "dict-only"
@@ -657,7 +655,13 @@ async def _entities_read(read: Any, texts: list[str], syn: dict[str, list[str]],
     """
     if not texts:
         return [], []
+    # Read tag names the backend the warmer uses (metadata-derived when no model
+    # is loaded here). The write tag names what ACTUALLY computed these rows: with
+    # no loaded model that is dict-only. Writing dict-only entities under the spaCy
+    # tag would make every warmer pass read them as valid and never recompute —
+    # co_mentions edges would vanish silently.
     tag = _ner_cache_tag(syn, nlp)
+    write_tag = f"{_ner_dict_fingerprint(syn)}|{'dict-only' if nlp is None else tag.rsplit('|', 1)[-1]}"
     hashes = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
 
     cached: dict[str, set[str]] = {}
@@ -687,7 +691,7 @@ async def _entities_read(read: Any, texts: list[str], syn: dict[str, list[str]],
         cached[text_hash] = ents
         # sorted: a set has no stable order, and a stable blob keeps the
         # table diffable and the tests deterministic
-        pending.append((text_hash, tag, json.dumps(sorted(ents), ensure_ascii=False)))
+        pending.append((text_hash, write_tag, json.dumps(sorted(ents), ensure_ascii=False)))
     return [cached[h] for h in hashes], pending
 
 

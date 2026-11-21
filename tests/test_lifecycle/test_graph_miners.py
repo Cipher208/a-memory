@@ -954,25 +954,40 @@ async def test_miner_structural_community_bridge_inside_community(db):
 
 @pytest.mark.asyncio
 async def test_entities_cached_skips_second_extraction(db, monkeypatch):
-    """Повторный проход не парсит те же тексты снова — ради этого кэш и заведён."""
+    """Повторный проход не парсит те же тексты снова — ради этого кэш и заведён.
+
+    Модель здесь «загружена» (заглушка с meta): только тогда тег чтения и тег
+    записи совпадают. С `nlp=None` пишется dict-only, а читается бэкенд-тег —
+    это отдельный контракт, его пингуют `test_entities_read_*`.
+    """
     import lifecycle.graph_miners as gm
+
+    class _Doc:
+        ents: tuple = ()
+
+    class _FakeNlp:
+        meta = {"name": "core_web_sm", "version": "3.8.0"}
+
+        def __call__(self, text: str) -> _Doc:
+            return _Doc()
 
     conn = await connection_manager.get(DB_NAME)
     syn = {"алиса": ["alice"]}
     texts = ["Алиса принесла отчёт", "Alice обновила документацию"]
+    nlp = _FakeNlp()
 
     calls: list[str] = []
     real = gm._entities
 
-    def counting(text: str, s: dict[str, list[str]], nlp: Any = None) -> set[str]:
+    def counting(text: str, s: dict[str, list[str]], n: Any = None) -> set[str]:
         calls.append(text)
-        return real(text, s, nlp)
+        return real(text, s, n)
 
     monkeypatch.setattr(gm, "_entities", counting)
 
-    first = await gm._entities_cached(conn, texts, syn, None)
+    first = await gm._entities_cached(conn, texts, syn, nlp)
     parsed_on_first = len(calls)
-    second = await gm._entities_cached(conn, texts, syn, None)
+    second = await gm._entities_cached(conn, texts, syn, nlp)
 
     assert first == second, "кэш обязан вернуть те же множества"
     assert parsed_on_first == len(texts), f"первый проход парсит все тексты, а не {parsed_on_first}"
@@ -1084,7 +1099,7 @@ async def test_miner_entities_second_run_does_not_reparse(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_cache_rows_are_keyed_by_tag(db):
-    """Строки кэша разделены тегом: разные бэкенды не перезаписывают друг друга."""
+    """Строки кэша разделены тегом: dict-only и бэкенд-строки не перезаписывают друг друга."""
     import lifecycle.graph_miners as gm
 
     conn = await connection_manager.get(DB_NAME)
@@ -1093,9 +1108,19 @@ async def test_ner_cache_rows_are_keyed_by_tag(db):
     await gm._entities_cached(conn, ["Алиса здесь"], syn, None)
     await gm._entities_cached(conn, ["нечто иное"], syn, None)
 
+    # Строка, которую записал бы прогон с загруженной моделью (warm-воркер).
+    warm_tag = gm._ner_cache_tag(syn, None)
+    await conn.execute(
+        "INSERT INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+        ("feedface", warm_tag, json.dumps(["алиса"])),
+    )
+    await conn.commit()
+
     rows = await (await conn.execute("SELECT text_hash, tag, entities FROM ner_cache")).fetchall()
-    assert len(rows) == 2
-    assert all(r["tag"] == gm._ner_cache_tag(syn, None) for r in rows)
+    assert len(rows) == 3, "разные теги живут в разных строках, а не перезаписывают друг друга"
+    dict_only = [r for r in rows if r["tag"].endswith("|dict-only")]
+    warm = [r for r in rows if r["tag"] == warm_tag]
+    assert len(dict_only) == 2 and len(warm) == 1, [r["tag"] for r in rows]
     for r in rows:
         assert isinstance(json.loads(r["entities"]), list)
 
@@ -1449,3 +1474,54 @@ def test_ner_backend_tag_none_on_broken_meta(monkeypatch, tmp_path):
 
     monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: _Spec())
     assert gm._ner_backend_tag() is None
+
+
+@pytest.mark.asyncio
+async def test_entities_read_writes_dict_only_tag_when_no_model(db):
+    """Без загруженной модели строки пишутся под dict-only, а не под spaCy-тегом.
+
+    Иначе warm-воркер прочитает пустое множество как валидное и никогда не
+    пересчитает узел: рёбра co_mentions пропадут молча.
+    """
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    syn = {"алиса": ["alice"]}
+    text = "Алиса и Борис здесь"
+
+    _ents, pending = await gm._entities_read(conn, [text], syn, None)
+
+    assert pending, "miss must produce a cache row"
+    written_tag = pending[0][1]
+    read_tag = gm._ner_cache_tag(syn, None)
+    assert written_tag.endswith("|dict-only"), f"dict-only rows must not claim the spaCy tag: {written_tag}"
+    assert written_tag != read_tag, "read tag (metadata) and write tag (what ran) must differ when no model is loaded"
+
+    await gm._entities_cache_write(conn, pending)
+    rows = await (await conn.execute("SELECT tag, entities FROM ner_cache")).fetchall()
+    assert all(r["tag"].endswith("|dict-only") for r in rows), [r["tag"] for r in rows]
+
+
+@pytest.mark.asyncio
+async def test_entities_read_reads_metadata_tag_but_writes_actual(db):
+    """Чтение — по тегу бэкенда из метаданных, запись — по фактически применённому."""
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    syn = {"алиса": ["alice"]}
+
+    # A row the warmer (spaCy loaded) would have written.
+    warm_tag = f"{gm._ner_dict_fingerprint(syn)}|core_web_sm-3.8.0"
+    await conn.execute(
+        "INSERT INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+        ("deadbeef", warm_tag, json.dumps(["алиса"])),
+    )
+    await conn.commit()
+
+    _ents, pending = await gm._entities_read(conn, ["Алиса и Борис здесь"], syn, None)
+    # read path found the warmer's tag...
+    assert gm._ner_cache_tag(syn, None) == warm_tag
+    # ...and the miss it produced is written dict-only, not under warm_tag
+    assert pending and pending[0][1].endswith("|dict-only")

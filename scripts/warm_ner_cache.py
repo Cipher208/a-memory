@@ -71,7 +71,7 @@ async def main() -> None:
         ).fetchall()
         have.update(str(r[0]) for r in rows)
 
-    backend = "dict-only" if nlp is None else f"{getattr(nlp, 'meta', {}).get('name', 'ner')}"
+    backend = _ner_cache_tag(syn, nlp).rsplit("|", 1)[-1]
     print(
         f"BASE {BASE}\n"
         f"  nodes={len(texts)} unique_texts={len(unique)}\n"
