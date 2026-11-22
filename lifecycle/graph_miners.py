@@ -1702,15 +1702,21 @@ async def wire_new_node(
 
     syn = load_synonyms()
     my_toks = _canon_tokens(content, syn)
-    my_ents = _entities(content, syn)
     my_tags = set(tags or [])
-    if not my_toks and not my_ents and not my_tags:
-        return _noop(0)
     others = await _layer_nodes(read, layer)
     other_tags: dict[int, set[str]] = {}
     for r in await (await read.execute("SELECT node_id, tag FROM epi_tags WHERE node_id != ?", (node_id,))).fetchall():
         other_tags.setdefault(int(r["node_id"]), set()).add(str(r["tag"]))
-    nlp = _get_ner()
+    # Entities come from the cache the warmer fills, not from spaCy in this
+    # process: importing spaCy here pulls 546 MB of torch that stays resident
+    # for the life of a long-lived daemon. A miss is computed dictionary-only;
+    # the dict-only rows are never written here — the cache is the warmer's
+    # property. The daily path reads it and stays silent.
+    ents_list, _pending = await _entities_read(read, [content] + [str(c) for _, c in others], syn, None)
+    my_ents = ents_list[0]
+    other_ents = dict(zip((oid for oid, _ in others), ents_list[1:], strict=True))
+    if not my_toks and not my_ents and not my_tags:
+        return _noop(0)
     wanted: list[tuple[int, int, str, float, str]] = []  # (a, b, relation, weight, heuristic)
     for oid, ocontent in others:
         if oid == node_id:
@@ -1720,7 +1726,7 @@ async def wire_new_node(
         shared_toks = my_toks & otoks
         if len(shared_toks) >= 2 and union and len(shared_toks) / len(union) >= 0.3:
             wanted.append((min(node_id, oid), max(node_id, oid), "topic_overlap", len(shared_toks) / len(union), "tokens"))
-        if my_ents and my_ents & _entities(ocontent, syn, nlp):
+        if my_ents and my_ents & other_ents.get(oid, set()):
             wanted.append((min(node_id, oid), max(node_id, oid), "co_mentions", 0.4, "entities"))
         shared = my_tags & other_tags.get(oid, set())
         if shared:
