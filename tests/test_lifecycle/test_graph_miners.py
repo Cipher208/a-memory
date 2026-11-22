@@ -1586,3 +1586,95 @@ async def test_entities_read_reads_metadata_tag_but_writes_actual(db):
     assert gm._ner_cache_tag(syn, None) == warm_tag
     # ...and the miss it produced is written dict-only, not under warm_tag
     assert pending and pending[0][1].endswith("|dict-only")
+
+
+@pytest.mark.asyncio
+async def test_wire_new_node_does_not_import_spacy(db, monkeypatch):
+    """Горячий путь дистилляции не имеет права тянуть spaCy в процесс."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_get_ner", lambda: (_ for _ in ()).throw(AssertionError("_get_ner must not be called")))
+    conn = await db.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    await _node("python sqlite indexing", T)
+    second = await _node("python sqlite indexing guide", T)
+
+    # The suite may have imported spacy/torch in earlier tests; purge them so this
+    # check is about what THIS miner pulls in, not about test order (same pattern
+    # as test_miner_entities_does_not_import_spacy).
+    saved = {name: mod for name, mod in sys.modules.items() if name in {"spacy", "torch"} or name.startswith(("spacy.", "torch."))}
+    for name in saved:
+        del sys.modules[name]
+    try:
+        await gm.wire_new_node(db, "user", second, "python sqlite indexing guide", ["db"])
+        assert "spacy" not in sys.modules
+        assert "torch" not in sys.modules
+    finally:
+        sys.modules.update(saved)
+
+
+@pytest.mark.asyncio
+async def test_wire_new_node_uses_warm_cache(db):
+    """Прогретая строка воркера даёт co_mentions без загрузки spaCy."""
+    import hashlib
+
+    import lifecycle.graph_miners as gm
+    from rag.synonyms import load_synonyms
+
+    conn = await db.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    first = await _node("Борис работает в Acme Corp", T)
+    second = await _node("офис Acme Corp открыт давно", T)
+
+    syn = load_synonyms()
+    warm_tag = gm._ner_cache_tag(syn, None)  # == backend tag: модель установлена
+    for text in ("Борис работает в Acme Corp", "офис Acme Corp открыт давно"):
+        h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        await conn.execute(
+            "INSERT OR REPLACE INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+            (h, warm_tag, json.dumps(["acme corp"])),
+        )
+    await conn.commit()
+
+    await gm.wire_new_node(db, "user", second, "офис Acme Corp открыт давно", [])
+    rows = await _edges("co_mentions")
+    assert (min(first, second), max(first, second)) in {(r["source_id"], r["target_id"]) for r in rows}
+
+
+@pytest.mark.asyncio
+async def test_wire_new_node_cold_cache_writes_dict_only(db):
+    """Холодный кэш: промах пишется под dict-only и не отравляет spaCy-тег."""
+    import hashlib
+
+    import lifecycle.graph_miners as gm
+    from rag.synonyms import load_synonyms
+
+    conn = await db.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    content = "python sqlite indexing guide"
+    second = await _node(content, T)
+    await conn.commit()
+
+    await gm.wire_new_node(db, "user", second, content, ["db"])
+
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    rows = await (await conn.execute("SELECT tag FROM ner_cache WHERE text_hash=?", (digest,))).fetchall()
+    assert rows, "a miss must produce a cache row"
+    assert all(str(r["tag"]).endswith("|dict-only") for r in rows), [r["tag"] for r in rows]
+    assert gm._ner_cache_tag(load_synonyms(), None) not in {str(r["tag"]) for r in rows}, "dict-only rows must not claim the spaCy tag"
+
+
+@pytest.mark.asyncio
+async def test_wire_new_node_co_mentions_from_dict_entities(db):
+    """dict-only сущности (синонимы) тоже дают co_mentions, без spaCy."""
+    import lifecycle.graph_miners as gm
+
+    conn = await db.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    first = await _node("Алиса и Борис здесь", T)
+    second = await _node("Алиса снова тут", T)
+    await conn.commit()
+
+    await gm.wire_new_node(db, "user", second, "Алиса снова тут", [])
+    rows = await _edges("co_mentions")
+    assert (min(first, second), max(first, second)) in {(r["source_id"], r["target_id"]) for r in rows}
