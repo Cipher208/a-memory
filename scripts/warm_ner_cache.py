@@ -44,6 +44,7 @@ async def main() -> None:
         _get_ner,
         _layer_nodes,
         _ner_cache_tag,
+        _ner_dict_fingerprint,
     )
     from rag.synonyms import load_synonyms
     from shared.connection import connection_manager
@@ -71,14 +72,22 @@ async def main() -> None:
         ).fetchall()
         have.update(str(r[0]) for r in rows)
 
-    backend = "dict-only" if nlp is None else f"{getattr(nlp, 'meta', {}).get('name', 'ner')}"
+    read_tag = tag
+    write_tag = f"{_ner_dict_fingerprint(syn)}|{'dict-only' if nlp is None else tag.rsplit('|', 1)[-1]}"
+    backend = read_tag.rsplit("|", 1)[-1]
     print(
         f"BASE {BASE}\n"
         f"  nodes={len(texts)} unique_texts={len(unique)}\n"
-        f"  ner_backend={backend} tag={tag}\n"
+        f"  ner_backend={backend} tag={read_tag}\n"
         f"  already_cached={len(have)} missing={len(unique) - len(have)}",
         flush=True,
     )
+    if read_tag != write_tag:
+        print(
+            f"  NOTE: no spaCy loaded here — rows are written under {write_tag}, "
+            f"which the nightly pass will not read. Install en_core_web_sm to warm real NER rows.",
+            flush=True,
+        )
     if VERIFY_ONLY or len(have) == len(unique):
         print("  nothing to do", flush=True)
         return

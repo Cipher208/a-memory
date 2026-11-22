@@ -8,6 +8,8 @@
 import asyncio
 import json
 import struct
+import sys
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -707,19 +709,41 @@ async def test_miner_entities_synonym_canon_creates_co_mentions(db):
 
 
 @pytest.mark.asyncio
-async def test_miner_entities_spacy_org_shared_mention(db):
-    try:
-        from mcp_server.utils.privacy import _get_nlp
+async def test_miner_entities_spacy_org_shared_mention(db, monkeypatch):
+    """Сущности NER из тёплого кэша (строки под тэгом бэкенда) дают рёбра co_mentions.
 
-        _get_nlp()
-    except Exception:
+    Майнер больше не грузит spaCy сам (`nlp=None` всегда): он читает строки,
+    которые записал `warm_ner_cache.py` под тэгом бэкенда. Здесь строка кэша
+    вставляется явно — это и есть контракт «warmer пишет, ночной проход читает».
+    Сам тест spaCy НЕ импортирует: иначе он бы отравил sys.modules для
+    `test_miner_entities_does_not_import_spacy`.
+    """
+    import hashlib
+
+    import lifecycle.graph_miners as gm
+    from rag.synonyms import load_synonyms
+
+    if gm._ner_backend_tag() is None:
         pytest.skip("en_core_web_sm не установлена")
+
+    monkeypatch.setattr(gm, "_get_ner", lambda: (_ for _ in ()).throw(AssertionError("_get_ner must not be called")))
+
     n1 = await _node("Борис работает в Acme Corp", T)
     n2 = await _node("офис Acme Corp открыт давно", T)
 
-    from lifecycle.graph_miners import miner_entities
+    syn = load_synonyms()
+    tag = gm._ner_cache_tag(syn, None)  # тэг бэкенда: именно его читает ночной проход
+    conn = await db.get("memory.db")
+    await gm._ensure_ner_cache(conn)
+    for text in ("Борис работает в Acme Corp", "офис Acme Corp открыт давно"):
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        await conn.execute(
+            "INSERT OR REPLACE INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+            (digest, tag, json.dumps(["acme corp"])),
+        )
+    await conn.commit()
 
-    await miner_entities(db, "user")
+    await gm.miner_entities(db, "user")
 
     rows = await _edges("co_mentions")
     assert (min(n1, n2), max(n1, n2)) in {(r["source_id"], r["target_id"]) for r in rows}
@@ -747,6 +771,37 @@ async def test_miner_entities_degree_cap_anti_hub(db):
     ).fetchone()
     assert result["edges"] > 0, "обычные co_mentions работают"
     assert deg[0] <= 12, f"хаб срезан лимитом 12: {deg[0]}"
+
+
+@pytest.mark.asyncio
+async def test_miner_entities_does_not_import_spacy(db, monkeypatch):
+    """Ночной майнер не имеет права тянуть spaCy/torch в процесс-лидер."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_get_ner", lambda: (_ for _ in ()).throw(AssertionError("_get_ner must not be called")))
+
+    # The suite may have imported spacy/torch in earlier tests; purge them so this
+    # check is about what THIS miner pulls in, not about test order. The original
+    # module objects are restored afterwards so later tests reuse them unchanged
+    # (no torch re-init) — we only drop the sys.modules keys for the call window.
+    saved = {name: mod for name, mod in sys.modules.items() if name in {"spacy", "torch"} or name.startswith(("spacy.", "torch."))}
+    for name in saved:
+        del sys.modules[name]
+    try:
+        conn = await connection_manager.get(DB_NAME)
+        for i in range(3):
+            await conn.execute(
+                "INSERT INTO epi_nodes (layer, user_id, content, node_type, tags, confidence, created_at) VALUES ('user', 'gu', ?, 'fact', '[]', 0.5, ?)",
+                (f"Алиса и Борис текст {i}", time.time()),
+            )
+        await conn.commit()
+
+        apply = await gm.miner_entities(db, "user")
+        assert apply is not None
+        assert "spacy" not in sys.modules
+        assert "torch" not in sys.modules
+    finally:
+        sys.modules.update(saved)
 
 
 class _FakeL3:
@@ -953,25 +1008,40 @@ async def test_miner_structural_community_bridge_inside_community(db):
 
 @pytest.mark.asyncio
 async def test_entities_cached_skips_second_extraction(db, monkeypatch):
-    """Повторный проход не парсит те же тексты снова — ради этого кэш и заведён."""
+    """Повторный проход не парсит те же тексты снова — ради этого кэш и заведён.
+
+    Модель здесь «загружена» (заглушка с meta): только тогда тег чтения и тег
+    записи совпадают. С `nlp=None` пишется dict-only, а читается бэкенд-тег —
+    это отдельный контракт, его пингуют `test_entities_read_*`.
+    """
     import lifecycle.graph_miners as gm
+
+    class _Doc:
+        ents: tuple = ()
+
+    class _FakeNlp:
+        meta = {"name": "core_web_sm", "version": "3.8.0"}
+
+        def __call__(self, text: str) -> _Doc:
+            return _Doc()
 
     conn = await connection_manager.get(DB_NAME)
     syn = {"алиса": ["alice"]}
     texts = ["Алиса принесла отчёт", "Alice обновила документацию"]
+    nlp = _FakeNlp()
 
     calls: list[str] = []
     real = gm._entities
 
-    def counting(text: str, s: dict[str, list[str]], nlp: Any = None) -> set[str]:
+    def counting(text: str, s: dict[str, list[str]], n: Any = None) -> set[str]:
         calls.append(text)
-        return real(text, s, nlp)
+        return real(text, s, n)
 
     monkeypatch.setattr(gm, "_entities", counting)
 
-    first = await gm._entities_cached(conn, texts, syn, None)
+    first = await gm._entities_cached(conn, texts, syn, nlp)
     parsed_on_first = len(calls)
-    second = await gm._entities_cached(conn, texts, syn, None)
+    second = await gm._entities_cached(conn, texts, syn, nlp)
 
     assert first == second, "кэш обязан вернуть те же множества"
     assert parsed_on_first == len(texts), f"первый проход парсит все тексты, а не {parsed_on_first}"
@@ -1016,7 +1086,25 @@ async def test_entities_cached_invalidated_by_dictionary_change(db):
     assert "boris" in after[0], f"после расширения словаря Борис должен появиться: {after[0]}"
 
 
-def test_ner_cache_tag_separates_dict_only_from_ner_backend():
+def test_ner_cache_tag_none_uses_metadata_backend(monkeypatch):
+    """nlp=None, но модель установлена: тег несёт бэкенд, а не dict-only."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: "core_web_sm-3.8.0")
+    tag = gm._ner_cache_tag({"алиса": ["alice"]}, None)
+    assert tag.endswith("|core_web_sm-3.8.0")
+    assert "dict-only" not in tag
+
+
+def test_ner_cache_tag_none_falls_back_to_dict_only(monkeypatch):
+    """Модели нет ⇒ прежнее поведение, старые строки остаются валидными."""
+    import lifecycle.graph_miners as gm
+
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: None)
+    assert gm._ner_cache_tag({"алиса": ["alice"]}, None).endswith("|dict-only")
+
+
+def test_ner_cache_tag_separates_dict_only_from_ner_backend(monkeypatch):
     """dict-only и spaCy дают разные множества — теги не имеют права совпасть."""
     import lifecycle.graph_miners as gm
 
@@ -1024,8 +1112,14 @@ def test_ner_cache_tag_separates_dict_only_from_ner_backend():
         meta = {"name": "fake_ner", "version": "1.0"}
 
     syn = {"алиса": ["alice"]}
-    assert gm._ner_cache_tag(syn, None) != gm._ner_cache_tag(syn, _FakeNlp())
+
+    # Без установленной модели nlp=None — это dict-only.
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: None)
     assert "dict-only" in gm._ner_cache_tag(syn, None)
+
+    # Модель установлена: тег несёт её бэкенд и не совпадает с загруженной spaCy.
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: "core_web_sm-3.8.0")
+    assert gm._ner_cache_tag(syn, None) != gm._ner_cache_tag(syn, _FakeNlp())
     assert "fake_ner" in gm._ner_cache_tag(syn, _FakeNlp())
 
 
@@ -1038,6 +1132,13 @@ async def test_miner_entities_second_run_does_not_reparse(db, monkeypatch):
     — что извлечение сущностей не повторяется.
     """
     import lifecycle.graph_miners as gm
+
+    # Pin dict-only mode so the miner's own writes (dict-only tag) are the rows it
+    # reads back: read tag == write tag. On a spaCy-installed host the miner reads
+    # under the backend tag and writes dict-only (the warmer fills the backend
+    # rows), so without this a second pass would legitimately re-parse. The cache
+    # coherence this test checks is exactly the dict-only operating mode.
+    monkeypatch.setattr(gm, "_ner_backend_tag", lambda: None)
 
     await _node("Алиса принесла отчёт по проекту", T)
     await _node("Alice обновила документацию", T)
@@ -1059,7 +1160,7 @@ async def test_miner_entities_second_run_does_not_reparse(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ner_cache_rows_are_keyed_by_tag(db):
-    """Строки кэша разделены тегом: разные бэкенды не перезаписывают друг друга."""
+    """Строки кэша разделены тегом: dict-only и бэкенд-строки не перезаписывают друг друга."""
     import lifecycle.graph_miners as gm
 
     conn = await connection_manager.get(DB_NAME)
@@ -1068,9 +1169,19 @@ async def test_ner_cache_rows_are_keyed_by_tag(db):
     await gm._entities_cached(conn, ["Алиса здесь"], syn, None)
     await gm._entities_cached(conn, ["нечто иное"], syn, None)
 
+    # Строка, которую записал бы прогон с загруженной моделью (warm-воркер).
+    warm_tag = gm._ner_cache_tag(syn, None)
+    await conn.execute(
+        "INSERT INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+        ("feedface", warm_tag, json.dumps(["алиса"])),
+    )
+    await conn.commit()
+
     rows = await (await conn.execute("SELECT text_hash, tag, entities FROM ner_cache")).fetchall()
-    assert len(rows) == 2
-    assert all(r["tag"] == gm._ner_cache_tag(syn, None) for r in rows)
+    assert len(rows) == 3, "разные теги живут в разных строках, а не перезаписывают друг друга"
+    dict_only = [r for r in rows if r["tag"].endswith("|dict-only")]
+    warm = [r for r in rows if r["tag"] == warm_tag]
+    assert len(dict_only) == 2 and len(warm) == 1, [r["tag"] for r in rows]
     for r in rows:
         assert isinstance(json.loads(r["entities"]), list)
 
@@ -1351,3 +1462,127 @@ async def test_miner_sessions_ignores_sweep_summary(db):
     result = await miner_sessions(db, "user")
 
     assert result["edges"] == 0
+
+
+def test_ner_backend_tag_none_without_spacy(monkeypatch):
+    """spaCy есть, пакет модели — нет: бэкенда нет, тег остаётся dict-only."""
+    import lifecycle.graph_miners as gm
+
+    class _SpacySpec:
+        origin = "/fake/spacy/__init__.py"
+        submodule_search_locations = ["/fake/spacy"]
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: _SpacySpec() if name == "spacy" else None)
+    assert gm._ner_backend_tag() is None
+
+
+def test_ner_backend_tag_none_when_spacy_missing_but_model_present(monkeypatch, tmp_path):
+    """Модель установлена и читаема, spaCy — нет: бэкенда не вычисляем (guard несущий).
+
+    meta.json здесь настоящий и валидный: без guard'а функция вернула бы тег, и
+    кэш молча пометился бы как валидный при отсутствующем NER-слое.
+    """
+    import lifecycle.graph_miners as gm
+
+    pkg = tmp_path / "en_core_web_sm"
+    pkg.mkdir()
+    (pkg / "meta.json").write_text('{"name": "core_web_sm", "version": "3.8.0"}', encoding="utf-8")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: None if name == "spacy" else _Spec())
+    assert gm._ner_backend_tag() is None
+
+
+def test_ner_backend_tag_reads_model_meta(monkeypatch, tmp_path):
+    """Тег берётся из meta.json пакета модели, без импорта spaCy."""
+    import lifecycle.graph_miners as gm
+
+    pkg = tmp_path / "en_core_web_sm"
+    pkg.mkdir()
+    (pkg / "meta.json").write_text('{"name": "core_web_sm", "version": "3.8.0"}', encoding="utf-8")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    monkeypatch.setattr(
+        gm.importlib.util,
+        "find_spec",
+        lambda name: _Spec() if name in ("spacy", "en_core_web_sm") else None,
+    )
+    imported = set(sys.modules)
+    assert gm._ner_backend_tag() == "core_web_sm-3.8.0"
+    # The tag must not drag spaCy/torch into the process: an earlier test in this
+    # file may already have imported them, so compare against the modules present
+    # before the call instead of asserting on the whole of `sys.modules`.
+    assert not {"spacy", "torch"} & (set(sys.modules) - imported)
+
+
+def test_ner_backend_tag_none_on_broken_meta(monkeypatch, tmp_path):
+    """Битый meta.json не роняет проход — бэкенда нет."""
+    import lifecycle.graph_miners as gm
+
+    pkg = tmp_path / "en_core_web_sm"
+    pkg.mkdir()
+    (pkg / "meta.json").write_text("{not json", encoding="utf-8")
+
+    class _Spec:
+        origin = str(pkg / "__init__.py")
+        submodule_search_locations = [str(pkg)]
+
+    monkeypatch.setattr(gm.importlib.util, "find_spec", lambda name: _Spec())
+    assert gm._ner_backend_tag() is None
+
+
+@pytest.mark.asyncio
+async def test_entities_read_writes_dict_only_tag_when_no_model(db):
+    """Без загруженной модели строки пишутся под dict-only, а не под spaCy-тегом.
+
+    Иначе warm-воркер прочитает пустое множество как валидное и никогда не
+    пересчитает узел: рёбра co_mentions пропадут молча.
+    """
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    syn = {"алиса": ["alice"]}
+    text = "Алиса и Борис здесь"
+
+    _ents, pending = await gm._entities_read(conn, [text], syn, None)
+
+    assert pending, "miss must produce a cache row"
+    written_tag = pending[0][1]
+    read_tag = gm._ner_cache_tag(syn, None)
+    assert written_tag.endswith("|dict-only"), f"dict-only rows must not claim the spaCy tag: {written_tag}"
+    assert written_tag != read_tag, "read tag (metadata) and write tag (what ran) must differ when no model is loaded"
+
+    await gm._entities_cache_write(conn, pending)
+    rows = await (await conn.execute("SELECT tag, entities FROM ner_cache")).fetchall()
+    assert all(r["tag"].endswith("|dict-only") for r in rows), [r["tag"] for r in rows]
+
+
+@pytest.mark.asyncio
+async def test_entities_read_reads_metadata_tag_but_writes_actual(db):
+    """Чтение — по тегу бэкенда из метаданных, запись — по фактически применённому."""
+    import lifecycle.graph_miners as gm
+
+    conn = await connection_manager.get(DB_NAME)
+    await gm._ensure_ner_cache(conn)
+    syn = {"алиса": ["alice"]}
+
+    # A row the warmer (spaCy loaded) would have written.
+    warm_tag = f"{gm._ner_dict_fingerprint(syn)}|core_web_sm-3.8.0"
+    await conn.execute(
+        "INSERT INTO ner_cache (text_hash, tag, entities) VALUES (?, ?, ?)",
+        ("deadbeef", warm_tag, json.dumps(["алиса"])),
+    )
+    await conn.commit()
+
+    _ents, pending = await gm._entities_read(conn, ["Алиса и Борис здесь"], syn, None)
+    # read path found the warmer's tag...
+    assert gm._ner_cache_tag(syn, None) == warm_tag
+    # ...and the miss it produced is written dict-only, not under warm_tag
+    assert pending and pending[0][1].endswith("|dict-only")

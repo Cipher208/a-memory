@@ -14,8 +14,10 @@ import contextlib
 import functools
 from bisect import bisect_left, bisect_right
 import hashlib
+import importlib.util
 import json
 import logging
+import pathlib
 import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -515,7 +517,11 @@ async def miner_entities(cm: AsyncConnectionManager, layer: str, *, read: Any) -
     from rag.synonyms import load_synonyms
 
     syn = load_synonyms()
-    nlp = _get_ner()
+    # No spaCy here on purpose: importing it costs 546 MB RSS that stays resident
+    # for the life of this process. The tag still names the NER backend (read from
+    # the model's meta.json), so a cache warmed by `warm_ner_cache.py` is hit; the
+    # misses this pass sees are written dictionary-only and filled by the warmer.
+    nlp = None
     ents, pending = await _entities_read(read, [str(c) for _, c in nodes], syn, nlp)
     wanted: list[tuple[int, int]] = []
     degree: dict[int, int] = {}
@@ -576,15 +582,50 @@ def _ner_dict_fingerprint(syn: dict[str, list[str]]) -> str:
     return hashlib.sha256("\n".join(vocab).encode("utf-8")).hexdigest()[:16]
 
 
+# The spaCy model the miner uses (`privacy._get_nlp(for_ner=True)`). The tag is
+# derived from the installed package's meta.json so the nightly pass can compute
+# it without importing spaCy — one import costs 546 MB RSS of torch that then
+# stays resident for the life of the process.
+_NER_MODEL = "en_core_web_sm"
+
+
+def _ner_backend_tag() -> str | None:
+    """Read the NER backend fingerprint from the model package metadata.
+
+    Returns `None` when spaCy or the model package is absent — the caller then
+    falls back to `dict-only`, exactly as a process without spaCy always has.
+    ``importlib.util.find_spec`` locates the package without importing it, so
+    torch never enters ``sys.modules`` on this path.
+    """
+    if importlib.util.find_spec("spacy") is None:
+        return None
+    spec = importlib.util.find_spec(_NER_MODEL)
+    locations = getattr(spec, "submodule_search_locations", None) or []
+    for location in locations:
+        meta_path = pathlib.Path(location) / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("ner backend: cannot read %s", meta_path)
+            continue
+        name = meta.get("name")
+        version = meta.get("version")
+        if name and version:
+            return f"{name}-{version}"
+    return None
+
+
 def _ner_cache_tag(syn: dict[str, list[str]], nlp: Any) -> str:
     """Cache tag tying a row to BOTH the dictionary and the NER backend.
 
-    A row computed with `nlp=None` (dictionary only) must never be served once
-    spaCy becomes available, and vice versa: the two produce different sets, and
-    mixing them would silently change which co_mentions edges get written.
+    The read tag names the backend a spaCy-loaded process uses, so the nightly
+    pass finds rows the warmer wrote. It does NOT describe what a process with no
+    loaded model actually computed — that is the write tag, which stays
+    `dict-only` (see `_entities_read`). Mixing the two would let dict-only
+    entities pose as spaCy output and silently kill co_mentions edges.
     """
     if nlp is None:
-        backend = "dict-only"
+        backend = _ner_backend_tag() or "dict-only"
     else:
         meta = getattr(nlp, "meta", None) or {}
         backend = f"{meta.get('name', 'ner')}-{meta.get('version', '?')}"
@@ -618,7 +659,13 @@ async def _entities_read(read: Any, texts: list[str], syn: dict[str, list[str]],
     """
     if not texts:
         return [], []
+    # Read tag names the backend the warmer uses (metadata-derived when no model
+    # is loaded here). The write tag names what ACTUALLY computed these rows: with
+    # no loaded model that is dict-only. Writing dict-only entities under the spaCy
+    # tag would make every warmer pass read them as valid and never recompute —
+    # co_mentions edges would vanish silently.
     tag = _ner_cache_tag(syn, nlp)
+    write_tag = f"{_ner_dict_fingerprint(syn)}|{'dict-only' if nlp is None else tag.rsplit('|', 1)[-1]}"
     hashes = [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts]
 
     cached: dict[str, set[str]] = {}
@@ -648,7 +695,7 @@ async def _entities_read(read: Any, texts: list[str], syn: dict[str, list[str]],
         cached[text_hash] = ents
         # sorted: a set has no stable order, and a stable blob keeps the
         # table diffable and the tests deterministic
-        pending.append((text_hash, tag, json.dumps(sorted(ents), ensure_ascii=False)))
+        pending.append((text_hash, write_tag, json.dumps(sorted(ents), ensure_ascii=False)))
     return [cached[h] for h in hashes], pending
 
 
@@ -699,7 +746,7 @@ def _get_ner() -> Any:
         try:
             from mcp_server.utils.privacy import _get_nlp
 
-            _ner = _get_nlp()
+            _ner = _get_nlp(for_ner=True)
         except Exception:
             _ner = False
     return _ner or None

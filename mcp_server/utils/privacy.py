@@ -51,14 +51,67 @@ _ru_nlp = None
 _ner_breaker = None
 
 
-def _get_nlp() -> Any:
-    """Lazy process-wide spaCy NER (en_core_web_sm; Cyrillic prose is not parsed — fine)."""
+def _spacy_ner_enabled() -> bool:
+    """Master switch for the spaCy tiers on the message path — default OFF.
+
+    2026-11-13: `import spacy` itself is **546 MB RSS** because spaCy pulls
+    torch, and 752 MB with a model loaded. That is fine for a server process
+    the user already runs, and ruinous for the autohooks daemon: it runs once
+    per agent (two on this box), handles an event, and was sitting at ~900 MB
+    — the VPS was carrying 10.5 GB of swap with no OOM, just permanent lag.
+
+    So the tiers are opt-in per contour on the *message path*. The regex /
+    credential / dictionary tiers are what a daemon actually needs, and they
+    cost nothing: the credential tier catches the shapes that must never be
+    stored (`sk-`, `ghp_`, PEM, `<private>`), and `rag.ru_personas` still
+    masks known people. What is lost is open-vocabulary name recognition — a
+    rare surname in stored prose stays unmasked.
+
+    The nightly miners keep their own switch (`rag.entity_mining_ner`): they
+    run in the leader's housekeeping pass, where the model is worth its weight,
+    not once per message. Sharing one flag would have forced a choice between
+    a fat daemon and a blind miner.
+    """
+    from config import config
+
+    return bool(config.get("rag", "spacy_ner", default=False))
+
+
+def _get_nlp(for_ner: bool = False) -> Any:
+    """Lazy process-wide spaCy NER (en_core_web_sm; Cyrillic prose is not parsed — fine).
+
+    Shared by the message path (`sanitize`) and the nightly entity miner, so it
+    takes the caller's intent rather than reading one flag for both: the miner
+    passes `for_ner=True` and is governed by `rag.entity_mining_ner`, the
+    message path passes nothing and stays off unless `rag.spacy_ner`.
+    """
+    allowed = _entity_mining_ner_enabled() if for_ner else _spacy_ner_enabled()
+    if not allowed:
+        return None
     global _nlp
     if _nlp is None:
         import spacy
 
         _nlp = spacy.load("en_core_web_sm")
     return _nlp
+
+
+def _entity_mining_ner_enabled() -> bool:
+    """SpaCy for the *nightly* entity miner — default ON.
+
+    This one stays on by default and that is deliberate: the miner runs in the
+    leader's housekeeping pass, once per node per night with a content-hash
+    cache, so the model's cost is amortised over a pass that already takes
+    minutes. The message path is where it could not stay — one `import spacy`
+    per process, per agent, for one call per message.
+
+    Living in one module with two flags is the honest shape of the fix: the
+    first attempt shared a single flag, which either blinded the miner or
+    re-fattened the daemon, and the test suite could not see the choice.
+    """
+    from config import config
+
+    return bool(config.get("rag", "entity_mining_ner", default=True))
 
 
 def _ru_ner_enabled() -> bool:
@@ -105,7 +158,12 @@ def _get_ru_nlp() -> Any:
     The two paths are told apart by `_model_absent`: an absent package is the
     documented normal mode, a package that is present but raises is a
     breakage and must reach the breaker.
+
+    `rag.spacy_ner` gates the import here too, not just the call site: this is
+    the one function that turns a config flag into 546 MB of resident torch.
     """
+    if not _spacy_ner_enabled():
+        return None
     global _ru_nlp
     if _ru_nlp is not None:
         return _ru_nlp
@@ -204,11 +262,15 @@ def sanitize(text: str, *, use_ner: bool = True) -> tuple[str, dict[str, str]]:
     except Exception:  # noqa: S110 — dictionary unavailable: the next tiers will handle it
         pass
 
-    if use_ner:
+    if use_ner and _spacy_ner_enabled():
         # S19: ru-NER for Cyrillic (ru_core_news_sm), en-NER for Latin script.
         # ru-model garbage guard (S19 spec: ru-NER is noisy on short texts):
         # PER/ORG/LOC ≤ 4 tokens AND ≥ 2 chars; 1-char and all-digit spans
         # are tokenizer noise, not a person. ru-model failure → en-path as is.
+        #
+        # `_spacy_ner_enabled()` gates the WHOLE block: `import spacy` is 546 MB
+        # RSS on its own, so a half-enabled gate (say, ru off, en on) would still
+        # pay it for nothing. Both tiers or neither.
         has_cyr_input = any("\u0400" <= ch <= "\u04ff" for ch in out)
         ru_doc = None
         if has_cyr_input and _ru_ner_enabled():
