@@ -1642,26 +1642,26 @@ async def test_wire_new_node_uses_warm_cache(db):
 
 
 @pytest.mark.asyncio
-async def test_wire_new_node_cold_cache_writes_dict_only(db):
-    """Холодный кэш: промах пишется под dict-only и не отравляет spaCy-тег."""
-    import hashlib
+async def test_wire_new_node_writes_no_cache_rows(db):
+    """Кэшем владеет воркер: дневной путь читает, но не пишет.
 
+    Запись dict-only строк здесь была бы write-only мусором: чтение идёт по
+    backend-тегу, а на промахе nlp=None даёт `|dict-only` — такие строки никто
+    не читает. На hermes это до 15k мёртвых строк за вызов, внутри транзакции
+    живого сообщения.
+    """
     import lifecycle.graph_miners as gm
-    from rag.synonyms import load_synonyms
 
     conn = await db.get(DB_NAME)
     await gm._ensure_ner_cache(conn)
-    content = "python sqlite indexing guide"
-    second = await _node(content, T)
+    second = await _node("python sqlite indexing guide", T)
     await conn.commit()
 
-    await gm.wire_new_node(db, "user", second, content, ["db"])
+    before = int((await (await conn.execute("SELECT COUNT(*) FROM ner_cache")).fetchone())[0])
+    await gm.wire_new_node(db, "user", second, "python sqlite indexing guide", ["db"])
+    after = int((await (await conn.execute("SELECT COUNT(*) FROM ner_cache")).fetchone())[0])
 
-    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-    rows = await (await conn.execute("SELECT tag FROM ner_cache WHERE text_hash=?", (digest,))).fetchall()
-    assert rows, "a miss must produce a cache row"
-    assert all(str(r["tag"]).endswith("|dict-only") for r in rows), [r["tag"] for r in rows]
-    assert gm._ner_cache_tag(load_synonyms(), None) not in {str(r["tag"]) for r in rows}, "dict-only rows must not claim the spaCy tag"
+    assert after == before, f"wire_new_node must not write cache rows: {before} -> {after}"
 
 
 @pytest.mark.asyncio

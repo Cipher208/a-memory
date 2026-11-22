@@ -1709,9 +1709,10 @@ async def wire_new_node(
         other_tags.setdefault(int(r["node_id"]), set()).add(str(r["tag"]))
     # Entities come from the cache the warmer fills, not from spaCy in this
     # process: importing spaCy here pulls 546 MB of torch that stays resident
-    # for the life of a long-lived daemon. A miss is computed dictionary-only
-    # and written under the dict-only tag; the nightly warmer fills it.
-    ents_list, pending = await _entities_read(read, [content] + [str(c) for _, c in others], syn, None)
+    # for the life of a long-lived daemon. A miss is computed dictionary-only;
+    # the dict-only rows are never written here — the cache is the warmer's
+    # property. The daily path reads it and stays silent.
+    ents_list, _pending = await _entities_read(read, [content] + [str(c) for _, c in others], syn, None)
     my_ents = ents_list[0]
     other_ents = dict(zip((oid for oid, _ in others), ents_list[1:], strict=True))
     if not my_toks and not my_ents and not my_tags:
@@ -1732,7 +1733,6 @@ async def wire_new_node(
             wanted.append((min(node_id, oid), max(node_id, oid), "tagged", min(0.3 + 0.1 * len(shared), 0.6), "tags"))
 
     async def apply(conn: Any) -> int:
-        await _entities_cache_write(conn, pending)
         edges = 0
         for a, b, relation, weight, heuristic in wanted:
             edges += await _insert_edge(conn, a, b, relation, weight, heuristic)
